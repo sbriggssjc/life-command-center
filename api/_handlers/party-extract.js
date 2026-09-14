@@ -11,17 +11,21 @@
 //
 // Adjudication (per canonical field, cores compared post-normalization):
 //   • A and B AGREE (normalized company cores match)  → write  source='party_extract_agree'
-//                                                         confidence 0.60
-//   • A present, B abstained (null)                   → write  source='gliner_extract'
-//                                                         confidence 0.55  (span-anchored)
+//                                                         confidence 0.60. AGREEMENT IS THE
+//                                                         ONLY WRITE PATH.
+//   • A present, B abstained (null)                   → NO write, log to disagreements
+//                                                         (disagreementKind='a_only')
 //   • A and B present but cores CONFLICT              → NO write, log to disagreements
 //   • B present, A absent (span-less LLM claim)       → NO write, log to disagreements
 //
-//   The plan's wording folds "disagreed" into the A-only gliner_extract write. We
-//   deliberately tighten that: a genuine value CONFLICT is ambiguity, and the standing
-//   data-write doctrine is "surface ambiguity to a review lane, never guess." So a
-//   conflict is logged (training signal, entity_match_labels philosophy), not written.
-//   Only abstention (B null) yields the A-only write.
+//   W5.1b (measured, session-35 100-row sample): the A-only lane (`gliner_extract`, GLiNER
+//   present / LLM abstained) was ~80% ENTITY-WRONG — it produced every serious error in the
+//   sample (tenant-as-seller, buyer-as-seller portfolio fan-out, buyer-as-listing-broker),
+//   while the agreement lane was ~93% entity-correct. So the A-only lane is DEMOTED to
+//   log-only: agreement between two independent extractors is now the sole write path. A
+//   value CONFLICT and a span-less B-only claim were already log-only (never-guess doctrine).
+//   `SOURCE_GLINER`/`CONF_GLINER` stay exported (the field_source_priority row stays
+//   registered) — the source simply gains no producers.
 //
 // This module is PURE + injectable — no direct DB/network at import time. The runner
 // (scripts/party-extract-backlog.mjs) wires the resolver fetch, invokeExtractionAI, the
@@ -60,8 +64,10 @@ export const CANONICAL_FIELDS = ['buyer', 'seller', 'listing_broker', 'procuring
 
 export const SOURCE_AGREE = 'party_extract_agree';
 export const SOURCE_GLINER = 'gliner_extract';
+export const SOURCE_NORTHMARQ_ROSTER = 'northmarq_sf_roster';
 export const CONF_AGREE = 0.60;
 export const CONF_GLINER = 0.55;
+export const CONF_NORTHMARQ_ROSTER = 0.95;
 
 // ---------------------------------------------------------------------------
 // Company-name core normalizer — mirrors resolver/app/normalize.py::normalize_company
@@ -210,15 +216,19 @@ export function adjudicateField(field, aValue, bValue) {
 
   if (a && b) {
     if (coresAgree(aCore, bCore)) {
-      // Agreement — write the MORE COMPLETE surface (still span-grounded via A).
-      const value = b.length > a.length ? b : a;
+      // Agreement — the ONLY write path. Prefer channel B's surface (the LLM tends to emit
+      // a clean party string; channel A's span can bleed into the surrounding address —
+      // sample evidence: A's "Philip Blvd. American Realty Capital Healthcare" vs B's clean
+      // "American Realty Capital Healthcare"). Fall back to A only when B is empty.
+      const value = b || a;
       return { field, decision: 'write', source: SOURCE_AGREE, confidence: CONF_AGREE, value, aValue: a, bValue: b, aCore, bCore };
     }
     return { field, decision: 'skip', disagreementKind: 'value_conflict', aValue: a, bValue: b, aCore, bCore };
   }
   if (a && !b) {
-    // A-only (LLM abstained). Span-anchored → gliner_extract write.
-    return { field, decision: 'write', source: SOURCE_GLINER, confidence: CONF_GLINER, value: a, aValue: a, bValue: null, aCore, bCore };
+    // A-only (LLM abstained). DEMOTED to log-only in W5.1b — ~80% entity-wrong in the sample.
+    // Never write; log as an a_only disagreement (training signal, like the other non-writes).
+    return { field, decision: 'skip', disagreementKind: 'a_only', aValue: a, bValue: null, aCore, bCore };
   }
   if (!a && b) {
     // B-only — span-less LLM claim is hallucination-shaped. Never write; log.
@@ -248,6 +258,87 @@ export function adjudicate(channelA, channelB) {
     out[field] = dec;
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Northmarq sell-side broker-of-record reconciliation
+// ---------------------------------------------------------------------------
+const NORTHMARQ_DEFAULT_LISTING_BROKER = 'Team Briggs / Northmarq';
+
+function cleanText(v) {
+  if (v == null) return null;
+  const s = String(v).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  return s || null;
+}
+
+function pickFirstText(obj, keys) {
+  for (const key of keys) {
+    const v = cleanText(obj?.[key]);
+    if (v) return v;
+  }
+  return null;
+}
+
+export function isNorthmarqSellSide(row = {}) {
+  if (row.is_northmarq !== true) return false;
+  const side = cleanText(row.deal_side || row.side || row.sf_deal_side || row.role_side || '');
+  if (!side) return true;
+  return !/\b(buy|buyer|purchas|procur|acquisition)\b/i.test(side);
+}
+
+export function resolveNorthmarqListingBroker(row = {}, opts = {}) {
+  const explicit = pickFirstText(row, [
+    'authoritative_listing_broker',
+    'team_broker_name',
+    'sf_listing_broker_name',
+    'broker_name',
+    'lead_broker',
+    'listing_broker_roster',
+  ]);
+  if (explicit) return explicit;
+
+  const team = pickFirstText(row, ['sjc_team', 'broker_team', 'deal_team', '_lcc_deal_team']);
+  if (team && /team\s+briggs|briggs/i.test(team)) return opts.defaultBroker || NORTHMARQ_DEFAULT_LISTING_BROKER;
+  if (opts.allowDefaultBroker && opts.defaultBroker) return opts.defaultBroker;
+  return null;
+}
+
+/**
+ * Plan how to reconcile an is_northmarq sell-side sale where a third-party
+ * feed has occupied the canonical listing_broker field. The caller owns IO:
+ * domain PATCH, sale_brokers links, party_extract_disagreements, and deal conflict.
+ */
+export function planNorthmarqListingBrokerReconciliation(row = {}, opts = {}) {
+  if (!isNorthmarqSellSide(row)) return { action: 'skip', reason: 'not_northmarq_sell_side' };
+  const authoritative = resolveNorthmarqListingBroker(row, opts);
+  if (!authoritative) return { action: 'skip', reason: 'no_authoritative_broker' };
+
+  const current = pickFirstText(row, ['listing_broker', 'current_listing_broker']);
+  const currentCore = normalizeCore(current);
+  const authoritativeCore = normalizeCore(authoritative);
+  const alreadyAuthoritative = current && coresAgree(currentCore, authoritativeCore);
+
+  const asReported = alreadyAuthoritative ? null : current;
+  const asReportedSource = asReported
+    ? (row.as_reported_source || row.listing_broker_source || (/cbre|costar/i.test(asReported) ? 'costar_sidebar' : row.data_source || 'third_party_feed'))
+    : null;
+  return {
+    action: alreadyAuthoritative ? 'noop' : 'reconcile',
+    field: 'listing_broker',
+    source: SOURCE_NORTHMARQ_ROSTER,
+    confidence: CONF_NORTHMARQ_ROSTER,
+    authoritativeValue: authoritative,
+    asReportedValue: asReported,
+    asReportedSource,
+    authoritativeCore,
+    asReportedCore: normalizeCore(asReported),
+    patch: alreadyAuthoritative ? {} : { listing_broker: authoritative },
+    disagreementKind: asReported ? 'northmarq_authoritative_role_conflict' : null,
+    saleBrokerLinks: [
+      { broker_name: authoritative, role: 'listing', source: SOURCE_NORTHMARQ_ROSTER },
+      ...(asReported ? [{ broker_name: asReported, role: 'as_reported_listing', source: asReportedSource }] : []),
+    ],
+  };
 }
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,13 @@
+{
+  "template_version": "healthcare_release_packet_template:1.0",
+  "template_id": "bbdffeb41d45b02ab8a84dc44bb150e478d3b9b6b6e7425475e90274d26b6151",
+  "lane": "asc",
+  "status": "template_incomplete",
+  "source_candidates": [
+    { "source_key": "cms_pos_asc", "catalog_url": "https://data.cms.gov/provider-characteristics/hospitals-and-other-facilities/provider-of-services-file-internet-quality-improvement-and-evaluation-system", "exact_release_required": true, "artifact_url": null, "release_date": null, "byte_size": null, "sha256": null, "header_sha256": null },
+    { "source_key": "cms_ascqr_facility", "catalog_url": "https://data.cms.gov/provider-data/topics/hospitals/ambulatory-surgical-centers", "exact_release_required": true, "artifact_url": null, "release_date": null, "byte_size": null, "sha256": null, "header_sha256": null },
+    { "source_key": "cms_ffs_enrollment", "catalog_url": "https://data.cms.gov/provider-characteristics/medicare-provider-supplier-enrollment/medicare-fee-for-service-public-provider-enrollment", "exact_release_required": true, "artifact_url": null, "release_date": null, "byte_size": null, "sha256": null, "header_sha256": null },
+    { "source_key": "cms_asc_payment", "catalog_url": "https://www.cms.gov/medicare/payment/prospective-payment-systems/ambulatory-surgical-center-asc", "exact_release_required": true, "artifact_url": null, "release_date": null, "byte_size": null, "sha256": null, "header_sha256": null }
+  ],
+  "controls": { "download_authorized": false, "sample_draw_authorized": false, "production_write_authorized": false, "required_independent_hash_verifiers": 2, "required_execution_approvals": 2 }
+}

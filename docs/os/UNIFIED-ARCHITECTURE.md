@@ -32,7 +32,7 @@ My `docs/os/` reinvented several things you already had. Reconciliation:
 | `docs/os/REGISTRY.md` (canonical map) | `CONTEXT_ROUTER.md` (top router) | REGISTRY becomes the **repo-side sub-index**; CONTEXT_ROUTER gets a row pointing to it. One top router. |
 | `docs/os/SURFACE-SYNC-PROTOCOL.md` | `MULTI_AI_DEPLOYMENT_CHECKLIST.md` | The checklist stays the **canonical human process**; SURFACE-SYNC + render/parity are the **automation/enforcement** of it. Cross-reference; don't duplicate the steps. |
 | `docs/os/canon/blocks/*` | `NORTHMARQ_PROJECT_PROMPT.md` + `BRIGGS-*` + standards | The canon blocks are the **enforced distillation** (machine-checkable floor) of those richer masters — derived-from, never competing. NPP stays the methodology SoT. |
-| `docs/os/architecture/connected-agent-*` + `unification-*` | `AI_ECOSYSTEM_GUIDE_v2.md` | The guide stays the **high-level 5-context narrative**; `architecture/` holds the **deep system detail** (Work IQ specialists, the one-URL unification). Guide → references `architecture/`. |
+| `docs/architecture/connected-agent-*` + `unification-*` | `AI_ECOSYSTEM_GUIDE_v2.md` | The guide stays the **high-level 5-context narrative**; `architecture/` holds the **deep system detail** (Work IQ specialists, the one-URL unification). Guide → references `architecture/`. |
 | `docs/os/canon` render/parity | `_core.md` auto-sync | Both push shared rules to every door. **Need to see `_core.md`** to decide whether render/parity *drives* the claude-md sync or runs beside it. Flagged as the open reconciliation. |
 
 ## 3. The doors (reconciled) × enforcement

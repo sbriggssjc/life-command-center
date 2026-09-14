@@ -67,6 +67,25 @@ except Exception:  # noqa: BLE001
         def __init__(self, message, status=422):
             super().__init__(message); self.status = status
 
+# Comps conformance validator — the produced workbook is checked (including the
+# recalc-error scan) after LibreOffice recalc; a non-conforming file is an error.
+try:
+    from validate_comps_output import validate_comps_file
+    _COMPS_VALIDATOR = True
+except Exception:  # noqa: BLE001
+    _COMPS_VALIDATOR = False
+
+# Post-recalc shared-width re-apply (Prompt 48). LibreOffice re-optimizes column
+# widths when it stores the recalc'd file, desyncing a shared column that is blank
+# on one sheet but populated on the other (e.g. PATIENTS). This re-applies the
+# shared-width contract as the LAST mutation before conformance, WITHOUT dropping
+# the cached formula values recalc just computed (surgical <cols> XML rewrite).
+try:
+    from comps_width_postpass import reapply_shared_widths
+    _COMPS_WIDTH_POSTPASS = True
+except Exception:  # noqa: BLE001
+    _COMPS_WIDTH_POSTPASS = False
+
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("bov-generator")
@@ -231,38 +250,66 @@ class BOVResponse(BaseModel):
     recalc_result:      dict
 
 
-# ── Filename helper ───────────────────────────────────────────────────────────
-def _make_filename(req: BOVRequest) -> str:
-    """
-    Produce: [Property/Tenant]_[City]_[State]_BOV_[ClientLastName]_[YYYYMM].xlsx
-      e.g. CompassusHospice_Roanoke_AL_BOV_Kitchens_202603.xlsx
-    Name = property.name, else tenant name (NNN), else first part of the address (MOB).
-    Each component has spaces removed and non-alphanumerics stripped.
-    """
+# ── Filename helpers ──────────────────────────────────────────────────────────
+def _filename_token(value: object, fallback: str = "") -> str:
+    """Return an underscore-joined filename component with punctuation stripped."""
     import re
 
-    def _clean(s: str) -> str:
-        s = re.sub(r"[^\w\s-]", "", str(s or "")).strip()
-        return re.sub(r"\s+", "", s)  # remove internal spaces (CompassusHospice)
+    text = re.sub(r"[^\w\s-]", " ", str(value or "")).strip()
+    text = re.sub(r"[-\s]+", "_", text)
+    text = re.sub(r"_+", "_", text).strip("_")
+    return text or fallback
 
-    prop = req.property
-    name = (prop.name or "").strip()
-    if not name:
-        if req.asset_type.upper() != "MOB" and req.tenants and req.tenants[0].name:
-            name = req.tenants[0].name
-        else:
-            name = prop.address.split(",")[0]
 
-    parts = [_clean(name)]
-    cs = (prop.city_state or "").split(",")
-    if len(cs) >= 1 and cs[0].strip():
-        parts.append(_clean(cs[0]))
-    if len(cs) >= 2 and cs[1].strip():
-        parts.append(_clean(cs[1]))
+def _property_filename_stem(property_obj: object, fallback: str = "Property") -> str:
+    """
+    Produce the canonical street-anchored property stem:
+    7912_Cameron_Rd_Austin_TX.
+    """
+    if isinstance(property_obj, BaseModel):
+        data = property_obj.model_dump()
+    elif isinstance(property_obj, dict):
+        data = property_obj
+    else:
+        data = {}
 
-    prefix = "_".join(p for p in parts if p)
-    client_last = _clean(req.client.last_name)
-    return f"{prefix}_BOV_{client_last}_{req.client.file_month}.xlsx"
+    raw_address = str(data.get("address") or data.get("property_address") or "").strip()
+    city_state = str(data.get("city_state") or "").strip()
+    city = str(data.get("city") or "").strip()
+    state = str(data.get("state") or data.get("st") or "").strip()
+
+    address_parts = [part.strip() for part in raw_address.split(",") if part.strip()]
+    street = address_parts[0] if address_parts else ""
+    if len(address_parts) >= 2 and not city:
+        city = address_parts[1]
+    if len(address_parts) >= 3 and not state:
+        state = address_parts[2]
+
+    if city_state:
+        cs_parts = [part.strip() for part in city_state.split(",") if part.strip()]
+        if cs_parts and not city:
+            city = cs_parts[0]
+        if len(cs_parts) >= 2 and not state:
+            state = cs_parts[1]
+
+    pieces = [street, city, state]
+    stem = "_".join(_filename_token(piece) for piece in pieces if _filename_token(piece))
+    return stem or _filename_token(data.get("name") or data.get("label"), fallback)
+
+
+def _deal_artifact_filename(property_obj: object, doc_type: str, client: object, month: str, ext: str) -> str:
+    client_data = client.model_dump() if isinstance(client, BaseModel) else (client or {})
+    client_name = _filename_token(client_data.get("last_name") or client_data.get("name"), "Briggs")
+    file_month = _filename_token(month or client_data.get("file_month") or datetime.now().strftime("%Y%m"))
+    return f"{_property_filename_stem(property_obj)}_{doc_type}_{client_name}_{file_month}.{ext.lstrip('.')}"
+
+
+def _make_filename(req: BOVRequest) -> str:
+    """
+    Produce: {Property}_{DocType}_{Client}_{YYYYMM}.xlsx
+      e.g. 7912_Cameron_Rd_Austin_TX_BOV_Ward_202608.xlsx
+    """
+    return _deal_artifact_filename(req.property, "BOV", req.client, req.client.file_month, "xlsx")
 
 
 # ── Generate endpoint ─────────────────────────────────────────────────────────
@@ -276,7 +323,8 @@ async def generate_bov(req: BOVRequest, request: Request):
         try:
             req.cre_property_id = resolve_property_id(req.property_lookup)
         except BovRecordError as e:
-            raise HTTPException(status_code=getattr(e, "status", 502), detail=str(e))
+            detail = {"error": str(e), "resolution": e.envelope} if getattr(e, "envelope", None) else str(e)
+            raise HTTPException(status_code=getattr(e, "status", 502), detail=detail)
 
     # R58 Unit 4 (2C) — {cre_property_id} input: load the reviewed extraction
     # record and merge any explicitly-posted overrides on top. Hand-authored
@@ -387,14 +435,18 @@ async def generate_comps(payload: dict, request: Request):
     if comp_type not in ("sales", "lease"):
         raise HTTPException(status_code=422, detail="comp_type must be 'sales' or 'lease'")
 
-    # Filename: [label]_[Sales|Lease]Comps_[YYYYMM].xlsx. label from payload.name or client.
-    import re as _re
-    label = str(payload.get("name") or payload.get("label")
-                or (payload.get("client") or {}).get("last_name") or "Briggs").strip()
-    label = _re.sub(r"[^\w\s-]", "", label); label = _re.sub(r"\s+", "", label) or "Briggs"
-    month = str((payload.get("client") or {}).get("file_month") or datetime.now().strftime("%Y%m"))
+    # Filename: {Property}_{DocType}_{Client}_{YYYYMM}.xlsx.
+    client = payload.get("client") or {}
+    month = str(client.get("file_month") or datetime.now().strftime("%Y%m"))
     kind = "SalesComps" if comp_type == "sales" else "LeaseComps"
-    filename = f"{label}_{kind}_{month}.xlsx"
+    property_obj = payload.get("property") or {
+        "address": payload.get("address") or payload.get("property_address"),
+        "city": payload.get("city"),
+        "state": payload.get("state") or payload.get("st"),
+        "city_state": payload.get("city_state"),
+        "name": payload.get("name") or payload.get("label"),
+    }
+    filename = _deal_artifact_filename(property_obj, kind, client, month, "xlsx")
     log.info("Generating %s: %s", kind, filename)
 
     with tempfile.TemporaryDirectory(prefix="comps-gen-") as tmp:
@@ -412,6 +464,33 @@ async def generate_comps(payload: dict, request: Request):
         except RecalcError as e:
             log.error("Comps recalc failed: %s", e)
             raise HTTPException(status_code=500, detail=f"Recalc failed: {e}")
+
+        # Re-apply the shared column-width contract AFTER recalc, as the LAST write
+        # before conformance. LibreOffice re-optimizes widths on store (desyncing a
+        # shared column blank on one sheet / populated on the other — the PATIENTS
+        # 10.0-vs-13.0 conformance 500). This surgically rewrites only the <cols>
+        # XML, preserving every cached formula value recalc computed. Sales only —
+        # the two-sheet shared-width requirement is where the desync happens.
+        if _COMPS_WIDTH_POSTPASS and comp_type == "sales":
+            try:
+                reapply_shared_widths(output_path)
+            except Exception as e:  # noqa: BLE001 — never fail the whole export on the width pass
+                log.warning("Post-recalc shared-width re-apply failed (continuing): %s", e)
+
+        # Conformance gate — the produced workbook must match the Briggs comps
+        # standard (sheets/headers/formula-protected columns/trim + AVG ranges +
+        # 0 recalc errors). A non-conforming workbook is an error, not a delivered
+        # file. Sales verticals only (the lease template has a different shape).
+        conformance = None
+        if _COMPS_VALIDATOR and comp_type == "sales":
+            res = validate_comps_file(output_path, check_recalc_errors=True)
+            conformance = res.as_dict()
+            if not res.ok:
+                log.error("Comps conformance failed: %s", res.violations)
+                raise HTTPException(
+                    status_code=500,
+                    detail={"error": "produced comps workbook failed conformance",
+                            "violations": res.violations})
 
         try:
             raw_bytes = Path(output_path).read_bytes()
@@ -437,6 +516,7 @@ async def generate_comps(payload: dict, request: Request):
         "skipped_formula_keys": summary["skipped_formula_keys"],
         "unknown_keys": summary["unknown_keys"],
         "recalc_result": recalc_result,
+        "conformance": conformance,
     }
 
 

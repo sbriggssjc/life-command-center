@@ -1,0 +1,12 @@
+{
+  "_comment": "OC2 routing table — spec EXEC-BRIEFS-SPEC.md §6: 'a routing table kept in canon, not hard-coded in the triage tick, so a new owner thread is a canon edit, not a redeploy.' Read by api/_shared/operator-notes.js::loadRoutingTable(). Add a thread by editing this file; no code change or redeploy needed.",
+  "threads": [
+    { "thread": "app/briefing", "keywords": ["brief", "briefing", "daily email", "digest", "analyst take"] },
+    { "thread": "automation", "keywords": ["cron", "tick", "pipeline", "sync", "ingest", "ingestion", "flow", "power automate"] },
+    { "thread": "data-coherence", "keywords": ["wrong data", "incorrect", "conflicting", "duplicate", "mismatch", "stale", "missing data", "data gap"] },
+    { "thread": "surfaces/canon", "keywords": ["canon", "copilot", "chatgpt", "northmarq claude", "surface sync"] },
+    { "thread": "comps", "keywords": ["comp", "comps", "cap rate", "bov", "capital markets"] },
+    { "thread": "buyer-engagement", "keywords": ["buyer", "tier 0", "owner contact", "call sheet", "prospecting"] },
+    { "thread": "exec-briefs", "keywords": ["market brief", "exec brief", "build brief", "operator inbox", "operator note"] }
+  ]
+}

@@ -43,8 +43,9 @@ import { buildCapitalMarketsWorkbook, exportFilename } from './_shared/cm-excel-
 import { parseRcaExport, normalizeProductType, VALID_PRODUCT_TYPES } from './_shared/rca-parser.js';
 import { composeStat, listSupportedTemplates as listSupportedStatTemplates } from './_shared/cm-stat-recipes.js';
 import { buildVolumeCapSummary, joinVolumeCapQuartile } from './_shared/cm-summary-table.js';
-import { renderChartsToImages } from './_shared/cm-chart-image-renderer.js';
+import { renderChartsToImages, buildChartConfig } from './_shared/cm-chart-image-renderer.js';
 import { buildDialysisMasterWorkbook } from './_shared/cm-template-loader.js';
+import { invokeChatProvider } from './_shared/ai.js';
 
 // ---------------------------------------------------------------------------
 // Synthetic chart_templates — composed from other templates' rows rather than
@@ -54,6 +55,49 @@ import { buildDialysisMasterWorkbook } from './_shared/cm-template-loader.js';
 // composer({ vertical, subspecialty, asOf, allCharts }) → row array
 // allCharts is the array of fully-fetched, non-synthetic charts in this batch.
 // ---------------------------------------------------------------------------
+function buildRolling3MonthVolumeBars(masterMonthlyRows) {
+  const monthly = [];
+  if (Array.isArray(masterMonthlyRows) && masterMonthlyRows.length) {
+    for (const r of masterMonthlyRows) {
+      if (r.period_end == null) continue;
+      if (r.monthly_volume == null && r.monthly_count == null) continue;
+      monthly.push({
+        period_end: r.period_end,
+        mv: r.monthly_volume == null ? null : Number(r.monthly_volume),
+        mc: r.monthly_count == null ? null : Number(r.monthly_count),
+      });
+    }
+  }
+  monthly.sort((a, b) => (String(a.period_end) < String(b.period_end) ? -1 : 1));
+
+  const out = [];
+  for (let i = 0; i < monthly.length; i++) {
+    if (i < 2) {
+      out.push({ period_end: monthly[i].period_end, quarterly_volume: null, quarterly_count: null });
+      continue;
+    }
+    let vol = 0;
+    let cnt = 0;
+    let haveVol = false;
+    let haveCnt = false;
+    for (let j = i - 2; j <= i; j++) {
+      const m = monthly[j];
+      if (Number.isFinite(m.mv)) { vol += m.mv; haveVol = true; }
+      if (Number.isFinite(m.mc)) { cnt += m.mc; haveCnt = true; }
+    }
+    out.push({
+      period_end: monthly[i].period_end,
+      quarterly_volume: haveVol ? vol : null,
+      quarterly_count: haveCnt ? cnt : null,
+    });
+  }
+  return out;
+}
+
+// Exported for regression tests (cm-quarterly-volume-bars.test.mjs) — locks the
+// rolling-3-month behavior so it can't silently regress to the boxy quarter-repeat.
+export { buildRolling3MonthVolumeBars };
+
 const SYNTHETIC_COMPOSERS = {
   'volume_cap_summary': ({ asOf, allCharts }) => {
     const find = (id) => allCharts.find((c) => c.chart_template_id === id)?.rows || [];
@@ -272,39 +316,53 @@ const SYNTHETIC_COMPOSERS = {
   // already computes quarterly_volume + quarterly_count). We pull from the
   // existing volume_ttm_by_quarter chart's row stream because it carries
   // both ttm and per-quarter fields after Round GD1 fixes.
-  'quarterly_volume_bars': ({ allCharts, masterMonthlyRows }) => {
-    // Round 24 — Read from masterMonthlyRows first (has quarterly_volume
-    // + quarterly_count on every row). Fall back to volume_ttm_by_quarter
-    // when master_m isn't loaded. User reported the tab as blank again
-    // — root cause was that volume_ttm_by_quarter wrapper view returns
-    // only ttm columns (no quarterly_*), so the old find() never matched.
-    const byPeriod = new Map();
-    if (Array.isArray(masterMonthlyRows) && masterMonthlyRows.length) {
-      for (const r of masterMonthlyRows) {
-        const qv = r.quarterly_volume ?? r.volume_quarter ?? r.volume_dollars_quarterly;
-        if (qv == null) continue;
-        byPeriod.set(r.period_end, {
+  'quarterly_volume_bars': ({ allCharts, masterMonthlyRows, volumeMonthlyRows }) => {
+    // A5 (CM chart feedback item #11) — the old synthetic plotted
+    // `quarterly_volume`, which master_m repeats on every month of the quarter
+    // (Oct/Nov/Dec all print the same $319.4M) so the bars looked boxy and
+    // never moved month-to-month. Rebuild as a TRAILING-3-MONTH ROLLING SUM of
+    // the TRUE monthly volume/count (master_m.monthly_volume / monthly_count),
+    // at monthly grain — same information, but it moves every month like the
+    // other charts. Computed over the FULL monthly series before the caller
+    // applies the display_from / as_of crops (so the first visible month still
+    // carries a full trailing window).
+    //
+    // Prefer `volumeMonthlyRows` — a SLIM (period_end, monthly_volume,
+    // monthly_count) projection the export path re-fetches when the full
+    // 39-column master_m select fails PostgREST serialization (Round 6b).
+    // That failure is what silently dropped gov exports to the boxy fallback
+    // below (351 monthly bars each stamped with the repeated quarter total).
+    const rolling = buildRolling3MonthVolumeBars(volumeMonthlyRows || masterMonthlyRows);
+    if (rolling.length > 0) return rolling;
+
+    // Fallback (monthly volume genuinely unavailable) — collapse to QUARTER
+    // grain (ONE bar per quarter) instead of repeating the quarter total on
+    // every monthly anchor. `volume_ttm_by_quarter` is fetched from the
+    // MONTHLY view (cm_{vertical}_volume_ttm_m), so its rows are monthly and
+    // each carries the same `quarterly_volume` three times; keying by period_end
+    // (as the pre-A5 code did) kept all three and produced the boxy artifact.
+    // One quarterly bar per quarter is honest and still moves quarter-to-quarter.
+    const byQuarter = new Map();
+    const find = (id) => allCharts.find((c) => c.chart_template_id === id)?.rows || [];
+    for (const r of find('volume_ttm_by_quarter')) {
+      const qv = r.quarterly_volume ?? r.volume_quarterly ?? r.volume_quarter
+                  ?? r.volume_dollars_quarterly;
+      if (qv == null || r.period_end == null) continue;
+      const d = new Date(r.period_end);
+      if (Number.isNaN(d.getTime())) continue;
+      const qKey = `${d.getUTCFullYear()}-Q${Math.floor(d.getUTCMonth() / 3)}`;
+      const prev = byQuarter.get(qKey);
+      // Keep the LATEST period_end in the quarter (the quarter-end month) as the
+      // single anchor for that quarter's bar.
+      if (!prev || String(r.period_end) > String(prev.period_end)) {
+        byQuarter.set(qKey, {
           period_end: r.period_end,
           quarterly_volume: Number(qv),
           quarterly_count: r.quarterly_count ?? r.count_quarter ?? null,
         });
       }
     }
-    if (byPeriod.size === 0) {
-      const find = (id) => allCharts.find((c) => c.chart_template_id === id)?.rows || [];
-      const volRows = find('volume_ttm_by_quarter');
-      for (const r of volRows) {
-        const qv = r.quarterly_volume ?? r.volume_quarterly ?? r.volume_quarter
-                    ?? r.volume_dollars_quarterly;
-        if (qv == null) continue;
-        byPeriod.set(r.period_end, {
-          period_end: r.period_end,
-          quarterly_volume: Number(qv),
-          quarterly_count: r.quarterly_count ?? r.count_quarter ?? null,
-        });
-      }
-    }
-    return [...byPeriod.values()].sort((a, b) =>
+    return [...byQuarter.values()].sort((a, b) =>
       String(a.period_end) < String(b.period_end) ? -1 : 1
     );
   },
@@ -334,6 +392,9 @@ const SYNTHETIC_COMPOSERS = {
     );
   },
 };
+
+// Exported for regression tests — see cm-quarterly-volume-bars.test.mjs.
+export { SYNTHETIC_COMPOSERS };
 
 function syntheticRecipeFor(template) {
   const t = template?.view_name_template || '';
@@ -376,6 +437,11 @@ export default withErrorHandler(async function handler(req, res) {
       case 'catalog':          return listCatalog(req, res);
       case 'brand':            return getBrandTokens(req, res);
       case 'broker_patterns':  return listBrokerPatterns(req, res);
+      case 'packet_status':    return packetStatus(req, res);
+      case 'packet':           return getReportPacket(req, res, user);
+      case 'packet_images':    return getReportPacketImages(req, res, user);
+      case 'commentary':       return getCommentary(req, res);
+      case 'marketing_markdown': return marketingMarkdown(req, res);
 
       // Chart data (Phase 1 live)
       case 'chart':            return fetchChart(req, res);
@@ -393,7 +459,7 @@ export default withErrorHandler(async function handler(req, res) {
 
       default:
         return res.status(400).json({
-          error: 'GET actions: verticals, subspecialties, catalog, brand, broker_patterns, chart, quarterly, export, narrative, copilot_stat, copilot_stat_catalog'
+          error: 'GET actions: verticals, subspecialties, catalog, brand, broker_patterns, packet_status, packet, packet_images, commentary, marketing_markdown, chart, quarterly, export, narrative, copilot_stat, copilot_stat_catalog'
         });
     }
   }
@@ -407,11 +473,14 @@ export default withErrorHandler(async function handler(req, res) {
       case 'add_broker_pattern':     return addBrokerPattern(req, res);
       case 'refresh_nm_attribution': return refreshNmAttribution(req, res);
       case 'rca_import':             return rcaImport(req, res, user);
+      case 'commentary':             return saveCommentary(req, res, user);
+      case 'generate_commentary':    return generateCommentary(req, res, user, workspaceId);
       case 'save_narrative':         return res.status(501).json(PHASE_2_PENDING(action));
       case 'publish':                return res.status(501).json(PHASE_2_PENDING(action));
+      case 'refresh_packet':         return refreshPacket(req, res, user);
 
       default:
-        return res.status(400).json({ error: 'POST actions: add_broker_pattern, refresh_nm_attribution, rca_import, save_narrative, publish' });
+        return res.status(400).json({ error: 'POST actions: add_broker_pattern, refresh_nm_attribution, rca_import, commentary, generate_commentary, save_narrative, publish, refresh_packet' });
     }
   }
 
@@ -466,6 +535,11 @@ async function listCatalog(req, res) {
 }
 
 async function getBrandTokens(req, res) {
+  const { tokens, raw } = await loadBrandTokensObject();
+  return res.status(200).json({ tokens, raw });
+}
+
+async function loadBrandTokensObject() {
   const result = await opsQuery(
     'GET',
     `cm_brand_tokens?select=token_key,token_value,category&order=category,token_key`
@@ -477,7 +551,7 @@ async function getBrandTokens(req, res) {
     if (!tokens[category]) tokens[category] = {};
     tokens[category][key || category] = row.token_value;
   }
-  return res.status(200).json({ tokens, raw: result.data || [] });
+  return { tokens, raw: result.data || [] };
 }
 
 async function listBrokerPatterns(req, res) {
@@ -571,7 +645,16 @@ function clampRowsToAsOf(rows, template, asOf) {
     shape.startsWith('time_series') ||
     shape.startsWith('monthly') ||
     shape.startsWith('quarterly') ||
-    shape.includes('yearly');
+    shape.includes('yearly') ||
+    // Historical as-of (2026-08-07): these snapshot shapes carry a REAL
+    // historical date in period_end (quarter-anchored cohort tables and
+    // per-sale dot clouds where period_end = sale_date), so clamping to
+    // <= as_of is correct — it selects the reporting quarter and drops
+    // sales/quarters that had not happened yet. (Active-inventory snapshots
+    // like tenant/term/per-listing are handled by _q reconstruction instead,
+    // never by this date clamp, which would wrongly empty a max()-only view.)
+    shape.startsWith('cohort_comparison') ||
+    shape.startsWith('per_sale');
   if (!isTimeSeries) return rows;
   const col = timeAxisColumnFor(template); // 'year' | 'period_end'
   // R68-E (G3): apply the per-chart lower bound (data-side x-axis crop).
@@ -592,6 +675,936 @@ function clampRowsToAsOf(rows, template, asOf) {
   return out.filter(
     (r) => r?.period_end == null || String(r.period_end).slice(0, 10) <= cap
   );
+}
+
+/**
+ * CM export audit item 7 — crop a chart's rows to its registered display_from.
+ * Only period_end time-series are cropped (the seeded series are all
+ * period_end-based); a display_from is a date, and period_end is an ISO
+ * 'YYYY-MM-DD' string that compares correctly as text. Non-time-series and
+ * year-axis shapes pass through untouched.
+ */
+export function cropRowsToDisplayFrom(rows, template, df) {
+  if (!Array.isArray(rows) || rows.length === 0 || df == null) return rows;
+  // Backward-compat: accept either a resolved display_from string or a
+  // {chart_template_id → date} map (used by the unit tests).
+  const cutoff = typeof df === 'string'
+    ? df
+    : df[template?.chart_template_id];
+  if (!cutoff) return rows;
+  if (timeAxisColumnFor(template) !== 'period_end') return rows; // year-axis: skip
+  return rows.filter(
+    (r) => r?.period_end == null || String(r.period_end).slice(0, 10) >= String(cutoff).slice(0, 10)
+  );
+}
+
+// ============================================================================
+// Q1 as-of regeneration (residual #1B, 2026-08-08) — annual buyer-pool YTD clamp
+// ============================================================================
+//
+// buyer_class_pct_by_year is an ANNUAL stacked bar (Data_Buyer_Pool). Its
+// source yearly view (cm_{vertical}_buyer_share_y) rolls every quarter of each
+// calendar year into that year's bar with NO as-of awareness, so a Q1
+// (as_of=2026-03-31) export summed Q1+Q2-2026 volume into the 2026 bar. The
+// year-axis crop/clamp can only DROP whole years, never re-sum a partial one.
+//
+// Fix: reconstruct the annual series in JS from the period_end-keyed quarterly
+// buyer-share view (cm_{vertical}_buyer_share_q — gov already had one; dia gets
+// it in 20260808_cm_q1_asof_residuals.sql), summing ONLY quarters whose
+// period_end <= as_of. The current (as_of) year is then a true YTD roll-up, and
+// when as_of is not a Q4/Dec year-end its bar is relabelled "<year> YTD" so the
+// partial year is never misread as a full year.
+const BUYER_SHARE_Q_VERTICALS = new Set(['dialysis', 'gov']);
+
+/**
+ * Roll period_end-keyed quarterly buyer-share rows up to an annual series,
+ * clamping every quarter to `asOf` (so the as-of year is a YTD sum, not a full
+ * year). Returns rows shaped exactly like the cm_{vertical}_buyer_share_y view
+ * (year, subspecialty, *_volume, *_pct) plus `ytd`/`ytd_through` provenance.
+ */
+export function buildAnnualBuyerShare(quarterRows, asOf) {
+  if (!Array.isArray(quarterRows) || quarterRows.length === 0) return [];
+  const cap = asOf ? String(asOf).slice(0, 10) : null;
+  // as-of month (0-11); a Q4/Dec (month 11) as-of means the year is complete.
+  const asOfMonth = cap
+    ? new Date(cap + 'T00:00:00Z').getUTCMonth()
+    : null;
+  const byYear = new Map();
+  for (const r of quarterRows) {
+    const pe = r?.period_end ? String(r.period_end).slice(0, 10) : null;
+    if (!pe) continue;
+    if (cap && pe > cap) continue; // as-of end clamp — drop quarters past as_of
+    const year = Number(pe.slice(0, 4));
+    if (!Number.isFinite(year)) continue;
+    if (!byYear.has(year)) {
+      byYear.set(year, {
+        year, subspecialty: r.subspecialty ?? null,
+        private_volume: 0, reit_volume: 0, cross_border_volume: 0, institutional_volume: 0,
+      });
+    }
+    const a = byYear.get(year);
+    a.private_volume       += Number(r.private_volume)       || 0;
+    a.reit_volume          += Number(r.reit_volume)          || 0;
+    a.cross_border_volume  += Number(r.cross_border_volume)  || 0;
+    a.institutional_volume += Number(r.institutional_volume) || 0;
+  }
+  const years = [...byYear.values()].sort((a, b) => a.year - b.year);
+  const maxYear = years.length ? years[years.length - 1].year : null;
+  // Partial (YTD) only when the as-of year is not yet complete (as_of before Q4).
+  const partialYear = cap && asOfMonth != null && asOfMonth !== 11;
+  return years
+    .filter((a) => a.year >= 2010) // mirror the yearly view's >= 2010 floor
+    .map((a) => {
+      const total = a.private_volume + a.reit_volume + a.cross_border_volume + a.institutional_volume;
+      const pct = (v) => (total > 0 ? v / total : null);
+      const isYtd = !!partialYear && a.year === maxYear;
+      return {
+        year: isYtd ? `${a.year} YTD` : a.year,
+        year_num: a.year,
+        subspecialty: a.subspecialty,
+        private_volume: a.private_volume,
+        reit_volume: a.reit_volume,
+        cross_border_volume: a.cross_border_volume,
+        institutional_volume: a.institutional_volume,
+        private_pct: pct(a.private_volume),
+        reit_pct: pct(a.reit_volume),
+        cross_border_pct: pct(a.cross_border_volume),
+        institutional_pct: pct(a.institutional_volume),
+        ytd: isYtd,
+        ytd_through: isYtd ? cap : null,
+      };
+    });
+}
+
+// ============================================================================
+// Historical as-of resolution (CM historical regeneration, 2026-08-07)
+// ============================================================================
+//
+// The export accepts ?as_of=YYYY-MM-DD. It is validated/snapped to a QUARTER
+// END and defaults to the latest COMPLETED quarter — the JS mirror of the SQL
+// `cm_last_completed_quarter_end()` (= date_trunc('quarter', current_date) - 1
+// day). A value that lands mid-quarter is snapped down to that quarter's end; a
+// value beyond the latest completed quarter is clamped back to it (a report can
+// never be "as of" an in-progress quarter). Unparseable input is rejected by
+// the caller (asOf === null).
+
+/** Quarter end (last calendar day of the quarter containing `d`), ISO date. */
+export function quarterEndOf(d) {
+  const dt = new Date(String(d).slice(0, 10) + 'T00:00:00Z');
+  if (Number.isNaN(dt.getTime())) return null;
+  const endMonth = Math.floor(dt.getUTCMonth() / 3) * 3 + 2; // 2,5,8,11
+  // Day 0 of the following month = last day of endMonth.
+  return new Date(Date.UTC(dt.getUTCFullYear(), endMonth + 1, 0)).toISOString().slice(0, 10);
+}
+
+/** Latest COMPLETED quarter end — JS mirror of cm_last_completed_quarter_end(). */
+export function latestCompletedQuarterEnd(today = new Date()) {
+  const startMonth = Math.floor(today.getUTCMonth() / 3) * 3;
+  const firstOfQuarter = Date.UTC(today.getUTCFullYear(), startMonth, 1);
+  return new Date(firstOfQuarter - 86400000).toISOString().slice(0, 10);
+}
+
+/**
+ * Resolve the requested as_of into a validated quarter-end.
+ * Returns { asOf, latest, defaulted, snapped } — asOf is null only when the
+ * caller passed an unparseable date (→ 400).
+ */
+export function resolveAsOf(raw) {
+  const latest = latestCompletedQuarterEnd();
+  if (raw == null || String(raw).trim() === '') {
+    return { asOf: latest, latest, defaulted: true, snapped: false };
+  }
+  const s = String(raw).slice(0, 10);
+  const qe = quarterEndOf(s);
+  if (!qe) return { asOf: null, latest, defaulted: false, snapped: false };
+  const clamped = qe > latest ? latest : qe;
+  return { asOf: clamped, latest, defaulted: false, snapped: clamped !== s };
+}
+
+// Snapshot feeds whose CURRENT-only views (max(period_end)) have a
+// period_end-keyed `_q` reconstruction sibling. For these, when exporting, we
+// fetch the `_q` view and select the requested quarter. Reconstruction is only
+// wired for verticals that actually have the `_q` views built (dialysis today);
+// any other vertical falls back to the current snapshot + an honest
+// "not historical" stamp on the sheet (see snapshot_not_historical below).
+const RECONSTRUCTABLE_QVIEW = {
+  available_by_tenant:         'cm_{vertical}_available_by_tenant_q',
+  available_by_term_bucket:    'cm_{vertical}_available_by_term_bucket_q',
+  available_cap_rate_dot_plot: 'cm_{vertical}_available_cap_dot_q',
+};
+const RECONSTRUCTABLE_VERTICALS = new Set(['dialysis']);
+
+// Data shapes that are point-in-time active-inventory snapshots (current-only
+// unless a `_q` reconstruction exists). Used to stamp sheets "Snapshot as of
+// <generation date> — not historical" when a historical as_of is requested but
+// the feed can't be reconstructed for this vertical.
+const CURRENT_ONLY_SNAPSHOT_SHAPES = new Set([
+  'tenant_summary_table',
+  'term_bucket_table',
+  'per_listing_snapshot',
+]);
+
+/**
+ * From a period_end-keyed reconstruction view, keep only the rows at the target
+ * quarter = the greatest period_end <= asOf. Selecting the latest quarter
+ * reproduces the current max(period_end) snapshot views exactly.
+ */
+export function selectSnapshotPeriod(rows, asOf) {
+  if (!Array.isArray(rows) || rows.length === 0) return rows;
+  const cap = String(asOf).slice(0, 10);
+  let target = null;
+  for (const r of rows) {
+    const p = String(r?.period_end || '').slice(0, 10);
+    if (!p || p > cap) continue;
+    if (target === null || p > target) target = p;
+  }
+  if (target === null) return [];
+  return rows.filter((r) => String(r?.period_end || '').slice(0, 10) === target);
+}
+
+/**
+ * CM export audit item 4 — treasury freshness step, run BEFORE the workbook is
+ * built. Treasury-derived series (10Y, loan constants, leveraged returns) read
+ * FRED DGS10 from economic_indicators, which is written by the single dia
+ * `ingest_fred` pipeline (we do NOT write it from here — a second writer would
+ * fork the dedup/data_hash). This step:
+ *   1. checks whether DGS10 covers the export month;
+ *   2. if not AND a refresh webhook is configured (CM_TREASURY_REFRESH_URL),
+ *      fires it once and re-checks (the env-gated ingestion trigger seam —
+ *      no-op when unset, so default behavior is unchanged);
+ *   3. returns { maxDate, stale } for meta; the per-chart macro-tail lag
+ *      warning remains the fallback when the month genuinely isn't published.
+ */
+async function ensureTreasuryFreshForExport(domain, asOf) {
+  if (!domain) return { maxDate: null, stale: null };
+  const monthStart = (d) => String(d || new Date().toISOString().slice(0, 10)).slice(0, 7) + '-01';
+  const readMax = async () => {
+    try {
+      const res = await domainQuery(
+        domain, 'GET',
+        'economic_indicators?series_id=eq.DGS10&select=observation_date&order=observation_date.desc&limit=1'
+      );
+      const v = res && res.ok !== false && Array.isArray(res.data) && res.data[0];
+      return v && v.observation_date ? String(v.observation_date).slice(0, 10) : null;
+    } catch { return null; }
+  };
+  const target = monthStart(asOf);
+  let maxDate = await readMax();
+  let stale = !maxDate || maxDate < target;
+  if (stale && process.env.CM_TREASURY_REFRESH_URL) {
+    try {
+      // The refresh target is the dia FRED ingestion trigger. It may be a bare
+      // webhook (default POST, no auth) OR an authenticated dispatch endpoint —
+      // e.g. GitHub Actions workflow_dispatch, which requires an auth token and a
+      // JSON body {"ref":"main"}. Optional env wiring (all unset => legacy bare POST):
+      //   CM_TREASURY_REFRESH_METHOD  (default POST)
+      //   CM_TREASURY_REFRESH_TOKEN   -> Authorization: Bearer <token>
+      //   CM_TREASURY_REFRESH_BODY    -> raw request body (e.g. '{"ref":"main"}')
+      // For GitHub, point CM_TREASURY_REFRESH_URL at
+      //   https://api.github.com/repos/<owner>/Dialysis/actions/workflows/fred-ingest-daily.yml/dispatches
+      // NOTE: dispatch is asynchronous (the ingest runs for ~1 min), so this
+      // request cannot refresh the CURRENT export — it primes the NEXT one. The
+      // daily schedule + dia_check_fred_staleness watchdog are the real freshness
+      // guarantee; this seam just kicks an on-demand catch-up.
+      const headers = { 'Content-Type': 'application/json' };
+      if (process.env.CM_TREASURY_REFRESH_TOKEN) {
+        headers.Authorization = `Bearer ${process.env.CM_TREASURY_REFRESH_TOKEN}`;
+        headers.Accept = 'application/vnd.github+json'; // harmless for non-GitHub targets
+      }
+      await fetch(process.env.CM_TREASURY_REFRESH_URL, {
+        method: process.env.CM_TREASURY_REFRESH_METHOD || 'POST',
+        headers,
+        body: process.env.CM_TREASURY_REFRESH_BODY || undefined,
+      });
+      maxDate = await readMax();
+      stale = !maxDate || maxDate < target;
+    } catch (e) {
+      console.warn(`[cm-export] treasury refresh webhook failed: ${e?.message || e}`);
+    }
+  }
+  if (stale) {
+    console.warn(
+      `[cm-export] treasury freshness: DGS10 latest ${maxDate || 'none'} does not cover ` +
+      `export month ${target.slice(0, 7)}. Run the dia FRED ingestion (ingest_fred) for ` +
+      `that month before shipping, or set CM_TREASURY_REFRESH_URL to auto-trigger it. ` +
+      `Treasury-joined series will end on the last published month (see per-chart macro-tail warnings).`
+    );
+  }
+  return { maxDate, stale };
+}
+
+/**
+ * Resolve a chart's display_from from the registry rows, preferring the row
+ * whose view_name equals the view this chart actually exports (so an _m chart
+ * with both _m and _q sibling rows crops on the cadence it reads). Falls back
+ * to any row for the chart_template_id. Returns an ISO date string or null.
+ */
+export function resolveDisplayFrom(displayFromRows, chart_template_id, view_name) {
+  if (!Array.isArray(displayFromRows) || displayFromRows.length === 0) return null;
+  const matches = displayFromRows.filter(
+    (r) => r.chart_template_id === chart_template_id && r.display_from
+  );
+  if (matches.length === 0) return null;
+  const exact = matches.find((r) => r.view_name === view_name);
+  return String((exact || matches[0]).display_from).slice(0, 10);
+}
+
+const CURATED_DISPLAY_FROM = {
+  gov: {
+    // Gov on-market/listing inventory is not robust before the 2012 coverage
+    // era. The live gov cm_view_registry does not yet expose display_from, so
+    // keep this export-side floor until the registry migration catches up.
+    market_turnover: '2012-01-01',
+    // Gov Rent & Price / SF has sparse/discontinuous pre-1997 history. The
+    // source-level registry migration sets this same floor; keep the fallback
+    // so exports crop correctly until that migration is live.
+    rent_and_price_psf: '1997-06-30',
+  },
+};
+
+export function resolveEffectiveDisplayFrom(displayFromRows, chart_template_id, view_name, vertical) {
+  return resolveDisplayFrom(displayFromRows, chart_template_id, view_name)
+    || CURATED_DISPLAY_FROM[String(vertical || '').toLowerCase()]?.[chart_template_id]
+    || null;
+}
+
+function normalizePacketVertical(vertical) {
+  const v = String(vertical || '').trim().toLowerCase();
+  if (v === 'dia') return 'dialysis';
+  if (v === 'government') return 'gov';
+  return v;
+}
+
+function quarterLabelFromPeriodEnd(periodEnd) {
+  const m = String(periodEnd || '').match(/^(\d{4})-(\d{2})/);
+  if (!m) return null;
+  return `Q${Math.ceil(Number(m[2]) / 3)}-${m[1]}`;
+}
+
+function periodEndFromQuarterLabel(label) {
+  const m = String(label || '').trim().match(/^Q([1-4])[-\s]?(\d{4})$/i);
+  if (!m) return null;
+  const q = Number(m[1]);
+  const y = Number(m[2]);
+  const month = q * 3;
+  const day = (month === 6 || month === 9) ? 30 : 31;
+  return `${y}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function packetDomainForVertical(vertical) {
+  return VERTICAL_TO_DOMAIN[normalizePacketVertical(vertical)] || null;
+}
+
+function chartsToPages(charts = []) {
+  const pages = {};
+  for (const chart of charts || []) {
+    if (!chart?.chart_template_id) continue;
+    pages[chart.chart_template_id] = {
+      page_id: chart.chart_template_id,
+      title: chart.name || chart.chart_template_id,
+      chart_template_id: chart.chart_template_id,
+      view_name: chart.view_name || null,
+      metric_focus: chart.metric_focus || null,
+      data_shape: chart.data_shape || null,
+      chart_type: chart.chart_type || null,
+      rows: Array.isArray(chart.rows) ? chart.rows : [],
+      commentary: null,
+      commentary_status: null,
+    };
+  }
+  return pages;
+}
+
+function packetFlagsFromCharts(charts = [], periodEnd) {
+  const flags = [];
+  for (const chart of charts || []) {
+    const rows = Array.isArray(chart.rows) ? chart.rows : [];
+    if (chart.fetch_failed || chart.ok === false) {
+      flags.push({ page: chart.chart_template_id, type: 'fetch_failed', msg: chart.error || 'Chart source fetch failed.' });
+      continue;
+    }
+    if (rows.length === 0) {
+      flags.push({ page: chart.chart_template_id, type: 'null_series', msg: 'No rows returned for this chart.' });
+      continue;
+    }
+    const latest = rows.filter(r => !r?.period_end || String(r.period_end).slice(0, 10) <= periodEnd).slice(-1)[0] || rows[rows.length - 1];
+    for (const [key, value] of Object.entries(latest || {})) {
+      if (/^n($|_)|(_n$)|count/i.test(key) && value != null) {
+        const n = Number(value);
+        if (Number.isFinite(n) && n > 0 && n < 10) {
+          flags.push({ page: chart.chart_template_id, type: 'thin_sample', msg: `${key}=${n}` });
+        }
+      }
+    }
+    if (chart.chart_template_id === 'cost_of_capital' && latest?.treasury_10y_close == null && latest?.treasury_10y_avg != null) {
+      flags.push({ page: chart.chart_template_id, type: 'rate_basis', msg: '10Y Treasury close missing; quarterly average is present.' });
+    }
+  }
+  return flags;
+}
+
+async function buildLivePacket({ vertical, periodEnd, quarter, user, onlyTemplates = null }) {
+  const payload = await assembleExportPayloadForPacket({ vertical, periodEnd, user, onlyTemplates });
+  const charts = payload?.charts || [];
+
+  return {
+    vertical,
+    quarter,
+    fiscal_quarter: quarter,
+    period_end: periodEnd,
+    source: 'export-payload-freeze',
+    frozen: false,
+    generated_at: new Date().toISOString(),
+    generated_by: user?.email || user?.id || 'api',
+    comparatives: {
+      prior_q: quarterEndBack(periodEnd, 1),
+      year_ago: quarterEndBack(periodEnd, 4),
+    },
+    charts,
+    pages: chartsToPages(charts),
+    flags: packetFlagsFromCharts(charts, periodEnd),
+  };
+}
+
+async function assembleExportPayloadForPacket({ vertical, periodEnd, user, onlyTemplates = null }) {
+  const fakeReq = {
+    query: {
+      vertical,
+      as_of: periodEnd,
+      subspecialty: 'all',
+      format: 'payload',
+      ...(Array.isArray(onlyTemplates) && onlyTemplates.length
+        ? { only_templates: onlyTemplates.join(',') }
+        : {}),
+    },
+    user,
+  };
+  let statusCode = 200;
+  let payload = null;
+  const fakeRes = {
+    setHeader() {},
+    status(code) { statusCode = code; return this; },
+    json(obj) { payload = obj; return obj; },
+    send(obj) { payload = obj; return obj; },
+  };
+  await exportWorkbook(fakeReq, fakeRes);
+  if (statusCode >= 400) {
+    const err = new Error(payload?.error || `export payload assembly failed (${statusCode})`);
+    err.status = statusCode;
+    err.detail = payload;
+    throw err;
+  }
+  if (!payload || payload.ok === false) {
+    const err = new Error(payload?.error || 'export payload assembly returned no payload');
+    err.status = payload?.status || 500;
+    err.detail = payload;
+    throw err;
+  }
+  return payload;
+}
+
+function quarterEndBack(periodEnd, k) {
+  const m = String(periodEnd || '').match(/^(\d{4})-(\d{2})/);
+  if (!m) return null;
+  const idx = Number(m[1]) * 4 + (Math.ceil(Number(m[2]) / 3) - 1) - k;
+  const y = Math.floor(idx / 4);
+  const q = (idx % 4 + 4) % 4 + 1;
+  const month = q * 3;
+  const day = (month === 6 || month === 9) ? 30 : 31;
+  return `${y}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+async function readCommentaryRows(domain, vertical, quarter, status = null) {
+  const statusFilter = status ? `&status=eq.${encodeURIComponent(status)}` : '';
+  const r = await domainQuery(
+    domain, 'GET',
+    `cm_report_commentary?select=*&vertical=eq.${encodeURIComponent(vertical)}&fiscal_quarter=eq.${encodeURIComponent(quarter)}${statusFilter}&order=page_id.asc`
+  );
+  return r.ok !== false && Array.isArray(r.data) ? r.data : [];
+}
+
+function attachCommentaryToPacket(packet, rows) {
+  const byPage = new Map((rows || []).map(r => [r.page_id, r]));
+  const pages = { ...(packet.pages || {}) };
+  const charts = (packet.charts || []).map((chart) => {
+    const row = byPage.get(chart.chart_template_id);
+    if (!row) return chart;
+    pages[chart.chart_template_id] = {
+      ...(pages[chart.chart_template_id] || {}),
+      commentary: row.copy || '',
+      commentary_status: row.status || null,
+    };
+    return { ...chart, commentary: row.copy || '', commentary_status: row.status || null };
+  });
+  return { ...packet, pages, charts, commentary: rows || [] };
+}
+
+/**
+ * Set of chart_template_ids that carry ≥1 data row in a packet. This is the
+ * "completeness fingerprint" used by the regression guard below.
+ */
+export function packetPopulatedIds(packet) {
+  const s = new Set();
+  for (const c of (packet?.charts || [])) {
+    if (c && c.chart_template_id && Array.isArray(c.rows) && c.rows.length > 0) {
+      s.add(c.chart_template_id);
+    }
+  }
+  return s;
+}
+
+/**
+ * Charts that were populated in `oldPacket` but are missing/empty in `newPacket`.
+ *
+ * The gov live packet build re-runs the full export assembly (dozens of parallel
+ * PostgREST fetches); under load an individual fetchView can time out and return
+ * empty, which silently drops that chart. Freezing such a degraded packet over a
+ * good one is what stranded the Capital Markets tab (2026-08-14). A rebuild is
+ * only allowed to REPLACE an existing snapshot when it regresses nothing — it may
+ * add newly-populated charts (improvement) or change values (freshness), but it
+ * must never turn a populated chart empty. A non-empty return = reject the rebuild.
+ */
+export function packetRegressions(newPacket, oldPacket) {
+  const oldIds = packetPopulatedIds(oldPacket);
+  const newIds = packetPopulatedIds(newPacket);
+  const lost = [];
+  for (const id of oldIds) if (!newIds.has(id)) lost.push(id);
+  return lost;
+}
+
+async function fetchSnapshotRow(domain, v, q) {
+  const existing = await domainQuery(
+    domain, 'GET',
+    `cm_report_snapshots?select=*&vertical=eq.${encodeURIComponent(v)}&fiscal_quarter=eq.${encodeURIComponent(q)}&limit=1`
+  );
+  if (existing.ok === false && existing.status === 404) {
+    const err = new Error('cm_report_snapshots table is missing; apply the packet migration first.');
+    err.status = 501;
+    throw err;
+  }
+  if (existing.ok !== false && Array.isArray(existing.data) && existing.data[0]) {
+    return existing.data[0];
+  }
+  return null;
+}
+
+async function serveSnapshotRow(domain, v, q, row, extra = {}) {
+  const commentary = await readCommentaryRows(domain, v, q);
+  return {
+    snapshot_id: row.snapshot_id,
+    frozen: true,
+    frozen_at: row.frozen_at,
+    frozen_by: row.frozen_by,
+    packet: attachCommentaryToPacket({ ...(row.packet || {}), source: 'frozen-snapshot' }, commentary),
+    ...extra,
+  };
+}
+
+async function buildOrFetchPacket({ vertical, quarter, periodEnd, user, forceLive = false }) {
+  const domain = packetDomainForVertical(vertical);
+  if (!domain) {
+    const err = new Error(`Unsupported packet vertical: ${vertical}`);
+    err.status = 400;
+    throw err;
+  }
+  const v = normalizePacketVertical(vertical);
+  const q = quarter || quarterLabelFromPeriodEnd(periodEnd);
+  const pe = periodEnd || periodEndFromQuarterLabel(q);
+  if (!q || !pe) {
+    const err = new Error('quarter or as_of is required');
+    err.status = 400;
+    throw err;
+  }
+
+  // Always look up the existing snapshot: it's what we serve when not rebuilding,
+  // and it's the baseline the regression guard protects when we do rebuild.
+  const existingRow = await fetchSnapshotRow(domain, v, q);
+
+  if (!forceLive && existingRow) {
+    return serveSnapshotRow(domain, v, q, existingRow);
+  }
+
+  const packet = await buildLivePacket({ vertical: v, periodEnd: pe, quarter: q, user });
+
+  // Regression guard — never overwrite a good snapshot with a degraded rebuild.
+  const regressed = existingRow ? packetRegressions(packet, existingRow.packet) : [];
+  if (existingRow && regressed.length > 0) {
+    // Keep (and serve) the existing good snapshot; report what the rebuild dropped
+    // so a caller (refresh_packet) can retry.
+    return serveSnapshotRow(domain, v, q, existingRow, {
+      persisted: false,
+      rebuild_rejected: true,
+      regressed,
+    });
+  }
+
+  const insert = await domainQuery(
+    domain,
+    'POST',
+    'cm_report_snapshots?on_conflict=vertical,fiscal_quarter',
+    {
+      vertical: v,
+      fiscal_quarter: q,
+      period_end: pe,
+      packet,
+      frozen_by: user?.email || user?.id || 'api',
+      updated_at: new Date().toISOString(),
+    },
+    { Prefer: 'resolution=merge-duplicates,return=representation' }
+  );
+  if (insert.ok === false) {
+    const err = new Error('packet_snapshot_write_failed');
+    err.status = insert.status || 500;
+    err.detail = insert.data;
+    throw err;
+  }
+  const row = Array.isArray(insert.data) ? insert.data[0] : insert.data;
+  return {
+    snapshot_id: row?.snapshot_id || null,
+    frozen: true,
+    frozen_at: row?.frozen_at || null,
+    frozen_by: row?.frozen_by || null,
+    packet: { ...packet, source: 'frozen-snapshot' },
+    persisted: true,
+    regressed: [],
+  };
+}
+
+/**
+ * POST action=refresh_packet — the reliable OFF-request packet rebuild.
+ *
+ * Runs the (heavy) live packet build up to `attempts` times. The regression guard
+ * inside buildOrFetchPacket means a degraded build (a chart dropped by a transient
+ * fetch timeout) is REJECTED — the existing good snapshot is preserved — so the
+ * loop simply retries until a complete, non-regressing build lands and sticks.
+ * This is what safely gets fresh (e.g. Q2) data into the frozen packet without the
+ * request-path rebuild that stranded the tab on 2026-08-14. Intended to be called
+ * by a scheduler (see .github/workflows/cm-packet-refresh.yml), not the browser.
+ */
+/**
+ * Chunked merge refresh — rebuild only `batchIds` charts (a small subset, so the
+ * request stays fast) and merge their fresh rows into the EXISTING snapshot. A
+ * chart is only replaced when the fresh build populated it; if the fresh build
+ * came back empty, the existing (populated) chart is kept — so a merge can never
+ * regress the snapshot. This is how fresh data lands on the heavy gov packet
+ * without a single slow full-build request (which exceeds Railway's HTTP window).
+ */
+async function mergeRefreshPacket({ domain, v, q, pe, user, batchIds }) {
+  const existingRow = await fetchSnapshotRow(domain, v, q);
+  if (!existingRow) {
+    const err = new Error('no_existing_snapshot_to_merge — run a full refresh first');
+    err.status = 409;
+    throw err;
+  }
+  const subset = await buildLivePacket({
+    vertical: v, periodEnd: pe, quarter: q, user, onlyTemplates: batchIds,
+  });
+  const freshById = new Map((subset.charts || []).map(c => [c.chart_template_id, c]));
+  const oldCharts = existingRow.packet?.charts || [];
+  const hasRows = (c) => c && Array.isArray(c.rows) && c.rows.length > 0;
+
+  const merged = oldCharts.map((c) => {
+    const fresh = freshById.get(c.chart_template_id);
+    return hasRows(fresh) ? fresh : c; // take fresh only when populated, else keep old
+  });
+  // Charts requested that weren't in the snapshot yet — append when populated.
+  const oldIds = new Set(oldCharts.map(c => c.chart_template_id));
+  for (const id of batchIds) {
+    if (!oldIds.has(id) && hasRows(freshById.get(id))) merged.push(freshById.get(id));
+  }
+
+  const mergedPacket = { ...(existingRow.packet || {}), charts: merged };
+  const insert = await domainQuery(
+    domain, 'POST', 'cm_report_snapshots?on_conflict=vertical,fiscal_quarter',
+    {
+      vertical: v, fiscal_quarter: q, period_end: pe, packet: mergedPacket,
+      frozen_by: user?.email || user?.id || 'api', updated_at: new Date().toISOString(),
+    },
+    { Prefer: 'resolution=merge-duplicates,return=representation' }
+  );
+  if (insert.ok === false) {
+    const err = new Error('merge_upsert_failed');
+    err.status = insert.status || 500;
+    err.detail = insert.data;
+    throw err;
+  }
+  return {
+    refreshed: batchIds.filter(id => hasRows(freshById.get(id))),
+    still_empty: batchIds.filter(id => !hasRows(freshById.get(id))),
+    total_charts: merged.length,
+  };
+}
+
+async function refreshPacket(req, res, user) {
+  const vertical = normalizePacketVertical(req.query.vertical || 'gov');
+  const asOfRes = resolveAsOf(req.query.as_of);
+  if (asOfRes.asOf === null) return res.status(400).json({ error: 'invalid_as_of' });
+  const periodEnd = asOfRes.asOf;
+  const quarter = quarterLabelFromPeriodEnd(periodEnd);
+
+  // Chunked merge mode: refresh only these charts and merge into the snapshot.
+  const batchIds = String(req.query.chart_template_ids || '')
+    .split(',').map(s => s.trim()).filter(Boolean);
+  if (batchIds.length) {
+    const domain = packetDomainForVertical(vertical);
+    const v = normalizePacketVertical(vertical);
+    try {
+      const out = await mergeRefreshPacket({ domain, v, q: quarter, pe: periodEnd, user, batchIds });
+      return res.status(200).json({ ok: true, mode: 'merge', vertical, quarter, period_end: periodEnd, ...out });
+    } catch (e) {
+      return res.status(e.status || 500).json({ error: e.message || 'merge_failed', detail: e.detail || null });
+    }
+  }
+  // Default 1 build per call so each HTTP request stays short — the scheduled
+  // workflow loops the calls and retries on !persisted. A caller may pass a higher
+  // `attempts` to retry within one (longer) request.
+  const maxAttempts = Math.max(1, Math.min(Number(req.query.attempts) || 1, 6));
+
+  const attempts = [];
+  let finalOut = null;
+  for (let i = 0; i < maxAttempts; i++) {
+    let out;
+    try {
+      out = await buildOrFetchPacket({ vertical, quarter, periodEnd, user, forceLive: true });
+    } catch (e) {
+      attempts.push({ attempt: i + 1, error: e?.message || String(e) });
+      continue;
+    }
+    finalOut = out;
+    attempts.push({
+      attempt: i + 1,
+      persisted: !!out.persisted,
+      regressed: out.regressed || [],
+      populated: packetPopulatedIds(out.packet).size,
+    });
+    // Stop as soon as a clean, complete build is persisted.
+    if (out.persisted && !(out.regressed || []).length) break;
+  }
+
+  return res.status(200).json({
+    ok: true,
+    vertical,
+    quarter,
+    period_end: periodEnd,
+    persisted: !!finalOut?.persisted,
+    regressed: finalOut?.regressed || [],
+    populated_charts: finalOut ? packetPopulatedIds(finalOut.packet).size : 0,
+    total_charts: finalOut?.packet?.charts?.length || 0,
+    attempts,
+  });
+}
+
+async function packetStatus(req, res) {
+  const vertical = normalizePacketVertical(req.query.vertical || 'dialysis');
+  const domain = packetDomainForVertical(vertical);
+  if (!domain) return res.status(400).json({ ok: false, built: false, error: 'unsupported_vertical', vertical });
+  const r = await domainQuery(domain, 'GET', 'cm_report_snapshots?select=snapshot_id,vertical,fiscal_quarter,period_end,frozen_at&order=frozen_at.desc&limit=5');
+  if (r.ok === false) {
+    return res.status(200).json({
+      ok: true,
+      built: false,
+      vertical,
+      status: r.status,
+      detail: r.data,
+      message: 'Packet layer is not confirmed built for this domain. Apply cm_report_snapshots migration and call action=packet to freeze a quarter.',
+    });
+  }
+  return res.status(200).json({
+    ok: true,
+    built: true,
+    vertical,
+    recent_snapshots: r.data || [],
+  });
+}
+
+async function getReportPacket(req, res, user) {
+  const vertical = normalizePacketVertical(req.query.vertical || 'dialysis');
+  const asOfResolution = resolveAsOf(req.query.as_of || periodEndFromQuarterLabel(req.query.quarter));
+  if (asOfResolution.asOf === null) return res.status(400).json({ error: 'invalid_as_of_or_quarter' });
+  const quarter = req.query.quarter || quarterLabelFromPeriodEnd(asOfResolution.asOf);
+  try {
+    const out = await buildOrFetchPacket({
+      vertical,
+      quarter,
+      periodEnd: asOfResolution.asOf,
+      user,
+      forceLive: req.query.live === 'true',
+    });
+    return res.status(200).json({
+      ok: true,
+      vertical,
+      quarter,
+      period_end: asOfResolution.asOf,
+      latest_completed_period_end: asOfResolution.latest,
+      live_unfrozen: req.query.live === 'true',
+      ...out,
+    });
+  } catch (e) {
+    return res.status(e.status || 500).json({ error: e.message || 'packet_failed', detail: e.detail || null });
+  }
+}
+
+async function getReportPacketImages(req, res, user) {
+  const vertical = normalizePacketVertical(req.query.vertical || 'dialysis');
+  const asOfResolution = resolveAsOf(req.query.as_of || periodEndFromQuarterLabel(req.query.quarter));
+  if (asOfResolution.asOf === null) return res.status(400).json({ error: 'invalid_as_of_or_quarter' });
+  const quarter = req.query.quarter || quarterLabelFromPeriodEnd(asOfResolution.asOf);
+  const ids = String(req.query.chart_template_ids || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+  try {
+    const out = await buildOrFetchPacket({
+      vertical,
+      quarter,
+      periodEnd: asOfResolution.asOf,
+      user,
+      forceLive: req.query.live === 'true',
+    });
+    const idSet = ids.length ? new Set(ids) : null;
+    const charts = (out.packet?.charts || []).filter(c =>
+      c && c.chart_template_id && (!idSet || idSet.has(c.chart_template_id))
+    );
+    const { tokens: brand } = await loadBrandTokensObject();
+    const rendered = await renderChartsToImages({ charts, brand });
+
+    // Per-chart failure diagnostics: classify every requested chart that did NOT
+    // produce a PNG. no_data = the packet carries no rows for it (fix upstream in
+    // the view/build); no_renderer = buildChartConfig returns null for its
+    // chart_template_id (missing switch branch); render_error = a config was built
+    // but QuickChart failed (network/timeout/payload). Logged every call, and
+    // returned in the body when ?debug=true so the 30/45 gap is enumerable.
+    const renderedIds = new Set(rendered.map(img => img.chart_template_id));
+    const failures = [];
+    for (const c of charts) {
+      if (renderedIds.has(c.chart_template_id)) continue;
+      let reason;
+      if (!Array.isArray(c.rows) || c.rows.length === 0) reason = 'no_data';
+      else {
+        let cfg = null;
+        try { cfg = buildChartConfig(c, brand); } catch { cfg = null; }
+        reason = cfg ? 'render_error' : 'no_renderer';
+      }
+      failures.push({ chart_template_id: c.chart_template_id, chart_type: c.chart_type || null, reason });
+    }
+    if (failures.length) {
+      console.warn(
+        `[cm packet_images] ${vertical}/${quarter} ${failures.length} chart(s) unrendered: ` +
+        failures.map(f => `${f.chart_template_id}:${f.reason}`).join(', ')
+      );
+    }
+
+    return res.status(200).json({
+      ok: true,
+      vertical,
+      quarter,
+      period_end: asOfResolution.asOf,
+      snapshot_id: out.snapshot_id || null,
+      images: rendered.map(img => ({
+        chart_template_id: img.chart_template_id,
+        name: img.name || null,
+        mime: 'image/png',
+        png_b64: Buffer.from(img.png).toString('base64'),
+      })),
+      ...(req.query.debug === 'true' ? { failures } : {}),
+    });
+  } catch (e) {
+    return res.status(e.status || 500).json({ error: e.message || 'packet_images_failed', detail: e.detail || null });
+  }
+}
+
+async function getCommentary(req, res) {
+  const vertical = normalizePacketVertical(req.query.vertical || 'dialysis');
+  const quarter = req.query.quarter || quarterLabelFromPeriodEnd(resolveAsOf(req.query.as_of).asOf);
+  const domain = packetDomainForVertical(vertical);
+  if (!domain || !quarter) return res.status(400).json({ error: 'vertical and quarter/as_of required' });
+  const rows = await readCommentaryRows(domain, vertical, quarter);
+  return res.status(200).json({ ok: true, vertical, quarter, commentary: rows });
+}
+
+async function saveCommentary(req, res, user) {
+  const body = req.body || {};
+  const vertical = normalizePacketVertical(body.vertical || req.query.vertical || 'dialysis');
+  const quarter = body.quarter || req.query.quarter || quarterLabelFromPeriodEnd(resolveAsOf(body.as_of || req.query.as_of).asOf);
+  const pageId = body.page_id || req.query.page_id;
+  const domain = packetDomainForVertical(vertical);
+  if (!domain || !quarter || !pageId) return res.status(400).json({ error: 'vertical, quarter/as_of, and page_id required' });
+  const status = body.status || 'edited';
+  const now = new Date().toISOString();
+  const row = {
+    vertical,
+    fiscal_quarter: quarter,
+    page_id: pageId,
+    title: body.title || pageId,
+    copy: body.copy || '',
+    status,
+    source: body.source || 'manual',
+    edited_by: user?.email || user?.id || null,
+    approved_by: status === 'approved' ? (user?.email || user?.id || null) : null,
+    approved_at: status === 'approved' ? now : null,
+    updated_at: now,
+  };
+  const r = await domainQuery(
+    domain, 'POST',
+    'cm_report_commentary?on_conflict=vertical,fiscal_quarter,page_id',
+    row,
+    { Prefer: 'resolution=merge-duplicates,return=representation' }
+  );
+  if (r.ok === false) return res.status(r.status || 500).json({ error: 'commentary_write_failed', detail: r.data });
+  return res.status(200).json({ ok: true, commentary: Array.isArray(r.data) ? r.data[0] : r.data });
+}
+
+async function generateCommentary(req, res, user, workspaceId) {
+  const body = req.body || {};
+  const vertical = normalizePacketVertical(body.vertical || 'dialysis');
+  const quarter = body.quarter || quarterLabelFromPeriodEnd(resolveAsOf(body.as_of).asOf);
+  const pageId = body.page_id;
+  if (!pageId) return res.status(400).json({ error: 'page_id required' });
+  const packetOut = await buildOrFetchPacket({ vertical, quarter, periodEnd: periodEndFromQuarterLabel(quarter), user });
+  const page = packetOut.packet?.pages?.[pageId];
+  if (!page) return res.status(404).json({ error: 'page_not_found_in_packet', page_id: pageId });
+  const prompt = [
+    'Draft Capital Markets report commentary for this chart page.',
+    'Use the capital-markets-update style: bold opening label, concise market read, figures only from the frozen packet, no placeholders.',
+    `Vertical: ${vertical}`,
+    `Quarter: ${quarter}`,
+    `Page: ${page.title || pageId}`,
+    `Flags: ${JSON.stringify((packetOut.packet.flags || []).filter(f => f.page === pageId))}`,
+    `Frozen figure rows: ${JSON.stringify((page.rows || []).slice(-12))}`,
+  ].join('\n\n');
+  const ai = await invokeChatProvider({
+    message: prompt,
+    context: { assistant_feature: 'capital_markets_commentary', vertical, quarter, page_id: pageId },
+    history: [],
+    attachments: [],
+    user,
+    workspaceId,
+  });
+  if (!ai.ok) return res.status(ai.status || 502).json({ error: 'commentary_generation_failed', detail: ai.data, provider: ai.provider });
+  const copy = ai.data?.response || ai.data?.message || ai.data?.text || '';
+  req.body = { vertical, quarter, page_id: pageId, title: page.title || pageId, copy, status: 'draft', source: `ai:${ai.provider || 'provider'}` };
+  return saveCommentary(req, res, user);
+}
+
+async function marketingMarkdown(req, res) {
+  const vertical = normalizePacketVertical(req.query.vertical || 'dialysis');
+  const quarter = req.query.quarter || quarterLabelFromPeriodEnd(resolveAsOf(req.query.as_of).asOf);
+  const domain = packetDomainForVertical(vertical);
+  if (!domain || !quarter) return res.status(400).json({ error: 'vertical and quarter/as_of required' });
+  const rows = await readCommentaryRows(domain, vertical, quarter, req.query.status || 'approved');
+  const title = `${vertical === 'dialysis' ? 'Dialysis' : 'Government'} Market Filter ${quarter} Copy Edits`;
+  const md = [
+    `# ${title}`,
+    '',
+    ...rows.flatMap(r => [
+      `## ${r.title || r.page_id}`,
+      '',
+      r.copy || '',
+      '',
+    ]),
+    rows.length ? '' : '_No approved commentary found._',
+  ].join('\n');
+  return res.status(200).json({ ok: true, vertical, quarter, markdown: md, commentary_count: rows.length });
 }
 
 /**
@@ -819,13 +1832,83 @@ async function fetchQuarterly(req, res) {
 async function exportWorkbook(req, res) {
   const { vertical, subspecialty = 'all', as_of, format = 'xlsx' } = req.query;
   if (!vertical) return res.status(400).json({ error: 'vertical required' });
-  if (format !== 'xlsx') {
+
+  // Historical as-of (2026-08-07): validate/snap to a quarter end; default =
+  // latest completed quarter. resolvedAsOf drives every sheet query, the
+  // display-window clamp, snapshot reconstruction, the filename, and the Cover
+  // "As of:" stamp — so the whole workbook is internally consistent.
+  const asOfResolution = resolveAsOf(as_of);
+  if (asOfResolution.asOf === null) {
+    return res.status(400).json({
+      error: 'invalid_as_of',
+      as_of,
+      hint: 'as_of must be a date (YYYY-MM-DD). It is snapped to the enclosing quarter end and defaults to the latest completed quarter.',
+    });
+  }
+  const resolvedAsOf = asOfResolution.asOf;
+  if (res && typeof res.setHeader === 'function') {
+    res.setHeader('X-CM-AsOf', resolvedAsOf);
+    res.setHeader('X-CM-AsOf-Latest', asOfResolution.latest);
+    res.setHeader('X-CM-AsOf-Defaulted', String(asOfResolution.defaulted));
+  }
+
+  if (!['xlsx', 'payload'].includes(format)) {
     return res.status(400).json({
       error: 'unsupported_format',
       format,
-      supported: ['xlsx'],
+      supported: ['xlsx', 'payload'],
       hint: 'PDF and PNG export land in V2.',
     });
+  }
+
+  if (req.query.source === 'packet') {
+    const quarter = req.query.quarter || quarterLabelFromPeriodEnd(resolvedAsOf);
+    const packetOut = await buildOrFetchPacket({ vertical, quarter, periodEnd: resolvedAsOf, user: req.user || null });
+    const commentaryMode = String(req.query.commentary || '').toLowerCase();
+    const commentary = commentaryMode
+      ? await readCommentaryRows(packetDomainForVertical(vertical), normalizePacketVertical(vertical), quarter, commentaryMode === 'all' ? null : 'approved')
+      : [];
+    const { tokens: brand } = await loadBrandTokensObject();
+    const chartImages = await renderChartsToImages({ charts: packetOut.packet.charts || [], brand }).catch(() => []);
+    const provenance = {
+      gitSha: process.env.RAILWAY_GIT_COMMIT_SHA || process.env.RENDER_GIT_COMMIT || process.env.SOURCE_VERSION || 'unknown',
+      generatedAt: new Date().toISOString(),
+      builder: 'api/capital-markets.js::exportWorkbook(packet)',
+      snapshotId: packetOut.snapshot_id || null,
+    };
+    const wb = buildCapitalMarketsWorkbook({
+      vertical,
+      subspecialty,
+      asOf: resolvedAsOf,
+      charts: packetOut.packet.charts || [],
+      brand,
+      masterRows: null,
+      chartImages,
+      provenance,
+      commentary,
+      // INTERIM GUARD: the packet export is not yet at parity with the standard
+      // export (missing MasterPasteReady + 11 registered feeds), so it MUST NOT
+      // be mistaken for the marketing deliverable. Watermark the Cover as a
+      // preview until parity lands and the standard exporter is packet-backed.
+      previewWatermark: true,
+    });
+    let buffer = await wb.xlsx.writeBuffer();
+    const injections = wb.nativeInjections || [];
+    if (injections.length > 0) {
+      try {
+        const { injectNativeCharts } = await import('./_shared/cm-native-chart-injector.js');
+        buffer = await injectNativeCharts(Buffer.from(buffer), injections);
+        res.setHeader('X-CM-Native-Charts', String(injections.length));
+      } catch (e) {
+        console.error(`[exportWorkbook:packet] native-chart injection failed: ${e?.message || e}`);
+      }
+    }
+    const filename = exportFilename({ vertical, subspecialty, asOf: resolvedAsOf }).replace(/\.xlsx$/i, '-packet.xlsx');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+    res.setHeader('X-CM-Packet-Snapshot', packetOut.snapshot_id || '');
+    return res.status(200).send(Buffer.from(buffer));
   }
 
   // 1. Fetch chart catalog + data via the same dispatch logic the dashboard uses.
@@ -840,7 +1923,21 @@ async function exportWorkbook(req, res) {
     'GET',
     `cm_chart_catalog?select=*&applies_to_verticals=cs.{${vertical}}${phaseFilter}&order=phase,chart_template_id`
   );
-  const templates = cat.data || [];
+  let templates = cat.data || [];
+
+  // Chunked-refresh support: `only_templates` (CSV of chart_template_ids) restricts
+  // the build to a small subset so each request stays well under the HTTP timeout.
+  // The full gov build (~45 parallel view fetches) can exceed Railway's response
+  // window; refresh_packet drives this a few charts at a time and merges the fresh
+  // rows into the existing snapshot. Synthetic (composed) templates depend on other
+  // charts' rows, so they are only built in a FULL build — a subset build restricts
+  // to real (view-backed) templates and leaves synthetics to the merge.
+  const onlyTemplates = String(req.query.only_templates || '')
+    .split(',').map(s => s.trim()).filter(Boolean);
+  const onlySet = onlyTemplates.length ? new Set(onlyTemplates) : null;
+  if (onlySet) {
+    templates = templates.filter((t) => onlySet.has(t.chart_template_id) && !syntheticRecipeFor(t));
+  }
 
   // Split into real (view-backed) vs synthetic (composed) templates so the
   // synthetic ones can read the freshly-fetched real-chart rows.
@@ -848,6 +1945,35 @@ async function exportWorkbook(req, res) {
   const syntheticTemplates = templates.filter((t) => syntheticRecipeFor(t));
 
   const domain = VERTICAL_TO_DOMAIN[vertical];
+
+  // CM export audit item 7 — per-series display_from policy. cm_view_registry
+  // stores the first period each registered series clears its density floor
+  // (e.g. the 2001-start sale series don't clear 25 TTM deals until 2007-Q1);
+  // the exporter drops rows earlier than that so charts inherit clean x-axes
+  // without hand-cropping. Best-effort: a missing registry / column just means
+  // no cropping (whole-history export, the prior behavior).
+  // A chart_template_id can have >1 registry row (an _m and a _q sibling view);
+  // keep the full rows so the crop resolves the row whose view_name matches the
+  // view this chart actually exports (see resolveDisplayFrom).
+  let displayFromRows = [];
+  if (domain) {
+    try {
+      const reg = await domainQuery(
+        domain, 'GET',
+        `cm_view_registry?select=chart_template_id,view_name,display_from&vertical=eq.${encodeURIComponent(vertical)}&display_from=not.is.null`
+      );
+      if (reg && reg.ok !== false && Array.isArray(reg.data)) {
+        displayFromRows = reg.data.filter((r) => r && r.chart_template_id && r.display_from);
+      }
+    } catch { /* registry optional — no crop on failure */ }
+  }
+
+  // CM export audit item 4 — treasury freshness step, before the workbook build.
+  const treasuryFreshness = await ensureTreasuryFreshForExport(domain, resolvedAsOf);
+  if (res && typeof res.setHeader === 'function') {
+    res.setHeader('X-CM-Treasury-Max', treasuryFreshness.maxDate || 'none');
+    res.setHeader('X-CM-Treasury-Stale', String(treasuryFreshness.stale));
+  }
 
   // Fetch a chart-source view robustly: many older gov views were built
   // without a `subspecialty` column and some use `period_label` instead of
@@ -863,48 +1989,117 @@ async function exportWorkbook(req, res) {
       `${view_name}?select=*&subspecialty=eq.${encodeURIComponent(subspecialty)}`,
       `${view_name}?select=*`,
     ];
-    // Run the full fallback ladder once.
+    // PostgREST caps every response at 1000 rows regardless of `limit` (see
+    // CLAUDE.md footgun). A `per_sale` dot-cloud view like cm_{v}_core_cap_dot_q
+    // holds >1000 rows; ordered ASC, the cap silently truncated the NEWEST
+    // sales (Data_Core_Cap_Dot ran only through mid-2025 — the audit's
+    // A/Data_Core_Cap_Dot bug). Page through with limit/offset on the WINNING
+    // path so every row lands and truncation is impossible. Uses the same
+    // stable order clause the winning try carried (offset paging is only
+    // stable under an ORDER BY; the ladder's ordered tries win first).
+    const PAGE = 1000;
+    const MAX_ROWS = 500000; // runaway backstop
+    const paginate = async (winningPath, firstPage) => {
+      if (!Array.isArray(firstPage) || firstPage.length < PAGE) return firstPage;
+      const all = firstPage.slice();
+      let offset = all.length;
+      // Strip any pre-existing limit/offset the caller may have added.
+      const basePath = winningPath.replace(/[?&](limit|offset)=\d+/g, '');
+      const sep = basePath.includes('?') ? '&' : '?';
+      while (all.length < MAX_ROWS) {
+        const pagePath = `${basePath}${sep}limit=${PAGE}&offset=${offset}`;
+        let pageRes;
+        try { pageRes = await exec(pagePath); }
+        catch { break; }
+        if (!pageRes || pageRes.ok === false || !Array.isArray(pageRes.data) || pageRes.data.length === 0) break;
+        all.push(...pageRes.data);
+        offset += pageRes.data.length;
+        if (pageRes.data.length < PAGE) break;
+      }
+      return all;
+    };
+    // Run the full fallback ladder once. Returns { result, path } so the
+    // pager can re-issue the winning query with limit/offset.
     const runLadder = async () => {
       let lastResult = null;
       for (const p of tries) {
         try {
           const result = await exec(p);
-          if (result.ok) return result;
+          if (result.ok) return { result, path: p };
           lastResult = result;
         } catch (e) {
           lastResult = { ok: false, status: 0, data: { error: String(e) } };
         }
       }
-      return lastResult || { ok: false, status: 0, data: [] };
+      return { result: lastResult || { ok: false, status: 0, data: [] }, path: null };
     };
     // Round 68-E (G8): the renewal_rent_growth empty-tab incident (2026-06-04)
     // was a TRANSIENT fetch failure on a cold dyno — the view was live with 158
     // rows and every prior export had data. A single retry pass after a short
     // backoff absorbs that class of cold-start blip before we surface it.
-    let result = await runLadder();
+    let { result, path } = await runLadder();
     if (result.ok === false) {
       await new Promise((r) => setTimeout(r, 400));
       const retry = await runLadder();
-      if (retry.ok !== false) {
-        result = retry;
+      if (retry.result.ok !== false) {
+        ({ result, path } = retry);
       } else {
         console.error(
           `[fetchView] ${view_name} failed after retry ` +
           `(vertical=${vertical}, subspecialty=${subspecialty}, ` +
-          `status=${retry.status || 'n/a'}): ${JSON.stringify(retry.data)?.slice(0, 200)} ` +
+          `status=${retry.result.status || 'n/a'}): ${JSON.stringify(retry.result.data)?.slice(0, 200)} ` +
           `— tab will be marked FETCH FAILED, re-export needed.`
         );
-        result = retry;
+        result = retry.result;
+        path = retry.path;
       }
+    }
+    // Page past the PostgREST 1000-row cap on the winning query so large
+    // per-sale/per-listing dot views export in full.
+    if (result.ok !== false && path && Array.isArray(result.data) && result.data.length === PAGE) {
+      result = { ...result, data: await paginate(path, result.data) };
     }
     return result;
   };
 
   const chartFetches = realTemplates.map(async (tmpl) => {
-    const view_name = tmpl.view_name_template.replace('{vertical}', vertical);
-    const orderCol = timeAxisColumnFor(tmpl);
+    // Historical as-of: for the current-only available-inventory snapshot
+    // feeds, redirect to the period_end-keyed `_q` reconstruction view (when
+    // this vertical has one) and select the requested quarter. Selecting the
+    // latest quarter reproduces the current max() snapshot views exactly.
+    const qViewTmpl = RECONSTRUCTABLE_QVIEW[tmpl.chart_template_id];
+    const reconstructed = !!qViewTmpl && RECONSTRUCTABLE_VERTICALS.has(vertical);
+    // Q1 as-of regeneration (residual #1B) — the annual buyer-pool bar is
+    // rebuilt from the period_end-keyed quarterly buyer-share view and rolled
+    // up in JS with an as-of clamp (see buildAnnualBuyerShare), so its current
+    // year is Q1 YTD rather than the whole calendar year. Only verticals with a
+    // cm_{vertical}_buyer_share_q view participate; others fall back to the
+    // yearly view unchanged.
+    const buyerAnnualYtd =
+      tmpl.chart_template_id === 'buyer_class_pct_by_year' &&
+      BUYER_SHARE_Q_VERTICALS.has(vertical);
+    const view_name = buyerAnnualYtd
+      ? `cm_${vertical}_buyer_share_q`
+      : (reconstructed ? qViewTmpl : tmpl.view_name_template).replace('{vertical}', vertical);
+    // A historical as_of on a current-only snapshot with NO reconstruction
+    // (e.g. gov's tenant/term/per-listing feeds) must be labeled honestly on
+    // the sheet rather than silently mislabeled as the report quarter.
+    const snapshot_not_historical =
+      !reconstructed &&
+      CURRENT_ONLY_SNAPSHOT_SHAPES.has(String(tmpl.data_shape || '').toLowerCase()) &&
+      resolvedAsOf !== asOfResolution.latest;
+    // The buyer-share_q view is period_end-keyed (no `year` column), so order
+    // it by period_end regardless of the yearly chart's time axis.
+    const orderCol = buyerAnnualYtd ? 'period_end' : timeAxisColumnFor(tmpl);
     try {
       const result = await fetchView(view_name, orderCol);
+      // Reconstructed feeds: narrow the all-quarters view to the target period
+      // BEFORE clamp/crop so the composers + data tab see just that quarter.
+      const rawRows = result.ok !== false ? (result.data || []) : [];
+      const baseRows = reconstructed ? selectSnapshotPeriod(rawRows, resolvedAsOf) : rawRows;
+      const snapshot_period = reconstructed
+        ? (baseRows[0]?.period_end ? String(baseRows[0].period_end).slice(0, 10) : null)
+        : null;
       return {
         chart_template_id: tmpl.chart_template_id,
         name: tmpl.name,
@@ -922,16 +2117,26 @@ async function exportWorkbook(req, res) {
         // 2026-05-29 - clamp time-series rows to the requested as-of period
         // so Data_* tabs never bleed past the report quarter (see
         // clampRowsToAsOf). Snapshot/table/kpi shapes pass through untouched.
-        rows: clampRowsToAsOf(
-          result.ok !== false ? (result.data || []) : [],
-          tmpl,
-          as_of
-        ),
+        // Q1 as-of regeneration (residual #1B): the annual buyer-pool bar is
+        // rebuilt (as-of-clamped YTD roll-up) from the quarterly buyer-share
+        // rows rather than the yearly view — buildAnnualBuyerShare already
+        // applies the as-of clamp, so the generic crop/clamp is skipped.
+        rows: buyerAnnualYtd
+          ? buildAnnualBuyerShare(baseRows, resolvedAsOf)
+          : cropRowsToDisplayFrom(
+              clampRowsToAsOf(baseRows, tmpl, resolvedAsOf),
+              tmpl,
+              resolveEffectiveDisplayFrom(displayFromRows, tmpl.chart_template_id, view_name, vertical)
+            ),
         // Round 68-E (G8): distinguish a real fetch failure (after the
         // fetchView retry pass) from a legitimately empty view, so the tab
         // writer can stamp "FETCH FAILED — re-export" instead of a silent
         // 0-row tab that looks like a data gap.
         fetch_failed: result.ok === false,
+        // Historical as-of provenance for the sheet stamps.
+        reconstructed,
+        snapshot_period,
+        snapshot_not_historical,
       };
     } catch (e) {
       return {
@@ -947,6 +2152,128 @@ async function exportWorkbook(req, res) {
     }
   });
   const realCharts = await Promise.all(chartFetches);
+
+  // CM chart fixes round 3, item 7 — the dialysis rent-box is now ONE chart
+  // spanning the modeled series' FULL history. Marketing had two "Rent/SF —
+  // Quarterly Box" charts (the legacy actuals-only + the 2023-cropped modeled
+  // companion); this replaces both with a single chart reading
+  // cm_dialysis_rent_box_q_with_modeled across its full history (every n>=6
+  // quarter — the view begins 2010-03-31 and runs to the latest quarter),
+  // titled "Rent/SF — Quarterly Box (incl. modeled rents)", basis_scope visible
+  // on the sheet. The legacy rent_psf_box_quarterly CHART is removed from the
+  // report set (see CHART_SUPPRESSED in cm-excel-export.js) while its
+  // actuals-only Data_Rent_PSF_Box sheet remains for reference.
+  if (vertical === 'dialysis') {
+    const base = realCharts.find((c) => c.chart_template_id === 'rent_psf_box_quarterly');
+    const MODELED_VIEW = 'cm_dialysis_rent_box_q_with_modeled';
+    const MODELED_MIN_PERIOD = '2003-01-01';   // FULL history (view floor is 2010-03-31)
+    const MODELED_MIN_N = 6;                    // acceptance: plot only n>=6 quarters
+    const shape = base || { data_shape: 'time_series_quarterly_ohlc', chart_type: 'StockChart' };
+    try {
+      const r = await fetchView(MODELED_VIEW, 'period_end');
+      const raw = r.ok !== false ? (r.data || []) : [];
+      // Deterministic display window: 2023+ and n_points>=6. The modeled view
+      // carries basis_scope + n_points; the sheet keeps basis_scope visible.
+      const windowed = raw.filter((row) => {
+        const pe = row && row.period_end ? String(row.period_end).slice(0, 10) : null;
+        const n = Number(row && row.n_points);
+        return pe && pe >= MODELED_MIN_PERIOD && Number.isFinite(n) && n >= MODELED_MIN_N;
+      });
+      const rows = clampRowsToAsOf(windowed, shape, resolvedAsOf);
+      if (rows.length > 0) {
+        realCharts.push({
+          chart_template_id: 'rent_psf_box_quarterly_modeled',
+          name: 'Rent/SF — Quarterly Box (incl. modeled rents)',
+          chart_type: shape.chart_type,
+          data_shape: shape.data_shape,
+          metric_focus: base ? base.metric_focus : 'rent_per_sf',
+          cadence: base ? base.cadence : null,
+          vertical,
+          view_name: MODELED_VIEW,
+          rows,
+          fetch_failed: r.ok === false,
+        });
+      }
+      console.log(
+        `[exportWorkbook] rent-box modeled companion: view=${MODELED_VIEW} ` +
+        `raw=${raw.length} plotted=${rows.length} (period>=${MODELED_MIN_PERIOD}, n>=${MODELED_MIN_N})`
+      );
+    } catch (e) {
+      console.warn(`[exportWorkbook] rent-box modeled companion skipped: ${e?.message || e}`);
+    }
+  }
+
+  // CM export audit item 2 (2026-08-07) — log the resolved display_from for
+  // every realCharts-driven sheet at export time (the crop itself is applied at
+  // fetch, line ~1098). Sheets whose rows are later overridden by a master_m
+  // mapper log again inside that loop with the re-applied crop. Together these
+  // make sheet->display_from fully visible in the deploy logs so a missing crop
+  // (Bid-Ask started 2001) can never silently recur.
+  for (const c of realCharts) {
+    const df = resolveEffectiveDisplayFrom(displayFromRows, c.chart_template_id, c.view_name, vertical);
+    console.log(
+      `[exportWorkbook] display_from sheet=${c.chart_template_id} ` +
+      `view=${c.view_name} display_from=${df || 'none'} rows=${Array.isArray(c.rows) ? c.rows.length : 0}`
+    );
+  }
+
+  // CM export audit item 1 — core dot freshness assertion. The Core Cap Rate
+  // Dot Plot reads the core-cohort view (cm_{v}_core_cap_dot_q). After the
+  // pagination fix the sheet carries every qualifying core sale, so its newest
+  // sale should be within 45 days of the export date; a larger gap means the
+  // upstream sales feed stalled (or the 1000-cap regressed). Warn loudly and
+  // stamp meta so the acceptance re-run can assert it. The date lives in
+  // `period_end` (the core view aliases sale_date → period_end).
+  const CORE_DOT_FRESH_DAYS = 45;
+  for (const c of realCharts) {
+    if (c.chart_template_id !== 'core_cap_rate_dot_plot') continue;
+    if (!Array.isArray(c.rows) || c.rows.length === 0) continue;
+    let maxMs = -Infinity;
+    for (const r of c.rows) {
+      const t = Date.parse(String(r?.period_end || '').slice(0, 10));
+      if (!Number.isNaN(t) && t > maxMs) maxMs = t;
+    }
+    if (maxMs === -Infinity) continue;
+    const ageDays = Math.round((Date.now() - maxMs) / 86400000);
+    c.core_dot_max_sale = new Date(maxMs).toISOString().slice(0, 10);
+    c.core_dot_age_days = ageDays;
+    if (ageDays > CORE_DOT_FRESH_DAYS) {
+      console.warn(
+        `[cm-export] core dot freshness: newest core sale ${c.core_dot_max_sale} ` +
+        `is ${ageDays}d old (> ${CORE_DOT_FRESH_DAYS}d) — check the sales feed / ` +
+        `pagination before shipping (view=${c.view_name}).`
+      );
+    }
+  }
+
+  // CM export audit item 6 — macro ingestion-lag guard. Treasury-joined series
+  // (cost of capital, leveraged returns, fed-funds-vs-10Y, net-lease spread)
+  // read FRED/treasury rates that can land a month behind the export date, so
+  // the final plotted point falls to null and the chart ends on a cliff. We do
+  // NOT fabricate a synthetic final point (never-fabricate doctrine); instead
+  // we surface the lag loudly so the operator ingests FRED for the export month
+  // before shipping. The clean fix is running the treasury ingestion first —
+  // this guard makes a stale tail impossible to miss.
+  const MACRO_TAIL_CHECK = {
+    cost_of_capital:        'treasury_10y_yield',
+    fed_funds_vs_treasury:  'treasury_10y_yield',
+    cash_leveraged_returns: 'leveraged_return_mid',
+    net_lease_spread:       'nm_spread',
+  };
+  for (const c of realCharts) {
+    const key = MACRO_TAIL_CHECK[c.chart_template_id];
+    if (!key || !Array.isArray(c.rows) || c.rows.length === 0) continue;
+    const last = c.rows[c.rows.length - 1];
+    if (last && last[key] == null) {
+      const lastGood = [...c.rows].reverse().find((r) => r && r[key] != null);
+      console.warn(
+        `[cm-export] macro tail lag on ${c.chart_template_id} (view=${c.view_name}): ` +
+        `final period ${last.period_end || '?'} has null ${key} — ` +
+        `${lastGood ? `last populated ${lastGood.period_end}` : 'no populated period'}. ` +
+        `Run FRED/treasury ingestion for the export month before shipping.`
+      );
+    }
+  }
 
   // Round 7 — moved synthCharts construction below master_m mapper so
   // synthetic composers see post-mapped (monthly) inputs. Previously
@@ -994,6 +2321,9 @@ async function exportWorkbook(req, res) {
   //     2026… we want to ensure the newest reported period as already
   //     passed."
   let masterMonthlyRows = null;
+  // Slim (period_end, monthly_volume, monthly_count) projection used only by the
+  // Quarterly Volume Bars composer — see the slim re-fetch below.
+  let volumeMonthlyRows = null;
   if (domain && (vertical === 'dialysis' || vertical === 'gov')) {
     const monthlyView = vertical === 'dialysis'
       ? 'cm_dialysis_market_quarterly_master_m'
@@ -1021,6 +2351,33 @@ async function exportWorkbook(req, res) {
         `skipped, charts will fall back to per-view quarterly data. ` +
         `error=${JSON.stringify(monthlyResult.data)?.slice(0, 200)}`
       );
+    }
+    // The Quarterly Volume Bars composer needs only the monthly volume/count
+    // columns. The full 39-column master_m select above intermittently fails
+    // PostgREST serialization in prod (Round 6b) — and when it returns 0 rows,
+    // that composer used to drop to a boxy quarterly fallback (repeated quarter
+    // totals on every monthly anchor). A SLIM 3-column projection sidesteps the
+    // serialization issue so the rolling-3-month bars survive even when the full
+    // fetch fails. Only re-fetch when the full set lacks usable monthly volume.
+    const fullHasMonthlyVol = Array.isArray(masterMonthlyRows)
+      && masterMonthlyRows.some((r) => r && r.monthly_volume != null);
+    if (!fullHasMonthlyVol) {
+      try {
+        const slimPath =
+          `${monthlyView}?select=period_end,monthly_volume,monthly_count` +
+          `&subspecialty=eq.${encodeURIComponent(subspecialty)}&order=period_end.asc`;
+        const slim = domain
+          ? await domainQuery(domain, 'GET', slimPath)
+          : await opsQuery('GET', slimPath);
+        if (slim.ok !== false && Array.isArray(slim.data) && slim.data.length) {
+          volumeMonthlyRows = slim.data;
+          console.log(
+            `[exportWorkbook] slim volume master_m fetch recovered ` +
+            `${slim.data.length} rows for ${monthlyView} ` +
+            `(full fetch lacked monthly_volume).`
+          );
+        }
+      } catch { /* best-effort; composer's quarterly fallback still applies */ }
     }
   }
 
@@ -1066,25 +2423,12 @@ async function exportWorkbook(req, res) {
         yoy_change_pct: r.yoy_change_pct,
       })),
       // Round 3b — Quarterly_Volume_Bars (PDF dialysis p.21 bottom).
-      // master_m carries `quarterly_volume` on every monthly anchor; we
-      // dedupe to the last day of each quarter so the rendered bars are
-      // truly quarterly (not 12 monthly snapshots of the same number).
+      // master_m carries repeated quarter totals on every monthly anchor.
+      // Use the TRUE monthly volume/count and calculate a rolling 3-month
+      // sum so the bars move each month while preserving quarterly volume
+      // economics.
       quarterly_volume_bars: (rows) => {
-        const byQuarter = new Map();
-        for (const r of rows) {
-          if (r.quarterly_volume == null && r.quarterly_count == null) continue;
-          // period_end is YYYY-MM-DD; quarter-end months are 03/06/09/12
-          const m = String(r.period_end).slice(5, 7);
-          if (m !== '03' && m !== '06' && m !== '09' && m !== '12') continue;
-          byQuarter.set(r.period_end, {
-            period_end: r.period_end,
-            quarterly_volume: Number(r.quarterly_volume) || 0,
-            quarterly_count: r.quarterly_count != null ? Number(r.quarterly_count) : null,
-          });
-        }
-        return [...byQuarter.values()].sort((a, b) =>
-          String(a.period_end) < String(b.period_end) ? -1 : 1
-        );
+        return buildRolling3MonthVolumeBars(rows);
       },
       cap_rate_yoy_change: (rows) => rows.map(r => ({
         period_end: r.period_end,
@@ -1137,12 +2481,18 @@ async function exportWorkbook(req, res) {
       // from the wrapper view directly via the realCharts path.
       //
       // (No perf concern — both wrappers run sub-200ms after Round 11.)
-      bid_ask_spread: (rows) => rows.map(r => ({
-        period_end: r.period_end,
-        avg_bid_ask_spread: r.avg_bid_ask_spread,
-        pct_price_change: r.pct_price_change_bid_ask,
-        avg_last_ask_cap: r.avg_last_ask_cap,
-      })),
+      // 2026-08-07 — `bid_ask_spread` master_m mapper REMOVED (same pattern as
+      // the nm_vs_market_cap / cap_rate_by_lease_term / seller_sentiment
+      // removals above). master_m only carries avg_bid_ask_spread /
+      // pct_price_change_bid_ask / avg_last_ask_cap, so mapping from it here
+      // DROPPED the R66 min_last_ask_cap / max_last_ask_cap /
+      // achieved_last_ask_cap columns (Data_Bid_Ask "Last Ask — Low/High" +
+      // "Achieved Cap" rendered ALL-NULL) AND wiped the display_from crop
+      // (Bid-Ask started 2001 instead of the registered 2015-04-30, because
+      // the override replaced the already-cropped realCharts rows with
+      // uncropped master_m rows). The dedicated monthly wrapper
+      // cm_<vertical>_bid_ask_spread_m carries every column at monthly cadence
+      // and is cropped on the realCharts path — let the chart read it directly.
       buyer_pool_breakdown: (rows) => rows.map(r => ({
         period_end: r.period_end,
         private_volume: r.private_volume,
@@ -1180,22 +2530,15 @@ async function exportWorkbook(req, res) {
         low_loan_constant:  r.low_loan_constant,
         high_loan_constant: r.high_loan_constant,
       })),
-      cash_leveraged_returns: (rows) => rows.map(r => {
-        // Match the cm_<vertical>_returns_indexes_q derivation: cash_return =
-        // avg_cap_rate; leveraged_return_mid uses 50% LTV on the mid loan
-        // constant. Reproduce the formula here so monthly TTM chart matches
-        // quarterly view shape.
-        const cap = r.avg_cap_rate_ttm;
-        const lo = r.low_loan_constant, hi = r.high_loan_constant;
-        const mid = (lo != null && hi != null) ? (lo + hi) / 2.0 : null;
-        const lev = (cap != null && mid != null)
-          ? (Number(cap) - Number(mid) * 0.5) / 0.5 : null;
-        return {
-          period_end: r.period_end,
-          cash_return: cap,
-          leveraged_return_mid: lev,
-        };
-      }),
+      // 2026-08-07 — `cash_leveraged_returns` master_m mapper REMOVED. It
+      // recomputed only cash_return + leveraged_return_mid from master_m loan
+      // constants, DROPPING the leveraged_return_low / leveraged_return_high
+      // columns added to cm_<vertical>_returns_indexes_m (migration
+      // 20260807_cm_dia_export_audit_views.sql) — so Data_Returns_Idx
+      // "Leveraged High/Low" rendered ALL-NULL — and it wiped the display_from
+      // crop. The extended monthly wrapper carries cash_return,
+      // leveraged_return_mid/low/high at monthly cadence and is cropped on the
+      // realCharts path — read it directly.
       net_lease_spread: (rows) => rows.map(r => ({
         period_end: r.period_end,
         treasury_10y_yield: r.treasury_10y_yield,
@@ -1222,13 +2565,14 @@ async function exportWorkbook(req, res) {
 
     // Vertical-specific mappers — fields that live on only one master_m.
     const verticalMappers = vertical === 'dialysis' ? {
-      seller_sentiment: (rows) => rows.map(r => ({
-        period_end: r.period_end,
-        pct_price_change_all: r.pct_price_change_all,
-        pct_price_change_long_term: r.pct_price_change_long_term,
-        last_ask_cap_all: r.last_ask_cap_all,
-        last_ask_cap_long_term: r.last_ask_cap_long_term,
-      })),
+      // 2026-08-07 — dialysis `seller_sentiment` master_m mapper REMOVED (gov's
+      // was already removed at R12, below). master_m carries only the
+      // pct_price_change / last_ask_cap cohorts, so mapping from it DROPPED the
+      // n_all / n_long_term counts — Data_Sentiment "N (all)" / "N (10+ yr)"
+      // rendered ALL-NULL — and wiped the display_from crop. The dedicated
+      // wrapper cm_dialysis_seller_sentiment_m carries n_all + n_long_term +
+      // both cohorts at monthly cadence and is gated/anchored — read it
+      // directly via the realCharts path (identical treatment to gov).
       // Round 3 PDF parity (dialysis p.22): override the shared
       // cap_rate_by_lease_term mapper to expose the dialysis-specific
       // 12+/8-12/6-8/<=5 cohorts ALONGSIDE the legacy 10+/6-10/<5/outside.
@@ -1278,8 +2622,27 @@ async function exportWorkbook(req, res) {
     for (const c of realCharts) {
       const mapper = monthlyMappers[c.chart_template_id];
       if (mapper) {
-        c.rows = mapper(masterMonthlyRows);
+        // CM export audit item 2 (2026-08-07) — the master_m override REPLACES
+        // c.rows wholesale, which previously discarded the display_from crop +
+        // as-of clamp applied on the realCharts fetch (line ~1098). master_m
+        // rows run back to 2001, so every mapped sales-series sheet (Volume_TTM,
+        // Cap_TTM, Count_TTM, Avg_Deal, YoY, Cap_Quartile, …) started 2001-01-31
+        // instead of its registered display_from. Re-apply BOTH transforms to
+        // the mapped output so a master_m-driven sheet crops exactly like a
+        // realCharts-driven one.
+        const df = resolveEffectiveDisplayFrom(displayFromRows, c.chart_template_id, c.view_name, vertical);
+        c.rows = cropRowsToDisplayFrom(
+          clampRowsToAsOf(mapper(masterMonthlyRows), c, resolvedAsOf),
+          c,
+          df
+        );
         c.cadence = 'monthly';  // hint for the renderer's window-size logic
+        // CM export audit item 2 — log the resolved crop per sheet at export
+        // time so a missing/way-off display_from is visible in the deploy logs.
+        console.log(
+          `[exportWorkbook] display_from sheet=${c.chart_template_id} ` +
+          `view=${c.view_name} display_from=${df || 'none'} rows=${c.rows.length}`
+        );
         swapped++;
       }
     }
@@ -1301,15 +2664,42 @@ async function exportWorkbook(req, res) {
       // a non-existent `buyer_pool_breakdown` chart_template_id; this
       // gives the composer the master_m rows it really needs.
       rows = composer({
-        vertical, subspecialty, asOf: as_of,
+        // Anchor synthetic composers on the RESOLVED as-of (snapped to the
+        // latest completed quarter), NOT the raw request. The realChart rows
+        // these composers read are clamped to resolvedAsOf, so passing the raw
+        // as_of (which can run a quarter ahead) made the volume_cap_summary
+        // composer anchor on a quarter with no row — blanking the current-Q
+        // column and every 5/10/15-yr trailing average. Everything else in the
+        // export already uses resolvedAsOf for consistency.
+        vertical, subspecialty, asOf: resolvedAsOf,
         allCharts: realCharts,
         masterMonthlyRows,
+        volumeMonthlyRows,
       }) || [];
     } catch { /* swallow — synthetic comp must not fail the workbook */ }
     // If any realChart this composer reads has cadence='monthly', the
     // synth output is also monthly (composer just maps row-by-row). Tag
     // accordingly so the renderer picks the monthly window/clipping.
     const upstreamMonthly = realCharts.some((c) => c.cadence === 'monthly');
+    // CM export audit item 2 (2026-08-07 follow-up) — crop synthetic series to
+    // their registered display_from too. Synthetic composers read masterMonthlyRows
+    // (uncropped back to 2001-01-31: quarterly_volume_bars, buyer_pool_monthly_count)
+    // or already-cropped realCharts (pace_of_cap_rate_expansion). The realCharts crop
+    // at line ~1098 never reaches these, so a registered sales-series synthetic still
+    // started 2001. Re-apply the crop here so a synthetic sales series inherits the
+    // same 2007-03-31 start as the realCharts sales series. Pace's YoY-lag output
+    // naturally starts ~2008, so its 2007-03-31 crop is a no-op (acceptance: pace
+    // 2008-01 is fine). Best-effort: no registry row → no crop (whole history).
+    //
+    // Q1 as-of regeneration (residual #1A, 2026-08-08) — ALSO apply the as-of END
+    // clamp here. #1624 applied only the display_from START crop to synthetic
+    // series, so Data_Buyer_Pool_M / Data_Volume_Quarterly still ran past as_of
+    // (through 2026-06-30 on a 2026-03-31 export) because these composers read
+    // masterMonthlyRows, which run to the latest completed quarter regardless of
+    // the requested as_of. clampRowsToAsOf drops rows with period_end > as_of on
+    // the same time-series shapes the realCharts path already clamps.
+    const df = resolveEffectiveDisplayFrom(displayFromRows, tmpl.chart_template_id, tmpl.view_name_template, vertical);
+    rows = cropRowsToDisplayFrom(clampRowsToAsOf(rows, tmpl, resolvedAsOf), tmpl, df);
     return {
       chart_template_id: tmpl.chart_template_id,
       name: tmpl.name,
@@ -1326,6 +2716,21 @@ async function exportWorkbook(req, res) {
   });
 
   charts = [...realCharts, ...synthCharts];
+
+  if (format === 'payload') {
+    return res.status(200).json({
+      ok: true,
+      vertical,
+      subspecialty,
+      as_of: resolvedAsOf,
+      latest_completed_period_end: asOfResolution.latest,
+      charts,
+      brand,
+      masterRows,
+      masterMonthlyRows,
+      treasuryFreshness,
+    });
+  }
 
   // 4b. Render the chart set to PNG images via QuickChart so each Data_* tab
   //     has a chart visual at the top alongside the data table below. This
@@ -1346,7 +2751,7 @@ async function exportWorkbook(req, res) {
     chartImages = [];
   }
 
-  const filename = exportFilename({ vertical, subspecialty, asOf: as_of });
+  const filename = exportFilename({ vertical, subspecialty, asOf: resolvedAsOf });
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
   // R66b — never cache the export at the browser/edge/proxy layer. The workbook
@@ -1377,7 +2782,7 @@ async function exportWorkbook(req, res) {
       const buf = await buildDialysisMasterWorkbook({
         masterRows: masterMonthlyRows,
         subspecialty,
-        asOf: as_of,
+        asOf: resolvedAsOf,
       });
       console.log(`[exportWorkbook] master_template path OK: ${buf.length} bytes from ${masterMonthlyRows.length} rows`);
       res.setHeader('X-CM-Workbook-Path', 'master_template');
@@ -1398,14 +2803,54 @@ async function exportWorkbook(req, res) {
   }
 
   // 5b. Default: ExcelJS-rendered workbook with data tabs + MasterPasteReady.
+  // CM export audit item 5 — build-provenance for the Cover stamp. The git SHA
+  // comes from the same Railway/host env vars server.js uses for /version, so
+  // the workbook's stamp matches the live /version and a deployed-vs-HEAD
+  // divergence is immediately visible on the deliverable.
+  const provenance = {
+    gitSha: (
+      process.env.RAILWAY_GIT_COMMIT_SHA ||
+      process.env.RENDER_GIT_COMMIT ||
+      process.env.SOURCE_VERSION ||
+      'unknown'
+    ),
+    generatedAt: new Date().toISOString(),
+    builder: 'api/capital-markets.js::exportWorkbook → cm-excel-export.js',
+  };
+  if (res && typeof res.setHeader === 'function') {
+    res.setHeader('X-CM-Build-Sha', provenance.gitSha);
+  }
+
+  // CM close-out item 1 — the standard (canonical) export now carries approved
+  // commentary too, so the "+ Commentary" button uses this full-parity builder
+  // instead of the watermarked preview packet. `commentary=approved` (default for
+  // that button) pulls approved rows; `commentary=all` pulls every row. Absent =
+  // no commentary sheet (the "Charts + Data" button). Best-effort: a commentary
+  // fetch failure never blocks the workbook.
+  let commentary = [];
+  const commentaryMode = String(req.query.commentary || '').toLowerCase();
+  if (commentaryMode) {
+    const cdomain = packetDomainForVertical(vertical);
+    if (cdomain) {
+      commentary = await readCommentaryRows(
+        cdomain,
+        normalizePacketVertical(vertical),
+        req.query.quarter || quarterLabelFromPeriodEnd(resolvedAsOf),
+        commentaryMode === 'all' ? null : 'approved'
+      ).catch(() => []);
+    }
+  }
+
   const wb = buildCapitalMarketsWorkbook({
     vertical,
     subspecialty,
-    asOf: as_of || null,
+    asOf: resolvedAsOf,
     charts,
     brand,
     masterRows,
     chartImages,
+    provenance,
+    commentary,
   });
 
   let buffer = await wb.xlsx.writeBuffer();

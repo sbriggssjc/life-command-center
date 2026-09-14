@@ -293,18 +293,17 @@ export async function fetchProcessingSummary(workspaceId, hours = 24) {
     opsQuery('GET', `${base}&outcome=eq.filed&select=id&limit=0`),
     opsQuery('GET', `${base}&outcome=eq.needs_review&select=id&limit=0`),
     opsQuery('GET', `${base}&outcome=eq.duplicate&select=id&limit=0`),
-    // KNOWN ISSUE (see docs/KNOWN_ISSUES.md): pending_moves counts rows still at
-    // move_status='pending', but NOTHING clears that column anymore — the queue-
-    // drain consumer (api/_handlers/processing-complete.js) was retired, and the
-    // live sync.js relay reconciles via pa-move-message, never touching
-    // processing_log.move_status on the terminal path. So this count monotonically
-    // inflates (counts ~every move-eligible email in the window). The filed/
-    // needs_review/duplicate counts above are accurate (they key on `outcome`,
-    // still written by emitProcessingComplete). Preferred fix: DROP the
-    // pending_moves clause from the briefing line — do NOT wire a parallel
-    // PATCH-based move_status tracker (sync.js + the To Do Completion Poll already
-    // own real move-tracking; a second mechanism would recreate the two-systems
-    // duplication that PR #1435 removed).
+    // P120 (2026-08-20) — RESOLVED. The note that used to sit here said this count
+    // "monotonically inflates because NOTHING clears move_status". That was true
+    // and is no longer: the queue-drain consumer now exists as the Move-Queue
+    // Executor (api/_handlers/move-queue.js + lcc_move_queue_ack), which is the
+    // single stamp-back path and clears move_status on every terminal outcome.
+    // So pending_moves is once again an HONEST actionable count — moves the app
+    // still owes the mailbox — and belongs on the briefing line.
+    // Caveat when reporting: move_status='moved' covers BOTH "we relocated it"
+    // and "it was already gone" (P119 terminal semantics). The real move-DELTA is
+    // processing_log.move_outcome='moved' — never quote move_status as a count of
+    // moves performed.
     opsQuery('GET', `${base}&move_status=eq.pending&select=id&limit=0`),
   ]);
   return {
@@ -440,6 +439,44 @@ export async function fetchSyncHealthSnapshot(workspaceId) {
       drift_flag: estimatedGap > 25,
       last_inbound_completed_at: latestSfInbound?.completed_at || null
     }
+  };
+}
+
+export async function fetchLccHealthSnapshot() {
+  const result = await opsQuery('GET',
+    'v_lcc_health_surface?select=subsystem,check_name,status,count,first_seen,ts,last_error,external_url,details&order=ts.desc&limit=200',
+    undefined, { countMode: 'none' }
+  );
+  if (!result.ok) {
+    return {
+      overall_status: 'unknown',
+      counts: { red: 0, amber: 0, green: 0, unknown: 1 },
+      top: [{
+        subsystem: 'lcc_health',
+        check_name: 'v_lcc_health_surface',
+        status: 'unknown',
+        count: 1,
+        last_error: result.data?.message || result.data?.error || 'LCC Health view unavailable',
+      }],
+    };
+  }
+  const rows = Array.isArray(result.data) ? result.data : [];
+  const counts = rows.reduce((acc, row) => {
+    const status = ['red', 'amber', 'green'].includes(row.status) ? row.status : 'unknown';
+    acc[status] = (acc[status] || 0) + 1;
+    return acc;
+  }, { red: 0, amber: 0, green: 0, unknown: 0 });
+  const rank = (status) => status === 'red' ? 3 : status === 'amber' ? 2 : status === 'unknown' ? 1 : 0;
+  const top = rows
+    .filter((row) => rank(row.status) >= 2)
+    .sort((a, b) => rank(b.status) - rank(a.status)
+      || (Number(b.count || 0) - Number(a.count || 0))
+      || String(b.ts || '').localeCompare(String(a.ts || '')))
+    .slice(0, 8);
+  return {
+    overall_status: counts.red > 0 ? 'red' : counts.amber > 0 ? 'amber' : counts.unknown > 0 ? 'unknown' : 'green',
+    counts,
+    top,
   };
 }
 
@@ -1359,4 +1396,85 @@ export async function fetchDormantCapabilities(minDaysOff = 30) {
     return { ...r, days_off: daysOff };
   });
   return { min_days_off: minDaysOff, count: items.length, items };
+}
+
+// ---------------------------------------------------------------------------
+// W7.2c — "what changed on your deals" delta. Deterministic query over the
+// propagation ledger (lcc_deal_comm_propagated.actions) + the two versioned
+// writes it drove (correspondence summary, deal dossier) in the last N hours.
+// One entry per deal touched. NO LLM. Empty ⇒ caller omits the section entirely.
+// ---------------------------------------------------------------------------
+export async function fetchDealPropagationDelta(hours = 24) {
+  const cutoffIso = new Date(Date.now() - hours * 3_600_000).toISOString();
+  const enc = encodeURIComponent;
+
+  const ledgerRes = await opsQuery('GET',
+    'lcc_deal_comm_propagated' +
+    `?propagated_at=gte.${enc(cutoffIso)}` +
+    '&select=entity_id,actions,propagated_at' +
+    '&order=propagated_at.desc&limit=2000', undefined, { countMode: 'none' })
+    .catch(() => ({ ok: false, data: null }));
+  const ledger = ledgerRes.ok && Array.isArray(ledgerRes.data) ? ledgerRes.data : [];
+  if (!ledger.length) return { window_hours: hours, count: 0, items: [] };
+
+  // Aggregate per deal from the ledger.
+  const byDeal = new Map();
+  for (const row of ledger) {
+    const id = row.entity_id;
+    if (!id) continue;
+    let agg = byDeal.get(id);
+    if (!agg) {
+      agg = { entity_id: id, new_comms: 0, milestones: new Map(), todos_generated: 0 };
+      byDeal.set(id, agg);
+    }
+    agg.new_comms += 1;
+    const acts = row.actions || {};
+    for (const m of (Array.isArray(acts.milestones) ? acts.milestones : [])) {
+      if (!m || !m.key) continue;
+      const cur = agg.milestones.get(m.key) || { written: 0, rolled_up: 0 };
+      if (m.outcome === 'inserted' || m.outcome === 'new_round' || m.inserted === true) cur.written += 1;
+      else if (m.outcome === 'rolled_up') cur.rolled_up += 1;
+      agg.milestones.set(m.key, cur);
+    }
+    if (acts.todo === 'generated') agg.todos_generated += 1;
+  }
+
+  const ids = [...byDeal.keys()];
+  const inList = ids.map((i) => `"${i}"`).join(',');
+
+  // Deal names + the two deal-level writes that don't live in the ledger.
+  const [namesRes, sumRes, dosRes] = await Promise.all([
+    opsQuery('GET', `entities?id=in.(${inList})&select=id,name`, undefined, { countMode: 'none' })
+      .catch(() => ({ ok: false, data: null })),
+    opsQuery('GET',
+      'lcc_deal_correspondence_summary' +
+      `?is_current=eq.true&source=eq.comms_tick&generated_at=gte.${enc(cutoffIso)}` +
+      `&entity_id=in.(${inList})&select=entity_id`, undefined, { countMode: 'none' })
+      .catch(() => ({ ok: false, data: null })),
+    opsQuery('GET',
+      'lcc_dossiers' +
+      `?dossier_type=eq.deal&generated_at=gte.${enc(cutoffIso)}` +
+      `&entity_id=in.(${inList})&select=entity_id,metadata`, undefined, { countMode: 'none' })
+      .catch(() => ({ ok: false, data: null })),
+  ]);
+  const names = new Map((namesRes.ok && Array.isArray(namesRes.data) ? namesRes.data : []).map((r) => [r.id, r.name]));
+  const summaryRefreshed = new Set((sumRes.ok && Array.isArray(sumRes.data) ? sumRes.data : []).map((r) => r.entity_id));
+  const dossierRegen = new Set(
+    (dosRes.ok && Array.isArray(dosRes.data) ? dosRes.data : [])
+      .filter((r) => (r.metadata?.generated_via || '') === 'w7.2_tick')
+      .map((r) => r.entity_id));
+
+  const items = [...byDeal.values()]
+    .map((agg) => ({
+      entity_id: agg.entity_id,
+      deal_name: names.get(agg.entity_id) || 'Unnamed deal',
+      new_comms: agg.new_comms,
+      summary_refreshed: summaryRefreshed.has(agg.entity_id),
+      dossier_regenerated: dossierRegen.has(agg.entity_id),
+      todos_generated: agg.todos_generated,
+      milestones: [...agg.milestones.entries()].map(([key, v]) => ({ key, ...v })),
+    }))
+    .sort((a, b) => b.new_comms - a.new_comms || a.deal_name.localeCompare(b.deal_name));
+
+  return { window_hours: hours, count: items.length, items };
 }

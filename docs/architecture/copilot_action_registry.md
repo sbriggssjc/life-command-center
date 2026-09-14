@@ -1,5 +1,10 @@
 # Copilot Action Registry (Wave 1)
 
+> 🗄️ **HISTORICAL (DOCMAP1, 2026-09-08).** Orphaned build-progress/plan report, not cited by any current index; superseded in practice by copilot_authoritative_architecture_plan.md + copilot_agent_catalog.md (REGISTRY.md §B).
+>
+> Kept for the record — nothing below was edited; treat any status/data claim in it as a
+> point-in-time snapshot, not current state.
+
 ## Purpose
 Define the Wave 1, implementation-ready Copilot action inventory for LCC and connected domain systems.
 
@@ -259,6 +264,50 @@ Each action entry includes:
 
 ---
 
+## Comps
+
+### query_comps
+- `action_name`: `query_comps`
+- `user_goal`: Pull bounded, market-targeted sales comps with explicit filters.
+- `category`: `read/query`
+- `owning_repo`: `LCC`
+- `endpoint_or_function`: `POST /api/query-comps`
+- `microsoft_surface`: `Teams`, `Copilot Chat`, `LCC Deal Agent`, `Claude Northmarq`
+- `inputs`: optional `request`, `tenant`, `states`, `metros`, `property_types`, `date_from`, `date_to`, `limit`
+- `outputs`: `{ comps, template_comps, markdown, meta }`
+- `risk_tier`: `0`
+- `confirmation_required`: `none`
+- `idempotency_notes`: Read-only query through the shared LCC comps engine.
+- `listing_driven_production_support`: Gives field agents real Team Briggs comps from the engine instead of web/general-knowledge substitutes.
+
+### synthesize_comps
+- `action_name`: `synthesize_comps`
+- `user_goal`: Parse a plain-language market request and return a bounded template-ready comp set.
+- `category`: `read/query`
+- `owning_repo`: `LCC`
+- `endpoint_or_function`: `POST /api/synthesize-comps`
+- `microsoft_surface`: `Teams`, `Copilot Chat`, `LCC Deal Agent`, `Claude Northmarq`
+- `inputs`: required `request`; optional overrides `tenant`, `states`, `metros`, `property_types`, `include_on_market`, `include_unreliable_noi`, `limit`
+- `outputs`: `{ interpreted_query, comps, template_comps, markdown, meta }`
+- `risk_tier`: `0`
+- `confirmation_required`: `none`
+- `idempotency_notes`: Read-only synthesis through the shared LCC comps engine.
+- `listing_driven_production_support`: Lets agents answer requests like DaVita, The Villages, FL from engine data with bounded output.
+
+### generate_comps
+- `action_name`: `generate_comps`
+- `user_goal`: Generate a Team Briggs comps workbook from bounded template-ready comp rows.
+- `category`: `export/generate`
+- `owning_repo`: `LCC`
+- `endpoint_or_function`: `POST /api/comps`
+- `microsoft_surface`: `Teams`, `Copilot Chat`, `LCC Deal Agent`, `Claude Northmarq`
+- `inputs`: required `comp_type` (`sales` or `lease`); sales rows in `on_market`/`sold`, lease rows in `comps`, optional `name` and `client`
+- `outputs`: `{ status, filename, download_url, comp_type, rows_by_sheet }`
+- `risk_tier`: `1`
+- `confirmation_required`: `lightweight`
+- `idempotency_notes`: Creates a new generated workbook artifact; source comp rows are not mutated.
+- `listing_driven_production_support`: Exports the same bounded engine comps into the Team Briggs workbook template.
+
 ## Ops / Visibility
 
 ### 16) get_daily_briefing_snapshot
@@ -315,6 +364,42 @@ Each action entry includes:
 | Improve seller communication speed/quality | Covered | `fetch_listing_activity_context`, `draft_seller_update_email` |
 | Improve execution reliability | Covered | `get_my_execution_queue`, `update_execution_task_status` |
 | Increase operational visibility and resilience | Covered | `get_daily_briefing_snapshot` (aggregator), `get_sync_run_health`, `retry_sync_error_record`, review queue surfacing actions |
+
+## Wave 3 — Call notes + Microsoft-side capture (W7.3)
+
+Capture calls + operator-tagged comms "from Microsoft as we send/work" so they
+become first-class inputs to the LIVE W7.2 propagation tick. Both land as
+deal-stamped `activity_events` through the existing dual-anchor spine.
+
+### 41) log_call_note
+- `action_name`: `log_call_note`
+- `user_goal`: Log a phone/Teams call as a first-class call note on a deal, from Copilot (Outlook/Teams).
+- `category`: `schedule/task`
+- `owning_repo`: `LCC`
+- `endpoint_or_function`: `POST /api/chat (copilot_action dispatch)` → `operations.js::handleLogCallNote` → `logManualCallNote`
+- `microsoft_surface`: `Teams`, `Outlook`, `Copilot Chat`, `LCC`
+- `inputs`: required `notes`; optional `deal_or_contact_query`, `direction` (made/received), `contact_name`, `occurred_at`
+- `outputs`: `{ ok, wrote, requires_pick, candidates[], activity_id, deal_entity_id, message }`
+- `risk_tier`: `1`
+- `confirmation_required`: `lightweight`
+- `idempotency_notes`: Dedup on (workspace, `manual_call`, external_id) where external_id hashes (actor, occurred_at, notes) — a re-submit is a no-op. Deal resolution NEVER guesses: an ambiguous query returns candidates and writes nothing (`requires_pick`).
+- `listing_driven_production_support`: A logged call updates the deal summary + next steps exactly like an email (W7.3 → W7.2).
+
+### 42) tag_comm_to_deal
+- `action_name`: `tag_comm_to_deal`
+- `user_goal`: Manually attach an existing email/call to a deal — the override lane for zero-match deals and matcher misses.
+- `category`: `review/resolve`
+- `owning_repo`: `LCC`
+- `endpoint_or_function`: `POST /api/chat (copilot_action dispatch)` → `operations.js::handleTagCommToDeal`
+- `microsoft_surface`: `Teams`, `Outlook`, `Copilot Chat`, `LCC`
+- `inputs`: required `deal_or_contact_query`; optional `internet_message_id` (preferred), `subject`, `sender`
+- `outputs`: `{ ok, wrote, already, conflict, activity_id, deal_entity_id, message }`
+- `risk_tier`: `1`
+- `confirmation_required`: `lightweight`
+- `idempotency_notes`: Stamps `deal_entity_id` on the matched activity. Re-stamping the SAME deal is a no-op (`already`); REFUSES to re-stamp a message already tied to a DIFFERENT deal (`conflict` surfaced, never overwritten).
+- `listing_driven_production_support`: Attaches the message so it propagates into the deal context (W7.3 → W7.2).
+
+> Companion capture (no Copilot action): the **Outlook category-tagging** flow (`POST /api/intake-tagged-comm`, PA-webhook-secret auth, flag `TAGGED_COMM_INTAKE`) and the in-app deal-surface **Log call** quick-log (`POST /api/intake-log-call`). See `docs/setup/OUTLOOK_CATEGORY_TAGGING_FLOW.md`.
 
 ## Notes
 - This registry intentionally excludes Wave 2+ workflows and high-autonomy domain-write actions.

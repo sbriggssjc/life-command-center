@@ -1,0 +1,70 @@
+{
+  "$schema_version": "1.0.0",
+  "_doc": "Capital Markets chart brand config — Briggs Brand Standards v3 / Northmarq 2024 guide. Single source of truth for CM chart typography, palette, series-ramp order, and color proportions. Loaded by api/_shared/cm-native-chart-injector.js (CM_BRAND). Per-vertical overrides live under `verticals`. This is DATA, not code — a future brand-guide update is a JSON change, not a code change.",
+  "_source": {
+    "authoritative": [
+      "Northmarq_Brand Style Guide_Final_11_2024.pdf (data-styling page)",
+      "colorproportions.png (series-ramp order + proportions)",
+      "Briggs_Brand_Standards_v3.md (tiebreaker)"
+    ],
+    "_provenance_note": "The three authoritative source files live in Scott's OneDrive (_WORKFLOW folder) and were NOT reachable from the build sandbox. Values below are taken from Scott's A1-v2 token spec (stated as derived from Briggs v3) and cross-checked against public/reports/cm_brand_tokens.json (reverse-engineered from the gov master workbook theme). ACTION: diff these hexes against the 2024 PDF data-styling page + colorproportions.png and correct any delta here — the PDF + Briggs v3 win. Log deltas in this block.",
+    "_deltas_vs_2024_pdf": []
+  },
+
+  "typeface": "Futura PT",
+  "typefacePreferred": "Futura PT",
+  "_typeface_note": "Set to Futura PT per marketing chart-formatting feedback (2026-08, ChartEdits.docx) so the exports match the marketing/website/PDF editing process. Body text = Futura PT (Book weight is the regular face; b=\"0\"); titles use b=\"1\" (Futura PT Bold/Heavy). ⚠️ If a machine that OPENS/edits these workbooks lacks Futura PT installed, Excel silently falls back to the theme font — keep Futura PT installed on every editor's machine, or flip this back to `Open Sans` (the Excel-safe universal face) here (one value, no code change).",
+
+  "palette": {
+    "primary":    "003DA5",
+    "deep":       "001159",
+    "accent":     "62B5E5",
+    "blue85":     "265AB2",
+    "gridline":   "E0E8F4",
+    "benchmark":  "9EA9B7",
+    "peridot":    "8FC49E",
+    "amethyst":   "9B88A5",
+    "topaz":      "99B2DD",
+    "aquamarine": "5FA3A8",
+    "tourmaline": "B6E0DA",
+    "iron":       "D8DFDF",
+    "steel":      "9EA9B7",
+    "slate":      "6A748C",
+    "charcoal":   "3D4A54",
+    "morganite":  "D4C8CB",
+    "ink":        "191919",
+    "paper":      "FFFFFF",
+    "black":      "000000"
+  },
+
+  "series": ["003DA5", "62B5E5", "265AB2", "9EA9B7", "6A748C", "5FA3A8", "8FC49E", "9B88A5", "B6E0DA", "99B2DD", "D4C8CB"],
+  "series_ramp": ["003DA5", "62B5E5", "265AB2", "9EA9B7", "6A748C", "5FA3A8", "8FC49E", "9B88A5", "B6E0DA", "99B2DD", "D4C8CB"],
+  "_series_note": "Report CHART series order (marketing-review decision, 8/2026 — supersedes the prior tertiary-order seeding): NM Blue (003DA5), Sky (62B5E5), Blue 85 (265AB2), Steel (9EA9B7), Slate (6A748C), THEN the tertiary ramp (Aquamarine, Peridot, Amethyst, Tourmaline, Topaz, Morganite) for the 6th+ series only. Report charts stay in the blue/neutral family; tertiary hues (peridot/amethyst/etc.) remain sanctioned for INFOGRAPHIC / tile use per the 2024 guide but are NOT the primary series colors on report charts. This decision is recorded here so it is not re-litigated from the guide text (which lists tertiaries at slot 4). Primary blues dominate; use slot N for series N.",
+
+  "text": {
+    "title":     "62B5E5",
+    "axisLabel": "6A748C",
+    "legend":    "6A748C",
+    "callout":   "003DA5"
+  },
+  "_text_note": "Chart TITLE = Sky 62B5E5, not-bold, ALL CAPS (marketing ChartEdits 2026-08-12). Chart axis/category labels = Slate 6A748C (marketing ChartEdits 2026-08-12; supersedes the prior Rich Black 191919). Charcoal (3D4A54) stays for worksheet body cells per Briggs §2. Callout numbers: one color per chart, NM Blue default (use Sky 62B5E5 where the series itself is NM Blue, for contrast). Superscript $/+ and the '$5B+' convention apply to the report's KPI tiles, NOT Excel chart data labels (n/a for dLbls).",
+
+  "sizes": { "title": 1200, "axisTitle": 900, "axisLabel": 700, "dataLabel": 900, "legend": 900, "chartArea": 800 },
+  "_sizes_note": "Font sizes in OOXML hundredths-of-a-point (1200 = 12pt). Per marketing feedback (ChartEdits 2026-08-12): chart TITLE 12pt Futura PT NOT-bold, ALL CAPS, Sky 62B5E5 (rendered via chartTitleXml with b=\"0\" + toUpperCase); chart-AREA default text (`chartArea`) 8pt Futura PT Book (the whole-chart Format-Chart-Area font); BOTH axis labels (`axisLabel`, x/category + y/value tick labels) 7pt, color Slate 6A748C. Change any here (no code change).",
+
+  "chartSize": {
+    "widthIn": 10.0,
+    "heightIn": 4.25,
+    "donutWidthIn": 4.25,
+    "donutHeightIn": 4.25,
+    "_note": "Fixed chart-object (Chart Area) size in inches per marketing feedback (2026-08 ChartEdits.docx): non-donut charts 4.25\"H × 10.00\"W; donut charts 4.25\" × 4.25\" square. Emitted as an explicit-size oneCellAnchor in cm-native-chart-injector.js (1 inch = 914400 EMU). NOTE: the same feedback doc also listed 'entire chart Size: H 3.55\" × W 10.12\"'; that conflicts with the 4.25×10.00 'Chart area size' line, so the explicit 'Chart area size' values were taken as authoritative. To use the 3.55×10.12 values instead, edit heightIn/widthIn here."
+  },
+
+  "banned": ["4CB582", "7E6BAD", "D97706", "D9D9D9", "595959", "1F4E79"],
+  "_banned_note": "Retired off-brand accents/grays. Slate #6A748C is intentionally NOT banned (it is the on-brand axis/legend neutral).",
+
+  "verticals": {
+    "dialysis": {},
+    "gov": {}
+  }
+}

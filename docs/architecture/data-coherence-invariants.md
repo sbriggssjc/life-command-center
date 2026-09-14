@@ -1,0 +1,560 @@
+# Data coherence invariants — every source must propel the whole system
+
+**Created 2026-08-28** from Scott's standing requirement:
+
+> *"We want to eliminate these exact types of code and/or logical gaps or misconnections that are
+> happening in all our databases in the LCC in the future (current two and planned others) so that
+> all data sources and ingestion is propelling the entire database forward, not just a bunch of
+> different component parts or subdatabases or tables."*
+
+> 📍 **This is the standing architectural contract. It applies to LCC Opps, Dialysis_DB, Government,
+> and every domain database added later.** It is not an audit — audits are the evidence that
+> produced it (`DEAD_END_AUDIT_PLAYBOOK.md`, B5, B6). **When you add a source, a table, a trigger,
+> or a whole database, this is the checklist.**
+
+---
+
+## 0. The failure this exists to prevent
+
+Every defect below was **live in production**, found in one 48-hour window, and **not one of them
+raised an error, a zero row, or an alert.** They are all the same shape: *a component works
+correctly in isolation while the system does not advance.*
+
+| defect | measured | why nothing caught it |
+|---|---|---|
+| gov never consumed its own `sales_transactions` as ownership history | **9,514 named sellers, 1.8% consumed**; the fix wrote **2,776 rows / 2,000 properties, 677 with no prior history at all** | **a missing feeder has no representation anywhere** — no error, no zero row, no queue |
+| `property_sale_events` link columns are `bigint` against `uuid` PKs | **5,208 rows, both link columns populated on ZERO** | a writer raises `22P02`; nobody wrote one, so nobody saw it. dia's twin has a compatible PK and 52 populated rows |
+| four ingestion producers dead since March–April 2026 | health view **all green** | **a FAILED step is a red row; a SKIPPED step is NO row**, and the view is built on emitted rows |
+| `parcel_owner_xref` corroboration engine | **561 divergences**, cron running every 30 min | the producer works; **nothing consumes its disagreements** |
+| `gsa_lease_diff` — the ownership store's largest source | **unregistered** on `field_source_priority` | the ladder is consulted per write; an absent rung reads as "no answer", not as an error |
+| `propagate_ownership_to_property` trigger | nulled `properties.recorded_owner_id` on any text-party insert; **7,567 rows already in that shape**, would have destroyed **1,446 of 9,312** | `AFTER INSERT`, no ledger, silent, unrecoverable |
+
+**The pattern:** each table, cron and view was individually correct. **The system did not move
+because the CONNECTIONS between them were never asserted anywhere.**
+
+---
+
+## 1. The invariants
+
+**Every one of these is a property of a CONNECTION, not of a component.** That is why component
+tests, boot checks and health views all pass while the invariant is violated.
+
+### I1 — Every producer names its consumer, and every consumer names its producer
+
+A source with no consumer is a **finding, not a state** (`DEAD_END_AUDIT_PLAYBOOK.md` Class 2). A
+consumer wired to a producer that does not exist fails **exactly like a consumer bug** (P137).
+
+> **On adding a producer:** name the consumer in the migration/handler header. If you cannot name
+> one, **do not build the producer.**
+> **On adding a consumer:** verify the producer WRITES the field you read — by name, not by concept.
+> C1: a lane's predicate read `unified_contacts.sf_account_id` while its only writer wrote
+> `recorded_owners.sf_account_id`. **1,961 owners already linked, 29 agreeing, and nothing errored.**
+
+> **On adding a SECOND STORE for one fact:** name which is canonical, in writing, and make the code
+> say so. **B6c-dup is I1's cleanest example yet — a consumer and a producer that each named a
+> DIFFERENT store as canonical.** `detail.js` said in its own comments that `property_sale_events`
+> was canonical and `sales_transactions` was *"legacy, retired for write paths"*; the database said
+> the reverse and always had — **77 of 77 gov views that read a sale store read `sales_transactions`,
+> including all 30 `cm_gov*` Capital Markets views, and ZERO read `property_sale_events`.** Both
+> stores were individually correct with coherent consumers, so nothing errored and no component test
+> could see it. **The comment is what let it survive**, which is why the repair is a comment
+> correction plus a propagation path, not a schema change.
+>
+> ⚠️ **A CODE COMMENT ASSERTING THE OPPOSITE OF THE DATABASE IS A DEFECT, AND IT IS THE ONLY DEFECT
+> CLASS HERE THAT NO DETECTOR CAN STRIP COMMENTS TO FIND.** Every other source guard in this repo
+> strips comments first (A1, A5c, N18, B1) so a migration's own prose cannot satisfy a grep for the
+> bug it removed. Here the defect *is* prose. Guard it by **proximity, not presence**: the false
+> claim may appear only adjacent to an annotated correction, and a separate assertion pins that the
+> annotation still exists so the proximity rule cannot go vacuously true.
+>
+> ⚠️ **And check the direction of the leak BEHAVIOURALLY, never by reading the propagation code.**
+> The B6c-dup probe was one rolled-back INSERT: `property_sale_events` +1, `sales_transactions`
+> **+0**, `properties.latest_sale_price` set. Reading the code would have shown the same thing more
+> slowly and less convincingly.
+>
+> ⚠️ **A complete downstream store is NOT evidence that propagation exists.** gov's spine held every
+> single priced event on a live property — because both bulk importers wrote **both** tables
+> independently, not because anything connected them. The operator path had never been used, so the
+> leak had produced zero damage and looked exactly like a working connection. **Ask when the path
+> last ran before reading its output as proof it works.**
+
+### I2 — A fact store's producer set must be the SAME SHAPE in every domain
+
+**This is the Class 20 detector and it is the highest-yield query in this document.** Group the
+store by its provenance column, split by domain. **A source bucket present for one domain and
+absent for another IS the finding** — no hypothesis required.
+
+```sql
+select source_domain, split_part(coalesce(<provenance_col>,'(null)'),':',1) as src_bucket,
+       count(*) , count(distinct <subject_col>)
+from <fact_store> group by 1,2 order by 1, 3 desc;
+```
+
+> ⚠️ **CORRECTED 2026-08-29 (D1 sizing) — THE QUERY ABOVE HAS A POPULATION OF ONE.** Measured on
+> LCC Opps: **exactly one table carries BOTH a domain column and a provenance column —
+> `lcc_entity_portfolio_facts`, the very table that found B5.** So the intra-table form of this
+> detector cannot generalise, and writing it as *the* detector overstated its reach.
+>
+> **The form that generalises is a CROSS-DATABASE diff of PARALLEL tables (gov vs dia)** — which is
+> how B5 was actually found, and how B6c found dia's `property_sale_events` differs from gov's.
+> **28 parallel pairs carry a provenance column on both sides** (23 diffable after the
+> out-of-scope and cardinality exclusions below); see
+> `docs/audits/D1_CROSS_DB_PROVENANCE_DIFF_2026-08-29.md`.
+>
+> ⚠️ **And a naive cross-DB query breaks on the first pair it meets:** `properties` uses
+> **`data_source` in gov and `source` in dia**. **Resolve the provenance column per table from the
+> catalogue; never hard-code it.** ⚠️ Several values also carry a suffix (`county_deed:<uuid>`,
+> `gov_master_backfill_r71|h=<hash>`), so `split_part` before grouping or the diff drowns in
+> one-row buckets.
+>
+> ⚠️ **Row-count disparity is NOT the signal — the producer SET is.** `property_financials` is
+> **98,510 (gov) vs 676 (dia)** and may be entirely legitimate. Diff the distinct sources; report
+> volume only as context.
+
+**A difference is not automatically a defect** — a domain may legitimately lack a source (dia has no
+GSA lease inventory; gov's tenant is a federal agency so it has no operator-vs-owner conflation).
+**But it must be an explained difference, not an unnoticed one.**
+
+> ✅ **SHIPPED 2026-08-29 as a standing detector** —
+> `scripts/d1-cross-db-provenance-diff.mjs` over `api/_shared/provenance-diff-planner.js`, with the
+> acknowledgement ledger `scripts/d1-provenance-acknowledgements.json` and the guard
+> `test/d1-cross-db-provenance-diff.test.mjs`. **Re-run MONTHLY**, and on adding any ingestion
+> source or domain database. Writeup: `docs/audits/D1_CROSS_DB_PROVENANCE_DIFF_2026-08-29.md`.
+> **First run: 69 differences across 23 two-sided stores — 58 legitimate, 5 unexplained, 6 unwired,
+> and none B5-sized.** The two domains are substantially coherent; the detector's value is now
+> preventing the next divergence rather than closing a current one.
+>
+> ⚠️ **THE DIFF HAS A PRECONDITION NOBODY STATED: THE STORE MUST RECORD ITS PRODUCER, AND 12 DO NOT.**
+> Twelve tables exist in BOTH domains and carry a provenance column in only one — so I2 **cannot be
+> evaluated on them at all**. The one that matters is **dia `ownership_history`: 10,037 rows, no
+> provenance column**, i.e. the very store B5 was a finding about is un-diffable on the dia side.
+> Also gov `recorded_owners` (17,242) and gov `available_listings` (3,131). **A store with no
+> provenance column is not "clean" — it is unmeasurable**, and it reads identically to clean.
+> Backlog **D1g**.
+>
+> ⚠️ **RESOLVING THE COLUMN BY NAME IS NOT ENOUGH — RESOLVE IT BY POPULATION.** gov
+> `property_financials` carries BOTH `data_source` and `source`, and **`source` is populated on 0 of
+> 98,510 rows**. Name-order precedence picks the dead column and reports an empty producer set.
+>
+> ⚠️ **A PROVENANCE COLUMN CAN HOLD A DATA VALUE, AND A CARDINALITY GUARD DOES NOT CATCH ALL OF
+> THEM.** `entity_match_candidates.source_name` holds **1,276 entity names** (caught by cardinality);
+> `ingestion_tracker.source` holds script names, dataset filenames **and temp paths**
+> (`/tmp/tmpuab4ll9g.json`) across only ~41 buckets (**not** caught). Excluding those by a name
+> pattern is how a detector starts returning comfortable zeros (P182) — so each exclusion is a
+> **recorded decision with a reason**, and is still **emitted and counted**.
+>
+> ⚠️ **FOLD VOCABULARY DRIFT BY SYNONYM, AND BE STINGY ABOUT IT.** `om_extraction` (gov) vs
+> `om_intake` (dia) is one pipeline; `connectivity4_` vs `connectivity2_recorded_resolution` is one
+> resolver. Only two groups qualified: **dia carries BOTH `costar_import` (2,832) and `costar_sidebar`
+> (596) on leases**, so those are different routes and folding them would have hidden a real
+> difference.
+>
+> ⚠️ **ACKNOWLEDGING IS NOT SILENCING, AND EVERY ENTRY NEEDS A REASON.** `legitimate` silences a row;
+> `unexplained`/`unwired` keep it rendering as known and tracked. An entry, synonym or exclusion with
+> no reason is REJECTED by the detector — the guard against becoming the badge of noise that B6d
+> fixed one layer up. And **verify the ledger against the measured population**: the completeness
+> gate caught 5 differences that had been missed by eye.
+
+### I3 — A cross-store link column must be type-compatible with its target and carry an FK
+
+`property_sale_events.ownership_history_id` is `bigint`; `ownership_history`'s PK is `uuid`. **The
+column cannot hold the value it is named for.** With no FK, nothing declares the intent, and the
+defect is invisible until someone writes.
+
+> **Rule:** a column named `<table>_id` must be the type of `<table>`'s PK and carry an FK, or carry
+> a comment stating why not. **A nullable FK is cheap; a type mismatch is unpayable.**
+
+> **⚠️ SWEPT 2026-08-28 (D2 / B6c) — and the repair is mostly NOT worth doing, which the invariant
+> as written does not tell you.** `docs/audits/B6c_PROPERTY_SALE_EVENTS_2026-08-28.md`. Both of
+> `property_sale_events`' link columns are confirmed impossible (`bigint` vs `uuid`, no FK, 0 of
+> 5,208), **and `ownership_history_id` has ZERO readers on either domain** — 0 hits across 620 gov
+> objects, 0 across dia, 0 in `api/`. Retyping it would satisfy I3 and build a link nobody follows
+> (**Dead-End Class 2**). **I3 says a link column must be type-compatible; it does not say every
+> `<table>_id` column deserves to exist.** Ask who reads it before repairing it — the honest
+> disposition for a dead link column is `DROP`, and the invariant is then satisfied vacuously.
+>
+> Three things the sweep established that belong with the rule:
+>
+> 1. **A declared FK is authoritative and Postgres already type-checks it**, so the detector need
+>    only examine *unFK'd* columns. `available_portfolios.portfolio_id` looked like a defect against
+>    a name-derived `portfolios`; its real FK points at `sales_portfolios` (uuid→uuid, correct).
+> 2. **Every genuinely mismatched undeclared column found across both domains is 0% populated** — a
+>    column that cannot hold its value never gets one. **Triage by populated-ness before reading
+>    names**: a *populated* mismatch is nearly always an external vendor id (a Salesforce
+>    `00T8W...`) or a uuid stored as text, i.e. an accepted false positive.
+> 3. ⚠️ **The same table can be broken on different columns in different domains.** gov's
+>    `property_sale_events.broker_id` is fine and dia's is broken; gov's two link columns are broken
+>    and dia's are fine. **Neither domain is a safe template for the other** — I2's same-shape
+>    invariant failing on TYPES, which I2's provenance `group by` cannot see.
+
+### I4 — A producer emits a run row even when it does nothing, and ESPECIALLY when it SKIPS
+
+**Playbook Class 21.** `pipeline_runner` guards the GSA diff on a local folder that is always empty
+on CI: the guard logs *"Task completed"*, the guarded task is never invoked, writes no `run_log`
+row, and therefore **has no row in `v_pipeline_task_health`** — which is built on emitted rows.
+**Four producers died for five months behind an all-green view.**
+
+> **A failed step is a red row. A skipped step is no row. A health view over emitted rows cannot
+> tell "skipped" from "never scheduled" from "healthy and quiet."**
+> **Rule:** open the run row **before** the work (P123), close it after, and record a SKIP with its
+> reason as a first-class outcome. Health must be computed against **expected** runs, not observed.
+
+✅ **CLOSED 2026-08-28 (B6a)** — `docs/audits/B6a_SKIPPED_STEP_HEALTH_BLINDNESS_2026-08-28.md`.
+Four corrections to the statement above, each of which changed the fix:
+
+- **⚠️ "No row" was only half the mechanism, and the worse half is a STALE GREEN ROW.**
+  `gsa_ingest_+_diff` was **not absent** from `v_pipeline_task_health` — it carried
+  `status='ok'`, *"Task completed"*, **67 days stale**, on a step whose own history says it ran
+  every 7 days, because `status` read the last outcome's `event_type` and nothing compared it to
+  when that outcome should have been superseded. **The recommended fix — "enumerate declared
+  steps, not logged ones" — would not have caught it**, because it was never missing. The missing
+  dimension is **cadence**, not enumeration.
+- **The fix is at the EMISSION POINT, and that dissolves the enumeration problem.** Once both
+  branches of every guard write (`record_skip` / `run_guarded_task`), the **logged set IS the
+  declared set** — so no step registry was needed, and a fourth registry was not built beside
+  `feed_freshness_registry`, `data_freshness_monitor.SOURCES` and this view.
+- **⚠️ A PRODUCER IS NOT A TABLE.** R56's `feed_freshness_registry` already implements this
+  invariant end to end — SLA, cross-DB mirror, deduped auto-resolving alert — and read healthy
+  over the four dead producers **because nobody registered them**. Registering `prospect_leads`
+  plainly would still have been GREEN: the table is fresh (other lead sources are live) while its
+  `ownership_change` lane died 2026-03-31. A table-keyed freshness row is fresh whenever **any**
+  of its producers writes. Fixed with a structured `filter_column`/`filter_value` (`%I`/`%L`,
+  never free SQL — the function is `SECURITY DEFINER`) and a both-or-neither CHECK.
+- **A legitimate skip must be DECLARABLE, and the declaration must have no default.** A skip
+  somebody chose is healthy and must be visible without alerting; an undeclared skip is the
+  finding. Read **`tasks_skipped_undeclared`**, never `tasks_skipped` (which previously counted
+  dry runs).
+
+⚠️ **And the instrument one level up is still blind.** The cross-DB monitor has evaluated **no
+gov or dia feed since 2026-07-26**: the mirror is stale, `lcc_finalize_feed_freshness` drops any
+non-200 response silently and returns `(0,0)`, and `lcc_check_feed_freshness` excludes mirror
+rows older than 3 days — so **when the sync stops, the check stops checking and reports nothing
+wrong.** gov reads a stale feed today with no open `feed_stale` alert. **B6a-follow-up**, named
+and sized, deliberately not fixed inside a gov instrument change.
+
+### I5 — Every source is registered on the authority ladder before it writes
+
+`field_source_priority` is the single place that answers *"if two sources disagree, who wins."*
+`v_field_provenance_unranked` is the drift detector and **should return 0 rows**.
+⚠️ It currently returns **33** — pre-existing drift, and `gsa_lease_diff` is not the only large
+source missing a rung.
+
+### I6 — A corroboration signal must have a consumer for its DISAGREEMENTS
+
+A source that agrees adds confidence; **a source that disagrees is the finding**, and it needs a
+review lane. `parcel_owner_xref` produces **561 divergences every 30 minutes** into nothing.
+
+> **Rule:** contradictions go to a review lane, **never to a silent winner**. And note two sources
+> can BOTH be right about different questions — a GSA lessor-of-record change is *who the government
+> pays*, a recorded deed is *who holds title*, and in a ground lease **both are true at once**
+> (Scott, on Sunflower). **Do not collapse a semantic difference into a precedence rule.**
+
+### I7 — A change signal reaches EVERY store it belongs in
+
+An owner/lessee change is simultaneously **transaction history (comps)** and **ownership history**.
+Reaching one is not reaching both. B6 swept 19 signals against this invariant.
+
+### I8 — A trigger that propagates must guard the absence of what it propagates
+
+`propagate_ownership_to_property` wrote `NEW.recorded_owner_id` unconditionally, so any row naming
+its parties as *text* — which is how `gsa_lease_diff`, `deed_extraction` and B5 all write —
+**overwrote a real owner with NULL.**
+
+> **Rule:** an `AFTER INSERT/UPDATE` propagation must be **fill-forward** — never write NULL over a
+> populated field — and must be positive-controlled **in both directions** (it preserves when the
+> source is null; it propagates when the source is set).
+
+### I9 — Provenance must be recoverable, and `updated_at` is not provenance
+
+`lcc_entity_portfolio_facts` has **no creation timestamp**, and the nightly re-upsert touches
+**11,828 of 14,076 rows daily** — so **every source reads "written today."** This cost a wrong
+conclusion in this very arc.
+
+> **Rule:** a fact store carries `created_at` **and** a provenance column. Never date a producer off
+> `updated_at` on an upserted table; find the producer in code.
+
+### I12 — The field a gap-closer WATCHES and the field a writer FILLS must be the same field, in the same unit
+
+**Added 2026-09-01 from B6d-assessor-marker, verified live on 3,702 paired rows.**
+
+`dia.properties` carries **`land_area` in ACRES and `lot_sf` in SQUARE FEET** — the same measurement
+twice, with **no conversion and no reconciliation anywhere**. Measured across every row holding both:
+
+| ratio `lot_sf / land_area` | rows | share |
+|---|---:|---:|
+| **exactly 43,560 ±1** (sq ft per acre) | 3,373 | **91.1%** |
+| within 1% | 258 | 7.0% |
+| within 10% | 44 | 1.2% |
+| genuine disagreement | 27 | 0.8% |
+
+**0 of 3,702 are equal.** They are one fact in two units, and nothing in the schema says so.
+
+The consequence is a queue that cannot close. `property_metadata_backfill_queue`'s closure trigger
+watches `land_area`; its writer fills `lot_sf` — so **223 of 662 open rows (34%) carry only gaps that
+writer can never close**, and the row stays open no matter how well the fill works. **Nothing errors.
+The writer succeeds and the gap persists.**
+
+> **Rule:** wherever a store holds one measurement in two units or two representations, **one is
+> derived and the derivation is enforced** (a `GENERATED` column, a trigger, or a single writer) —
+> never two independently-written columns. And **a gap-closer's watched field must be the field its
+> writer actually writes**; assert that pairing explicitly, because the failure is silent on both
+> sides.
+>
+> ⚠️ **The conversion is NOT a backfill.** Measured 2026-09-01: **zero** `dia.properties` rows have
+> `land_area IS NULL AND lot_sf IS NOT NULL`, so `land_area = lot_sf / 43560` fills **0 rows today**.
+> It changes what a *future* source can close (236 → 439 of 662), which is a plumbing fix, not a
+> yield fix. **State which of the two any such change is** — the audit that found this initially
+> read it as the higher-value one.
+
+### I11 — A monitor must alert on its own blindness. An exclusion of stale inputs IS a silent failure.
+
+**Added 2026-08-28 from B6a's follow-on finding, and independently verified. ✅ CLOSED THE SAME DAY
+— see `docs/audits/B6a_FOLLOWUP_FRESHNESS_MONITOR_2026-08-28.md`; the account below is the
+violation as found, kept because the mechanism is the lesson.** This is the sharpest instance of the
+class in the whole campaign, because **every layer reported success.**
+
+The cross-DB freshness monitor had **evaluated nothing since 2026-07-26**:
+
+1. gov's own `v_feed_freshness` is **correct** and says `sam_lease_opportunities` is 32 days stale.
+2. LCC crons **140/141** fire daily and record `succeeded` — but `lcc_domain_feed_freshness.synced_at`
+   is frozen at **2026-07-26 (gov) / 2026-07-29 (dia)**, because `lcc_finalize_feed_freshness`
+   consumes only `status_code = 200` and **silently drops everything else**, returning `(0,0)` —
+   indistinguishable from *"nothing to do."*
+3. `lcc_check_feed_freshness` **excludes mirror rows older than 3 days**, so it evaluates **zero**
+   gov/dia feeds and returns `new_alerts: 0, stale: []`.
+
+**Verified independently 2026-08-28:** gov mirror **33 days** stale, dia **30**; `feed_stale`
+alerts — **8 ever, 0 open, last detected 2026-07-24**, i.e. two days *before* the sync died. **The
+alerts stopped when the monitoring stopped, and the surface has read healthy for a month.**
+
+> **The staleness guard on the mirror IS the silent failure.** The exclusion is individually
+> defensible — evaluating a stale mirror would produce false alerts — but **"I cannot see this feed"
+> and "this feed is fine" must never render identically.**
+>
+> **Rule:** every check that filters out inputs it cannot trust must **emit an alert for the
+> filtered set**, and must be **verified to fire by deliberately starving it** (I4 §2a). A monitor
+> that has never been seen going red on its own blindness is a claim, not a monitor.
+> **Corollary:** a fail-soft that swallows a non-200 must **count and surface** it. `(0,0)` may
+> never mean both *nothing to do* and *everything failed*.
+
+**Closed 2026-08-28.** The exclusion was **kept** — deleting it is the wrong fix and worse than the
+bug, because the check would then alert on ages it cannot vouch for — and the excluded set became
+its own deduped, auto-resolving `feed_mirror_stale` alert. `feeds_evaluated` and
+`feeds_excluded_stale_mirror` are reported separately. Seen going red on the live month-old mirror
+and green again after recovery.
+
+Four things the fix turned up that the invariant should carry:
+
+* **The transport was TWO unrelated causes** three days apart — gov a *marginal* cold-cache
+  statement timeout (`500`/`57014`; warm 231 ms against a 3 s anon budget, so the same request
+  returned `200` three minutes later), dia a *hard* revoked `anon` EXECUTE (`401`/`42501`). Fixing
+  either alone would have left the other silent. **Do not stop at the first cause when several
+  inputs fail in the same week.**
+* **A retry must be bounded and must alert when exhausted**, or it becomes a new way to stay quiet.
+* **`(0,0)` had a third and fourth silent sibling**: a `RAISE NOTICE`-and-continue on a missing
+  secret, and a `200` carrying an **empty array** (the P157 shape — a status-code check passes while
+  nothing arrives). **Read the body, not the code.**
+* ⚠️ **A response store with a shorter retention than its own inflight table loses work
+  permanently.** `net._http_response` is pruned to ~6 h while the inflight row lingered 24 h, so a
+  response arriving after the finalize pass could never be consumed by the next day's. That needed
+  its own outcome class (`lost`) — *ask what happens to a request that is neither answered nor
+  answerable.*
+
+### I13 — One real-world entity, one canonical row; group and join on its id, never on a display string (2026-09-11)
+
+Operators, agencies, owners, brokers, guarantors, tenants, properties. Aliases live in an alias table with
+provenance; legal entities LINK to parents rather than merge into them (a guarantor's legal identity is a credit
+fact). A `canonical_name`/`normalized_name` column that detects duplicates but has no merge consumer is an I6
+violation. **Found by:** ID1 (dialysis operator split), ID0 probe (gov agency split, owner/broker duplicate groups).
+
+### I14 — Low-cardinality attribute domains are controlled vocabularies, enforced at write (2026-09-11)
+
+County, city, state, property_type, status, source. A reference list per domain, with the write path resolving to
+it (or failing to a review status). **Found by:** ID0 probe — gov `properties.county` has 832 county/state pairs split by
+case alone; dia `medicare_clinics.city` has 766 collapsed values; dia `property_type` has 96 values.
+
+### I15 — A bulk load reconciles its row count to the source; truncation fails the load (2026-09-11)
+
+Round-number caps, or tied counts across partitions loaded together, are truncation signatures. **Found by:** MB-a3 —
+DaVita = Fresenius = 2,450 CMS rows, one batch, 17 s apart (B6d-cms).
+
+### I16 — The DEPLOYED object must match its committed source; drift is invisible and outlives the fix (2026-09-12)
+
+A function, view, trigger or policy edited by hand in the database and never committed reads, to every later session,
+as if the repo were the source of truth. **Found by ID3a-b:** the live `canonicalize_agency()` had already diverged
+from `gov_round_76bg_agency_canonicalizer.sql` — its regexes carried word boundaries the committed file lacked — so a
+fix written against the committed source would have been written for a function that no longer existed. The inverse of
+the "MERGED is not RUNNING" doctrine: *running is not committed*. **Second instance, 2026-09-12 (repo-level, worse):** the government DB is written by migrations in **two** repos — `life-command-center` (213 `migrations/government/*`) and `government-lease` — and ID3a-c's fix landed in the latter, so LCC's committed copy of the same function is now **older than live and still applicable**: re-running it would restore the state-agency contamination and the ICE/CBP conflation. **Rule (Scott, 2026-09-12): one repo owns each database's objects — `government-lease` owns the government DB; `life-command-center` owns Dialysis_DB and LCC Opps (the Dialysis repo owns CMS/NPI ingestion rows, not schema).** Blast radius measured 2026-09-12: **188 of the 194 objects LCC's retired gov migrations define are live**, so this is not a tidy-up — it is a live-overwrite hazard. A migration directory in a non-owning repo is historical, and must say so. **Detector:** hash every routine/view definition in each DB against the definition the OWNING repo's migrations produce, and alert on any difference. Until it exists, a session that
+touches a DB object reads the DEPLOYED definition first and says so.
+
+✅ **ID3a-d (2026-09-12) named the owner of all three databases and retired the government copy.**
+`government-lease` owns **government** (settled by Scott); `life-command-center`'s own
+`supabase/migrations/government/*` (213 files) is now marked historical with a
+`README.md` + a per-file header comment (never re-applied, never added to;
+`test/gov-migrations-directory-retired.test.mjs` guards it), explicitly naming both defects
+re-applying the stale `canonicalize_agency()` copy would restore. `Dialysis` owns **Dialysis_DB**
+and `life-command-center` owns **LCC Opps** — both proposed from evidence (migration counts,
+CLAUDE.md self-description), 👤 Dialysis is not yet Scott-confirmed. Full ownership table:
+`CLAUDE.md` → "ONE REPO OWNS EACH DATABASE'S OBJECTS". **The detector is designed and documented,
+not yet run** — `scripts/db-drift/gov-deployed-vs-committed-drift.sql` computes the live half of
+the hash comparison against government (the database where drift has already bitten twice); the
+"expected" half (replaying `government-lease`'s migrations) and the final diff are specified
+inline but require real Supabase credentials this sandbox does not have. Do not fabricate a
+result — run it for real, record what it finds, and only then schedule it on I11.
+
+**I16 is not only about DB objects — 2026-09-12 (Cowork), MB2a.** The same invariant was found
+broken on an **edge function**, where it is worse: `briefing-intel-snapshot` is deployed at **v21
+with no `dialysis` key in `RSS_FEEDS` at all**, read from the DEPLOYED body. MB-b committed three
+dialysis feeds on 2026-09-12 and MB2a replaced them the same day; **neither has ever run**. What
+makes this class distinct from a drifted DB object is that nothing anywhere reports it: this repo
+has **no workflow that deploys `supabase/functions/**`** (`.github/workflows/` has none), so a
+merged change to an edge function deploys nothing AND fails nothing — the build stays green while
+the live behaviour is unchanged. A DB migration at least fails loudly when it is not applied.
+So the I16 detector must cover BOTH halves: committed-vs-deployed for DB objects, and
+committed-vs-deployed for every `supabase/functions/*/index.ts`. Note also that DRIFT1's census
+(2026-09-07) listed this exact function as "committed, not in scope" — accurate on that date and
+stale five days later, which is the general lesson: **a one-time census cannot hold a drift
+invariant; only a repeated check can.** → backlog `MB2a-deploy`.
+
+**I11 can fail INVERTED — 2026-09-12 (Cowork), FEED2.** I11 says a monitor must alert on its own
+blindness. The MB2a feed monitor failed the other way: it attributed its own blindness to the thing it
+watched. Its staleness measure was `checked_date - (last date with items)` — **calendar days** — but the
+producer writing those rows runs **weekdays only** (`0 10 * * 1-5`) while the check runs **daily**
+(`15 11 * * *`). So Monday minus Friday is 3 days and a feed that answered perfectly on both checks read
+as 3 days stale. A second bug compounded it: with no prior row the expression fell back to a **9999
+sentinel** meaning "unknown", so the monitor's FIRST run would have alerted on all 16 feeds. Both were
+caught before the cron ever fired, and fixed by counting **checks rather than days**
+(`zero_item_streak_checks`, migration `20260912190000`).
+
+Two general lessons worth carrying into any I11 detector:
+
+- **A gap in the DATA is not a fault in the SOURCE.** Whenever a detector measures elapsed time, check
+  the cadence of the thing that writes the rows. If the writer's schedule is sparser than the checker's,
+  calendar arithmetic converts every gap into a false fault. Count observations, not dates.
+- **"No history" is not "maximally bad".** A sentinel like 9999 makes an unknown indistinguishable from
+  the worst case, which is precisely the confident-wrong-answer this document exists to prevent. An
+  unseen feed should read as unknown and stay silent until it has actually been observed failing.
+
+A false alarm is not a harmless failure mode: a monitor that cries wolf every Monday is one nobody reads
+by the third week, which returns the system to exactly the silence I11 was written to end.
+
+**FEED2's twin lives in the CUTOFF, not the STALENESS CHECK — MB2e, 2026-09-14.** A fixed calendar
+window (`maxAgeHours`) applied to a source whose publication cadence is slower than that window is
+empty by construction on some days, for the identical reason FEED2's streak was: the checker's clock and
+the producer's clock disagree. Where FEED2's disagreement was *weekday cron vs daily check*, MB2e's is
+*a 72h news cutoff vs a feed that publishes a few times a week* — Federal Register (GSA) and Tax
+Foundation both parsed real items and contributed **zero** on a Monday check (newest item 82h / 92h
+old), because Monday-minus-72h excludes everything published before Friday morning. Fixed the same way
+twice already worked: size the window from the source's own measured cadence (168h/7d, not a global
+widening of the 72h news default — MB2b's ESRD fix is the precedent), and give the MONITOR a way to see
+the class itself (`v_market_brief_feed_health_no_contribution`, a DISTINCT alert from `market_brief_
+feed_stale`, counting consecutive CHECKS never calendar days, with `items_after_cutoff IS NULL` rows
+never counting toward the streak in either direction). **The general rule: whenever a fixed window is
+compared against a producer's cadence — a staleness check OR a content cutoff — ask what the window
+looks like on the worst day of that producer's cycle, not the best.**
+
+### I10 — A one-shot backfill is not a producer
+
+If the mechanism that filled a store was a migration or a script, the store **decays from the moment
+it lands** (Class 8). dia's seller-exit backfill was a one-shot plus a standing sidebar writer —
+which is *fine*, and had to be checked rather than assumed.
+
+---
+
+## 2. Onboarding a NEW domain database
+
+Scott's requirement explicitly covers **planned future databases**. A new domain is not "another
+Supabase project"; it is a new set of connections that must be asserted on day one.
+
+1. **Declare its `source_domain` short code** and add it to the canonical set (`dia`/`gov`/`lcc`/
+   `cre`). ⚠️ **The alias class has recurred many times** — canonicalize on the way in.
+2. **Run I2 against every shared fact store** and produce the producer-set diff *before* go-live.
+   **Any bucket the new domain lacks is either wired or explained in writing.**
+3. **Register every source on `field_source_priority`** (I5) and confirm
+   `v_field_provenance_unranked` does not grow.
+4. **Register every scheduled producer with an EXPECTED cadence** so I4's health check can see a
+   silence.
+5. **Add its anon-readable portfolio views** with `security_invoker=off` ⚠️ (P157: `on` returns
+   **HTTP 200 `[]`** to anon and looks exactly like "no new data" — it froze a sync for 23 days).
+6. **Type-check every cross-store link column against its target PK** (I3).
+7. **Add it to this document's coverage table below.**
+
+---
+
+## 3. Standing detectors — the ones that exist, and the ones that do not
+
+| invariant | detector | status |
+|---|---|---|
+| I5 | `v_field_provenance_unranked` | ✅ exists · ⚠️ **33 rows** (drift) |
+| I2 | provenance `group by` split by domain | ⚠️ **manual** — run in B5/B6; **no standing view** |
+| I3 | link-column type check against target PK | ⚠️ **manual, published 2026-08-28** — the catalogue query is in `docs/audits/B6c_PROPERTY_SALE_EVENTS_2026-08-28.md` **§7e**; **no standing view** (same status as I2). Run on all three projects: **10 genuine defects, 3 low-severity, 5 accepted false positives.** Two refinements it earned while running: **(a) a DECLARED FK is authoritative and Postgres already type-checks it**, so the detector need only examine *unFK'd* columns — that removes a whole false-positive class; **(b) every genuinely mismatched undeclared column found is 0% populated** (a column that cannot hold its value never gets one), so **triage by populated-ness first** — a *populated* mismatch is nearly always an external vendor id or a uuid-as-text. ⚠️ **Positive-control it before believing a zero (P182)**, and note LCC Opps' zero is **bounded**: 151 of 559 `_id` columns evaluated, the rest not name-resolvable and **not examined**. |
+| I4 | expected-vs-observed run health | ✅ **B6a, 2026-08-28** — skips emit; `is_overdue` vs the step's own p90 cadence; the four dead producers registered and RED. Mirror repaired by **B6a-follow-up**. ⚠️ **B6b added the first producer to actually exercise it** (`gsa_change_layer`, emitting on both branches, DECLARED skip when GSA has not published) and found a registry defect the instrument could not see: `gsa_lease_timeline` was keyed on `created_at`, which an UPSERT only moves when a NEW row first appears — a **correct** rebuild over a stable roster would have read STALE and re-opened the alert. Corrected to `updated_at`. **Check the ts_column is one the producer always touches, not merely one it sometimes does.**  ⚠️ **B6b-lead (2026-08-29) adds the mirror failure: a lane can read ALIVE on every consumption metric while having no human consumer at all.** `prospect_leads.lead_source='ownership_change'` showed 7,729 leads / 2,041 worked / 208 pushed to Salesforce / 2,149 touched in 30 days. Measured: "worked" is `filtered_multi_tenant`, an **automated exclusion filter**; "pushed to Salesforce" is `sf_contact_id` (a matched existing contact) while `sf_lead_id` is **0 of 7,729**; "touched" is **1,216 on a single day**. `assigned_to`, `last_contacted_at` and `next_action` are **0 across the entire lane**. **A consumer metric must name the WRITER of the state it counts** — the same demand I4 already makes of a producer's run row. And check the lane's own origin: 59% of those leads were minted by a DIFFERENT producer (`county_deed`) under the same hard-coded `lead_source`, which is why the badge never went quiet when the lane died.⚠️ **B6d (2026-08-29) closes the other half: the EXPECTATION itself was never graded.** `expected_max_age_days = 45` appeared on **10 of 23** domain feeds — a default, not a measurement. All 25 registered feeds (⚠️ **25, not 23** — LCC Opps carries its own registry) now hold a `cadence_class` and either a bound with a mandatory `expectation_basis` or **no bound with a mandatory `unwatched_reason`**, CHECK-enforced. **Rule: a bound must be justified and an absent bound explained**, or the next reader inherits a round number with no way to tell a measurement from a habit. ⚠️ **And a feed's own gap distribution is CIRCULAR once it has been dead** — an outage is a CLOSED gap and enters the distribution, so I4's own p90 rule (correct for pipeline STEPS, whose dead gap never closes) derives a **510-day** bound for `gsa_lease_change_facts`. Size from the producer's DECLARED schedule and corroborate on the current regime; below three gaps say `cannot_be_sized_from_data`. **Standing instrument: `v_feed_expectation_grade` on gov and dia** (measured cadence beside the configured bound), so this is re-gradeable rather than a one-shot that rots. ⚠️ **B6d-cms (2026-08-29) shows the invariant is NOT satisfied by B6a alone — it holds only where a health view actually READS the run rows.** dia's CMS pipeline emits faithfully: 27 `failed` + 6 `abandoned` rows, dated, with reasons. **It is registered in no producer registry, and `ingestion_tracker` has no health consumer** (B6a's surface is `run_log` → `v_pipeline_task_health`, gov-side). So two months of killed runs alerted nobody, and the **45-day freshness bound was the only backstop** — a monitor of the SYMPTOM standing in for a monitor of the CAUSE, which is why it took 65 days to notice a producer that had been dying since June. **Emitting is necessary and not sufficient: the row needs a reader.** This is I4's own failure mode one layer up — B6a fixed *a skipped step emits nothing*; here **the step emits, into a table nothing watches.** ⚠️ **And the same defect made a fixed-interval gate invisible:** `run_cms_ingestion` gated a **daily** cron behind `if days_ago >= 30`, so the producer's real cadence was ~monthly while its schedule said daily — **a second, invisible schedule inside the job.** An expected-cadence registry keyed on the SCHEDULE would have been wrong about this producer in the healthy case too. **Read the cadence the producer actually achieves, never the one its cron declares.**  ⚠️ **B6d-pri (2026-08-31) confirms it is STRUCTURAL on the dia side and adds the layer BELOW the run row.** Two of the fleet's Railway crons — `cms-ingestion` and `public-record-ingest` — are in **no registry at all**: dia's `feed_freshness_registry` holds 5 rows and is **table-keyed** (a producer is not a table, I4's own lesson), `ingestion_tracker` still has no reader, and `v_pipeline_task_health` exists only on gov. **But the sharper finding is that emitting-with-a-reader is still not sufficient if the STEP INSIDE the run reports success it did not have.** The pending_updates drain logged `Pending updates cleanup complete` immediately after ~500 consecutive 23502 failures and the process exited **0** — so even a health view reading these rows would have read them GREEN. **I4 must reach inside the run: a step reports attempted/succeeded/failed, and a step that attempted writes and landed none (`attempted > 0 and succeeded == 0`) must be loud AND must reach the process exit code.** ⚠️ **And the honest-count rule applies to the LOG WINDOW too** — the observed 1,001 lines were a viewer cap against 1,952 attempts, so every per-defect count taken from a log is a **floor** until reconciled against the population. Filed **B6d-pri**. ✅ **B6d-cms-escalation (2026-09-01) builds dia's half: `dia_producer_registry` + `v_dia_producer_health`.** The detector row above read as gov-only; dia's state is now recorded either way. ⚠️ **It is NOT gov's view copied — gov enumerates LOGGED steps, which is sound there only because B6a made every guarded step emit, so the logged set IS the declared set. dia has had no such fix: FOUR of five scheduled producers write no run row at all**, so the declared set must come from an explicit registry seeded from the SCHEDULERS. **Enumerating from `ingestion_tracker` would have rebuilt the blindness one level up** — its five distinct `source` values are the real producer plus the janitor, the watermark writer, a one-shot and a dead lane, and miss all four blind producers. ⚠️ **A registered producer that emits nothing gets a row saying `no_run_ledger` with a CHECK-enforced `blindness_reason`, never absence** — I4's own rule applied to the registry itself. ⚠️ **And the first honest run proved the invariant's sharpest edge yet: `fred-ingest-daily.yml` reported `conclusion: success` on 16 consecutive scheduled runs while writing ZERO rows**, because `ModuleNotFoundError: postgrest` was masked by `| tee` without `pipefail` — which also defeated the script's own `sys.exit(1 if nothing written)` guard. Its watchdog WAS firing (an `lcc_health_alerts` row open 16 days) and its own log printed `{"status": "stale"}` on every green run. **Three surfaces each held half the truth and none of them met: emitting is not sufficient, having a reader is not sufficient — the run signal and the output signal must meet in ONE surface.** ⚠️ **Corollary for expectations: size from the DECLARED schedule and show observed p90 beside it.** gov's observed-only p90 cannot size a producer that has never run, which is four of five here; and `cms_ingestion`'s observed p90 of **30.44 days against a declared 1-day cadence** is the removed 30-day throttle still legible in the run history — a divergence only visible because both are shown.|
+| **I11** | a check that alerts on its own blindness | ✅ **DETECTOR LIVE 2026-08-28 (B6a-follow-up)** — `lcc_check_feed_freshness` keeps the 3-day mirror exclusion and now opens a deduped, auto-resolving **`feed_mirror_stale`** over the set it refuses to evaluate; `lcc_finalize_feed_freshness` counts/records/retries non-200 into `lcc_feed_freshness_sync_status`. `feeds_evaluated` **2 → 25**, excluded **18 → 0**, **6 `feed_stale` opened** (B6a's four among them). Positive-controlled in **both** directions on the live month-old mirror. ⚠️ gov's cold-cache timeout is **mitigated (retry), not cured** — B6a-follow-up-b. ⚠️ **B6d (2026-08-29) found the detector's blind spot at the OTHER end: RETIRING AN EXPECTATION MADE ITS ALERT PERMANENT.** The auto-resolve arm requires the feed to be PRESENT and not stale, so a feed whose expectation is retired leaves the evaluated set and its open alert can never close — live on `property_sale_events` the same day B6c-dup retired it with `is_active = false`. Fixed by **B6a's own lesson one layer up: an unwatched feed EMITS**, with `status='unwatched'` and a NULL bound, and a second resolve arm closes alerts against that positive statement. ⚠️ **It must key on the NULL bound, never on ABSENCE** — absence also covers a feed whose query ERRORED or whose mirror went blind, so `compute_feed_freshness` carries the bound through even when the per-feed query throws. The residual (deregistered, hard-deleted) is **counted as `alerts_orphaned`, never auto-resolved**: a decision and a disappearance must not close identically. Controls ran in both directions on the widened bounds, plus a positive control on the orphan counter itself. |
+| I6 | divergence consumer | ⚠️ `parcel_owner_xref.diverges` has none → **B6h** (renamed from B6d 2026-08-29) |
+| I1 | producer/consumer registry | ❌ **none** — still the biggest hole. ⚠️ **B6c-dup (2026-08-29) shows the sub-class a registry would have to catch: TWO STORES FOR ONE FACT, each naming itself canonical.** `detail.js` vs 77 gov views. A registry keyed on *tables* would not have caught it — both tables had real consumers; it needs to record **which store is authoritative for a FACT**. Partially guarded now by `test/b6cdup-sale-store-canonical.test.mjs`, which is a one-instance pin, not a detector. | ⚠️ **OWN-T0 (2026-09-02) is the same class at the FACT grain, and it is live: four stores name the owner of a property and nothing reconciles them.** The panel printed the resolved owner in the headline and the domain true_owner two lines below — they disagree on **1,260 of 7,678 (16.4%)** — while **756 properties carry two CURRENT owners** in one store, because every writer of `lcc_entity_portfolio_facts` asks *does THIS OWNER already have a fact* and none asks *does this PROPERTY already have a current owner*. `v_lcc_property_ownership_reconciled` is the reconciled read; `v_lcc_property_multi_current` is the detector (the standing one read **0**). **The registry a full I1 would need has to record the GRAIN a fill-blanks predicate is asked at, not just which store is authoritative** — here both stores were authoritative for different levels of the same fact (sponsor and SPE) and neither was wrong.
+| I8 | fill-forward trigger audit | ❌ **none** — one instance fixed (B5), others unaudited |
+| **I13** | identity: normalized-collapse probe + identical-canonical groups | ⚠️ **manual, 2026-09-11** (`docs/audits/ID0_IDENTITY_VALUE_DOMAIN_PROBE_2026-09-11.md`) → standing detector in **ID4** |
+| **I14** | controlled-vocabulary drift | ⚠️ **manual, 2026-09-11** (same probe) → **ID4** |
+| **I15** | import count reconciliation / truncation signature | ❌ **none** → **ID4** |
+| **I16** | deployed-vs-committed definition drift | ⚠️ **designed 2026-09-12 (ID3a-d), not yet run.** `scripts/db-drift/gov-deployed-vs-committed-drift.sql` computes the live-side hash for government (the database drift has bitten twice); the expected-side replay + diff are specified but unexecuted — no Supabase network access from this sandbox. Two instances found so far (ID3a-b's `canonicalize_agency()`; ID3a-d's two-repo copy of the same function). Until a run exists, read the deployed definition before editing any DB object, and know which repo owns it (see `CLAUDE.md` ownership table). **Third instance 2026-09-12 (Cowork, MB2a): the `briefing-intel-snapshot` EDGE FUNCTION is deployed at v21 without the `dialysis` stream two commits after it was added — and no workflow deploys `supabase/functions/**` at all, so the drift is both unfixed and unreported.** The detector must therefore cover edge-function bodies, not just DB object definitions. |
+| I9 | fact stores lacking `created_at` | ❌ **none** |
+| **I13** | identity collapse (byte-identical entity under case/punctuation/format variants) | ⚠️ **PARTIAL — one class now has a standing detector.** ✅ **gov AGENCY (ID3a, 2026-09-12):** `v_gov_agency_identity_detector` over `properties.agency_id` + `property_agencies.agency_id`, using an AGENCY-SPECIFIC comparator (`gov_agency_alias_key` — word boundaries preserved, deliberately NOT a shared alnum key), reporting collapse, orphans and `rows_no_raw_text` as a SEPARATE state (blank ≠ unresolvable, P180). First live run: properties 7,369 resolved / 10,143 orphan / 179 strings collapsed onto 44 agencies; bridge 119,361 / 12,882 / 110 onto 45. Run once, **not scheduled** (ID3a-detector-schedule). Registry wired 0% → 35.9% and 0.12% → **90.3%**. ⚠️ **And ID3a proves the per-class rule from the other direction:** gov already had a 45-code normalizer (`agency_canonical`) and it was **unsafe to wire from** — it conflates federal agencies with same-named state bodies and commercial lookalikes (`NAVY` = Navy Federal Credit Union ×145; `ICE` includes an ice-cream shop). **A column named for the answer is not the answer.** Audit `docs/audits/ID3a_GOV_AGENCY_IDENTITY_WIRING_2026-09-12.md`.
+    ✅ **ID3a-b (2026-09-12) fixed the display column itself** — `canonicalize_agency()`
+    (`supabase/migrations/government/20260912030000_gov_id3ab_agency_canonicalizer_contamination_fix.sql`)
+    now excludes `*federal credit union` / `ice cream`/`frozen yogurt` collisions before any
+    keyword branch runs, resolves STATE via a closed allowlist instead of a bare `\mstate\M`
+    word match (213→9 properties), drops bare `DOC`/RICHMOND-style trailing `"(XX)"` state
+    suffixes to review instead of auto-linking, and adds a second `using_agency_canonical`
+    column for the `GSA - <occupant>` compound shape (ID3a-gsa-compound, closed). **Still
+    live and NOT fixed:** the same shape on DOJ/EPA/DOL/ED/DOT (filed **ID3a-c**) — this
+    invariant's "column named for the answer" lesson generalises past the three codes ID3a
+    named, and a full sweep of every code in the CASE, not just the ones already flagged,
+    is what a standing detector for this invariant would need to do that a one-time fix
+    cannot. ❌ **Every other class: none — baseline measured, not shipped.** `docs/audits/ID4_IDENTITY_INTEGRITY_BASELINE_2026-09.md`: gov `true_owners` 991 groups/2,004 rows collapse on a naive key; gov agency FK is 0%/0.12% wired against an already-working 45-code normalizer; dia `operators` — **ID4 read 14 rows; live it is 67** (59 `kind='company'`, 4 `category`, 2 `non_operator`, 2 `payer` after ID2a). Inside `company` the duplicates and junk survive: `Us Renal Care Inc` ×2 + `US Renal Care`, `Dialysis Clinic Inc` + `Dialysis Clinic, Inc.`, `DaVita Dialysis`, `Satellite Dialysis`, clinic-level rows (`BMA Quincy`, `DCI East Gainesville`, `KNICKERBOCKER DIALYSIS, INC` — BMA/Knickerbocker are Fresenius subsidiaries needing a parent link), and person/junk rows (`Family Video`, `Robert Young`, `Cheryl Ann Cunnings`). All carry 0 properties today, so no report is wrong — but they are selectable and will be re-minted against without ID2a-cleanup; dia `brokers.broker_name` (147 alnum-strip groups) is a **measured negative result** — the discovery key is unsafe on this population (bare surnames/brands collide) and must not become a detector until BR1–BR5's composite-field comparator lands. **The lesson this baseline adds to I13's design: no shared normalizer across entity kinds — a per-(table,column) registered comparator, proven on named rows, or the detector manufactures false duplicates on exactly the columns it was meant to protect.** |
+| **I14** | attribute-vocabulary format drift (case/whitespace splits, no identity question) | ❌ **none — one instance measured.** gov county/state pairs: 834 of 2,445 (34%) collapse on `lower(trim())` alone — cheapest class in the identity program, no review lane needed. |
+| **I13** | identity collapse (byte-identical entity under case/punctuation/format variants) | ⚠️ **PARTIAL — one class now has a standing detector.** ✅ **gov AGENCY (ID3a, 2026-09-12):** `v_gov_agency_identity_detector` over `properties.agency_id` + `property_agencies.agency_id`, using an AGENCY-SPECIFIC comparator (`gov_agency_alias_key` — word boundaries preserved, deliberately NOT a shared alnum key), reporting collapse, orphans and `rows_no_raw_text` as a SEPARATE state (blank ≠ unresolvable, P180). First live run: properties 7,369 resolved / 10,143 orphan / 179 strings collapsed onto 44 agencies; bridge 119,361 / 12,882 / 110 onto 45. Run once, **not scheduled** (ID3a-detector-schedule). Registry wired 0% → 35.9% and 0.12% → **90.3%**. ⚠️ **And ID3a proves the per-class rule from the other direction:** gov already had a 45-code normalizer (`agency_canonical`) and it was **unsafe to wire from** — it conflates federal agencies with same-named state bodies and commercial lookalikes (`NAVY` = Navy Federal Credit Union ×145; `ICE` includes an ice-cream shop). **A column named for the answer is not the answer.** Audit `docs/audits/ID3a_GOV_AGENCY_IDENTITY_WIRING_2026-09-12.md`. ❌ **Every other class: none — baseline measured, not shipped.** `docs/audits/ID4_IDENTITY_INTEGRITY_BASELINE_2026-09.md`: gov `true_owners` 991 groups/2,004 rows collapse on a naive key; gov agency FK is 0%/0.12% wired against an already-working 45-code normalizer; dia `operators` — **ID4 read 14 rows; live it is 67** (59 `kind='company'`, 4 `category`, 2 `non_operator`, 2 `payer` after ID2a). Inside `company` the duplicates and junk survive: `Us Renal Care Inc` ×2 + `US Renal Care`, `Dialysis Clinic Inc` + `Dialysis Clinic, Inc.`, `DaVita Dialysis`, `Satellite Dialysis`, clinic-level rows (`BMA Quincy`, `DCI East Gainesville`, `KNICKERBOCKER DIALYSIS, INC` — BMA/Knickerbocker are Fresenius subsidiaries needing a parent link), and person/junk rows (`Family Video`, `Robert Young`, `Cheryl Ann Cunnings`). All carry 0 properties today, so no report is wrong — but they are selectable and will be re-minted against without ID2a-cleanup; dia `brokers.broker_name` (147 alnum-strip groups) is a **measured negative result** — the discovery key is unsafe on this population (bare surnames/brands collide) and must not become a detector until BR1–BR5's composite-field comparator lands. **The lesson this baseline adds to I13's design: no shared normalizer across entity kinds — a per-(table,column) registered comparator, proven on named rows, or the detector manufactures false duplicates on exactly the columns it was meant to protect.** |
+| **I14** | attribute-vocabulary format drift (case/whitespace splits, no identity question) | ✅ **PARTIAL — first class SHIPPED (ID3e, 2026-09-12).** gov `properties.{county,city}` + dia `medicare_clinics.city`, keyed on `(normalized_name, lower(trim(state)))` as a PAIR — the comparator is per-class, per ID4's rule, and **county alone is never sufficient**: cross-state same-name counties are real, separate jurisdictions (`St Louis` MN vs MO, `LaSalle` IL vs TX, `DeSoto` FL vs MS), confirmed live to carry distinct fold keys. Punctuation normalizes to a SPACE, never deleted, so a VA independent city's `(city)`/`city` token survives — `RICHMOND (CITY)` and `Richmond city` fold to one key, and never collide with a same-named county. Two corrupted-state rows route to a review view (`v_gov_place_vocab_state_review`), never auto-repaired. Mechanism: one IMMUTABLE normalizer function + STORED generated columns (`county_norm`/`city_norm`) + parity views (`v_{gov,dia}_{county,city}_fold_groups`) — additive, no rewrite of the source columns. `docs/os/PLANNED-BACKLOG.md` §ID3e; migrations `supabase/migrations/{government,dialysis}/20260912120000_*_id3e_*_vocab_fold.sql`; guard `test/id3e-migration-shape.test.mjs`. Live re-measure 2026-09-12: gov county/state 2,445→1,611 (834 collapse, 34%), gov city/state 3,454→3,225 (229 collapse), dia city/state 4,367→3,635 (732 collapse). ⚠️ **No consumer repointed yet** — this ships the normalized form only; a consumer migration is a separate, later decision. dia `properties.property_type` (96 values, only 9 collapse) is explicitly **NOT** this class — it's a semantic taxonomy/rollup question, filed `ID3e-property-type-taxonomy`. |
+| **I15** | bulk-import completeness (rows-written vs source, truncation signature) | ❌ **none — one claimed instance RETRACTED on re-measurement.** dia `medicare_clinics.chain_organization` was cited (ID1) as a "2,450/2,450, 17-seconds-apart" truncated-import signature; re-measured 2026-09-11 it is 2,796/2,768 — not equal, not the claimed shape. **The underlying fact survives independently** (both series dead since 2026-01-22, matching B6d-cms) — only the truncation MECHANISM was wrong. **Worked example for I15's own design: a plausible truncation signature must be re-run against current data before it becomes an alert, never carried forward as a narrative.**|
+
+**The honest state: FOUR of eleven invariants have a standing detector** — I5 (pre-existing),
+**I4 and I11 both shipped 2026-08-28**, and I11 was *added* that same day **because it was found
+violated**. Everything else is still found by a human asking the right question, which does not
+scale and is exactly what Scott is asking us to stop relying on. **Backlog `P0d / D1–D5` turns the
+highest-yield remaining ones into scheduled checks; D1 and D2 are the cheap ones that find real
+defects today.**
+
+⚠️ **B6d (2026-08-29) does not add a fifth — it makes two of the four HONEST.** A detector is only as
+good as the expectation it compares against, and I4's expectations were never graded: ten of twenty-three
+domain feeds sat at a round 45 days. Two of the four alerts that surface was carrying turned out to be
+**genuine ingestion outages** that the obvious "the SLA must be wrong" reading would have buried, and two
+described **decisions** and could never close. **A standing detector with an ungraded threshold is not a
+fifth invariant met; it is one of the four half-met.**
+
+⚠️ **Read this table as a SCORECARD, and expect it to move in both directions.** I11 did not exist
+until the day it was violated — **the count of invariants is not fixed, and a new row appearing is
+the contract working, not a regression.** Conversely a ✅ here means *a detector exists and has been
+seen firing*, never *this class cannot recur*: I4 is ✅ while `record_skip` has still not been
+exercised by a real run, and I11 is ✅ while gov's cold-cache timeout is **mitigated by retry, not
+cured**.
+
+---
+
+## 4. Coverage today
+
+| database | ref | swept against these invariants |
+|---|---|---|
+| LCC Opps | `xengecqvemvfknjvbvrq` | I2 (ownership facts), I5 (partial) |
+| Government | `scknotsqkcheojiaewwh` | I1–I8 via B6 (19 signals) |
+| Dialysis_DB | `zqzrriwuavgrquhisnoa` | I2, I10 (partial — B6g reports two blind spots, unfixed) |
+
+---
+
+## 5. Related
+
+- `docs/audits/DEAD_END_AUDIT_PLAYBOOK.md` — **Class 20** (unwired sibling source), **Class 21**
+  (skipped step emits nothing), plus 19 other detectors.
+- `docs/audits/B6_OWNERSHIP_CHANGE_SIGNAL_COVERAGE_2026-08-28.md` — the 19-signal sweep.
+  ⛔ **Its §6 is superseded** — do not act on its resizing of B5.
+- `docs/audits/B5_GOV_SELLER_EXIT_FEEDER_2026-08-28.md` — the feeder and the trigger bug.
+- `docs/architecture/connectivity-and-open-threads.md` §4j — the route-level view.
+- `CLAUDE.md` — *"we must acquire the data is the most expensive conclusion available."*

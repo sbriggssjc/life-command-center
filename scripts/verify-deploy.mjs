@@ -31,12 +31,13 @@
 //                 returned HTML.
 //
 // Usage:
-//   node scripts/verify-deploy.mjs [--url <base>] [--sha <sha>] [--timeout <ms>]
+//   node scripts/verify-deploy.mjs [--url <base>] [--sha <sha>] [--timeout <ms>] [--wait[=sec]]
 //   npm run verify:deploy
 
 import { execSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { CRITICAL_SUBROUTES } from '../test/critical-subroutes.mjs';
+import { readFileSync } from 'node:fs';
+import { CRITICAL_SUBROUTES, CRITICAL_ROUTES_NON_OPERATIONS } from '../test/critical-subroutes.mjs';
 
 // Append a unique cache-buster so no URL-keyed cache (client/proxy/CDN) can serve
 // a stale copy. Query param is what actually defeated the cache in the incident.
@@ -51,12 +52,16 @@ const NOCACHE_HEADERS = { 'cache-control': 'no-cache', pragma: 'no-cache' };
 const DEFAULT_URL = 'https://tranquil-delight-production-633f.up.railway.app';
 
 function parseArgs(argv) {
-  const args = { url: DEFAULT_URL, sha: null, timeout: 15000 };
+  const args = { url: DEFAULT_URL, sha: null, timeout: 15000, wait: 0 };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--url') args.url = argv[++i];
     else if (a === '--sha') args.sha = argv[++i];
     else if (a === '--timeout') args.timeout = parseInt(argv[++i], 10) || args.timeout;
+    // --wait[=seconds] — poll /version until it matches, for the interactive
+    // push→verify loop where Railway is still building. Bare --wait = 180s.
+    else if (a === '--wait') args.wait = 180;
+    else if (a.startsWith('--wait=')) args.wait = parseInt(a.slice(7), 10) || 180;
     else if (a === '-h' || a === '--help') args.help = true;
   }
   return args;
@@ -89,7 +94,9 @@ function bodyLooksLikeHtml(text, contentType) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
-    console.log('Usage: node scripts/verify-deploy.mjs [--url <base>] [--sha <sha>] [--timeout <ms>]');
+    console.log('Usage: node scripts/verify-deploy.mjs [--url <base>] [--sha <sha>] [--timeout <ms>] [--wait[=sec]]');
+    console.log('  --wait[=sec]  poll /version until it matches the repo SHA (default 180s).');
+    console.log('                For the interactive push→verify loop; CI should NOT use it.');
     process.exit(0);
   }
   const base = args.url.replace(/\/+$/, '');
@@ -154,7 +161,30 @@ async function main() {
     } else if (deployed.git_pinned === false) {
       failures.push(`deploy is NOT git-pinned (source=${deployed.source}) — cannot confirm it matches ${expectedSha.slice(0, 12)}`);
     } else if (!expectedSha.startsWith(live) && !live.startsWith(expectedSha)) {
-      failures.push(`SHA MISMATCH: live=${live} vs repo=${expectedSha.slice(0, 12)} — the deploy is stale (unshipped merges)`);
+      // --wait: poll until Railway finishes rebuilding, instead of failing on a
+      // race. Running this straight after `git push` reported a stale deploy
+      // twice on 2026-08-20 when Railway was simply still building — the hard
+      // fail is right for CI, wrong for the interactive push→verify loop.
+      // Default stays hard-fail: you must ASK to wait.
+      let matched = false;
+      if (args.wait > 0) {
+        const deadline = Date.now() + args.wait * 1000;
+        process.stdout.write(`  ⏳ live=${live} != repo=${expectedSha.slice(0, 12)} — waiting up to ${args.wait}s for the rebuild`);
+        while (Date.now() < deadline && !matched) {
+          await new Promise((r) => setTimeout(r, 5000));
+          process.stdout.write('.');
+          const again = await readVersion();
+          const now = String((again.json && again.json.version) || '');
+          if (now && (expectedSha.startsWith(now) || now.startsWith(expectedSha))) matched = true;
+        }
+        console.log('');
+      }
+      if (matched) {
+        console.log(`  ✓ SHA matches repo (${expectedSha.slice(0, 12)}) — after waiting for the rebuild`);
+      } else {
+        failures.push(`SHA MISMATCH: live=${live} vs repo=${expectedSha.slice(0, 12)} — the deploy is stale (unshipped merges)`
+          + (args.wait > 0 ? ` [still stale after ${args.wait}s — this is NOT a build race]` : ' [if you just pushed, Railway may still be building: re-run with --wait]'));
+      }
     } else {
       console.log(`  ✓ SHA matches repo (${expectedSha.slice(0, 12)})`);
     }
@@ -164,7 +194,7 @@ async function main() {
   //    API-scoped 404 fix is live and no route falls through to index.html).
   //    Cache-busted + no-cache so a cached 200 can't mask a currently-missing
   //    route (the same masking risk the /version freshness check covers).
-  for (const route of CRITICAL_SUBROUTES) {
+  for (const route of [...CRITICAL_SUBROUTES, ...CRITICAL_ROUTES_NON_OPERATIONS]) {
     const url = `${base}/api/${route}`;
     try {
       const res = await fetchWithTimeout(
@@ -180,6 +210,39 @@ async function main() {
       }
     } catch (err) {
       failures.push(`GET /api/${route} failed: ${err.message}`);
+    }
+  }
+
+  // 3) EVERY classic <script src> in index.html must actually be served as JS.
+  //    W6.5 decomposition ADDS front-end files (dc-lanes.js, detail-rent.js, …).
+  //    A newly-added file that does not ship 404s in the browser and every symbol
+  //    it defines is undefined at call time — the app breaks — while checks (1)
+  //    and (2) stay green, because they only ever probe /version and /api/*.
+  //    Found the hard way on 2026-08-20: detail-rent.js had to be curl'd by hand
+  //    to confirm it was live, because nothing in this gate looked at it.
+  //    The SPA catch-all makes this extra sneaky — a missing .js can come back
+  //    HTTP 200 with index.html in the body, so assert on the BODY, not status.
+  const scriptSrcs = [...readFileSync('index.html', 'utf8')
+    .matchAll(/<script\s+src="([^"?]+\.js)(\?[^"]*)?"/gi)]
+    .map((m) => m[1])
+    .filter((src) => !/^https?:\/\//i.test(src));   // CDN scripts are not ours
+  for (const src of scriptSrcs) {
+    const url = `${base}/${src.replace(/^\.?\//, '')}`;
+    try {
+      const res = await fetchWithTimeout(
+        withCacheBust(url), { headers: { ...NOCACHE_HEADERS } }, args.timeout,
+      );
+      const text = await res.text();
+      const ctype = res.headers.get('content-type') || '';
+      if (!res.ok) {
+        failures.push(`GET /${src} → HTTP ${res.status} — a <script> in index.html is NOT deployed`);
+      } else if (bodyLooksLikeHtml(text, ctype)) {
+        failures.push(`GET /${src} returned HTML — the SPA catch-all is masking a MISSING script file`);
+      } else {
+        console.log(`  ✓ /${src} served (${(text.length / 1024).toFixed(0)} KB)`);
+      }
+    } catch (err) {
+      failures.push(`GET /${src} failed: ${err.message}`);
     }
   }
 

@@ -25,6 +25,14 @@ inputs → identical workbook, on every surface.
 Briggs BOV workbook; formula-protected columns never overwritten; escalation schedule matches the lease;
 memo cites the source terms.
 
+Deliverable naming/save doctrine is binding on BOV work and companion valuation artifacts: every finished deal
+artifact uses `{Property}_{DocType}_{Client}_{YYYYMM}` before the extension. `{Property}` is street-anchored and
+`_`-joined with no commas or double spaces, e.g. `7912_Cameron_Rd_Austin_TX`. `{DocType}` uses PascalCase with no
+spaces; current vocabulary is `VAM`, `MasterSheet`, `SalesComps`, `LeaseComps`, `BOV`, `OM`, `LOI`. Save the full
+set to `Team Briggs - Documents/Deals/{Client}/{Property}/` when disk/SharePoint access is available, or
+`outputs/deals/{Client}_{Property}/` as the repo-local fallback. If the surface cannot save, state that and name
+attachments to the same convention.
+
 ## Never
 - Never fabricate an escalation schedule or assumption.
 - Never overwrite formula-protected columns.

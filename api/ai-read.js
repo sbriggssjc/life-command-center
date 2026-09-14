@@ -10,7 +10,7 @@
 //
 // This unifies the read surface onto THIS host (tranquil-delight) so ChatGPT and
 // Copilot use ONE base URL. Single engine, no drift. See
-// docs/os/architecture/unification-changeset.md (Phase 1).
+// docs/architecture/unification-changeset.md (Phase 1).
 //
 // Route → engine target is set by the caller via req.query._mcpTarget (mirrors
 // server.js's existing alias style). Defaults to req.path when unset.

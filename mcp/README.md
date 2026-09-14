@@ -118,8 +118,31 @@ government routes to the government template). Formula-protected columns are nev
 Build the Briggs BOV workbook. Record-first: pass `property_lookup` (address) or `cre_property_id` for a known LCC
 property and every caller gets the identical workbook; hand-author only brand-new deals.
 
-### 12. `log_memory` / `recall_memory`
+### 12. `get_property_rent_timeline`
+Rent Intelligence Engine: the versioned, provenance-tracked rent-by-year timeline for a dialysis property.
+Returns per-year `rent_annual`, `rent_psf`, `lease_phase`, `basis` (contract | stated | projected | convention),
+`confidence`, and a compact provenance summary. Current (unsuperseded) version by default; `include_superseded`
+returns the full forked-version history for audit. **Rent-anchoring source of record** — the comps-engine and
+bov / bov-government skills should read this for rent at a given year instead of ad-hoc `rent_at_sale` lookups
+(consumer call-site migration is sequenced after the post-#1638 workbook regeneration).
+
+**Example prompts:**
+- "Show the rent timeline for property 24703"
+- "What was the modeled rent on the Tulsa DaVita in 2023?"
+- "Pull the rent-by-year with confidence for this deal, include superseded versions"
+
+### 13. `log_memory` / `recall_memory`
 Persist and recall durable notes across sessions.
+
+### 14. `log_operator_note` / `get_operator_inbox`
+The OC-a operator-note funnel (spec: `docs/architecture/EXEC-BRIEFS-SPEC.md` §6, contract:
+`docs/architecture/operator_note_contract.md`). `log_operator_note` files a bug/data-gap/idea/UX/
+question note — every channel (in-app Note button, Outlook, Teams, MCP, Cowork) writes the same
+`operator_notes` table; a separate triage tick classifies, dedupes and routes it. `get_operator_inbox`
+reads the one to-do list (open/routed/in_progress notes grouped by owner thread) — call it alongside
+`recall_memory` at the start of a session. Sibling of `log_memory`/`recall_memory`, same auth pattern.
+`log_operator_note` is a WRITE tool and has no HTTP route (Claude/MCP-only, matching `log_memory`);
+`get_operator_inbox` is read-only and is exposed at `/api/operator-inbox` for ChatGPT/Copilot.
 
 ## Endpoints
 
@@ -146,6 +169,7 @@ these into a GPT Action or Copilot custom connector.
 | `/api/queue-summary` | POST | get_queue_summary |
 | `/api/pipeline-health` | POST | get_pipeline_health |
 | `/api/recall-memory` | POST | recall_memory |
+| `/api/operator-inbox` | POST | get_operator_inbox |
 | `/api/query-comps` | POST | query_comps |
 | `/api/synthesize-comps` | POST | synthesize_comps |
 

@@ -29,7 +29,7 @@
 <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script defer src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <title>Life Command Center</title>
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="styles.css?v=2026091201">
 <link rel="stylesheet" href="styles-round-76bj.css">
 </head>
 <body>
@@ -115,20 +115,34 @@
         <div class="greeting-date" id="greetingDate"></div>
         <div class="home-layout">
           <div class="home-main">
-            <!-- Work Your Outreach — the daily on-ramp into the outreach focus
-                 session (2026-06-26). Honest, actionable count of reachable,
-                 value-ranked prospect cadences due, landing directly in the
-                 card-at-a-time focus flow (renderOutreachFocus). Distinct from the
-                 cockpits below: this is "go knock out today's touches". -->
-            <div class="widget" id="outreachOnrampWidget">
+            <!-- Today: Significant / Important / Urgent (UX-T1a-today, 2026-09-03) —
+                 docs/os/canon/blocks/operator-doctrine.md 1.8.0's three sections.
+                 Replaces the old "Work Your Outreach" + "Top BD Actions" cards,
+                 which carried no section structure and no due-today boundary.
+                 GET /api/operations?action=today_sections. -->
+            <div class="widget" id="todaySectionsWidget">
               <div class="widget-title">
-                Work Your Outreach
+                Today
                 <div class="nba-controls">
-                  <button type="button" class="nba-refresh-btn" onclick="renderOutreachOnramp(true)" title="Refresh">↻</button>
+                  <button type="button" class="nba-refresh-btn" onclick="renderTodaySections(true)" title="Refresh">↻</button>
                 </div>
               </div>
-              <div class="nba-subhead">Your reachable, value-ranked prospect cadences — knock them out one at a time.</div>
-              <div id="outreachOnrampContent"><div class="loading"><span class="spinner"></span></div></div>
+              <div class="nba-subhead">The day's tasks only, ranked by client value. All three must be done — Urgent must never crowd out Significant.</div>
+
+              <div class="today-section" id="todaySignificantSection">
+                <div class="today-section-head">Significant <span class="today-section-sub">— pays in 5 years: new-client research, first outreach, follow-ups</span></div>
+                <div id="todaySignificantContent"><div class="loading"><span class="spinner"></span></div></div>
+              </div>
+
+              <div class="today-section" id="todayImportantSection">
+                <div class="today-section-head">Important <span class="today-section-sub">— pays within a year: BOVs, ELAs, working buyers, marketing live listings</span></div>
+                <div id="todayImportantContent"><div class="loading"><span class="spinner"></span></div></div>
+              </div>
+
+              <div class="today-section" id="todayUrgentSection">
+                <div class="today-section-head">Urgent <span class="today-section-sub">— pays in ~90 days: pipeline management, deal correspondence</span></div>
+                <div id="todayUrgentContent"><div class="loading"><span class="spinner"></span></div></div>
+              </div>
             </div>
 
             <!-- Top Data Gaps to Close — cross-domain data-quality gap queue, ranked
@@ -153,22 +167,6 @@
               <button type="button" class="nba-viewall" onclick="navTo('pagePriorityQueue')">Looking for who to pursue? Open the Priority Queue →</button>
             </div>
 
-            <!-- Top BD Actions — the BD-action cockpit's top slice surfaced on Today
-                 (R59 Unit 2, 2026-06-21). The single highest-value MOVE (suspected
-                 sales / maturities / owner conflicts / contacts / chains), value-ranked.
-                 Distinct from Top Data Gaps above (data-quality) — this is "who/what to
-                 pursue". Links to the full Top BD Actions list. -->
-            <div class="widget" id="todayBdActionsWidget">
-              <div class="widget-title">
-                Top BD Actions
-                <div class="nba-controls">
-                  <button type="button" class="nba-refresh-btn" onclick="renderTodayBdActions(true)" title="Refresh">↻</button>
-                </div>
-              </div>
-              <div class="nba-subhead">Your highest-value moves — suspected sales, loan maturities, owner conflicts, contacts to push. Click to work the deal.</div>
-              <div id="todayBdActionsContent"><div class="loading"><span class="spinner"></span></div></div>
-              <button type="button" class="nba-viewall" onclick="navTo('pagePriorityQueue');setTimeout(function(){if(typeof renderBdWorklist==='function')renderBdWorklist();},300)">See all BD actions →</button>
-            </div>
 
             <!-- Stats -->
             <div class="widget-grid" id="homeStats">
@@ -220,6 +218,14 @@
                 </div>
               </div>
               <div id="dailyBriefingContent"><div class="loading"><span class="spinner"></span></div></div>
+            </div>
+
+            <!-- Market Briefs — MB-b (EXEC-BRIEFS-SPEC.md §2/MB4). Read-only
+                 live-facts view per swimlane, reachable near the Daily
+                 Briefing widget. -->
+            <div class="widget" id="marketBriefsWidget">
+              <div class="widget-title">Market Briefs</div>
+              <div id="marketBriefsWidgetContent"><div class="loading"><span class="spinner"></span></div></div>
             </div>
 
             <!-- Business Metrics -->
@@ -327,9 +333,39 @@
       </div>
     </div>
 
+    <!-- SELLER PROSPECT QUEUE — UX-T1a-today's first front-end surface for
+         v_lcc_seller_prospect_queue / GET /api/seller-prospect-queue (the queue
+         existed with no page since UX-T1a-queue; this is the "See all →" target
+         for the Today "Significant" section). Minimal: chip filters + a ranked
+         list, reusing the same server-side chip/pagination contract Today reads
+         from the summary card. -->
+    <div class="page" id="pageSellerProspectQueue">
+      <div class="page-inner">
+        <div class="widget-title">Seller Prospects
+          <div class="nba-controls">
+            <button type="button" class="nba-refresh-btn" onclick="renderSellerProspectQueuePage(true)" title="Refresh">↻</button>
+          </div>
+        </div>
+        <div class="nba-subhead">$2.5M–$25M, a newer lease or a recorded reason to sell, an owner not yet reached — ranked by client value.</div>
+        <div id="sellerProspectChips" style="margin:8px 0"></div>
+        <div id="sellerProspectQueueContent"><div class="loading"><span class="spinner"></span></div></div>
+        <div id="sellerProspectPager" style="margin-top:10px"></div>
+      </div>
+    </div>
+
     <div class="page" id="pageResearch">
       <div class="page-inner">
         <div id="researchContent"><div class="loading"><span class="spinner"></span></div></div>
+      </div>
+    </div>
+
+    <!-- MARKET BRIEFS — MB-b (EXEC-BRIEFS-SPEC.md §2/MB4). Live facts per
+         swimlane, citations + staleness, issue archive with changed-since
+         highlighting. Read-only; shares the same data path as the daily
+         email's Lane Briefs block. Route: #/briefs/<lane>. -->
+    <div class="page" id="pageMarketBriefs">
+      <div class="page-inner">
+        <div id="marketBriefsContent"><div class="loading"><span class="spinner"></span></div></div>
       </div>
     </div>
 
@@ -557,14 +593,31 @@
   <div class="next-action-bar" id="detailNextActionBar" style="display:none"></div>
 </div>
 
-<!-- Companion property panel — dual-dock beside a contact/owner panel. Opens on
-     the opposite side when a property is clicked inside a contact panel; both
-     stay visible; independently minimizable/closable. -->
+<!-- Companion panel — dual-dock beside the primary detail panel. Holds a property
+     when the primary is an owner, and an owner when the primary is a property.
+     Both stay visible; each is independently resizable, swappable (⇄) and
+     parkable into the minimize tray. -->
 <div class="companion-panel" id="companionPanel">
   <div class="detail-header" id="companionHeader"></div>
+  <!-- Full-detail side-by-side (Scott, 2026-08-15: "we want to see the full
+       detail side-by-side instead of a placeholder that you can swap over to
+       the primary"). The companion now mirrors the primary panel's structure so
+       it can host a real tabbed panel, not a summary card. -->
+  <div class="detail-tabs" id="companionTabs" style="display:none"></div>
   <div class="detail-body" id="companionBody"></div>
 </div>
-<div class="companion-min" id="companionMin" onclick="restoreCompanion()" title="Restore property panel"></div>
+
+<!-- Resize grab strips (left edge of each panel). Widths are CSS vars, so the
+     companion + its resizer track the primary automatically. -->
+<div class="panel-resizer" id="panelResizerPrimary" title="Drag to resize · double-click to reset"></div>
+<div class="panel-resizer" id="panelResizerCompanion" title="Drag to resize · double-click to reset"></div>
+
+<!-- Minimize tray — parked panels. Multiple can be parked at once. -->
+<div class="panel-tray" id="panelTray"></div>
+
+<!-- Legacy restore tab (hidden by CSS; kept so any stale caller of
+     restoreCompanion() still resolves). -->
+<div class="companion-min" id="companionMin" onclick="restoreCompanion()"></div>
 
 <!-- Log Call Modal -->
 <div class="modal-overlay" id="logCallModal" role="dialog" aria-label="Log Activity" onclick="if(event.target===this)closeLogCall()">
@@ -876,7 +929,16 @@
 /* Global error handler — surfaces uncaught errors and unhandled rejections */
 (function() {
   var errCount = 0, MAX_ERRORS = 20;
+  /* OC1 — a small ring buffer of recent errors the in-app Note button reads
+     (operator-note-client.js) so a captured note carries the failing
+     endpoint/error automatically, per the operator_note_contract.md
+     "recent_errors" context field. Independent of errCount's toast throttle. */
+  window.__lccRecentErrors = window.__lccRecentErrors || [];
+  var RING_MAX = 10;
   function report(type, msg, source, line, col) {
+    var entry = type + ': ' + msg + (source ? ' @ ' + source + ':' + line + ':' + col : '');
+    window.__lccRecentErrors.push(entry);
+    if (window.__lccRecentErrors.length > RING_MAX) window.__lccRecentErrors.shift();
     if (errCount >= MAX_ERRORS) return;
     errCount++;
     console.error('[LCC ' + type + '] ' + msg + (source ? ' @ ' + source + ':' + line + ':' + col : ''));
@@ -894,15 +956,30 @@
 })();
 </script>
 <script src="auth.js?v=2026050802"></script>
-<script src="app.js?v=2026072801"></script>
+<script src="app-modal.js?v=2026091201"></script>
+<script src="app-treasury-chart.js?v=2026091201"></script>
+<script src="app-export-comps.js?v=2026091201"></script>
+<script src="app-tasks.js?v=2026091201"></script>
+<script src="app.js?v=2026091201"></script>
 <script src="gov.js?v=2026061604"></script>
-<script src="dialysis.js?v=2026050802"></script>
+<script src="dialysis.js?v=2026091201"></script>
 <script src="capital-markets.js?v=2026050802"></script>
-<script src="detail.js?v=2026072401"></script>
+<script src="detail-rent.js?v=2026091201"></script>
+<script src="detail-tab-documents.js?v=2026091201"></script>
+<script src="detail-panel-shell.js?v=2026091201"></script>
+<script src="detail-entity-tabs.js?v=2026091201"></script>
+<script src="detail-openers.js?v=2026091201"></script>
+<script src="detail.js?v=2026091201"></script>
+<script src="operator-note-client.js?v=2026091100"></script>
 <script src="detail-lease-comps-fix.js?v=2026050903"></script>
 <script src="contacts-ui.js?v=2026062402"></script>
-<script src="ops.js?v=2026062101"></script>
+<script src="dc-lanes.js?v=2026091201"></script>
+<script src="ops-perf-dashboard.js?v=2026091201"></script>
+<script src="ops-sync-health.js?v=2026091201"></script>
+<script src="ops-domain-health.js?v=2026091201"></script>
+<script src="ops-metrics.js?v=2026091201"></script>
+<script src="ops.js?v=2026091201"></script>
 <script src="marketing.js?v=2026072801"></script>
-<script type="module" src="review-shared.js?v=2026061603"></script>
+<script type="module" src="review-shared.js?v=2026082701"></script>
 </body>
 </html>

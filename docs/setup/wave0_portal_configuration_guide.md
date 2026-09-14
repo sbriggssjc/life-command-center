@@ -1,5 +1,11 @@
 # Wave 0 Completion — Microsoft 365 & Portal Configuration Guide
 
+> 🚨 **STALE (DOCMAP3, 2026-09-08): this doc references Vercel as a live deployment target.**
+> Vercel was retired 2026-07-20 (root `CLAUDE.md`: *"PRODUCTION RUNS ON RAILWAY (Vercel retired
+> 2026-07-20)"*). `server.js` on Railway is now the single source of `/api/*` routing;
+> `vercel.json` is deleted. Treat any Vercel-dashboard step or vercel.app URL below as historical
+> / needing translation to the Railway equivalent before acting on it.
+
 > **Purpose:** Step-by-step instructions for completing Wave 0 configuration outside the codebase.
 > These are browser-based tasks in Vercel, Power Automate, and Teams.
 > **Date:** 2026-04-06

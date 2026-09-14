@@ -155,6 +155,13 @@ const DIA_READ_TABLES = new Set([
   "sale_brokers", "brokers", "broker_companies", "loans", "property_intel",
   "v_property_detail", "v_lease_detail", "v_ownership_current",
   "v_ownership_chain", "v_property_rankings",
+  // Reconciled clinic economics (model dialysis_econ_reconciled_v1): current-year
+  // rollup + full per-(clinic, fiscal_year) series for revenue/profit/EBITDA trends,
+  // + market-education aggregates (scale curve, operator benchmark, market summary,
+  // per-clinic value crosswalk).
+  "v_clinic_econ_current", "v_clinic_econ_series",
+  "v_dia_econ_scale_curve", "v_dia_econ_operator_benchmark",
+  "v_dia_econ_market_summary", "v_dia_econ_value_crosswalk",
   // Ownership Research workbench (Layer H.5 frontend for the canonical
   // cleanup series).
   "v_recorded_owner_canonical_clusters", "v_ownership_research_backlog",
@@ -754,8 +761,23 @@ Deno.serve(async (req: Request) => {
   if (offset !== null) url.searchParams.set("offset", offset);
 
   try {
-    const wantCount = params.get("count") !== "false";
-    const isHeavyView = table === "v_crm_client_rollup" || table === "v_sf_tasks_contact_rollup";
+    // Count strategy (incident 2026-08-12): an EXACT count forces PostgREST to
+    // run a full-table COUNT on every request. The gov dashboard fires several
+    // count tiles over large tables (properties, contacts, ownership_history,
+    // frpp_records, gsa_lease_events…) concurrently on load; those full scans
+    // held PostgREST's pool and helped wedge the gov origin (uniform 522s).
+    // Large tables/heavy views now default to a PLANNER estimate (no scan).
+    // Callers may still force accuracy by passing count=exact, or select
+    // count=planned / count=estimated explicitly; count=false skips it.
+    const countParam = (params.get("count") || "").toLowerCase();
+    const wantCount = countParam !== "false";
+    const HEAVY_COUNT = new Set([
+      "v_crm_client_rollup", "v_sf_tasks_contact_rollup",
+      "properties", "contacts", "ownership_history", "sales_transactions",
+      "prospect_leads", "available_listings", "frpp_records", "frpp_annual_snapshots",
+      "gsa_lease_events", "gsa_snapshots", "gsa_inventory_snapshot_lines",
+      "v_sales_comps", "leases", "lease_escalations",
+    ]);
 
     const fetchHeaders: Record<string, string> = {
       apikey: dbKey,
@@ -763,7 +785,11 @@ Deno.serve(async (req: Request) => {
       "Content-Type": "application/json",
     };
     if (wantCount) {
-      fetchHeaders["Prefer"] = isHeavyView ? "count=planned" : "count=exact";
+      const explicit = (countParam === "exact" || countParam === "planned" || countParam === "estimated")
+        ? countParam
+        : null;
+      const mode = explicit ?? (HEAVY_COUNT.has(table) ? "planned" : "exact");
+      fetchHeaders["Prefer"] = `count=${mode}`;
     }
 
     const response = await fetch(url.toString(), {

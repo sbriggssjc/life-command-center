@@ -176,7 +176,7 @@ export async function deriveNextStep(subject, body, dealName = null, deps = {}) 
 
     let resp;
     try {
-      resp = await invoke({ prompt: buildPrompt(subject, body, dealName, premise) });
+      resp = await invoke({ prompt: buildPrompt(subject, body, dealName, premise), surface: 'next_step' });
     } catch (_e) {
       return null; // never block the correspondence path on an AI failure
     }

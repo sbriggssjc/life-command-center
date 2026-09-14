@@ -99,7 +99,7 @@ export async function attachRecognizedDoc(args) {
     if (match?.status === 'review_required') {
       let emitted = false;
       try {
-        await emitMatchDisambiguation(
+        const r = await emitMatchDisambiguation(
           null,
           subjectHint?.tenant_brand || null,
           subjectHint?.tenant_brand || null,
@@ -110,7 +110,7 @@ export async function attachRecognizedDoc(args) {
             context: { source_path: pathRef, subject_hint: subjectHint || null, doc_type: docType || null },
           },
         );
-        emitted = true;
+        emitted = !(r && r.emitted === false);  // Prompt 91: empty-candidate cards are not minted
       } catch (err) {
         console.warn('[folder-feed-attach] disambiguation emit failed (non-fatal):', err?.message);
       }

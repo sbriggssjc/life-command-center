@@ -1,0 +1,9 @@
+-- Rent Intelligence Phase 4c — coverage stats for the CM packet layer (dia).
+-- Applied live to zqzrriwuavgrquhisnoa. Reconciles to the 12,371-property universe.
+--   cm_dia_rent_coverage_summary   (portfolio partition: evidence_timeline 4,316 +
+--     convention_shell 424 + research_backlog_no_intercept 6,098 + no_tenant_no_evidence
+--     1,533 = TOTAL 12,371)
+--   cm_dia_rent_coverage_by_year   (per-year basis mix: contract/stated/projected/convention)
+--   cm_dia_rent_research_backlog   (the 6,098 no-intercept shells by tenant x state, ranked)
+-- Full bodies applied via mcp apply_migration dia_rent_intelligence_phase4c_coverage;
+-- reproduce via pg_get_viewdef('<view>'::regclass, true).

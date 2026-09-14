@@ -1,3 +1,13 @@
+> 📍 **CANONICAL PAGE FOR THIS TOPIC: [`docs/architecture/owner-role-classification.md`](../architecture/owner-role-classification.md)** — read **§2e** first: it carries the LIVE state,
+> what shipped since, and the two failure modes this document's rules were later found to produce.
+> **This file is the 2026-05-22 DOCTRINE and remains the fullest statement of intent** (roles,
+> current-vs-former, multi-developer, the proposed `property_developers` junction). Keep reading it
+> for the *why*; do not take its implementation status as current.
+>
+> ⚠️ **THIS FILE IS DUPLICATED VERBATIM IN THREE REPOSITORIES** — here, `GovernmentProject/` and
+> `DialysisProject/`. **This copy is the one to edit.** The other two are stale mirrors; a future
+> chat reading either of them will get 2026-05-22 implementation claims with no supersession notes.
+
 # Developer Identification, Ownership Chain & BD Engine — Audit v3
 
 **Date:** 2026-05-22

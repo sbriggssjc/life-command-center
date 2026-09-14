@@ -25,27 +25,129 @@ import { authenticate, requireRole, primaryWorkspace, handleCors, authReadiness 
 import { opsQuery, pgFilterVal, requireOps, withErrorHandler, fetchWithTimeout } from './_shared/ops-db.js';
 import { ROLES } from './_shared/lifecycle.js';
 import { domainQuery } from './_shared/domain-db.js';
+import { isTrueOwnerOperator, trueOwnerOperatorSelectFields } from './_shared/true-owner-operator-guard.js';
+import {
+  FEED_PAGE_SIZE, NBA_FEED_ORDER, PROBE_CHUNK_SIZE,
+  feedKeyOf, openTaskKeyOf, planAutoClose, planMintHead, mintHeadPageCount,
+  chunkProbeIds, probeIdIsSafe, probeChunkIsTrustworthy,
+  nbaFeedGateFilter,
+} from './_shared/nba-feed-sweep.js';
+import { invokeExtractionAI } from './_shared/ai.js';
+import {
+  buildNewsAlertExtractionPrompt, parseNewsAlertExtractionJson, normalizeNewsAlertExtraction,
+} from './_shared/news-alert-assist.js';
+import {
+  JUNK_TARGETS, findJunkTarget, junkSubjectRef, parseJunkSubjectRef,
+  junkCandidateReason, namingHygieneReason, buildJunkPrescreenPrompt, normalizeJunkProposal,
+  parseJunkVerdictJson, planJunkApply, buildRetireMarker,
+  applyPrescreenGuards, dismissDistributionGuard, isEnqueueableJunkVerdict,
+  deterministicDismissReason,
+  junkNameHash, junkScoredKeyFor, selectUnscoredCandidates, scoreWithBudget,
+  computeScanDeadline, remainingScoreBudget, nextScanCursor,
+} from './_shared/junk-prescreen.js';
+import {
+  TM_MISPARSE_HEURISTIC, EMAIL_FANOUT_SUSPECT_THRESHOLD, isMisparseName, tmMisparseReason,
+} from './_shared/tm-misparse.js';
+import {
+  buildTier0Card, tier0SubjectRef, validateTier0Verdict, rentBand as tier0RentBand,
+} from './_shared/tier0-confirm-planner.js';
+import {
+  SPONSOR_FAMILY_CACHE_TABLE, SPONSOR_FAMILY_REGISTRY_TABLE,
+  sponsorFamilySubjectRef, buildSponsorFamilyCard, validateSponsorFamilyVerdict, orderSponsorFamilyRows,
+  annotateSponsorDuplicates,
+} from './_shared/sponsor-family-planner.js';
+import {
+  ENTITY_RETYPE_SOURCE_VIEW,
+  entityRetypeSubjectRef, buildEntityRetypeCard, validateEntityRetypeVerdict, orderEntityRetypeRows,
+} from './_shared/entity-retype-planner.js';
+import {
+  planAmbiguousEntityMerge, ambiguousEntitySubjectRef, buildAmbiguousEntityCard,
+  validateAmbiguousEntityVerdict,
+} from './_shared/ambiguous-entity-merge-planner.js';
+import {
+  applyTier0Attach, tier0BatchTag, TIER0_SOURCE_CONFIRM,
+} from './_shared/tier0-attach-effect.js';
+import {
+  DUP_PAIR_TARGETS, findDupPairTarget, dupSideRef, dupPairKey, dupPairSubjectRef,
+  generateCandidatePairs, excludeKnownPairs, buildDupPairPrompt, normalizeDupPairProposal,
+  parseDupPairJson, isProposablePair, dupPairDisposition, DUP_PAIR_NEEDS_HUMAN_SIM,
+  scoreDupPairsWithBudget,
+} from './_shared/dup-pair-planner.js';
+import {
+  LINK_POOL_CHAIN, LINK_POOL_PERSON_EMAIL, CHAIN_GAP_CATALOGUE, chainGapSpec,
+  chainSubjectRef, personEmailSubjectRef, normDomain as linkNormDomain,
+  valueGateChainRows, assembleEvidence, evidenceIsEmpty, evidenceHash, linkScoredKeyFor,
+  buildLinkPropagationPrompt, parseLinkProposalJson, normalizeLinkProposal,
+  validateLinkProposal, isProposableLink, LINK_MIN_CONFIDENCE, scoreLinksWithBudget,
+} from './_shared/link-propagation-planner.js';
+import {
+  assembleReport, buildNarrativePrompt, parseNarrativeJson, collectComputedValues,
+  validateFigures, renderFindingsDoc, renderFixUnitStubs,
+} from './_shared/systemic-findings.js';
+import {
+  assembleCoverage, renderCoverageDoc, coveragePct as w95CoveragePct,
+} from './_shared/link-coverage.js';
+import {
+  buildMatchDisambigPrompt, parseAssistJson, normalizeAssistRanking,
+  cardFromDecision, assistAgreement,
+} from './_shared/match-disambig-assist.js';
+import {
+  NAMING_HYGIENE_TARGETS, findHygieneTarget, hygieneSubjectRef, parseHygieneSubjectRef,
+  hygieneClass, hygieneNameHash, hygieneScoredKeyFor, planAbbreviationProposal,
+  planAddressLinkProposal, buildAbbrevExpansionPrompt,
+  parseExpansionJson, normalizeExpansionProposal, planHygieneApply,
+  isEnqueueableHygieneProposal,
+  collectAddressNumbers, matchCandidateToProperties,
+} from './_shared/naming-hygiene-planner.js';
+import { provenanceTargetDatabase } from './_shared/field-priority-guard.js';
+import * as RH from './_shared/reachability-harvest-planner.js';
+import { pickBestBody as pickBestCommsBody } from './_shared/voice-corpus-clean.js';
+import { isBrokerageContact as coaIsBrokerageContact, buildOwnerBridgeProvenanceArgs } from './_shared/comms-owner-attribution.js';
+import { openResearchTask } from './_shared/research-task.js';
 import { isProvenanceMarker } from './_shared/provenance-flush.js';
 import { buildSosAddressObservations, computeSosNotFoundDisposition } from './_shared/sos-writeback-observations.js';
 import { resolvePortalsForProperties, resolvePortalForProperty } from './_shared/county-portal-resolver.js';
+import { applyAssessorCapture, applyRecorderCapture, applySosEntityCapture } from './_shared/public-records-writeback.js';
 import { reconcilePropertyOwnership, propagateDeedGranteeToOwner, reconcileSaleAndOwnershipForNewOwner } from './_handlers/sidebar-pipeline.js';
 import { lookupLlc } from './_shared/llc-research.js';
 import { handleFlSosEnrichLink } from './_shared/fl-sos-enrich-link.js';
-import { findSalesforceAccountByName, isSalesforceConfigured, createSalesforceTask } from './_shared/salesforce.js';
+import { findSalesforceAccountByName, isSalesforceConfigured, createSalesforceTask,
+         updateSalesforceTaskDue, closeSalesforceTask, getOpenTasksForCompliance } from './_shared/salesforce.js';
 import { handleSfOwnerSync, handleOwnerReconcile } from './_handlers/sf-owner-sync.js';
 import { planSfLinkVerdict, sfLinkColumn, sfLinkTarget, parseConflictExistingId } from './_handlers/sf-link-review.js';
+import * as RS from './_shared/sf-link-rescore-planner.js';
+import * as DH from './_shared/sf-donor-handoff-planner.js';
+import * as SA from './_shared/sf-link-assist-planner.js';
+import * as PT from './_shared/property-twin-assist-planner.js';
+import * as DPR from './_shared/dia-property-redirect-planner.js';
+import * as CA from './_shared/clean-assist-context.js';
+import { enrichCleanAssistItems } from './_shared/clean-assist-enrich.js';
 import { handleDealCorrespondenceBackfill } from './_handlers/deal-correspondence-backfill.js';
 import { handleSfSellerOwner } from './_handlers/sf-seller-owner.js';
+import { buildNameBackfillPatch, reverseNameBackfillPatch, senderEmailFromMetadata, recipientEmailsFromMetadata, isHarvestableParty } from './_shared/outlook-name-backfill.js';
 import { artifactSafeName } from './_shared/artifact-storage.js';
 import { handleGeocodeTick } from './_handlers/geocode-backfill.js';
+import { handleOwnershipChainDraftTick } from './_handlers/ownership-chain-draft-tick.js';
+import { handleOwnT0jSponsorClassifyTick } from './_handlers/ownt0j-sponsor-classify-tick.js';
+import { handleTier0AutoAttachTick } from './_handlers/tier0-auto-attach-tick.js';
+import { handleBroker1AssignTick } from './_handlers/broker1-assign-tick.js';
+import { handleAmbiguousEntityAutomergeTick } from './_handlers/ambiguous-entity-automerge-tick.js';
+import { handleBenchRankTick } from './_handlers/bench-rank-tick.js';
+import { handleBriefingAnalystTakeTick } from './_handlers/briefing-analyst-take-tick.js';
 import { runDownstreamPipeline } from './_handlers/intake-extractor.js';
 import { createPropertyFromIntake } from './_handlers/intake-create-property.js';
 import {
   isNonDealSnapshot, hasFullDealSignature, normalizeDocType,
   snapshotLooksLikeListing, LISTING_DOCUMENT_TYPES, classifyStagedIntake,
+  pageIntakeReviewRows,
 } from './_shared/intake-classify.js';
-import { normalizeState, parseContactFromJunk } from './_shared/entity-link.js';
+import { normalizeState, parseContactFromJunk, normalizeCanonicalName, recordContactFieldWrites } from './_shared/entity-link.js';
 import { diaSupabaseKey, govSupabaseKey } from './_shared/supabase-keys.js';
+import {
+  SELLER_QUEUE_CHIPS, buildQueuePath, buildChipCountPath, buildPagination,
+  resolveChip, normalizeDomain, clampLimit, clampOffset,
+} from './_shared/seller-prospect-queue.js';
+import { createHash, randomUUID } from 'node:crypto';
 
 // Default flag values — safe defaults for gradual rollout
 const DEFAULT_FLAGS = {
@@ -94,6 +196,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'connectors':  return handleConnectors(req, res);
     case 'config':      return handleConfig(req, res);
     case 'diag':        return handleDiag(req, res);
+    case 'sf-task-probe': return handleSfTaskProbe(req, res);
     case 'treasury':    return handleTreasury(req, res);
     case 'edge-data':   return handleEdgeDataProxy(req, res);
     case 'edge-brief':  return handleEdgeBriefingProxy(req, res);
@@ -125,6 +228,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'gov-buyer-sync':          return handleGovBuyerSync(req, res);
     case 'next-best-action':        return handleNextBestAction(req, res);
     case 'recorder-portal':         return handleRecorderPortal(req, res);
+    case 'public-records-capture':  return handlePublicRecordsCapture(req, res);
     case 'client-error':            return handleClientErrorReport(req, res);
     case 'llc-research-queue':      return handleLlcResearchQueueList(req, res);
     case 'resolve-llc-research':    return handleResolveLlcResearch(req, res);
@@ -138,9 +242,35 @@ export default withErrorHandler(async function handler(req, res) {
     case 'resolve-cms-chain-drift':    return handleResolveCmsChainDrift(req, res);
     case 'priority-band':              return handlePriorityBand(req, res);
     case 'priority-queue':             return handlePriorityQueueList(req, res);
+    case 'seller-prospect-queue':      return handleSellerProspectQueue(req, res);
     case 'priority-trigger-properties': return handlePriorityTriggerProperties(req, res);
     case 'review-counts':              return handleReviewCounts(req, res);
+    case 'news-alerts':                return handleNewsAlerts(req, res);
     case 'ops-health':                 return handleOpsHealth(req, res);
+    case 'ollama-clean-assist-tick':   return handleOllamaCleanAssistTick(req, res);
+    case 'junk-prescreen-tick':        return handleJunkPrescreenTick(req, res);
+    case 'tm-misparse-seed':           return handleTmMisparseSeed(req, res);
+    case 'junk80-seed':                return handleJunk80Seed(req, res);
+    case 'entity-retype-placeholder-seed': return handleEntityRetypePlaceholderSeed(req, res);
+    case 'naming-hygiene-tick':        return handleNamingHygieneTick(req, res);
+    case 'dup-pair-tick':              return handleDupPairTick(req, res);
+    case 'link-propagation-tick':      return handleLinkPropagationTick(req, res);
+    case 'reachability-harvest-tick':  return handleReachabilityHarvestTick(req, res);
+    case 'systemic-findings-tick':     return handleSystemicFindingsTick(req, res);
+    case 'link-coverage-tick':         return handleLinkCoverageTick(req, res);
+    case 'match-disambig-assist-tick': return handleMatchDisambigAssistTick(req, res);
+    case 'property-twin-assist-tick': return handlePropertyTwinAssistTick(req, res);
+    case 'dia-property-link-tick': return handleDiaPropertyLinkTick(req, res);
+    case 'ownership-chain-draft-tick': return handleOwnershipChainDraftTick(req, res);
+    case 'ownt0j-sponsor-classify-tick': return handleOwnT0jSponsorClassifyTick(req, res);
+    case 'tier0-auto-attach-tick':    return handleTier0AutoAttachTick(req, res);
+    case 'broker1-assign-tick':       return handleBroker1AssignTick(req, res);
+    case 'ambiguous-entity-automerge-tick': return handleAmbiguousEntityAutomergeTick(req, res);
+    case 'bench-rank-tick':          return handleBenchRankTick(req, res);
+    case 'briefing-analyst-take-tick': return handleBriefingAnalystTakeTick(req, res);
+    case 'sf-link-assist-tick':        return handleSfLinkAssistTick(req, res);
+    case 'sf-link-rescore-tick':       return handleSfLinkRescoreTick(req, res);
+    case 'sf-donor-handoff-tick':      return handleSfDonorHandoffTick(req, res);
     case 'fl-sos-enrich-link':         return handleFlSosEnrichLink(req, res);
     case 'resolve-owner-link':         return handleResolveOwnerLink(req, res);
     case 'decisions':                  return handleDecisionsList(req, res);
@@ -149,10 +279,321 @@ export default withErrorHandler(async function handler(req, res) {
     case 'owner-deed-autofix':         return handleOwnerDeedAutofix(req, res);
     case 'junk-bucket':                return handleJunkBucket(req, res);
     case 'exact-merge':                return handleExactMerge(req, res);
+    case 'state-lease-consume':        return handleStateLeaseConsume(req, res);
+    case 'agency-risk-consume':        return handleAgencyRiskConsume(req, res);
+    case 'npi-consume':                return handleNpiConsume(req, res);
+    case 'outlook-name-backfill':      return handleOutlookNameBackfill(req, res);
     default:
       return res.status(400).json({ error: 'Unknown admin route' });
   }
 });
+
+// ============================================================================
+// W5.2 — signal -> task automation (state lease / agency risk / NPI)
+// Three deterministic consumer ticks (NO LLM in the value gate — auditable).
+// Each: (a) fixed-threshold value gate, (b) create the work item (research_task
+// for research-work; the DECISION lanes are pull-based via fetchFederatedSource
+// and are drained by verdicts), (c) mark consumed (gov processed_at seam / ops
+// ledger), (d) producer-staleness alarm. GET = dry-run, POST = apply. See
+// audit §3.4.1 + docs/audits/ROLLOUT_STATUS.md (W5.2). Grounding note: state_lease
+// events are all backfill-stamped processed (0 unconsumed today) — the mechanism
+// is durable and fires when the producer resumes; do NOT re-process the backfill.
+// ============================================================================
+
+// Open a health alert once (dedup on alert_kind + source, unresolved). Mirrors
+// the resolve-side PATCH key used elsewhere in admin.js; the OPEN side is done in
+// JS here because the producer freshness lives cross-DB (gov), not in a pg fn.
+async function openHealthAlertOnce(alertKind, source, severity, summary, details) {
+  const existing = await opsQuery('GET', 'lcc_health_alerts?select=alert_id'
+    + '&alert_kind=eq.' + pgFilterVal(alertKind) + '&source=eq.' + pgFilterVal(source)
+    + '&resolved_at=is.null&limit=1', undefined, { countMode: 'none' });
+  if (existing.ok && Array.isArray(existing.data) && existing.data[0]) {
+    return { opened: false, alert_id: existing.data[0].alert_id };
+  }
+  const ins = await opsQuery('POST', 'lcc_health_alerts', {
+    detected_at: new Date().toISOString(),
+    alert_kind: alertKind, source, severity, summary, details: details || null,
+  });
+  const aid = (ins.ok && Array.isArray(ins.data) && ins.data[0]) ? ins.data[0].alert_id : null;
+  return { opened: ins.ok, alert_id: aid, error: ins.ok ? null : ins.data };
+}
+
+// Producer freshness: max(created_at) age in days for a cross-DB signal table.
+async function w52ProducerStaleness(domain, table, maxAgeDays) {
+  const r = await domainQuery(domain, 'GET', table + '?select=created_at&order=created_at.desc&limit=1');
+  const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+  if (!rows.length || !rows[0].created_at) return { checked: r.ok, stale: false, max_created_at: null };
+  const ageDays = (Date.now() - new Date(rows[0].created_at).getTime()) / 86400000;
+  return { checked: true, stale: ageDays > maxAgeDays, age_days: Math.round(ageDays), max_created_at: rows[0].created_at };
+}
+
+async function w52ResolveWorkspace(user) {
+  let ws = null;
+  try { ws = primaryWorkspace(user)?.workspace_id || null; } catch (_e) { ws = null; }
+  if (!ws) {
+    const wr = await opsQuery('GET', 'workspaces?select=id&order=created_at.asc&limit=1');
+    if (wr.ok && Array.isArray(wr.data) && wr.data[0]) ws = wr.data[0].id;
+  }
+  return ws;
+}
+
+// ---- state_lease distress -> research_tasks (LCC OWN consumption ledger) ------
+// SEAM-CONTENTION FIX (W5.2b, 2026-08-06): gov lead-gen (pipeline step 44
+// `state_events_to_leads`) stamps `state_lease_events.processed_at` on EVERY
+// event it dispositions — including the `no_lead_event_type` distress rows that
+// create NO prospect_lead. `processed_at` is gov lead-gen's seam and was never
+// LCC's to share; filtering on it made this tick scan 0 forever while the
+// no-lead distress events (removed/agency_change/footprint_reduction) died
+// silently between the two consumers. LCC now tracks its OWN consumption
+// ops-side: research_tasks (source_table='state_lease_events', source_record_id
+// =<event id>) IS the per-event ledger. We NEVER read or write gov processed_at.
+// Type partition with lead-gen (no double-surfacing): LCC tasks only the types
+// lead-gen dispositions as no_lead_event (removed/footprint_reduction/
+// agency_change); `relocated` already becomes a prospect_lead in lead-gen
+// (lead_event:relocated) so it drops to the digest. `created_at` floor excludes
+// the 2026-06-23 backfill (dispositioned in the June session — never resurrect).
+const STATE_LEASE_LCC_FLOOR = '2026-08-01';
+async function handleStateLeaseConsume(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET (dry-run) or POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+  const dryRun = req.method === 'GET';
+  const limit = Math.min(500, Math.max(1, parseInt(req.query.limit || '200', 10)));
+  // Fixed value gate: distress types lead-gen leaves as no_lead_event always
+  // task; renewed/new_lease/lessor_change/relocated are informational (digest
+  // count only). lessor_change would gate on a tracked-entity link, but
+  // state_lease_events.property_id is 100% NULL (grounded 2026-08-05) so no
+  // reliable link exists -> digest only (never guess); relocated already gets a
+  // prospect_lead in gov lead-gen so LCC does not re-surface it as a task.
+  const DISTRESS = ['removed', 'footprint_reduction', 'agency_change'];
+  const result = { mode: dryRun ? 'dry_run' : 'apply', distress_types: DISTRESS,
+    scanned: 0, tasks_created: 0, deduped: 0, errors: [], digest: {}, producer: null };
+
+  const stale = await w52ProducerStaleness('government', 'state_lease_events', 45);
+  result.producer = stale;
+  if (!dryRun && stale.stale) {
+    result.producer_alarm = await openHealthAlertOnce('state_lease_producer_stale', 'state_lease_events', 'warning',
+      'state_lease_events producer silent for ' + stale.age_days + 'd (>45d): the state-lease snapshot diff has stopped emitting; the consumer would run over a dead producer.',
+      { max_created_at: stale.max_created_at, age_days: stale.age_days });
+  }
+
+  // Digest counts (informational, cheap): recent-window created_at, NOT
+  // processed_at — that column belongs to gov lead-gen now. `relocated` joins
+  // the digest since lead-gen tasks it.
+  const digestSince = new Date(Date.now() - 30 * 86400000).toISOString();
+  for (const et of ['renewed', 'new_lease', 'lessor_change', 'relocated']) {
+    const c = await domainQuery('government', 'GET', 'state_lease_events?select=id&created_at=gte.'
+      + digestSince + '&event_type=eq.' + et + '&limit=1', undefined, { 'Prefer': 'count=exact' });
+    result.digest[et] = (c.ok && typeof c.count === 'number') ? c.count : null;
+  }
+
+  // Candidate events: distress types created since the LCC floor (excludes the
+  // June backfill). Consumption is decided against the LCC research_tasks ledger
+  // below — NOT gov processed_at.
+  const evR = await domainQuery('government', 'GET', 'state_lease_events'
+    + '?select=id,source_code,state_lease_id,event_type,event_date,from_snapshot_date,to_snapshot_date,annual_rent'
+    + '&created_at=gte.' + STATE_LEASE_LCC_FLOOR + '&event_type=in.(' + DISTRESS.join(',') + ')&order=event_date.desc&limit=' + limit);
+  if (!evR.ok) return res.status(502).json({ error: 'state_lease_events read failed', detail: evR.data });
+  const allEvents = Array.isArray(evR.data) ? evR.data : [];
+
+  // LCC OWN ledger: which of these events already have a research_task (any
+  // status). Re-runs create ZERO duplicates; the open-dedupe unique index
+  // (uq_research_tasks_open_source) backstops races. Batched — never N+1.
+  const consumedIds = new Set();
+  const evIds = allEvents.map((e) => e.id).filter((x) => x != null);
+  if (evIds.length) {
+    const inIds = evIds.map((id) => '"' + String(id).replace(/"/g, '') + '"').join(',');
+    const lr = await opsQuery('GET', 'research_tasks?select=source_record_id&source_table=eq.state_lease_events'
+      + '&source_record_id=in.(' + encodeURIComponent(inIds) + ')&limit=1000', undefined, { countMode: 'none' });
+    for (const x of ((lr.ok && Array.isArray(lr.data)) ? lr.data : [])) consumedIds.add(String(x.source_record_id));
+  }
+  const events = allEvents.filter((e) => !consumedIds.has(String(e.id)));
+  result.deduped = allEvents.length - events.length;
+  result.scanned = events.length;
+
+  // Batch snapshot enrichment (address/agency/lessor) — never N+1.
+  const leaseIds = [...new Set(events.map((e) => e.state_lease_id).filter(Boolean))];
+  const snapMap = new Map();
+  if (leaseIds.length) {
+    const inList = leaseIds.map((x) => '"' + String(x).replace(/"/g, '') + '"').join(',');
+    const sr = await domainQuery('government', 'GET', 'state_lease_snapshots'
+      + '?select=source_code,state_lease_id,snapshot_date,address,city,state,agency,lessor,annual_rent'
+      + '&state_lease_id=in.(' + encodeURIComponent(inList) + ')&limit=1000');
+    for (const s of ((sr.ok && Array.isArray(sr.data)) ? sr.data : [])) {
+      snapMap.set(s.source_code + '|' + s.state_lease_id + '|' + s.snapshot_date, s);
+    }
+  }
+  const snapFor = (e) => snapMap.get(e.source_code + '|' + e.state_lease_id + '|' + (e.to_snapshot_date || e.from_snapshot_date))
+    || snapMap.get(e.source_code + '|' + e.state_lease_id + '|' + e.from_snapshot_date) || {};
+
+  if (dryRun) {
+    result.sample = events.slice(0, 5).map((e) => { const s = snapFor(e); return {
+      id: e.id, event_type: e.event_type, address: s.address || null, agency: s.agency || null, lessor: s.lessor || null }; });
+    return res.status(200).json(result);
+  }
+
+  const ws = await w52ResolveWorkspace(user);
+  for (const e of events) {
+    const s = snapFor(e);
+    const title = 'State lease ' + String(e.event_type).replace(/_/g, ' ') + ': '
+      + (s.address || ('lease ' + e.state_lease_id)) + (s.state ? ' (' + s.state + ')' : '');
+    const meta = { signal: 'state_lease_event', event_id: e.id, domain: 'gov',
+      source_code: e.source_code, state_lease_id: e.state_lease_id, event_type: e.event_type,
+      event_date: e.event_date, address: s.address || null, city: s.city || null, state: s.state || null,
+      agency: s.agency || null, lessor: s.lessor || null, annual_rent: s.annual_rent || e.annual_rent || null,
+      deep_link: '#/gov' };
+    // LCC consumption is recorded by the research_task row itself (the ledger).
+    // We do NOT write gov state_lease_events.processed_at — that seam belongs to
+    // gov lead-gen; touching it could hide events from lead-gen or double-stamp.
+    const ins = await opsQuery('POST', 'research_tasks', {
+      workspace_id: ws, created_by: user.id || null, research_type: 'state_lease_distress_review',
+      title, instructions: null, domain: 'gov', status: 'queued', priority: 40,
+      source_record_id: String(e.id), source_table: 'state_lease_events', metadata: meta });
+    if (ins.ok) {
+      result.tasks_created += 1;
+    } else if (ins.status === 409) {
+      // Race: an open task already exists (open-dedupe index). Already ledgered.
+      result.deduped += 1;
+    } else {
+      result.errors.push('insert ' + e.id + ': ' + JSON.stringify(ins.data).slice(0, 120));
+    }
+  }
+  return res.status(200).json(result);
+}
+
+// ---- agency risk: staleness + auto-dismiss safety valve (pull lane drains) ---
+async function handleAgencyRiskConsume(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET (dry-run) or POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+  const dryRun = req.method === 'GET';
+  const limit = Math.min(2000, Math.max(1, parseInt(req.query.limit || '1000', 10)));
+  const result = { mode: dryRun ? 'dry_run' : 'apply', producer: null,
+    actionable_high: null, auto_dismissed: 0, elevated_scanned: 0, elevated_linked: 0, digest: {}, errors: [] };
+
+  const stale = await w52ProducerStaleness('government', 'agency_risk_signals', 45);
+  result.producer = stale;
+  if (!dryRun && stale.stale) {
+    result.producer_alarm = await openHealthAlertOnce('agency_risk_producer_stale', 'agency_risk_signals', 'warning',
+      'agency_risk_signals producer silent for ' + stale.age_days + 'd (>45d).',
+      { max_created_at: stale.max_created_at, age_days: stale.age_days });
+  }
+
+  const hc = await domainQuery('government', 'GET', 'agency_risk_signals?select=signal_id&processed_at=is.null&risk_level=eq.high&limit=1',
+    undefined, { 'Prefer': 'count=exact' });
+  result.actionable_high = (hc.ok && typeof hc.count === 'number') ? hc.count : null;
+  for (const lvl of ['elevated', 'moderate', 'low']) {
+    const c = await domainQuery('government', 'GET', 'agency_risk_signals?select=signal_id&processed_at=is.null&risk_level=eq.' + lvl + '&limit=1',
+      undefined, { 'Prefer': 'count=exact' });
+    result.digest[lvl] = (c.ok && typeof c.count === 'number') ? c.count : null;
+  }
+
+  if (dryRun) return res.status(200).json(result);
+
+  // low + moderate are below the action floor and never surface -> auto-dismiss
+  // (reversible: clear processed_at). Capped per run.
+  const lm = await domainQuery('government', 'PATCH',
+    'agency_risk_signals?processed_at=is.null&risk_level=in.(low,moderate)&limit=' + limit,
+    { processed_at: new Date().toISOString(), processed_reason: 'low_moderate_below_floor' },
+    { 'Prefer': 'return=representation' });
+  if (lm.ok && Array.isArray(lm.data)) result.auto_dismissed += lm.data.length;
+  else if (!lm.ok) result.errors.push('low_moderate dismiss: ' + JSON.stringify(lm.data).slice(0, 120));
+
+  // elevated with NO tracked property exposure is not actionable -> auto-dismiss.
+  // High is NEVER auto-dismissed (always a card).
+  const er = await domainQuery('government', 'GET',
+    'agency_risk_signals?select=signal_id,agency&processed_at=is.null&risk_level=eq.elevated&order=created_at.desc&limit=' + limit);
+  const erows = (er.ok && Array.isArray(er.data)) ? er.data : [];
+  result.elevated_scanned = erows.length;
+  const agencies = [...new Set(erows.map((x) => x.agency).filter(Boolean))];
+  const linked = new Set();
+  if (agencies.length) {
+    const inList = agencies.map((a) => '"' + String(a).replace(/"/g, '') + '"').join(',');
+    const pr = await domainQuery('government', 'GET', 'properties?select=agency&agency=in.(' + encodeURIComponent(inList) + ')&limit=1000');
+    for (const p of ((pr.ok && Array.isArray(pr.data)) ? pr.data : [])) linked.add(String(p.agency || '').toLowerCase());
+  }
+  const unlinkedIds = erows.filter((x) => !x.agency || !linked.has(String(x.agency).toLowerCase())).map((x) => x.signal_id);
+  result.elevated_linked = erows.length - unlinkedIds.length;
+  for (let i = 0; i < unlinkedIds.length; i += 100) {
+    const inIds = unlinkedIds.slice(i, i + 100).map((id) => '"' + String(id) + '"').join(',');
+    const mp = await domainQuery('government', 'PATCH', 'agency_risk_signals?signal_id=in.(' + encodeURIComponent(inIds) + ')',
+      { processed_at: new Date().toISOString(), processed_reason: 'elevated_no_tracked_exposure' },
+      { 'Prefer': 'return=representation' });
+    if (mp.ok && Array.isArray(mp.data)) result.auto_dismissed += mp.data.length;
+    else if (!mp.ok) result.errors.push('elevated dismiss: ' + JSON.stringify(mp.data).slice(0, 120));
+  }
+  return res.status(200).json(result);
+}
+
+// ---- NPI: missing/new -> research_tasks (ops ledger); dup lanes = digest ------
+async function handleNpiConsume(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET (dry-run) or POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+  const dryRun = req.method === 'GET';
+  const limit = Math.min(1000, Math.max(1, parseInt(req.query.limit || '200', 10)));
+  const result = { mode: dryRun ? 'dry_run' : 'apply', scanned: 0, tasks_created: 0, deduped: 0, ledgered: 0, errors: [], digest: {} };
+
+  // Digest counts for the DECISION lanes (worked in the Decision Center, not here).
+  for (const [k, q] of [
+    ['dup_data_error', 'signal_type=eq.duplicate_inventory_npi&severity=eq.data_error'],
+    ['dup_auto_resolvable', 'signal_type=eq.duplicate_inventory_npi&severity=eq.auto_resolvable'],
+    ['dup_data_quality', 'signal_type=eq.duplicate_inventory_npi&severity=eq.data_quality'],
+  ]) {
+    const c = await domainQuery('dialysis', 'GET', 'mv_npi_inventory_signals?select=clinic_id&' + q + '&limit=1',
+      undefined, { 'Prefer': 'count=exact' });
+    result.digest[k] = (c.ok && typeof c.count === 'number') ? c.count : null;
+  }
+
+  // consumed hashes for the research signal types (matview has no seam).
+  const consumed = new Set();
+  const cr = await opsQuery('GET', 'lcc_npi_signal_consumed?select=signal_hash&signal_type=in.(missing_inventory_npi,new_npi)&limit=1000',
+    undefined, { countMode: 'none' });
+  for (const x of ((cr.ok && Array.isArray(cr.data)) ? cr.data : [])) consumed.add(x.signal_hash);
+
+  const ws = await w52ResolveWorkspace(user);
+  const preview = [];
+  const RESEARCH = [
+    { signal_type: 'missing_inventory_npi', research_type: 'npi_missing_inventory' },
+    { signal_type: 'new_npi', research_type: 'npi_new_registration' },
+  ];
+  for (const spec of RESEARCH) {
+    const r = await domainQuery('dialysis', 'GET', 'mv_npi_inventory_signals'
+      + '?select=signal_type,clinic_id,npi,facility_name,address,city,state,operator_name,cluster_winner_medicare_id,severity,signal_priority,signal_reason,latest_total_patients'
+      + '&signal_type=eq.' + spec.signal_type + '&order=latest_total_patients.desc.nullslast&limit=' + limit);
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    for (const row of rows) {
+      const hash = npiSignalHash(row);
+      if (consumed.has(hash)) { result.deduped += 1; continue; }
+      result.scanned += 1;
+      const title = (spec.signal_type === 'missing_inventory_npi' ? 'NPI missing: ' : 'New NPI: ')
+        + (row.facility_name || ('clinic ' + row.clinic_id)) + (row.state ? ' (' + row.state + ')' : '');
+      const meta = { signal: 'npi_inventory', signal_hash: hash, signal_type: row.signal_type, domain: 'dia',
+        clinic_id: row.clinic_id, npi: row.npi || null, facility_name: row.facility_name || null,
+        operator_name: row.operator_name || null, address: row.address || null, city: row.city || null, state: row.state || null,
+        latest_total_patients: row.latest_total_patients || null, signal_reason: row.signal_reason || null,
+        deep_link: w52PropDeepLink('dia', row.clinic_id) };
+      if (dryRun) { preview.push({ hash, title, clinic_id: row.clinic_id }); continue; }
+      const ins = await opsQuery('POST', 'research_tasks', {
+        workspace_id: ws, created_by: user.id || null, research_type: spec.research_type,
+        title, instructions: null, domain: 'dia', status: 'queued', priority: 45,
+        source_record_id: hash, source_table: 'mv_npi_inventory_signals', metadata: meta });
+      let taskId = null;
+      if (ins.ok) { result.tasks_created += 1; taskId = Array.isArray(ins.data) ? (ins.data[0] && ins.data[0].id) : (ins.data && ins.data.id); }
+      else if (ins.status === 409) { result.deduped += 1; }
+      else { result.errors.push('insert ' + hash.slice(0, 8) + ': ' + JSON.stringify(ins.data).slice(0, 120)); continue; }
+      const lg = await opsQuery('POST', 'lcc_npi_signal_consumed', {
+        signal_hash: hash, signal_type: row.signal_type, severity: row.severity || null,
+        clinic_id: row.clinic_id != null ? String(row.clinic_id) : null, npi: row.npi || null,
+        cluster_winner_medicare_id: row.cluster_winner_medicare_id || null,
+        consumed_via: 'research_task', consumed_reason: spec.research_type, research_task_id: taskId, decision_id: null });
+      if (lg.ok || lg.status === 409) result.ledgered += 1;
+      else result.errors.push('ledger ' + hash.slice(0, 8) + ': ' + JSON.stringify(lg.data).slice(0, 120));
+    }
+  }
+  if (dryRun) result.sample = preview.slice(0, 5);
+  return res.status(200).json(result);
+}
 
 // ============================================================================
 // OPS HEALTH (2026-05-31)
@@ -175,6 +616,8 @@ async function handleOpsHealth(req, res) {
     try { const r = await opsQuery('GET', path + (path.includes('?') ? '&' : '?') + 'select=*&limit=1', undefined, { countMode: 'exact' }); return r.ok ? (r.count || 0) : null; }
     catch (_e) { return null; }
   };
+  const flowHealthWindowHours = Math.min(168, Math.max(1, parseInt(req.query.flow_window_hours || '24', 10)));
+  const flowHealthSince = new Date(Date.now() - flowHealthWindowHours * 60 * 60 * 1000).toISOString();
   // Cross-domain LLC worker health: queued vs in_progress (stuck) per domain.
   const domCount = async (dom, path) => {
     try { const r = await domainQuery(dom, 'GET', path + (path.includes('?') ? '&' : '?') + 'select=*&limit=1', { 'Prefer': 'count=exact' }); return r.ok ? (r.count || 0) : null; }
@@ -183,12 +626,21 @@ async function handleOpsHealth(req, res) {
 
   const [
     openAlerts, openFlowFailures, cronSummary,
+    recentFlowFailures,
+    healthSurface, cleanAssistHealth,
+    invalidPriorityColumns,
     writeFail24h, writeFailTop, writeFail7d,
     diaLlcQueued, diaLlcInProgress, govLlcQueued, govLlcInProgress,
   ] = await Promise.all([
     opsRead('v_lcc_health_alerts_open?select=alert_kind,source,severity,summary,detected_at,age_hours&order=detected_at.desc&limit=50'),
     opsRead('v_flow_run_failures_open?select=flow_name,failed_action,error_kind,error_detail_short,severity,detected_at&order=detected_at.desc&limit=50'),
     opsRead('v_cron_health_summary?select=alert_kind,source,severity,summary,detected_at,resolved_at&order=detected_at.desc&limit=50'),
+    opsRead('flow_run_failures?select=flow_name,flow_run_id,failed_action,error_kind,error_code,error_detail,detected_at,resolved_at,severity'
+      + '&detected_at=gte.' + encodeURIComponent(flowHealthSince)
+      + '&order=detected_at.desc&limit=500'),
+    opsRead('v_lcc_health_surface?select=subsystem,check_name,status,count,first_seen,ts,last_error,external_url,details&order=status.desc,ts.desc&limit=200'),
+    opsRead('v_lcc_clean_assist_health?select=subsystem,check_name,status,count,first_seen,ts,last_error,external_url,details&limit=1'),
+    opsRead('v_field_source_priority_invalid_columns?select=target_table,field_name,source,nearby_columns&limit=50'),
     opsCount('v_ingest_write_failures_24h'),
     opsRead('v_ingest_write_failures_top_24h?select=domain,method,http_status,path_norm,failures_24h,sample_error&order=failures_24h.desc&limit=5'),
     opsCount('v_ingest_write_failures_recent'),  // 7d, kept as context only
@@ -208,7 +660,83 @@ async function handleOpsHealth(req, res) {
 
   const alerts = openAlerts || [];
   const flows = openFlowFailures || [];
+  const recentFlows = Array.isArray(recentFlowFailures) ? recentFlowFailures : [];
   const crons = (cronSummary || []).filter(r => !r.resolved_at);
+
+  const openFlowCounts = new Map();
+  for (const f of flows) {
+    const name = f.flow_name || 'unknown';
+    openFlowCounts.set(name, (openFlowCounts.get(name) || 0) + 1);
+  }
+  const byFlow = new Map();
+  for (const f of recentFlows) {
+    const name = f.flow_name || 'unknown';
+    const cur = byFlow.get(name) || {
+      flow_name: name,
+      failures: 0,
+      open_failures: 0,
+      latest_failure_at: null,
+      latest_action: null,
+      latest_error_kind: null,
+      latest_error_code: null,
+      latest_error_detail_short: null,
+      severity: 'warn',
+    };
+    cur.failures += 1;
+    if (!f.resolved_at) cur.open_failures += 1;
+    if (!cur.latest_failure_at || String(f.detected_at || '') > String(cur.latest_failure_at || '')) {
+      cur.latest_failure_at = f.detected_at || null;
+      cur.latest_action = f.failed_action || null;
+      cur.latest_error_kind = f.error_kind || null;
+      cur.latest_error_code = f.error_code || null;
+      cur.latest_error_detail_short = String(f.error_detail || '').slice(0, 240) || null;
+      cur.severity = f.severity || cur.severity;
+    }
+    byFlow.set(name, cur);
+  }
+  for (const [name, count] of openFlowCounts.entries()) {
+    const cur = byFlow.get(name) || {
+      flow_name: name,
+      failures: 0,
+      latest_failure_at: null,
+      latest_action: null,
+      latest_error_kind: null,
+      latest_error_code: null,
+      latest_error_detail_short: null,
+      severity: 'error',
+    };
+    cur.open_failures = Math.max(cur.open_failures || 0, count);
+    byFlow.set(name, cur);
+  }
+  const flowHealth = [...byFlow.values()]
+    .map((f) => ({
+      ...f,
+      status: f.open_failures > 0 ? 'failing' : (f.failures > 0 ? 'recovered_recently' : 'healthy'),
+    }))
+    .sort((a, b) => (b.open_failures - a.open_failures)
+      || (b.failures - a.failures)
+      || String(b.latest_failure_at || '').localeCompare(String(a.latest_failure_at || '')));
+
+  const surfaceRows = (Array.isArray(healthSurface) ? healthSurface : [])
+    .concat(Array.isArray(cleanAssistHealth) ? cleanAssistHealth : []);
+  const invalidPriorityRows = Array.isArray(invalidPriorityColumns) ? invalidPriorityColumns : [];
+  const lccHealth = buildLccHealthSurface({
+    surfaceRows,
+    flowHealth,
+    invalidPriorityRows,
+    crons,
+    alerts,
+    deployProbe: buildDeployProbe(),
+    generatedAt: new Date().toISOString(),
+  });
+  const includeDigest = req.query.digest === '1' || req.query.digest === 'true';
+  const digest = includeDigest
+    ? await buildLccHealthDigest(lccHealth).catch((err) => ({
+        summarizer: 'deterministic',
+        error: err?.message || String(err),
+        text: deterministicHealthDigest(lccHealth),
+      }))
+    : { summarizer: 'deterministic', text: deterministicHealthDigest(lccHealth) };
 
   const topFail = (Array.isArray(writeFailTop) && writeFailTop[0]) ? writeFailTop[0] : null;
   return res.status(200).json({
@@ -216,6 +744,8 @@ async function handleOpsHealth(req, res) {
     summary: {
       open_alerts: alerts.length,
       open_flow_failures: flows.length,
+      failing_flows: flowHealth.filter(f => f.status === 'failing').length,
+      flow_failures_window_hours: flowHealthWindowHours,
       open_cron_issues: crons.length,
       // Honest window (R7 Phase 2.3): 24h count + the single worst path, with
       // the 7d figure demoted to context. The old "write_failures_recent" was a
@@ -227,10 +757,249 @@ async function handleOpsHealth(req, res) {
         path: topFail.path_norm, count_24h: topFail.failures_24h, sample_error: topFail.sample_error,
       } : null,
       workers_stuck: workers.filter(w => w.status === 'stuck').length,
+      lcc_health_status: lccHealth.overall_status,
+      lcc_health_red: lccHealth.counts.red,
+      lcc_health_amber: lccHealth.counts.amber,
+      clean_assist: Array.isArray(cleanAssistHealth) && cleanAssistHealth[0] ? cleanAssistHealth[0].details : null,
     },
-    alerts, flow_failures: flows, cron_issues: crons, workers,
+    alerts, flow_failures: flows, flow_health: flowHealth, cron_issues: crons, workers,
+    lcc_health: lccHealth,
+    health_digest: digest,
     write_failures_top_24h: Array.isArray(writeFailTop) ? writeFailTop : [],
   });
+}
+
+function healthSeverityRank(status) {
+  const s = String(status || '').toLowerCase();
+  if (s === 'red' || s === 'critical' || s === 'error' || s === 'failing') return 3;
+  if (s === 'amber' || s === 'warning' || s === 'warn' || s === 'degraded') return 2;
+  if (s === 'unknown') return 1;
+  return 0;
+}
+
+function healthStatusFromRank(rank) {
+  if (rank >= 3) return 'red';
+  if (rank === 2) return 'amber';
+  if (rank === 1) return 'unknown';
+  return 'green';
+}
+
+function buildDeployProbe() {
+  const source =
+    process.env.RAILWAY_GIT_COMMIT_SHA ? 'railway_git_commit_sha'
+    : process.env.RAILWAY_DEPLOYMENT_ID ? 'railway_deployment_id'
+    : process.env.RENDER_GIT_COMMIT ? 'render_git_commit'
+    : process.env.SOURCE_VERSION ? 'source_version'
+    : 'boot_timestamp';
+  const raw = process.env.RAILWAY_GIT_COMMIT_SHA
+    || process.env.RAILWAY_DEPLOYMENT_ID
+    || process.env.RENDER_GIT_COMMIT
+    || process.env.SOURCE_VERSION
+    || '';
+  return {
+    subsystem: 'deploy',
+    check_name: 'railway_version',
+    status: source === 'boot_timestamp' ? 'amber' : 'green',
+    count: 1,
+    first_seen: null,
+    ts: new Date().toISOString(),
+    last_error: source === 'boot_timestamp'
+      ? 'Deploy version is falling back to boot timestamp; Railway git/deployment env was not visible to the API process.'
+      : null,
+    external_url: null,
+    details: {
+      version: raw ? String(raw).slice(0, 12) : null,
+      source,
+      git_pinned: source !== 'boot_timestamp',
+    },
+  };
+}
+
+function buildLccHealthSurface({ surfaceRows, flowHealth, invalidPriorityRows, crons, alerts, deployProbe, generatedAt }) {
+  const rows = [...surfaceRows, deployProbe].filter(Boolean).map((row) => ({
+    subsystem: row.subsystem || row.source || 'unknown',
+    check_name: row.check_name || row.check || 'unknown',
+    status: String(row.status || 'unknown').toLowerCase(),
+    count: Number(row.count || 0),
+    first_seen: row.first_seen || row.detected_at || null,
+    ts: row.ts || row.detected_at || generatedAt,
+    last_error: row.last_error || row.summary || null,
+    external_url: row.external_url || null,
+    details: row.details || {},
+  }));
+
+  const bySubsystemMap = new Map();
+  for (const row of rows) {
+    const sub = row.subsystem;
+    const cur = bySubsystemMap.get(sub) || { subsystem: sub, status_rank: 0, red: 0, amber: 0, green: 0, unknown: 0, checks: [] };
+    const rank = healthSeverityRank(row.status);
+    cur.status_rank = Math.max(cur.status_rank, rank);
+    if (row.status === 'red') cur.red += 1;
+    else if (row.status === 'amber') cur.amber += 1;
+    else if (row.status === 'green') cur.green += 1;
+    else cur.unknown += 1;
+    cur.checks.push(row);
+    bySubsystemMap.set(sub, cur);
+  }
+
+  const bySubsystem = [...bySubsystemMap.values()].map((sub) => ({
+    subsystem: sub.subsystem,
+    status: healthStatusFromRank(sub.status_rank),
+    counts: { red: sub.red, amber: sub.amber, green: sub.green, unknown: sub.unknown },
+    checks: sub.checks.sort((a, b) => healthSeverityRank(b.status) - healthSeverityRank(a.status)
+      || String(b.ts || '').localeCompare(String(a.ts || ''))).slice(0, 12),
+  })).sort((a, b) => healthSeverityRank(b.status) - healthSeverityRank(a.status)
+    || a.subsystem.localeCompare(b.subsystem));
+
+  const counts = rows.reduce((acc, row) => {
+    const s = row.status === 'red' || row.status === 'amber' || row.status === 'green' ? row.status : 'unknown';
+    acc[s] = (acc[s] || 0) + 1;
+    return acc;
+  }, { red: 0, amber: 0, green: 0, unknown: 0 });
+
+  const findFlow = (namePart) => flowHealth.find((f) =>
+    String(f.flow_name || '').toLowerCase().includes(namePart.toLowerCase()));
+  const sfSync = findFlow('SF Deal -> LCC Opportunity Sync') || findFlow('opportunity sync');
+  const artifact = findFlow('LCC Get Artifact') || findFlow('get artifact');
+  const issue710 = invalidPriorityRows.length > 0;
+  const boot = rows.find((r) => r.subsystem === 'boot_check' || /boot/i.test(r.check_name))
+    || (alerts || []).find((a) => /boot/i.test(String(a.summary || a.source || a.alert_kind || '')));
+
+  const replay_2026_08_01 = [
+    {
+      incident: 'SF Deal -> LCC Opportunity Sync',
+      would_flag_same_day: !!(sfSync && (sfSync.open_failures > 0 || sfSync.failures > 0)),
+      evidence: sfSync ? `${sfSync.failures} failure(s), latest ${sfSync.latest_failure_at || 'unknown'}` : 'No matching flow_run_failures row in current window.',
+    },
+    {
+      incident: 'LCC Get Artifact',
+      would_flag_same_day: !!(artifact && (artifact.open_failures > 0 || artifact.failures > 0)),
+      evidence: artifact ? `${artifact.failures} failure(s), latest ${artifact.latest_failure_at || 'unknown'}` : 'No matching flow_run_failures row in current window.',
+    },
+    {
+      incident: 'Issue #710 field_source_priority schema drift',
+      would_flag_same_day: issue710,
+      evidence: issue710
+        ? `${invalidPriorityRows.length} invalid field_source_priority row(s) visible in v_field_source_priority_invalid_columns.`
+        : 'v_field_source_priority_invalid_columns is empty or unavailable.',
+    },
+    {
+      incident: 'Boot Check crash',
+      would_flag_same_day: !!boot,
+      evidence: boot ? (boot.summary || boot.last_error || boot.source || 'Boot-related health alert/event present.') : 'No boot_check event present; Boot Check should POST lcc_record_health_event.',
+    },
+  ];
+
+  return {
+    generated_at: generatedAt,
+    overall_status: counts.red > 0 ? 'red' : counts.amber > 0 ? 'amber' : counts.unknown > 0 ? 'unknown' : 'green',
+    counts,
+    by_subsystem: bySubsystem,
+    top_failures: rows
+      .filter((r) => healthSeverityRank(r.status) >= 2)
+      .sort((a, b) => healthSeverityRank(b.status) - healthSeverityRank(a.status)
+        || (Number(b.count || 0) - Number(a.count || 0))
+        || String(b.ts || '').localeCompare(String(a.ts || '')))
+      .slice(0, 12),
+    replay_2026_08_01,
+    thresholds: {
+      flow_failure_threshold: 5,
+      db_check_red: true,
+      deploy_red_on_failed_probe: true,
+    },
+  };
+}
+
+function likelyFixForHealthRow(row) {
+  const sub = String(row.subsystem || '').toLowerCase();
+  const check = String(row.check_name || '').toLowerCase();
+  const err = String(row.last_error || '').toLowerCase();
+  if (sub === 'power_automate' || check.includes('flow')) {
+    return 'Open the failing Power Automate run, fix the failed action or connector auth, then confirm its fault branch records recovery.';
+  }
+  if (check.includes('field_source_priority')) {
+    return 'Map or remove field_source_priority rows that point at non-existent target columns, then rerun Daily DB Checks.';
+  }
+  if (sub === 'deploy' || check.includes('railway')) {
+    return 'Confirm Railway deployed the intended main SHA and run npm run verify:deploy after redeploy.';
+  }
+  if (sub === 'connectors' || err.includes('auth')) {
+    return 'Re-authorize the connector at the source system and run a reachability probe.';
+  }
+  if (check.includes('boot')) {
+    return 'Run npm run check:boot and inspect the boot-check stack trace from the failing commit.';
+  }
+  return 'Inspect the collected last_error/details for this check; do not infer beyond the logged signal.';
+}
+
+function deterministicHealthDigest(lccHealth) {
+  const bad = lccHealth.top_failures || [];
+  if (!bad.length) return 'LCC Health is green. No red or amber checks are currently collected.';
+  const lines = [`LCC Health is ${String(lccHealth.overall_status || 'unknown').toUpperCase()}: ${lccHealth.counts.red} red, ${lccHealth.counts.amber} amber.`];
+  for (const row of bad.slice(0, 8)) {
+    const since = row.first_seen ? ` since ${row.first_seen}` : '';
+    const err = row.last_error ? ` Last error: ${String(row.last_error).slice(0, 180)}` : '';
+    lines.push(`- ${row.subsystem}/${row.check_name}: ${String(row.status).toUpperCase()} (${row.count || 0})${since}.${err} Likely fix: ${likelyFixForHealthRow(row)}`);
+  }
+  return lines.join('\n');
+}
+
+async function buildLccHealthDigest(lccHealth) {
+  if (!process.env.OLLAMA_URL) {
+    return { summarizer: 'deterministic', text: deterministicHealthDigest(lccHealth) };
+  }
+  const evidence = (lccHealth.top_failures || []).slice(0, 12).map((row) => ({
+    subsystem: row.subsystem,
+    check: row.check_name,
+    status: row.status,
+    count: row.count,
+    first_seen: row.first_seen,
+    ts: row.ts,
+    last_error: row.last_error,
+    likely_fix: likelyFixForHealthRow(row),
+  }));
+  const prompt = [
+    'Summarize this LCC Health evidence for a daily operator digest.',
+    'Rules: use only the JSON evidence, do not fabricate causes, include what is failing, since when, and likely fix.',
+    JSON.stringify({ overall_status: lccHealth.overall_status, counts: lccHealth.counts, evidence }, null, 2),
+  ].join('\n\n');
+  const base = String(process.env.OLLAMA_URL || '').trim().replace(/\/+$/, '');
+  const model = String(process.env.OLLAMA_MODEL || 'qwen2.5:14b').trim();
+  const timeoutMs = Number(process.env.OLLAMA_TIMEOUT_MS || 45000);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const r = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(process.env.OLLAMA_API_KEY ? { Authorization: `Bearer ${process.env.OLLAMA_API_KEY}` } : {}),
+        ...(process.env.CF_ACCESS_CLIENT_ID && process.env.CF_ACCESS_CLIENT_SECRET
+          ? {
+              'CF-Access-Client-Id': process.env.CF_ACCESS_CLIENT_ID,
+              'CF-Access-Client-Secret': process.env.CF_ACCESS_CLIENT_SECRET,
+            }
+          : {}),
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0,
+        stream: false,
+      }),
+      signal: controller.signal,
+    });
+    const data = await r.json().catch(() => ({}));
+    const text = data?.choices?.[0]?.message?.content;
+    if (!r.ok || !text) {
+      return { summarizer: 'deterministic', ollama_error: data?.error || `ollama status ${r.status}`, text: deterministicHealthDigest(lccHealth) };
+    }
+    return { summarizer: 'ollama', model: data?.model || model, text };
+  } catch (err) {
+    return { summarizer: 'deterministic', ollama_error: err?.message || String(err), text: deterministicHealthDigest(lccHealth) };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 // ============================================================================
@@ -331,12 +1100,18 @@ async function handleReviewCounts(req, res) {
     provConflicts, staleIdentities, unlinkedEntities,
     diaResearch, govOwnershipQueue, diaLlc, govLlc,
     govDupAddr, govPending, govSosLinks, stagedIntakeReview,
-    govSfLink, diaSfLink,
+    govSfLink, diaSfLink, diaTwins,
   ] = await Promise.all([
     opsLane('data_conflicts',    'v_field_provenance_conflict_classified?conflict_class=eq.cross_source'),
     opsLane('stale_identities',  'v_stale_identities'),
     opsLane('unlinked_entities', 'v_unlinked_entities'),
-    withLaneTimeout(domCount('dia', 'v_next_best_research', 'estimated')),
+    // A5c: the badge counts ACTIONABLE work, not raw output. Ungated this read
+    // returns 29,643 — the whole dia gap pool, 84% of whose owners hold no
+    // property and most of the rest operators or placeholders. A badge that big
+    // and that wrong is the surface people learn to ignore (doctrine rule 5).
+    // `count=exact` because the planner's estimate over the gated view is off by
+    // ~58x (11,569 vs 198); measured 644 ms, inside the 3,500 ms lane timeout.
+    withLaneTimeout(domCount('dia', 'v_next_best_research?gate_pass=is.true', 'exact')),
     withLaneTimeout(domCount('gov', 'ownership_research_queue', 'estimated')),
     withLaneTimeout(domCount('dia', 'llc_research_queue?status=eq.queued')),
     withLaneTimeout(domCount('gov', 'llc_research_queue?status=eq.queued')),
@@ -355,6 +1130,51 @@ async function handleReviewCounts(req, res) {
     // sublane badge — the lane is mint-at-verdict, NOT a 3,452-row lcc_decisions mint.
     withLaneTimeout(domCount('gov', 'v_sf_link_review_queue')),
     withLaneTimeout(domCount('dia', 'v_sf_link_review_queue')),
+    // dia geospatial property "address twins" awaiting a human verdict (the
+    // pending slice of dia_property_twin_review; auto_blank husks already merged
+    // by the dia_merge_twins auto pass). Folded into the merges_dupes lane below.
+    withLaneTimeout(domCount('dia', 'dia_property_twin_review?status=eq.pending')),
+  ]);
+
+  // W8 (Prompt 75): live badge counts for the two W8-touched federated lanes.
+  // The DC page overrides its owner_reconcile / w8_u3_link_review badges with
+  // these — the /api/decisions?summary=1 federated total for owner_reconcile
+  // fans out 8+ cross-DB sub-queries and can time out to a 0 badge, and the U3
+  // lane must reflect v_w8_u3_link_review_open. owner_reconcile is the SUM of its
+  // five folded seeders (mirrors fetchFederatedSource('owner_reconcile').total),
+  // INCLUDING the W8 U2 dup-pair proposals (w8_u2_dup_pair).
+  const [
+    orLcc, orGovUnif, orGovEmc, orDiaEmc, orU2, u3Open, u3Conflict, u5Open, w92Open, w91Open, w96Open,
+    ocpOpen, tier0Open,
+  ] = await Promise.all([
+    withLaneTimeout(opsCount('v_lcc_owner_reconcile_review')),
+    withLaneTimeout(domCount('gov', 'owner_unification_review_queue?status=eq.pending_review')),
+    withLaneTimeout(domCount('gov', 'entity_match_candidates?status=eq.pending_review')),
+    withLaneTimeout(domCount('dia', 'entity_match_candidates?status=eq.pending_review')),
+    withLaneTimeout(opsCount('w8_u2_dup_pair?status=eq.proposed')),
+    withLaneTimeout(opsCount('w8_u3_link_review?status=eq.proposed&proposed_verdict=in.(link_proposal,different_people)')),
+    // Prompt 77: conflict rows (ambiguous_entity_match) are real, resolvable work.
+    withLaneTimeout(opsCount('w8_u3_link_review?status=eq.conflict')),
+    // W8 U5 (Prompt 79): open naming-hygiene proposals (rename + address-link).
+    withLaneTimeout(opsCount('naming_hygiene_review?status=eq.proposed')),
+    // W9.2 (Prompt 88): open contact-reachability proposals (deterministic + LLM).
+    withLaneTimeout(opsCount('reachability_harvest_review?status=eq.proposed')),
+    // W9.1 (Prompt 98): open contact-acquisition proposals (attach + mint).
+    withLaneTimeout(opsCount('contact_acquisition_review?status=eq.proposed')),
+    // W9.6 (Prompt 102): open correspondence→owner attribution proposals.
+    withLaneTimeout(opsCount('comms_owner_attribution_review?status=eq.proposed')),
+    // Prompt 114 (BREAK-1 Unit 3): ACTIONABLE owner-contact review proposals.
+    // Counted off the VIEW, not the table: the view drops rows whose owner is
+    // already reachable, so the badge is real work rather than raw output.
+    withLaneTimeout(opsCount('v_lcc_owner_contact_attach_review_open')),
+    // Prompt 188: Tier 0 confirm lane. Counted through fetchFederatedSource — the
+    // SAME source the list renders from — NOT a bare count on the view.
+    // ⚠️ Counting the view directly would put the badge and the list on different
+    // sources, which is exactly the P132 defect (the Research badge kept reporting
+    // healthy open counts off a summary view while the list itself 500'd). The
+    // JS name-shape gate can empty a card the SQL view still counts, so the two
+    // numbers agree today by luck and would not stay agreeing.
+    withLaneTimeout(fetchFederatedSource('tier0_owner_contact', 1).then((r) => r.total)),
   ]);
 
   const val = (r) => (r && typeof r.value === 'number') ? r.value : null;
@@ -385,8 +1205,9 @@ async function handleReviewCounts(req, res) {
       count_mode: 'cached', status: laneStatus(provConflicts),
       href: 'pageDataQuality', tone: 'yellow' },
     { key: 'merges_dupes', label: 'Property merges & duplicates',
-      count: sum(govDupAddr), parts: { gov_dup_address: val(govDupAddr) },
-      count_mode: 'exact', status: laneStatus(govDupAddr),
+      count: sum(govDupAddr, diaTwins),
+      parts: { gov_dup_address: val(govDupAddr), dia_address_twins: val(diaTwins) },
+      count_mode: 'exact', status: laneStatus(govDupAddr, diaTwins),
       href: 'pageDataQuality', tone: 'yellow' },
     { key: 'pending_updates', label: 'Pending updates (Gov)',
       count: sum(govPending), parts: { pending: val(govPending) },
@@ -411,6 +1232,41 @@ async function handleReviewCounts(req, res) {
       parts: { gov: val(govSfLink), dia: val(diaSfLink) },
       count_mode: 'exact', status: laneStatus(govSfLink, diaSfLink),
       href: 'pageDataQuality', tone: '' },
+    { key: 'owner_reconcile', label: 'Owner reconcile — same party?',
+      count: sum(orLcc, orGovUnif, orGovEmc, orDiaEmc, orU2),
+      parts: { lcc_ore: val(orLcc), gov_unification: val(orGovUnif),
+        gov_entity_match: val(orGovEmc), dia_entity_match: val(orDiaEmc), w8_u2_dup_pairs: val(orU2) },
+      count_mode: 'exact', status: laneStatus(orLcc, orGovUnif, orGovEmc, orDiaEmc, orU2),
+      href: 'pageDataQuality', tone: '' },
+    { key: 'w8_u3_link_review', label: 'Ownership links — Ollama proposals',
+      count: sum(u3Open, u3Conflict),
+      parts: { open_proposals: val(u3Open), conflicts: val(u3Conflict) },
+      count_mode: 'exact', status: laneStatus(u3Open, u3Conflict),
+      href: 'pageDataQuality', tone: '' },
+    { key: 'naming_hygiene_review', label: 'Naming hygiene — rename / link',
+      count: sum(u5Open), parts: { open_proposals: val(u5Open) },
+      count_mode: 'exact', status: laneStatus(u5Open),
+      href: 'pageDataQuality', tone: '' },
+    { key: 'reachability_harvest_review', label: 'Contact reachability — internal harvest',
+      count: sum(w92Open), parts: { open_proposals: val(w92Open) },
+      count_mode: 'exact', status: laneStatus(w92Open),
+      href: 'pageDataQuality', tone: '' },
+    { key: 'contact_acquisition_review', label: 'Contact acquisition — owner outreach',
+      count: sum(w91Open), parts: { open_proposals: val(w91Open) },
+      count_mode: 'exact', status: laneStatus(w91Open),
+      href: 'pageDataQuality', tone: '' },
+    { key: 'comms_owner_attribution_review', label: 'Correspondence → owner attribution',
+      count: sum(w96Open), parts: { open_proposals: val(w96Open) },
+      count_mode: 'exact', status: laneStatus(w96Open),
+      href: 'pageDataQuality', tone: '' },
+    { key: 'owner_contact_attach_review', label: 'Owner contacts — attach or reject',
+      count: sum(ocpOpen), parts: { actionable_proposals: val(ocpOpen) },
+      count_mode: 'exact', status: laneStatus(ocpOpen),
+      href: 'pageDataQuality', tone: '' },
+    { key: 'tier0_owner_contact', label: 'Tier 0 — confirm the owner’s firm domain',
+      count: sum(tier0Open), parts: { actionable_cards: val(tier0Open) },
+      count_mode: 'exact', status: laneStatus(tier0Open),
+      href: 'pageDataQuality', tone: '' },
   ];
 
   return res.status(200).json({
@@ -419,6 +1275,3043 @@ async function handleReviewCounts(req, res) {
     degraded: lanes.some((l) => l.status === 'partial'),
     lanes,
   });
+}
+
+async function handleNewsAlerts(req, res) {
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const selectCols = [
+    'news_lead_id', 'source', 'domain', 'tenant', 'match_kind', 'confidence',
+    'city', 'state', 'article_url', 'article_title', 'summary', 'status',
+    'dedup_key', 'source_ref', 'raw_subject', 'metadata', 'created_at', 'updated_at',
+  ].join(',');
+
+  const countStatus = async (statusPath) => {
+    const r = await opsQuery('GET', 'news_alert_leads?select=news_lead_id&' + statusPath + '&limit=1', undefined, { countMode: 'exact' });
+    return (r.ok && typeof r.count === 'number') ? r.count : 0;
+  };
+
+  if (req.method === 'GET') {
+    const status = String(req.query.status || 'open').trim().toLowerCase();
+    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit || '100', 10)));
+    const offset = Math.max(0, parseInt(req.query.offset || '0', 10));
+    let statusFilter = 'status=in.(needs_review,developer_unknown)';
+    if (status === 'needs_review' || status === 'review') statusFilter = 'status=eq.needs_review';
+    else if (status === 'developer_unknown' || status === 'developer') statusFilter = 'status=eq.developer_unknown';
+    else if (status === 'dismissed') statusFilter = 'status=eq.dismissed';
+    else if (status === 'converted') statusFilter = 'status=eq.converted';
+    else if (status === 'all') statusFilter = '';
+    else if (status !== 'open') return res.status(400).json({ error: 'invalid status filter' });
+
+    const path = 'news_alert_leads?select=' + selectCols
+      + (statusFilter ? '&' + statusFilter : '')
+      + '&order=created_at.desc'
+      + '&limit=' + limit + '&offset=' + offset;
+    const [itemsR, openN, reviewN, devN, dismissedN, convertedN] = await Promise.all([
+      opsQuery('GET', path, undefined, { countMode: 'exact' }),
+      countStatus('status=in.(needs_review,developer_unknown)'),
+      countStatus('status=eq.needs_review'),
+      countStatus('status=eq.developer_unknown'),
+      countStatus('status=eq.dismissed'),
+      countStatus('status=eq.converted'),
+    ]);
+    if (!itemsR.ok) return res.status(502).json({ error: 'news_alert_list_failed', detail: itemsR.data });
+    return res.status(200).json({
+      ok: true,
+      status,
+      total: typeof itemsR.count === 'number' ? itemsR.count : null,
+      counts: {
+        open: openN,
+        needs_review: reviewN,
+        developer_unknown: devN,
+        dismissed: dismissedN,
+        converted: convertedN,
+      },
+      items: Array.isArray(itemsR.data) ? itemsR.data : [],
+    });
+  }
+
+  if (req.method !== 'POST') return res.status(405).json({ error: 'GET or POST only' });
+
+  let workspaceId = null;
+  try { workspaceId = req.headers['x-lcc-workspace'] || primaryWorkspace(user)?.workspace_id || null; } catch (_e) { workspaceId = null; }
+  if (!requireRole(user, 'operator', workspaceId)) return res.status(403).json({ error: 'Operator role required' });
+
+  const body = req.body || {};
+  const id = String(body.news_lead_id || body.id || '').trim();
+  const action = String(body.action || '').trim().toLowerCase();
+  if (!id) return res.status(400).json({ error: 'news_lead_id required' });
+
+  if (action === 'extract_details') {
+    const readR = await opsQuery('GET',
+      'news_alert_leads?select=' + selectCols + '&news_lead_id=eq.' + pgFilterVal(id) + '&limit=1',
+      undefined, { countMode: 'none' });
+    if (!readR.ok) return res.status(502).json({ error: 'news_alert_read_failed', detail: readR.data });
+    const row = Array.isArray(readR.data) ? readR.data[0] : null;
+    if (!row) return res.status(404).json({ error: 'news_alert_not_found' });
+
+    const prompt = buildNewsAlertExtractionPrompt(row);
+    const ai = await invokeExtractionAI({ prompt, surface: 'news_alert_assist' });
+    const parsed = parseNewsAlertExtractionJson(ai?.data?.response || '');
+    const now = new Date().toISOString();
+    const extraction = normalizeNewsAlertExtraction(parsed, row, {
+      model: ai?.data?.model || null,
+      provider: ai?.provider || null,
+      at: now,
+    });
+    extraction.tried = Array.isArray(ai?.tried) ? ai.tried : [];
+    extraction.ai_ok = !!ai?.ok;
+
+    const metadata = Object.assign({}, row.metadata || {});
+    metadata.news_alert_extraction = extraction;
+    const patchR = await opsQuery('PATCH',
+      'news_alert_leads?news_lead_id=eq.' + pgFilterVal(id),
+      { metadata, updated_at: now },
+      { headers: { Prefer: 'return=representation' } });
+    if (!patchR.ok) return res.status(502).json({ error: 'news_alert_extract_update_failed', detail: patchR.data });
+    const updated = Array.isArray(patchR.data) ? patchR.data[0] : patchR.data;
+    return res.status(200).json({ ok: true, item: updated, extraction });
+  }
+
+  if (action === 'create_tracking_task') {
+    const readR = await opsQuery('GET',
+      'news_alert_leads?select=' + selectCols + '&news_lead_id=eq.' + pgFilterVal(id) + '&limit=1',
+      undefined, { countMode: 'none' });
+    if (!readR.ok) return res.status(502).json({ error: 'news_alert_read_failed', detail: readR.data });
+    const row = Array.isArray(readR.data) ? readR.data[0] : null;
+    if (!row) return res.status(404).json({ error: 'news_alert_not_found' });
+    const ex = row.metadata && row.metadata.news_alert_extraction ? row.metadata.news_alert_extraction : null;
+    const titleCore = row.article_title || row.raw_subject || [row.tenant, row.city, row.state].filter(Boolean).join(' - ') || 'News alert';
+    const triggers = ex && Array.isArray(ex.follow_up_triggers) ? ex.follow_up_triggers : [];
+    const instructions = [
+      row.article_url ? 'Article: ' + row.article_url : null,
+      row.summary ? 'Summary: ' + row.summary : null,
+      ex && ex.reason ? 'Assist reason: ' + ex.reason : null,
+      triggers.length ? 'Follow-up triggers: ' + triggers.join('; ') : null,
+    ].filter(Boolean).join('\n\n') || null;
+    const rt = await openResearchTask({
+      researchType: 'news_alert_development_followup',
+      title: 'News alert follow-up - ' + titleCore,
+      instructions,
+      domain: 'lcc',
+      propertyId: id,
+      sourceTable: 'news_alert_leads',
+      metadata: {
+        news_lead_id: id,
+        domain: row.domain || null,
+        tenant: row.tenant || null,
+        city: row.city || null,
+        state: row.state || null,
+        article_url: row.article_url || null,
+        extraction: ex || null,
+      },
+      workspaceId,
+    });
+    if (!rt.ok) return res.status(502).json({ error: 'news_alert_task_failed', detail: rt });
+    const now = new Date().toISOString();
+    const metadata = Object.assign({}, row.metadata || {});
+    metadata.news_alert_tracking_task = { id: rt.id || null, created: !!rt.created, duplicate: !!rt.duplicate, at: now };
+    metadata.news_alert_review = {
+      action: 'create_tracking_task',
+      previous_status: row.status || null,
+      status: 'converted',
+      note: 'Converted to research tracking task.',
+      reviewed_at: now,
+      reviewed_by: user.email || user.user_id || user.id || null,
+    };
+    const patchR = await opsQuery('PATCH',
+      'news_alert_leads?news_lead_id=eq.' + pgFilterVal(id),
+      { status: 'converted', metadata, updated_at: now },
+      { headers: { Prefer: 'return=representation' } });
+    if (!patchR.ok) return res.status(502).json({ error: 'news_alert_task_update_failed', detail: patchR.data, task: rt });
+    const updated = Array.isArray(patchR.data) ? patchR.data[0] : patchR.data;
+    return res.status(200).json({ ok: true, item: updated, research_task: rt });
+  }
+
+  const actionStatus = {
+    dismiss: 'dismissed',
+    reopen: 'needs_review',
+    send_to_developer: 'developer_unknown',
+    mark_developer: 'developer_unknown',
+    mark_converted: 'converted',
+  };
+  const nextStatus = actionStatus[action];
+  if (!nextStatus) return res.status(400).json({ error: 'invalid action', allowed: Object.keys(actionStatus) });
+
+  const readR = await opsQuery('GET',
+    'news_alert_leads?select=news_lead_id,status,metadata&news_lead_id=eq.' + pgFilterVal(id) + '&limit=1',
+    undefined, { countMode: 'none' });
+  if (!readR.ok) return res.status(502).json({ error: 'news_alert_read_failed', detail: readR.data });
+  const row = Array.isArray(readR.data) ? readR.data[0] : null;
+  if (!row) return res.status(404).json({ error: 'news_alert_not_found' });
+
+  const now = new Date().toISOString();
+  const metadata = Object.assign({}, row.metadata || {});
+  metadata.news_alert_review = {
+    action,
+    previous_status: row.status || null,
+    status: nextStatus,
+    note: body.note ? String(body.note).slice(0, 1000) : null,
+    reviewed_at: now,
+    reviewed_by: user.email || user.user_id || user.id || null,
+  };
+
+  const patchR = await opsQuery('PATCH',
+    'news_alert_leads?news_lead_id=eq.' + pgFilterVal(id),
+    { status: nextStatus, metadata, updated_at: now },
+    { headers: { Prefer: 'return=representation' } });
+  if (!patchR.ok) return res.status(502).json({ error: 'news_alert_update_failed', detail: patchR.data });
+  const updated = Array.isArray(patchR.data) ? patchR.data[0] : patchR.data;
+  return res.status(200).json({ ok: true, item: updated });
+}
+
+// ============================================================================
+// PROMPT 32 — OLLAMA CLEANING-ASSIST TICK
+// ============================================================================
+// P4 assist layer only. This worker reads existing Decision Center subjects and
+// writes lcc_clean_assist_proposals. It never calls merge/apply/change RPCs and
+// never writes domain canonical tables. The human/resolver/priority ladder keeps
+// ownership of truth.
+//
+// P134 (2026-08-26) — CONTEXT ENRICHMENT + EVIDENCE GATE. A 12-item inert dry-run
+// graded 6 of 12 proposals as `uncertain @ 0.00` whose reason was "the context
+// lacks detail" / "insufficient info about the conflict". The model was not
+// failing; it was being handed a lane row's IDENTIFIERS with none of the
+// comparative evidence the task needs, and correctly abstaining. Shipping that
+// would fill the Decision Center with content-free cards — the Consumption-Layer
+// noise failure. Three changes, none of which touch the safety doctrine:
+//   1. ENRICH — clean-assist-enrich.js batch-reads the real evidence per lane
+//      (group members, the priority ladder, each entity's own attributes, the
+//      matched property).
+//   2. GATE — clean-assist-context.js decides whether an item HAS comparative
+//      evidence. One that does not is skipped and counted (`skipped_no_evidence`)
+//      rather than paying an Ollama call to hear "insufficient evidence".
+//   3. COHERENCE — a decisive verdict returned at ~0 confidence is downgraded to
+//      `uncertain` (the lane sorts on confidence; an assertion with none must not
+//      rank as a decisive call).
+// The brain is pure and unit-tested; the enrichment IO is read-only GETs.
+// ============================================================================
+const CLEAN_ASSIST_SOURCE = 'ollama_clean_assist';
+const CLEAN_ASSIST_TYPES = CA.CLEAN_ASSIST_TYPES;
+
+function cleanAssistEnabled(flagRow) {
+  const env = String(process.env.OLLAMA_CLEAN_ASSIST || '').toLowerCase();
+  if (['on', '1', 'true', 'yes', 'enabled'].includes(env)) return true;
+  return String(flagRow?.state || '').toLowerCase() === 'on';
+}
+
+const cleanAssistKind = CA.cleanAssistKind;
+const cleanAssistNormalizeProposal = CA.normalizeCleanAssistProposal;
+const parseCleanAssistJson = CA.parseCleanAssistJson;
+const buildCleanAssistPrompt = CA.buildCleanAssistPrompt;
+
+async function fetchCleanAssistFlag() {
+  try {
+    const r = await opsQuery('GET', 'feature_flags_registry?flag=eq.OLLAMA_CLEAN_ASSIST&select=flag,state&limit=1', undefined, { countMode: 'none' });
+    return r.ok && Array.isArray(r.data) ? r.data[0] : null;
+  } catch (_e) { return null; }
+}
+
+async function recordCleanAssistHealth({ status, count, lastError, details }) {
+  try {
+    await opsQuery('POST', 'rpc/lcc_record_health_event', {
+      p_source: 'clean_assist',
+      p_check_name: 'ollama_clean_assist',
+      p_status: status,
+      p_count: count || 0,
+      p_last_error: lastError || null,
+      p_external_url: null,
+      p_details: details || {},
+    });
+  } catch (_e) { /* health is best-effort */ }
+}
+
+async function upsertCleanAssistProposal(item, proposal, meta) {
+  const body = {
+    source: CLEAN_ASSIST_SOURCE,
+    source_run_id: meta.sourceRunId,
+    decision_id: item.id || null,
+    decision_type: item.decision_type,
+    subject_ref: item.subject_ref,
+    subject_domain: item.subject_domain || null,
+    subject_property_id: item.subject_property_id != null ? String(item.subject_property_id) : null,
+    subject_entity_id: item.subject_entity_id || null,
+    proposal_kind: meta.kind,
+    verdict: proposal.verdict,
+    reason: proposal.reason,
+    confidence: proposal.confidence,
+    proposed_link: proposal.proposed_link || {},
+    conflict_summary: proposal.conflict_summary || null,
+    model_provider: meta.provider || null,
+    model_name: meta.model || null,
+    ai_tried: Array.isArray(meta.tried) ? meta.tried : [],
+    prompt_hash: meta.promptHash,
+    status: 'proposed',
+  };
+  return opsQuery('POST',
+    'lcc_clean_assist_proposals?on_conflict=decision_type,subject_ref,proposal_kind,source',
+    body,
+    { headers: { Prefer: 'return=representation,resolution=merge-duplicates' } });
+}
+
+// P139 — the assist tick's fair share. Rank alone cannot guarantee REACH: it
+// takes only `perType` (3–20) items per lane per run, so whichever
+// sub-population ranks higher takes the whole window. `interleaveByKind` in
+// 'equal' mode round-robins the kinds present, in rank order within each, so a
+// mixed lane hands the model both every run. Single-kind lanes are untouched.
+//
+// Doctrine note: this is REACH, not ranking — the human Decision Center lane
+// keeps its own ('proportional') order and nothing an operator works is hidden.
+function takeInterleavedByKind(items, n) {
+  if (n <= 0) return [];
+  return interleaveByKind(items, 'equal').slice(0, n);
+}
+
+async function handleOllamaCleanAssistTick(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const flag = await fetchCleanAssistFlag();
+  const enabled = cleanAssistEnabled(flag);
+  const limit = Math.min(30, Math.max(1, parseInt(req.query.limit || req.body?.limit || '12', 10)));
+  if (req.method === 'GET') {
+    return res.status(200).json({ ok: true, enabled, limit, source: CLEAN_ASSIST_SOURCE, types: CLEAN_ASSIST_TYPES });
+  }
+  if (!enabled) {
+    await recordCleanAssistHealth({ status: 'amber', count: 0, lastError: 'OLLAMA_CLEAN_ASSIST feature flag is off',
+      details: { enabled: false, flag_state: flag?.state || 'missing' } });
+    return res.status(200).json({ ok: true, skipped: 'feature_flag_off', enabled: false });
+  }
+
+  const sourceRunId = 'p32_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
+  const perType = Math.max(1, Math.ceil(limit / CLEAN_ASSIST_TYPES.length));
+  // P137 — THE TICK NEEDS A CURSOR THAT ADVANCES, OR THE HEAD OF A LANE JAMS
+  // FOREVER. It used to ask each lane for exactly `perType` items at offset 0
+  // and take them verbatim. A federated lane is value-ranked and an annotation
+  // writes to lcc_clean_assist_proposals, NOT lcc_decisions — so an annotated
+  // subject is NOT excluded by fetchExcludedRefs and stays at the head. Measured
+  // live 2026-08-26 on provenance_conflict: the 65 dia sales-price xref rows
+  // carried rank_value = 1000 + severity = 1001, and the max _provImportance for
+  // a field_provenance row was 1000 — so EVERY xref row outranked EVERY one of
+  // the 454 field_provenance rows, permanently. With perType = 4 the tick re-read
+  // the same 4 xref cards on every run (all 4 proposals in the re-grade were
+  // `prov:dia_xref:*`), and no field_provenance conflict had ever reached the
+  // model. Exactly the class CLAUDE.md documents: a worker whose only exclusion
+  // is its own output, where the output is not what the selector reads.
+  //
+  // ⚠️ That rank imbalance is FIXED (P139) — both sub-populations are now on one
+  // 0–1000 band and the lane interleaves them, so the description above is the
+  // HISTORY of this cursor, not the current state. The cursor is still required:
+  // it is what stops an ANNOTATED subject from sitting at the head forever, which
+  // is a separate defect from which population owns the head.
+  //
+  // The durable marker already exists — lcc_clean_assist_proposals is UNIQUE on
+  // (decision_type, subject_ref, proposal_kind, source) and listFederatedLane
+  // already attaches it as item.clean_assist. So over-fetch a window, drop the
+  // subjects THIS source has already annotated, and take perType of the rest.
+  // Capped at 100 because attachCleanAssistProposals resolves at most 100 refs —
+  // beyond that an annotated item would read as un-annotated and we would be back
+  // to re-proposing the head.
+  const laneWindow = Math.min(100, perType * 8 + 20);
+  const candidates = [];
+  // Honest per-lane accounting: a lane that yields nothing because everything in
+  // its window is already annotated is DRAINED, which is a different fact from a
+  // lane that is empty — never let the two read the same.
+  const laneCursor = {};
+  for (const type of CLEAN_ASSIST_TYPES) {
+    try {
+      const lane = await listFederatedLane(type, laneWindow, 0, type === 'intake_disposition' ? { intakeView: 'all' } : undefined);
+      const laneItems = lane.items || [];
+      const fresh = laneItems.filter((it) => !(it.clean_assist && it.clean_assist.source === CLEAN_ASSIST_SOURCE));
+      // P139: round-robin across the lane's sub-populations instead of taking
+      // the top `perType` by rank. A single-kind lane is unaffected.
+      const taken = takeInterleavedByKind(fresh, perType);
+      for (const item of taken) candidates.push(item);
+      // Per-sub-population accounting. Without it a lane whose head is one kind
+      // reads identically to a lane that is genuinely interleaving — the same
+      // "looks like success" failure the whole cursor exists to prevent.
+      const tally = (arr) => arr.reduce((acc, it) => {
+        const k = (it && it.context && it.context.kind) ? String(it.context.kind) : '_unkeyed';
+        acc[k] = (acc[k] || 0) + 1;
+        return acc;
+      }, {});
+      laneCursor[type] = {
+        window: laneItems.length,
+        already_annotated: laneItems.length - fresh.length,
+        taken: taken.length,
+        // A full window with nothing fresh means the tick has annotated
+        // everything it can currently see — say so rather than reporting 0 work.
+        window_exhausted: laneItems.length >= laneWindow && taken.length === 0,
+        fresh_by_kind: tally(fresh),
+        taken_by_kind: tally(taken),
+      };
+    } catch (e) {
+      console.warn('[ollama-clean-assist] lane read failed', type, e?.message || e);
+      laneCursor[type] = { error: String(e?.message || e) };
+    }
+  }
+
+  // P134: fill each card's context with the comparative evidence its lane needs
+  // (batched, read-only) BEFORE the gate — an item skipped for thin evidence must
+  // be one whose evidence genuinely is not on file, not one we failed to fetch.
+  let selected = candidates.slice(0, limit);
+  try {
+    selected = await enrichCleanAssistItems(selected);
+  } catch (e) {
+    console.warn('[ollama-clean-assist] context enrichment failed', e?.message || e);
+  }
+
+  const summary = { source_run_id: sourceRunId, candidates: selected.length, proposed: 0, failed: 0,
+    skipped: 0, skipped_no_evidence: 0, coherence_downgraded: 0, by_type: {}, no_evidence_reasons: {},
+    // P137: how far each lane's cursor got. `already_annotated` is a
+    // RE-DISCOVERY tally, never throughput — read `taken` for work done and
+    // `window_exhausted` for a lane the tick can no longer advance.
+    lane_cursor: laneCursor };
+  for (const item of selected) {
+    const kind = cleanAssistKind(item.decision_type);
+    // The evidence gate. No comparative evidence => no model call: a proposal
+    // that can only say "insufficient evidence" is noise on the operator's
+    // surface and a wasted Ollama call.
+    const gate = CA.assessCleanAssistEvidence(item);
+    if (!gate.sufficient) {
+      summary.skipped += 1;
+      summary.skipped_no_evidence += 1;
+      const why = gate.reason || 'unknown';
+      summary.no_evidence_reasons[why] = (summary.no_evidence_reasons[why] || 0) + 1;
+      continue;
+    }
+    const prompt = buildCleanAssistPrompt(item, kind, gate.evidence);
+    const promptHash = createHash('sha256').update(prompt).digest('hex');
+    try {
+      const ai = await invokeExtractionAI({ prompt, surface: 'clean_assist' });
+      const parsed = parseCleanAssistJson(ai?.data?.response || '');
+      const proposal = cleanAssistNormalizeProposal(parsed, kind);
+      if (!parsed) {
+        proposal.verdict = 'uncertain';
+        proposal.confidence = 0;
+        proposal.reason = 'AI response was not valid JSON; queued as uncertain for human review.';
+        proposal.coherence_downgraded = false;
+      }
+      if (proposal.coherence_downgraded) summary.coherence_downgraded += 1;
+      const wr = await upsertCleanAssistProposal(item, proposal, {
+        sourceRunId, kind, promptHash,
+        provider: ai?.provider || null,
+        model: ai?.data?.model || null,
+        tried: ai?.tried || [],
+      });
+      if (wr.ok) {
+        summary.proposed += 1;
+        summary.by_type[item.decision_type] = (summary.by_type[item.decision_type] || 0) + 1;
+      } else {
+        summary.failed += 1;
+      }
+    } catch (e) {
+      summary.failed += 1;
+      console.warn('[ollama-clean-assist] proposal failed', item.decision_type, item.subject_ref, e?.message || e);
+    }
+  }
+  await recordCleanAssistHealth({
+    status: summary.failed ? 'amber' : 'green',
+    count: summary.proposed,
+    lastError: summary.failed ? `${summary.failed} proposal(s) failed in ${sourceRunId}` : null,
+    details: summary,
+  });
+  return res.status(200).json({ ok: true, ...summary });
+}
+
+// ============================================================================
+// PROMPT 80 — MATCH-DISAMBIGUATION PRE-RANK ASSIST TICK
+// ============================================================================
+// W8 consumption aid for the dead match_disambiguation lane (1,120 open, zero
+// decided). A nightly Ollama pass ranks each card's ≤5 candidate properties
+// best-first and stores the ranking as an ANNOTATION (metadata.assist) via the
+// metadata-only SQL writer lcc_annotate_match_disambig_assist. It NEVER writes a
+// verdict — the human verdict path (handleDecisionVerdict match_disambiguation
+// branch) is unchanged; the assist only sorts the lane + shows inline hints + a
+// one-click "assist agrees" confirm. Doctrine: LLM annotates, human decides.
+//
+//   GET  /api/match-disambig-assist-tick          -> counts (open, unannotated)
+//   GET  /api/match-disambig-assist-tick?score=1  -> inline sample ranking sheet
+//                                                    (NO writes — dry-run)
+//   POST /api/match-disambig-assist-tick          -> annotate one bounded, resumable
+//                                                    batch (flag-gated; no-op OFF)
+// ============================================================================
+const MATCH_ASSIST_BATCH_SIZE = Math.max(1, parseInt(process.env.MATCH_ASSIST_BATCH_SIZE || '20', 10));
+const MATCH_ASSIST_BUDGET_MS = Math.max(5000, parseInt(process.env.MATCH_ASSIST_BUDGET_MS || '120000', 10));
+const MATCH_ASSIST_INLINE_N = Math.max(1, parseInt(process.env.MATCH_ASSIST_INLINE_N || '5', 10));
+
+function matchDisambigAssistEnabled(flagRow) {
+  const env = String(process.env.MATCH_DISAMBIG_ASSIST || '').toLowerCase();
+  if (['on', '1', 'true', 'yes', 'enabled'].includes(env)) return true;
+  return String(flagRow?.state || '').toLowerCase() === 'on';
+}
+
+async function fetchMatchDisambigAssistFlag() {
+  try {
+    const r = await opsQuery('GET', 'feature_flags_registry?flag=eq.MATCH_DISAMBIG_ASSIST&select=flag,state&limit=1', undefined, { countMode: 'none' });
+    return r.ok && Array.isArray(r.data) ? r.data[0] : null;
+  } catch (_e) { return null; }
+}
+
+async function recordMatchDisambigAssistHealth({ status, count, lastError, details }) {
+  try {
+    await opsQuery('POST', 'rpc/lcc_record_health_event', {
+      p_source: 'match_disambig_assist', p_check_name: 'match_disambig_assist',
+      p_status: status, p_count: count || 0, p_last_error: lastError || null,
+      p_external_url: null, p_details: details || {},
+    });
+  } catch (_e) { /* health is best-effort */ }
+}
+
+// Open match_disambiguation cards whose assist annotation is missing
+// (metadata->>assist IS NULL) — the resume cursor. Already-annotated cards drop
+// out on their own, so successive nightly ticks advance without a separate ledger.
+// Ordered by rank_value (candidate count) then age so the drain is deterministic.
+async function fetchUnannotatedMatchDisambigCards(limit) {
+  const path = 'lcc_decisions?select=id,subject_ref,context,rank_value,created_at'
+    + '&decision_type=eq.match_disambiguation&status=eq.open'
+    + '&metadata->>assist=is.null'
+    + '&order=rank_value.desc.nullslast,created_at.asc&limit=' + Math.max(1, limit);
+  const r = await opsQuery('GET', path);
+  return (r.ok && Array.isArray(r.data)) ? r.data : [];
+}
+
+async function annotateMatchDisambigCard(decision, sourceRunId) {
+  const card = cardFromDecision(decision);
+  if (!card.candidates.length) {
+    return { ok: false, skipped: 'no_candidates', decision_id: decision.id };
+  }
+  const prompt = buildMatchDisambigPrompt(card);
+  const promptHash = createHash('sha256').update(prompt).digest('hex');
+  const ai = await invokeExtractionAI({ prompt, surface: 'match_disambig_assist' });
+  const parsed = parseAssistJson(ai?.data?.response || '');
+  const assist = normalizeAssistRanking(parsed, card, {
+    model: ai?.data?.model || null,
+    provider: ai?.provider || null,
+    at: new Date().toISOString(),
+  });
+  assist.source_run_id = sourceRunId;
+  assist.prompt_hash = promptHash;
+  assist.parsed_ok = !!parsed;
+  return { ok: true, assist, decision_id: decision.id, subject_ref: decision.subject_ref, parsed_ok: !!parsed };
+}
+
+async function handleMatchDisambigAssistTick(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const flag = await fetchMatchDisambigAssistFlag();
+  const enabled = matchDisambigAssistEnabled(flag);
+  const limit = Math.min(50, Math.max(1, parseInt(req.query.limit || req.body?.limit || String(MATCH_ASSIST_BATCH_SIZE), 10)));
+
+  // Honest open + unannotated counts (the lane-drain visibility).
+  const openCntR = await opsQuery('GET', 'lcc_decisions?select=id&status=eq.open&decision_type=eq.match_disambiguation&limit=1', undefined, { countMode: 'exact' });
+  const unCntR = await opsQuery('GET', 'lcc_decisions?select=id&status=eq.open&decision_type=eq.match_disambiguation&metadata->>assist=is.null&limit=1', undefined, { countMode: 'exact' });
+  const openCount = (openCntR.ok && typeof openCntR.count === 'number') ? openCntR.count : null;
+  const unannotated = (unCntR.ok && typeof unCntR.count === 'number') ? unCntR.count : null;
+
+  // ---- GET dry-run --------------------------------------------------------
+  if (req.method === 'GET') {
+    const wantSample = req.query.score === '1' || req.query.score === 'true';
+    const out = { ok: true, enabled, flag_state: flag?.state || 'missing', limit,
+      open_cards: openCount, unannotated, surface: 'match_disambig_assist' };
+    if (!wantSample) return res.status(200).json(out);
+    // Inline sample sheet — annotate up to N cards in memory, NO writes.
+    const sampleN = Math.min(limit, MATCH_ASSIST_INLINE_N);
+    const cards = await fetchUnannotatedMatchDisambigCards(sampleN);
+    const sourceRunId = 'p80dry_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+    const samples = [];
+    const scan = await scoreWithBudget(cards, async (d) => {
+      try {
+        const a = await annotateMatchDisambigCard(d, sourceRunId);
+        samples.push(a.ok
+          ? { decision_id: d.id, subject_ref: d.subject_ref, parsed_ok: a.parsed_ok,
+              recommended_action: a.assist.recommended_action, top_pick: a.assist.top_pick,
+              top_confidence: a.assist.top_confidence, ranking: a.assist.ranking }
+          : { decision_id: d.id, skipped: a.skipped });
+        return a;
+      } catch (e) { samples.push({ decision_id: d.id, error: e?.message || String(e) }); return null; }
+    }, { maxN: sampleN, budgetMs: MATCH_ASSIST_BUDGET_MS });
+    out.mode = 'dry_run';
+    out.sampled = scan.scored;
+    out.samples = samples;
+    out.note = 'Inline sample only — NO annotations written. POST (flag ON) writes metadata.assist.';
+    return res.status(200).json(out);
+  }
+
+  // ---- POST apply (flag-gated) --------------------------------------------
+  if (!enabled) {
+    await recordMatchDisambigAssistHealth({ status: 'amber', count: 0,
+      lastError: 'MATCH_DISAMBIG_ASSIST feature flag is off',
+      details: { enabled: false, flag_state: flag?.state || 'missing', open_cards: openCount, unannotated } });
+    return res.status(200).json({ ok: true, skipped: 'feature_flag_off', enabled: false, open_cards: openCount, unannotated });
+  }
+
+  const sourceRunId = 'p80_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
+  const cards = await fetchUnannotatedMatchDisambigCards(limit);
+  const summary = { source_run_id: sourceRunId, open_cards: openCount, unannotated,
+    candidates: cards.length, annotated: 0, failed: 0, skipped: 0, skipped_no_candidates: 0 };
+  const scan = await scoreWithBudget(cards, async (d) => {
+    try {
+      const a = await annotateMatchDisambigCard(d, sourceRunId);
+      if (!a.ok) {
+        summary.skipped += 1;
+        // Prompt 91: surface the empty-candidate class as its own counter so this
+        // unworkable-by-construction card type is visible in the response rather
+        // than folded into a generic skip. The producer guard now prevents new
+        // empties; a non-zero count here means legacy cards still await the sweep.
+        if (a.skipped === 'no_candidates') summary.skipped_no_candidates += 1;
+        return a;
+      }
+      const wr = await opsQuery('POST', 'rpc/lcc_annotate_match_disambig_assist',
+        { p_decision_id: d.id, p_assist: a.assist });
+      if (wr.ok) summary.annotated += 1; else summary.failed += 1;
+      return a;
+    } catch (e) {
+      summary.failed += 1;
+      console.warn('[match-disambig-assist] annotate failed', d.id, e?.message || e);
+      return null;
+    }
+  }, { maxN: limit, budgetMs: MATCH_ASSIST_BUDGET_MS });
+  summary.scored = scan.scored;
+  summary.budget_exhausted = scan.budget_exhausted;
+  summary.remaining_unscored = scan.remaining_unscored;
+
+  await recordMatchDisambigAssistHealth({
+    status: summary.failed ? 'amber' : 'green',
+    count: summary.annotated,
+    lastError: summary.failed ? `${summary.failed} annotation(s) failed in ${sourceRunId}` : null,
+    details: summary,
+  });
+  return res.status(200).json({ ok: true, mode: 'apply', ...summary });
+}
+
+// ============================================================================
+// Prompt 106 — property_twin lane deterministic pre-rank + Ollama assist.
+//
+// Two layers, deterministic-first (mirrors W9.3 sf-link-assist):
+//   1. A NO-LLM classifier decides the bulk from the dia_property_twin_review
+//      row's OWN `detail` fields (same-op/near-identical-name -> merge;
+//      different-op/distinct-address -> not_twin). Bulk-confirmable.
+//   2. The genuine-judgment residue (same-address operator change, multiple
+//      anchors, same-op name divergence, blank shadow) is scored by Ollama with
+//      a VERBATIM evidence quote (dropped if not a substring of the evidence).
+// The annotation lands in lcc_clean_assist_proposals (source property_twin_assist),
+// keyed by subject_ref 'twin:dia:<review_id>'. It NEVER merges and NEVER PATCHes
+// the review row's status — the reversible merge stays a HUMAN verdict (the
+// dia merge RPC), the annotation-never-verdict guard.
+//
+//   GET  /api/property-twin-assist-tick            -> dry-run counts (per-class)
+//   GET  /api/property-twin-assist-tick?score=1&n= -> dry-run + inline sample
+//                                                     (NO writes)
+//   POST /api/property-twin-assist-tick            -> apply: annotate one bounded
+//                                                     resumable batch (flag-gated)
+// ============================================================================
+const PT_ASSIST_BATCH = Math.max(1, parseInt(process.env.PROPERTY_TWIN_ASSIST_BATCH || '40', 10));
+const PT_ASSIST_BUDGET_MS = Math.max(5000, parseInt(process.env.PROPERTY_TWIN_ASSIST_BUDGET_MS || '110000', 10));
+const PT_ASSIST_INLINE_N = Math.max(1, parseInt(process.env.PROPERTY_TWIN_ASSIST_INLINE_N || '20', 10));
+// Prompt 135 — how deep into the pending slice one invocation may look for
+// unannotated rows. Bounded so a run is cheap; when the ceiling is hit the run
+// reports scan_capped and `remaining` is a FLOOR, never a total.
+const PT_ASSIST_SCAN_MAX = Math.max(PT.TWIN_SCAN_PAGE,
+  parseInt(process.env.PROPERTY_TWIN_ASSIST_SCAN_MAX || String(PT.TWIN_SCAN_MAX_ROWS), 10) || PT.TWIN_SCAN_MAX_ROWS);
+
+// subject_refs that already carry a property_twin_assist annotation (resumable
+// cursor). A verdict-consumed row leaves the pending slice, so the pool is finite
+// and annotated-exclusion is self-healing.
+async function fetchTwinAssistAnnotated() {
+  const set = new Set();
+  const PAGE = 1000;
+  try {
+    for (let off = 0; ; off += PAGE) {
+      const r = await opsQuery('GET', 'lcc_clean_assist_proposals?select=subject_ref'
+        + '&decision_type=eq.' + PT.PT_ASSIST_DECISION_TYPE + '&source=eq.' + PT.PT_ASSIST_SOURCE
+        + '&order=proposal_id.asc&limit=' + PAGE + '&offset=' + off, undefined, { countMode: 'none' });
+      if (!r.ok || !Array.isArray(r.data)) break;
+      for (const row of r.data) if (row.subject_ref) set.add(row.subject_ref);
+      if (r.data.length < PAGE) break;
+    }
+  } catch (_e) { /* best-effort */ }
+  return set;
+}
+
+// Pending twin review rows (closest-first), with the `detail` the classifier reads.
+// Prompt 135: takes an OFFSET so the caller can page PAST the already-annotated
+// window. Closest-first ordering is deliberate and preserved — this is a
+// prioritization assist, so the highest-likelihood twins are annotated first.
+async function fetchPendingTwinRows(limit, offset = 0) {
+  const r = await domainQuery('dia', 'GET',
+    'dia_property_twin_review?select=id,classification,distance_miles,detail'
+    + '&status=eq.pending&order=distance_miles.asc,id.asc&limit=' + Math.max(1, limit)
+    + '&offset=' + Math.max(0, offset));
+  return (r.ok && Array.isArray(r.data)) ? r.data : [];
+}
+
+// Merge the row's top-level classification/distance into the detail so the planner
+// (which reads a single object) sees the full picture.
+function twinDetailOf(row) {
+  const d = (row && row.detail && typeof row.detail === 'object') ? row.detail : {};
+  return { ...d, classification: row?.classification ?? d.classification ?? null,
+    distance_miles: row?.distance_miles ?? d.distance_miles ?? null };
+}
+
+// Run the two layers for one row. Deterministic-decisive rows spend NO LLM; the
+// residue calls Ollama and validates the verbatim quote.
+async function annotateTwinRow(row, sourceRunId) {
+  const detail = twinDetailOf(row);
+  const det = PT.classifyTwinDeterministic(detail);
+  let proposal;
+  let promptHash = null;
+  let provider = null;
+  let model = null;
+  let tried = [];
+  if (!det.needs_llm) {
+    proposal = PT.buildProposalFromLayers(detail, null); // deterministic decisive
+  } else {
+    const prompt = PT.buildTwinAssistPrompt(detail);
+    promptHash = createHash('sha256').update(prompt).digest('hex');
+    const ai = await invokeExtractionAI({ prompt, surface: 'property_twin_assist' });
+    provider = ai?.provider || null;
+    model = ai?.data?.model || null;
+    tried = ai?.tried || [];
+    const parsed = PT.parseTwinAssistJson(ai?.data?.response || '');
+    proposal = PT.buildProposalFromLayers(detail, parsed || {});
+    proposal.parsed_ok = !!parsed;
+  }
+  return { subject_ref: 'twin:dia:' + row.id, review_id: row.id,
+    classification: row.classification, proposal, promptHash, provider, model, tried };
+}
+
+async function upsertTwinAssist(a, meta) {
+  const p = a.proposal;
+  return opsQuery('POST',
+    'lcc_clean_assist_proposals?on_conflict=decision_type,subject_ref,proposal_kind,source',
+    {
+      source: PT.PT_ASSIST_SOURCE, source_run_id: meta.sourceRunId, decision_id: null,
+      decision_type: PT.PT_ASSIST_DECISION_TYPE, subject_ref: a.subject_ref,
+      subject_domain: 'dia', subject_property_id: null, subject_entity_id: null,
+      proposal_kind: PT.PT_ASSIST_KIND, verdict: p.verdict, reason: p.reason,
+      confidence: p.confidence,
+      proposed_link: { layer: p.layer, evidence_quote: p.evidence_quote || null,
+        dropped: !!p.dropped, drop_reason: p.drop_reason || null, classification: a.classification || null },
+      conflict_summary: null, model_provider: meta.provider || null, model_name: meta.model || null,
+      ai_tried: Array.isArray(meta.tried) ? meta.tried : [], prompt_hash: meta.promptHash, status: 'proposed',
+    },
+    { headers: { Prefer: 'return=representation,resolution=merge-duplicates' } });
+}
+
+// Attach each property_twin lane item's latest property_twin_assist annotation
+// (verdict + confidence + reason + evidence + layer) onto context.assist so the
+// lane can order easy-first and dc-lanes can render the suggestion. Read-only;
+// returns the same items. NEVER a verdict.
+async function attachPropertyTwinAssist(items) {
+  const refs = [...new Set((items || []).map((it) => it.subject_ref).filter(Boolean))].slice(0, 200);
+  if (!refs.length) return items;
+  try {
+    const inList = '("' + refs.map((r) => String(r).replace(/"/g, '\\"')).join('","') + '")';
+    const r = await opsQuery('GET', 'lcc_clean_assist_proposals?select=subject_ref,verdict,confidence,reason,proposed_link'
+      + '&decision_type=eq.' + PT.PT_ASSIST_DECISION_TYPE + '&source=eq.' + PT.PT_ASSIST_SOURCE
+      + '&subject_ref=in.' + encodeURIComponent(inList) + '&order=proposal_id.desc', undefined, { countMode: 'none' });
+    if (!r.ok || !Array.isArray(r.data)) return items;
+    const by = new Map();
+    for (const row of r.data) if (!by.has(row.subject_ref)) by.set(row.subject_ref, row); // desc => first = latest
+    return items.map((it) => {
+      const a = by.get(it.subject_ref);
+      if (!a) return it;
+      const link = (a.proposed_link && typeof a.proposed_link === 'object') ? a.proposed_link : {};
+      const assist = { verdict: a.verdict, confidence: a.confidence, reason: a.reason,
+        layer: link.layer || null, evidence_quote: link.evidence_quote || null, dropped: !!link.dropped };
+      return { ...it, context: { ...(it.context || {}), assist } };
+    });
+  } catch (_e) { return items; }
+}
+
+async function recordTwinAssistHealth({ status, count, lastError, details }) {
+  try {
+    await opsQuery('POST', 'rpc/lcc_record_health_event', {
+      p_source: 'property_twin_assist', p_check_name: 'property_twin_assist',
+      p_status: status, p_count: count || 0, p_last_error: lastError || null,
+      p_external_url: null, p_details: details || {},
+    });
+  } catch (_e) { /* health is best-effort */ }
+}
+
+async function handlePropertyTwinAssistTick(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const flag = await fetchW93Flag('PROPERTY_TWIN_ASSIST');
+  const enabled = w93FlagEnabled('PROPERTY_TWIN_ASSIST', flag);
+  const limit = Math.min(200, Math.max(1, parseInt(req.query.limit || req.body?.limit || String(PT_ASSIST_BATCH), 10)));
+
+  const scanErrors = [];
+  const annotated = await fetchTwinAssistAnnotated();
+  const pendingCntR = await domainQuery('dia', 'GET', 'dia_property_twin_review?select=id&status=eq.pending&limit=1',
+    undefined, { Prefer: 'count=exact' });
+  const pendingCount = (pendingCntR.ok && typeof pendingCntR.count === 'number') ? pendingCntR.count : null;
+
+  // Prompt 135 — page THROUGH the pending slice skipping annotated rows, rather
+  // than filtering a fixed first page (which pinned `fresh` at 0 forever once
+  // that page was annotated: 200 written 2026-08-19, then 0 for 7 days against
+  // 1,095 pending, with the cron reporting healthy throughout).
+  let scan = { fresh: [], fresh_total: 0, scanned: 0, scan_capped: false };
+  try {
+    scan = await PT.selectFreshTwinRows({
+      fetchPage: (n, off) => fetchPendingTwinRows(n, off),
+      isAnnotated: (r) => annotated.has('twin:dia:' + r.id),
+      want: PT_ASSIST_SCAN_MAX,   // collect every fresh row in the window so the counts are honest
+      maxScan: PT_ASSIST_SCAN_MAX,
+    });
+  } catch (e) { scanErrors.push('fetch_pending: ' + (e?.message || String(e))); }
+  const fresh = scan.fresh;
+  // `remaining` = unannotated pending rows still to drain (a FLOOR when capped).
+  const remaining = scan.fresh_total;
+  const freshThisRun = Math.min(limit, fresh.length);
+
+  // Deterministic pre-classify EVERY fresh row in-memory (no LLM) for honest counts.
+  const byClass = {}; const bySuggest = { merge: 0, not: 0, uncertain: 0 };
+  let detDecisive = 0; let llmResidue = 0; let bulkConfirmableMerges = 0;
+  for (const r of fresh) {
+    const det = PT.classifyTwinDeterministic(twinDetailOf(r));
+    byClass[r.classification || 'unknown'] = (byClass[r.classification || 'unknown'] || 0) + 1;
+    if (det.needs_llm) { llmResidue += 1; }
+    else { detDecisive += 1; bySuggest[det.suggest] = (bySuggest[det.suggest] || 0) + 1;
+      if (det.suggest === 'merge') bulkConfirmableMerges += 1; }
+  }
+
+  // ---- GET dry-run --------------------------------------------------------
+  if (req.method === 'GET') {
+    const out = { ok: true, mode: 'dry_run', enabled, flag_state: flag?.state || 'missing', limit,
+      surface: 'property_twin_assist', pending: pendingCount,
+      // annotated_total is the TRUE uncapped count (fetchTwinAssistAnnotated pages
+      // at 1000); annotated_existing is kept as its long-standing alias.
+      annotated_total: annotated.size, annotated_existing: annotated.size,
+      fresh: fresh.length, fresh_this_run: freshThisRun, remaining,
+      scanned: scan.scanned, scan_capped: scan.scan_capped,
+      deterministic_decisive: detDecisive, llm_residue: llmResidue,
+      bulk_confirmable_merges: bulkConfirmableMerges, by_class: byClass, by_suggest: bySuggest,
+      scan_errors: scanErrors,
+      note: 'Annotation-only. Deterministic classifier decides the bulk (NO LLM); the residue is scored by Ollama with a verbatim evidence quote. NEVER merges — the merge RPC is only ever a HUMAN verdict.' };
+    if (!(req.query.score === '1' || req.query.score === 'true')) return res.status(200).json(out);
+    const n = Math.min(limit, Math.max(1, parseInt(req.query.n || String(PT_ASSIST_INLINE_N), 10) || PT_ASSIST_INLINE_N));
+    const samples = [];
+    const start = Date.now();
+    for (const r of fresh.slice(0, n)) {
+      if (Date.now() - start >= PT_ASSIST_BUDGET_MS) break;
+      try {
+        const a = await annotateTwinRow(r, 'p106dry');
+        samples.push({ subject_ref: a.subject_ref, classification: a.classification,
+          suggest: a.proposal.verdict, confidence: a.proposal.confidence, layer: a.proposal.layer,
+          reason: a.proposal.reason, evidence_quote: a.proposal.evidence_quote || null,
+          dropped: !!a.proposal.dropped, drop_reason: a.proposal.drop_reason || null });
+      } catch (e) { samples.push({ subject_ref: 'twin:dia:' + r.id, error: e?.message || String(e) }); }
+    }
+    out.samples = samples;
+    out.note += ' NO writes in dry-run.';
+    return res.status(200).json(out);
+  }
+
+  // ---- POST apply (flag-gated) --------------------------------------------
+  if (!enabled) {
+    await recordTwinAssistHealth({ status: 'amber', count: 0,
+      lastError: 'PROPERTY_TWIN_ASSIST feature flag is off',
+      details: { enabled: false, flag_state: flag?.state || 'missing', pending: pendingCount, fresh: fresh.length } });
+    return res.status(200).json({ ok: true, skipped: 'feature_flag_off', enabled: false, pending: pendingCount,
+      fresh: fresh.length, fresh_this_run: freshThisRun, remaining, scan_capped: scan.scan_capped });
+  }
+
+  const sourceRunId = 'p106_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
+  const summary = { source_run_id: sourceRunId, pending: pendingCount,
+    annotated_total: annotated.size, annotated_existing: annotated.size,
+    fresh: fresh.length, fresh_this_run: freshThisRun, remaining,
+    scanned: scan.scanned, scan_capped: scan.scan_capped,
+    candidates: 0, annotated_new: 0, deterministic: 0, llm: 0, dropped: 0,
+    failed: 0, budget_exhausted: false, by_suggest: { merge: 0, not: 0, uncertain: 0 }, scan_errors: scanErrors };
+  const start = Date.now();
+  for (const r of fresh.slice(0, limit)) {
+    // Deterministic rows are ~free; only pay the LLM-budget check for the residue.
+    const needsLlm = PT.classifyTwinDeterministic(twinDetailOf(r)).needs_llm;
+    if (needsLlm && Date.now() - start >= PT_ASSIST_BUDGET_MS) { summary.budget_exhausted = true; break; }
+    summary.candidates += 1;
+    try {
+      const a = await annotateTwinRow(r, sourceRunId);
+      if (a.proposal.layer === 'deterministic') summary.deterministic += 1; else summary.llm += 1;
+      if (a.proposal.dropped) summary.dropped += 1;
+      summary.by_suggest[a.proposal.verdict] = (summary.by_suggest[a.proposal.verdict] || 0) + 1;
+      const wr = await upsertTwinAssist(a, { sourceRunId, promptHash: a.promptHash, provider: a.provider, model: a.model, tried: a.tried });
+      if (wr.ok) summary.annotated_new += 1; else summary.failed += 1;
+    } catch (e) { summary.failed += 1; scanErrors.push('annotate twin:dia:' + r.id + ': ' + (e?.message || String(e))); }
+  }
+  await recordTwinAssistHealth({ status: summary.failed ? 'amber' : 'green', count: summary.annotated_new,
+    lastError: summary.failed ? summary.failed + ' annotation(s) failed in ' + sourceRunId : null, details: summary });
+  return res.status(200).json({ ok: true, mode: 'apply', ...summary });
+}
+
+// ============================================================================
+// PDR14b — GET/POST /api/dia-property-link-tick
+//
+// Recurring self-heal sweep for dia-domain entity metadata.domain_property_id
+// pointers that have gone dangling (dia merged/dropped the property row). See
+// api/_shared/dia-property-redirect-planner.js for the resolution order and
+// its doctrine. domain='dia' ONLY.
+//
+// GET  -> ungated dry run: scans, classifies, reports counts. NEVER writes.
+// POST -> gated behind PDR14B_DIA_REDIRECT_SWEEP (feature_flags_registry).
+//         Self-heals the resolvable subset (PDR14a redirect, then an
+//         unambiguous parcel_number match), and upserts the unresolved
+//         residue into lcc_dia_property_link_review — never guessed.
+//
+// Bounded (limit, default 200) + resumable (each run re-scans the current
+// dangling population, so a capped night simply resumes next run) + every
+// correction is reversible via metadata.domain_property_id_corrected_from.
+// ============================================================================
+
+const DPR_TICK_DEFAULT_LIMIT = 200;
+
+async function fetchDiaLinkedEntities() {
+  // Only entities carrying a dia domain_property_id pointer are in scope.
+  // metadata->>'domain_property_id' is a text column so a numeric compare
+  // must cast; PostgREST paging caps at 1000/page (documented repo footgun),
+  // so page explicitly rather than trusting a single request.
+  const out = [];
+  let offset = 0;
+  for (;;) {
+    const r = await opsQuery('GET',
+      `entities?domain=eq.dia&metadata->>domain_property_id=not.is.null` +
+      `&select=id,metadata&order=id.asc&limit=1000&offset=${offset}`);
+    if (!r.ok || !Array.isArray(r.data)) break;
+    out.push(...r.data);
+    if (r.data.length < 1000) break;
+    offset += 1000;
+  }
+  return out;
+}
+
+async function diaPropertiesExist(pids) {
+  // Membership probe against the LIVE dia properties table — the anti-join
+  // that decides which candidates are actually dangling. Chunked to stay
+  // well under any URL-length/1000-row PostgREST limits.
+  const live = new Set();
+  const CHUNK = 200;
+  for (let i = 0; i < pids.length; i += CHUNK) {
+    const chunk = pids.slice(i, i + CHUNK);
+    const r = await domainQuery('dia', 'GET',
+      `properties?property_id=in.(${chunk.join(',')})&select=property_id`);
+    if (r.ok && Array.isArray(r.data)) {
+      for (const row of r.data) live.add(String(row.property_id));
+    }
+  }
+  return live;
+}
+
+async function diaResolveRedirect(pid) {
+  const r = await domainQuery('dia', 'POST', 'rpc/dia_resolve_property_id',
+    { p_property_id: Number(pid) });
+  if (!r.ok) return null;
+  const v = Array.isArray(r.data) ? r.data[0] : r.data;
+  // The RPC returns a bare bigint (or null); PostgREST wraps a scalar RPC's
+  // result in { dia_resolve_property_id: <value> } OR returns it bare
+  // depending on the PostgREST version — handle both.
+  if (v == null) return null;
+  if (typeof v === 'object') return v.dia_resolve_property_id ?? null;
+  return v;
+}
+
+async function diaParcelFallbackMatch(parcelToken) {
+  // PDR13-style unambiguous exact match: a single candidate row wins, more
+  // than one is refused (surfaced, never guessed) — mirrors
+  // dia_find_property_twins_strong_id's `distinct on` + anchor selection,
+  // simplified to "exactly one live property carries this parcel_number".
+  const r = await domainQuery('dia', 'GET',
+    `properties?parcel_number=eq.${encodeURIComponent(parcelToken)}&select=property_id&limit=2`);
+  if (!r.ok || !Array.isArray(r.data)) return { n_match: 0, candidate_pid: null };
+  return {
+    n_match: r.data.length,
+    candidate_pid: r.data.length === 1 ? r.data[0].property_id : null,
+  };
+}
+
+async function handleDiaPropertyLinkTick(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const flag = await fetchW93Flag('PDR14B_DIA_REDIRECT_SWEEP');
+  const enabled = w93FlagEnabled('PDR14B_DIA_REDIRECT_SWEEP', flag);
+  const limit = Math.min(1000, Math.max(1, parseInt(req.query.limit || req.body?.limit || String(DPR_TICK_DEFAULT_LIMIT), 10)));
+
+  const entities = await fetchDiaLinkedEntities();
+  const distinctPids = [...new Set(entities.map(e => String(e.metadata?.domain_property_id || '')).filter(Boolean))];
+  const liveSet = distinctPids.length ? await diaPropertiesExist(distinctPids) : new Set();
+
+  const dangling = entities.filter(e => {
+    const pid = String(e.metadata?.domain_property_id || '');
+    return pid && !liveSet.has(pid);
+  }).slice(0, limit);
+
+  // Resolve each dangling entity's candidates (I/O), then hand the pure
+  // planner the whole batch so the decision logic is identical whether run
+  // here or under test.
+  const resolvedInput = [];
+  for (const e of dangling) {
+    const dead_pid = String(e.metadata?.domain_property_id);
+    const redirectResolved = await diaResolveRedirect(dead_pid);
+    let parcelMatch = null;
+    if (redirectResolved == null) {
+      const token = DPR.usableParcelToken(e.metadata?.parcel_number);
+      if (token) parcelMatch = await diaParcelFallbackMatch(token);
+    }
+    resolvedInput.push({ id: e.id, dead_pid, redirectResolved, parcelMatch });
+  }
+  const plan = DPR.planDiaPropertyRedirectSweep(resolvedInput);
+
+  // ---- GET dry-run ----------------------------------------------------------
+  if (req.method === 'GET') {
+    return res.status(200).json({
+      ok: true, mode: 'dry_run', enabled, flag_state: flag?.state || 'missing',
+      surface: 'dia_property_link', limit,
+      linked_total: entities.length, distinct_pids: distinctPids.length,
+      dangling_this_scan: dangling.length,
+      would_resolve_via_redirect: plan.resolved_via_redirect,
+      would_resolve_via_parcel_match: plan.resolved_via_parcel,
+      would_flag: plan.flagged,
+      note: 'domain=dia only. Resolution order: PDR14a dia_resolve_property_id redirect, ' +
+        'then an unambiguous parcel_number match (>=6 chars, single candidate). ' +
+        'No confident match -> lcc_dia_property_link_review, never guessed. NO writes in dry-run.',
+    });
+  }
+
+  // ---- POST apply (flag-gated) -----------------------------------------------
+  if (!enabled) {
+    return res.status(200).json({
+      ok: true, skipped: 'feature_flag_off', enabled: false,
+      dangling_this_scan: dangling.length,
+      would_resolve_via_redirect: plan.resolved_via_redirect,
+      would_resolve_via_parcel_match: plan.resolved_via_parcel,
+      would_flag: plan.flagged,
+    });
+  }
+
+  let applied = 0, apply_failed = 0, flagged = 0, flag_failed = 0;
+  for (const item of plan.toApply) {
+    // entities.metadata is a shared jsonb column with many writers; a
+    // PostgREST PATCH replaces the whole column (the documented OCR2
+    // footgun), so the correction goes through a single-merge-owner RPC
+    // that fills only the PDR14b keys and races safely against every other
+    // writer via a row lock.
+    const rpc = await opsQuery('POST', 'rpc/lcc_pdr14b_apply_dia_redirect', {
+      p_entity_id: item.entity_id,
+      p_resolved_property_id: item.resolved,
+      p_dead_property_id: item.dead_pid,
+      p_via: item.via,
+    });
+    if (rpc.ok) applied += 1; else apply_failed += 1;
+  }
+  for (const item of plan.toFlag) {
+    const rpc = await opsQuery('POST', 'lcc_dia_property_link_review', {
+      entity_id: item.entity_id, dangling_property_id: item.dead_pid, reason: item.reason,
+    }, { Prefer: 'resolution=merge-duplicates,return=minimal' });
+    if (rpc.ok) flagged += 1; else flag_failed += 1;
+  }
+
+  return res.status(200).json({
+    ok: true, mode: 'apply', enabled,
+    dangling_this_scan: dangling.length,
+    resolved_via_redirect: plan.resolved_via_redirect,
+    resolved_via_parcel_match: plan.resolved_via_parcel,
+    applied, apply_failed, flagged, flag_failed,
+  });
+}
+
+// ============================================================================
+// W8 U1 (Prompt 62, 2026-08-07): Ollama junk-entity pre-screen.
+//
+// Extends the prompt-32 clean-assist machinery. A deterministic pre-filter finds
+// junk CANDIDATES cheaply across dia/gov/ops entity tables (junkCandidateReason,
+// NO LLM); the local model (invokeExtractionAI) scores ONLY that candidate pool;
+// proposals land in junk_entity_review (the Decision Center federated lane). The
+// verdict is HUMAN (handleDecisionVerdict junk_entity_review branch). Nothing
+// here writes canonical data — that is the apply path, gated on a human confirm.
+//
+//   GET  /api/junk-prescreen-tick            -> dry-run report (per-domain counts)
+//   GET  /api/junk-prescreen-tick?score=1    -> dry-run + inline model proposals
+//                                               (NO writes — a sampleable sheet)
+//   POST /api/junk-prescreen-tick            -> apply: scan + score + write props
+//                                               (flag-gated; no-ops while OFF)
+// ============================================================================
+// Prompt 66 — bounded, resumable scoring. Scoring is ollama-latency-bound
+// (~16s/call), so both the inline dry-run (GET ?score=1) and the cron/apply POST
+// enforce a wall-clock budget, and the apply path scores at most one ollama-sized
+// batch per invocation (the scored ledger is the resume cursor). Defaults keep a
+// single HTTP invocation well under the Railway proxy timeout.
+const JUNK_SCORE_BUDGET_MS = Math.max(5000, parseInt(process.env.JUNK_SCORE_BUDGET_MS || '120000', 10));
+const JUNK_SCORE_BATCH_SIZE = Math.max(1, parseInt(process.env.JUNK_SCORE_BATCH_SIZE || '25', 10));
+const JUNK_SCORE_INLINE_DEFAULT_N = Math.max(1, parseInt(process.env.JUNK_SCORE_INLINE_N || '6', 10));
+// Prompt 85 — deterministic-certainty dismissals (blank / all-non-alpha / exact
+// placeholder) spend NO LLM call, so a much larger slice drains per invocation
+// than the LLM batch (which is ollama-latency bound). Default 100/night.
+const JUNK_DET_BATCH_SIZE = Math.max(1, parseInt(process.env.JUNK_DET_BATCH_SIZE || '100', 10));
+// Prompt 84 — windowed resumable scan (port the U5/Prompt-83 pattern back to U1).
+// The per-invocation scan is a WINDOW, not the whole 128k/7-target corpus; a keyset
+// cursor persisted in the scan-batch ledger advances the window each run so nightly
+// ticks WALK the corpus instead of rescanning it (the weight that starved scoring).
+const JUNK_SCAN_WINDOW = Math.max(1000, parseInt(process.env.JUNK_PRESCREEN_SCAN_WINDOW || '20000', 10));
+// The WHOLE-invocation wall-clock budget, split so the scan gets a bounded share
+// and scoring is GUARANTEED its slice (computeScanDeadline / remainingScoreBudget).
+const JUNK_TICK_BUDGET_MS = Math.max(5000, parseInt(process.env.JUNK_TICK_BUDGET_MS || '120000', 10));
+const JUNK_SCAN_BUDGET_MS = Math.max(2000, parseInt(process.env.JUNK_SCAN_BUDGET_MS || '60000', 10));
+// Scoring's guaranteed floor — even if the scan overran its share, scoring still
+// gets at least this much wall-clock so a nightly run never produces 0 scored.
+const JUNK_MIN_SCORE_BUDGET_MS = Math.max(2000, parseInt(process.env.JUNK_MIN_SCORE_BUDGET_MS || '20000', 10));
+// Prompt 67 — the dismiss-share above which the batch is refused as suspect.
+// Post-65 the candidate pool is pre-filtered true-junk, so a high dismiss share
+// is expected; default 0.9 refuses only the near-total all-dismiss pathology.
+const JUNK_DISMISS_GUARD_THRESHOLD = (() => {
+  const v = parseFloat(process.env.JUNK_DISMISS_GUARD_THRESHOLD || '0.9');
+  return Number.isFinite(v) && v > 0 && v <= 1 ? v : 0.9;
+})();
+
+function junkPrescreenEnabled(flagRow) {
+  const env = String(process.env.W8_U1_JUNK_PRESCREEN || '').toLowerCase();
+  if (['on', '1', 'true', 'yes', 'enabled'].includes(env)) return true;
+  return String(flagRow?.state || '').toLowerCase() === 'on';
+}
+
+async function fetchJunkPrescreenFlag() {
+  try {
+    const r = await opsQuery('GET', 'feature_flags_registry?flag=eq.W8_U1_JUNK_PRESCREEN&select=flag,state&limit=1', undefined, { countMode: 'none' });
+    return r.ok && Array.isArray(r.data) ? r.data[0] : null;
+  } catch (_e) { return null; }
+}
+
+// Few-shot grounding drawn from real accrued human junk_entity_name verdicts, so
+// the model scores against the operator's rubric. Best-effort; empty on failure.
+async function fetchJunkFewShot() {
+  try {
+    const r = await opsQuery('GET', 'lcc_decisions?select=verdict,context&decision_type=eq.junk_entity_name'
+      + '&status=neq.open&verdict=not.is.null&order=decided_at.desc.nullslast&limit=8');
+    if (!r.ok || !Array.isArray(r.data)) return [];
+    return r.data.map((d) => {
+      const ctx = d.context && typeof d.context === 'object' ? d.context : {};
+      const name = ctx.name || ctx.entity_name || ctx.subject_name || null;
+      return name ? { name, verdict: String(d.verdict) } : null;
+    }).filter(Boolean);
+  } catch (_e) { return []; }
+}
+
+// Page a target's (pk, name) rows and gate each with the deterministic filter.
+// The JS gate is authoritative. Prompt 84: the per-invocation pull is a WINDOW
+// (JUNK_SCAN_WINDOW rows) advanced by a KEYSET cursor (`pkCol > startCursor`),
+// NOT the whole table via offset — so nightly runs walk the corpus in bounded
+// slices instead of rescanning ~128k rows every time (the weight that starved
+// scoring). Returns { …, nextCursor, wrapped } for the resume ledger. A wall-clock
+// `deadline` stops the scan before a page it can't afford; the cursor holds so the
+// next run resumes the exact slice.
+async function pullJunkCandidatesForTarget(target, startCursor, deadline) {
+  const cols = target.pkCol + ',' + target.nameCol;
+  const mergedPred = target.mergedCol ? '&' + target.mergedCol + '=is.null' : '';
+  const found = [];
+  // Naming-hygiene backlog (Prompt 65): abbrev / address rows are REAL entities,
+  // NOT U1 junk — counted per class, never enqueued.
+  const namingHygiene = { known_abbreviation: 0, address_as_name: 0, total: 0 };
+  const PAGE = 1000;
+  let scanned = 0, truncated = false, reachedEnd = false, lastPk = null;
+  let cursor = startCursor != null && String(startCursor) !== '' ? String(startCursor) : null;
+  for (let pulled = 0; pulled < JUNK_SCAN_WINDOW; pulled += PAGE) {
+    // Wall-clock budget: stop BEFORE a page we can't afford; the cursor holds so
+    // the next run resumes this exact slice (never a silent partial scan).
+    if (deadline && Date.now() >= deadline) { truncated = true; break; }
+    const cursorPred = cursor != null ? '&' + target.pkCol + '=gt.' + encodeURIComponent(cursor) : '';
+    const path = target.table + '?select=' + cols + mergedPred + cursorPred
+      + '&order=' + target.pkCol + '.asc&limit=' + PAGE;
+    const r = target.domain === 'lcc'
+      ? await opsQuery('GET', path)
+      : await domainQuery(target.domain, 'GET', path);
+    if (!r.ok) {
+      // LOUD (Prompt 83): surface status + detail, never a silent records:0. The
+      // cursor holds (retry the same slice next run).
+      const detail = r.data && typeof r.data === 'object'
+        ? (r.data.message || r.data.error || JSON.stringify(r.data)) : String(r.data || '');
+      const err = 'HTTP ' + (r.status || '?') + (detail ? ': ' + String(detail).slice(0, 300) : '');
+      console.error('[junk-prescreen] SCAN FAILED', target.domain, target.table, err, 'path=', path);
+      return { candidates: found, scanned, truncated: false, namingHygiene, error: err,
+        status: r.status || null, nextCursor: startCursor != null ? String(startCursor) : null, wrapped: false };
+    }
+    const rows = Array.isArray(r.data) ? r.data : [];
+    scanned += rows.length;
+    for (const row of rows) {
+      const pk = row[target.pkCol];
+      lastPk = pk;
+      cursor = String(pk);
+      const name = row[target.nameCol];
+      const hit = junkCandidateReason(name);
+      if (!hit) {
+        // Not junk — is it a naming-hygiene backlog row? (count only, no enqueue)
+        const hy = namingHygieneReason(name);
+        if (hy) {
+          namingHygiene[hy.heuristic] = (namingHygiene[hy.heuristic] || 0) + 1;
+          namingHygiene.total += 1;
+        }
+        continue;
+      }
+      found.push({
+        domain: target.domain, table: target.table, pk: String(pk),
+        entity_name: name == null ? '' : String(name),
+        name_hash: junkNameHash(name),
+        heuristic: hit.heuristic, evidence: hit.evidence,
+        acronymOnly: hit.acronymOnly || false,
+        surnameLike: hit.surnameLike || false,
+        subject_ref: junkSubjectRef(target.domain, target.table, pk),
+        context: { pk_col: target.pkCol, name_col: target.nameCol },
+      });
+    }
+    if (rows.length < PAGE) { reachedEnd = true; break; }
+    if (pulled + PAGE >= JUNK_SCAN_WINDOW) truncated = true;
+  }
+  if (truncated) console.warn('[junk-prescreen] scan window bounded', target.domain, target.table, JUNK_SCAN_WINDOW);
+  // Wrap the keyset when the table end was reached OR the window under-filled, so
+  // the next run restarts from the top; otherwise advance to the last pk seen.
+  const { nextCursor, wrapped } = nextScanCursor({ reachedEnd, truncated, lastPk, startCursor });
+  return { candidates: found, scanned, truncated, namingHygiene, error: null, status: 200, nextCursor, wrapped };
+}
+
+// Scan-time batch connection check (Prompt 65). A candidate that is FK-referenced
+// / carries identities or relationships is by definition NOT junk, so it is
+// EXCLUDED from the pool BEFORE scoring (killing both the wasted per-row LLM/probe
+// cost and the keep-flood). Returns the set of connected pks (as strings) for the
+// given target across its configured fkChildren, batched via `in.(…)`. A failed
+// batch probe treats those pks as connected (safe: excluded from the junk pool).
+// The per-row junkFkReferenced remains the apply-path safety net (belt + braces).
+async function junkConnectedPkSet(target, pks) {
+  const connected = new Set();
+  const children = target.fkChildren || [];
+  if (!pks.length || !children.length) return connected;
+  const CHUNK = 100;
+  for (const child of children) {
+    for (let i = 0; i < pks.length; i += CHUNK) {
+      const slice = pks.slice(i, i + CHUNK);
+      const inList = slice.map((p) => encodeURIComponent(p)).join(',');
+      const path = child.table + '?select=' + child.col + '&' + child.col + '=in.(' + inList + ')';
+      try {
+        const r = target.domain === 'lcc'
+          ? await opsQuery('GET', path)
+          : await domainQuery(target.domain, 'GET', path);
+        const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+        for (const row of rows) {
+          const v = row[child.col];
+          if (v != null) connected.add(String(v));
+        }
+      } catch (_e) {
+        for (const p of slice) connected.add(String(p));
+      }
+    }
+  }
+  return connected;
+}
+
+// FK guard (hazard class): true when the row is referenced by ANY configured
+// child. A referenced row is never retired — it routes to a conflict card.
+async function junkFkReferenced(target, pk) {
+  for (const child of (target.fkChildren || [])) {
+    const path = child.table + '?select=' + child.col + '&' + child.col + '=eq.'
+      + encodeURIComponent(pk) + '&limit=1';
+    try {
+      const r = target.domain === 'lcc'
+        ? await opsQuery('GET', path, undefined, { countMode: 'exact' })
+        : await domainQuery(target.domain, 'GET', path, undefined, { 'Prefer': 'count=exact' });
+      const n = (typeof r.count === 'number') ? r.count : ((Array.isArray(r.data) && r.data.length) ? r.data.length : 0);
+      if (n > 0) return { referenced: true, child: child.table + '.' + child.col, count: n };
+    } catch (_e) { /* a failed child probe is treated as unknown → safe (referenced) */
+      return { referenced: true, child: child.table + '.' + child.col, count: null, probe_error: true };
+    }
+  }
+  return { referenced: false };
+}
+
+// Already-scored dedupe set (Prompt 66). Every candidate that was scored on a
+// prior tick (proposal persisted OR keep-counted) is recorded in
+// junk_prescreen_scored keyed by (domain, table, pk, name_hash); its
+// `subject_ref:name_hash` key excludes it from re-scoring until its name changes.
+// Best-effort: an unavailable table (migration not yet applied) yields an empty
+// set, so the tick degrades to the pre-Prompt-66 behavior instead of crashing.
+async function fetchJunkScoredKeys() {
+  const set = new Set();
+  const PAGE = 1000;
+  try {
+    for (let off = 0; ; off += PAGE) {
+      const r = await opsQuery('GET', 'junk_prescreen_scored?select=subject_ref,name_hash&order=id.asc&limit=' + PAGE + '&offset=' + off);
+      if (!r.ok) break;
+      const rows = Array.isArray(r.data) ? r.data : [];
+      for (const x of rows) if (x.subject_ref) set.add(x.subject_ref + ':' + (x.name_hash || ''));
+      if (rows.length < PAGE) break;
+    }
+  } catch (_e) { /* best-effort — empty set degrades gracefully */ }
+  return set;
+}
+
+// Deterministic scan across every target: candidates, minus already-proposed
+// (any junk_entity_review row), already-decided (lcc_decisions) subjects, and
+// already-scored (junk_prescreen_scored, keyed on name_hash so a rename re-scores).
+// Prompt 84: windowed + resumable. `cursors` (per target key) resume the keyset
+// scan where the last run stopped; `opts.deadline` bounds the whole scan so it
+// never eats the invocation budget. Returns `nextCursors` (persisted in the scan
+// ledger) + `budgetExhausted`.
+async function junkScanAll(cursors = {}, opts = {}) {
+  const deadline = Number.isFinite(opts.deadline) ? opts.deadline : null;
+  const [existing, decided, scoredKeys] = await Promise.all([
+    (async () => {
+      const set = new Set();
+      const PAGE = 1000;
+      for (let off = 0; ; off += PAGE) {
+        const r = await opsQuery('GET', 'junk_entity_review?select=subject_ref&order=review_id.asc&limit=' + PAGE + '&offset=' + off);
+        const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+        for (const x of rows) if (x.subject_ref) set.add(x.subject_ref);
+        if (rows.length < PAGE) break;
+      }
+      return set;
+    })(),
+    fetchExcludedRefs('junk_entity_review').catch(() => new Set()),
+    fetchJunkScoredKeys(),
+  ]);
+  const perDomain = {};
+  const nextCursors = {};
+  const fresh = [];
+  let budgetExhausted = false;
+  for (const target of JUNK_TARGETS) {
+    const key = target.domain + ':' + target.table;
+    // Whole-invocation budget: once spent, skip the remaining targets and HOLD
+    // their cursors so the next run resumes them (never a silent partial scan).
+    if (deadline && Date.now() >= deadline) {
+      budgetExhausted = true;
+      nextCursors[key] = cursors ? (cursors[key] || null) : null;
+      perDomain[key] = { domain: target.domain, table: target.table, skipped: 'budget_exhausted',
+        scanned: 0, candidates: 0, new: 0, excluded_connected: 0, excluded_scored: 0, enqueueable: 0,
+        naming_hygiene: { total: 0 }, truncated: false };
+      continue;
+    }
+    let pull;
+    try { pull = await pullJunkCandidatesForTarget(target, cursors ? cursors[key] : null, deadline); }
+    catch (e) {
+      perDomain[key] = { domain: target.domain, table: target.table, error: e?.message || String(e), candidates: 0, scanned: 0 };
+      nextCursors[key] = cursors ? (cursors[key] || null) : null;
+      continue;
+    }
+    if (pull.error) {
+      // A failed scan surfaces LOUDLY with candidates:0 AND the error — never a
+      // silent zero. The cursor holds (retry the same slice next run).
+      perDomain[key] = { domain: target.domain, table: target.table, error: pull.error,
+        status: pull.status || null, scanned: 0, candidates: 0, new: 0, excluded_connected: 0,
+        excluded_scored: 0, enqueueable: 0, naming_hygiene: { total: 0 }, truncated: false };
+      nextCursors[key] = pull.nextCursor != null ? String(pull.nextCursor) : (cursors ? (cursors[key] || null) : null);
+      continue;
+    }
+    nextCursors[key] = pull.nextCursor != null ? String(pull.nextCursor) : null;
+    const notProposed = pull.candidates.filter((c) => !existing.has(c.subject_ref) && !decided.has(c.subject_ref));
+    // Resume cursor (Prompt 66): drop candidates already scored on a prior tick
+    // (unchanged name). A renamed row has a new name_hash ⇒ retained ⇒ re-scored.
+    const newOnes = selectUnscoredCandidates(notProposed, scoredKeys);
+    const excludedScored = notProposed.length - newOnes.length;
+    // Scan-time connection exclusion (Prompt 65): drop connected rows BEFORE
+    // scoring — a referenced record is not junk regardless of name shape.
+    let connectedSet = new Set();
+    try { connectedSet = await junkConnectedPkSet(target, newOnes.map((c) => c.pk)); }
+    catch (_e) { connectedSet = new Set(); }
+    let excludedConnected = 0;
+    const enqueueable = [];
+    for (const c of newOnes) {
+      if (connectedSet.has(String(c.pk))) { excludedConnected += 1; continue; }
+      enqueueable.push(c);
+    }
+    perDomain[key] = {
+      domain: target.domain, table: target.table,
+      scanned: pull.scanned, candidates: pull.candidates.length,
+      new: newOnes.length, excluded_connected: excludedConnected,
+      excluded_scored: excludedScored,
+      enqueueable: enqueueable.length,
+      naming_hygiene: pull.namingHygiene || { total: 0 },
+      truncated: pull.truncated || false,
+      scan_cursor_from: (cursors && cursors[key]) || null, scan_cursor_to: nextCursors[key],
+      wrapped: pull.wrapped || false,
+    };
+    for (const c of enqueueable) fresh.push(c);
+  }
+  return { perDomain, fresh, nextCursors, budgetExhausted };
+}
+
+// Collect per-target scan failures for LOUD surfacing (Prompt 84). A non-empty
+// list means a target returned a real HTTP error instead of rows.
+function junkScanErrors(perDomain) {
+  const out = [];
+  for (const [key, v] of Object.entries(perDomain || {})) {
+    if (v && v.error) out.push({ target: key, status: v.status || null, error: v.error });
+  }
+  return out;
+}
+
+// Read the per-target keyset cursors persisted on the most recent scan batch
+// (details.scan_cursors) — U5/U2 pattern: the ledger IS the cursor. Best-effort.
+async function fetchJunkScanCursors() {
+  try {
+    const r = await opsQuery('GET', 'junk_review_batch?select=details&batch_kind=eq.scan&order=created_at.desc&limit=1');
+    if (r.ok && Array.isArray(r.data) && r.data[0] && r.data[0].details && r.data[0].details.scan_cursors) {
+      const c = r.data[0].details.scan_cursors;
+      return c && typeof c === 'object' ? c : {};
+    }
+  } catch (_e) { /* best-effort */ }
+  return {};
+}
+
+function junkDomainRollup(perDomain) {
+  const roll = {};
+  for (const v of Object.values(perDomain)) {
+    const d = v.domain || 'unknown';
+    roll[d] = roll[d] || { scanned: 0, candidates: 0, new: 0, excluded_connected: 0, excluded_scored: 0, enqueueable: 0, naming_hygiene: 0 };
+    roll[d].scanned += v.scanned || 0;
+    roll[d].candidates += v.candidates || 0;
+    roll[d].new += v.new || 0;
+    roll[d].excluded_connected += v.excluded_connected || 0;
+    roll[d].excluded_scored += v.excluded_scored || 0;
+    roll[d].enqueueable += v.enqueueable || 0;
+    roll[d].naming_hygiene += (v.naming_hygiene && v.naming_hygiene.total) || 0;
+  }
+  return roll;
+}
+
+// FLAT naming-hygiene backlog (Prompt 84) — one { total, known_abbreviation,
+// address_as_name } summed across domains. The systemic-findings reader
+// (fetchSystemicFindingsInputs) consumes `naming_hygiene_backlog.total` from the
+// latest U1 batch, so the apply batch persists this flat shape (the per-domain
+// rollup stayed nested and read as total:undefined → 0).
+function junkNamingHygieneFlat(perDomain) {
+  const flat = { total: 0, known_abbreviation: 0, address_as_name: 0 };
+  for (const v of Object.values(perDomain)) {
+    const hy = v.naming_hygiene || {};
+    flat.total += hy.total || 0;
+    flat.known_abbreviation += hy.known_abbreviation || 0;
+    flat.address_as_name += hy.address_as_name || 0;
+  }
+  return flat;
+}
+
+async function recordJunkPrescreenHealth({ status, count, lastError, details }) {
+  try {
+    await opsQuery('POST', 'rpc/lcc_record_health_event', {
+      p_source: 'junk_prescreen', p_check_name: 'ollama_junk_prescreen',
+      p_status: status, p_count: count || 0, p_last_error: lastError || null,
+      p_external_url: null, p_details: details || {},
+    });
+  } catch (_e) { /* health is best-effort */ }
+}
+
+// Score one candidate with the local model → normalized proposal (+ meta).
+// Prompt 64: probe the relationship/portfolio connection FIRST (via the existing
+// FK-guard machinery). A connected row is by definition not junk, so we short-
+// circuit to `keep` WITHOUT spending an LLM call. Otherwise the model judges,
+// then applyPrescreenGuards vetoes any unsafe dismiss (acronym / abbreviation /
+// address) — the model can never retire a real entity on a name-shape hint.
+async function scoreJunkCandidate(candidate, fewShot) {
+  // Prompt 85 — deterministic-certainty bypass. blank_name / all_non_alpha / an
+  // EXACT placeholder (never a fuzzy token hit) is junk with literal certainty:
+  // dismiss it WITHOUT a model call, evidence = the verbatim value, provider
+  // 'none', confidence 1.0. Mirrors U5's deterministic-rename arm. Verdicts stay
+  // human — this is a proposal to the review lane; the FK guard at apply time is
+  // the final safety (a connected row already excluded at scan time anyway).
+  const det = deterministicDismissReason(candidate.entity_name);
+  if (det) {
+    return {
+      proposal: {
+        verdict: 'dismiss', confidence: 1,
+        evidence_quote: candidate.evidence != null ? String(candidate.evidence)
+          : (det.evidence != null ? String(det.evidence) : ''),
+        reason: 'deterministic: ' + det.heuristic,
+        guards: [],
+      },
+      provider: 'none', model: null, skipped_llm: true, deterministic: true, connected: false,
+    };
+  }
+  const target = findJunkTarget(candidate.domain, candidate.table);
+  let connection = { referenced: false };
+  if (target) {
+    try { connection = await junkFkReferenced(target, candidate.pk); }
+    catch (_e) { connection = { referenced: true, child: null, probe_error: true }; }
+  }
+  const connected = !!connection.referenced;
+  const connectionDetail = connection.child
+    ? connection.child + (connection.count != null ? ' (' + connection.count + ')' : '')
+    : (connection.probe_error ? 'probe_error → treated as connected' : null);
+
+  // Connected → never junk. Skip the LLM, propose keep deterministically.
+  if (connected) {
+    return {
+      proposal: {
+        verdict: 'keep', confidence: 0.2,
+        evidence_quote: candidate.evidence != null ? String(candidate.evidence) : '',
+        reason: 'Connected entity (' + (connectionDetail || 'FK-referenced') + ') — a referenced record is not junk regardless of name shape.',
+        guards: ['connection_gate'],
+      },
+      provider: null, model: null, skipped_llm: true, connected: true,
+    };
+  }
+
+  const ctx = Object.assign({}, candidate.context || {}, {
+    connected: false, relationship_count: 0, identity_count: 0,
+  });
+  const prompt = buildJunkPrescreenPrompt(Object.assign({}, candidate, { context: ctx }), fewShot);
+  const ai = await invokeExtractionAI({ prompt, surface: 'junk_prescreen' });
+  const parsed = parseJunkVerdictJson(ai?.data?.response || '');
+  let proposal = normalizeJunkProposal(parsed, candidate);
+  if (!parsed) { proposal.verdict = 'uncertain'; proposal.confidence = 0; proposal.reason = 'AI response was not valid JSON; queued as uncertain for human review.'; }
+  // Deterministic vetoes (dismiss → keep/rename/parse_contact only).
+  proposal = applyPrescreenGuards(proposal, candidate, { connected: false, hasProvenance: false, connectionDetail });
+  return { proposal, provider: ai?.provider || null, model: ai?.data?.model || null, connected: false };
+}
+
+async function upsertJunkProposal(candidate, proposal, meta) {
+  const body = {
+    subject_ref: candidate.subject_ref,
+    domain: candidate.domain, table_name: candidate.table, pk_value: candidate.pk,
+    entity_name: candidate.entity_name, heuristic: candidate.heuristic,
+    proposed_verdict: proposal.verdict, confidence: proposal.confidence,
+    evidence_quote: proposal.evidence_quote, reason: proposal.reason,
+    model_provider: meta.provider || null, model_name: meta.model || null,
+    source_run_id: meta.sourceRunId, scan_batch_id: meta.scanBatchId || null,
+    status: 'proposed',
+  };
+  return opsQuery('POST', 'junk_entity_review?on_conflict=subject_ref', body,
+    { headers: { Prefer: 'return=representation,resolution=merge-duplicates' } });
+}
+
+// Record scored candidates in the resume-cursor ledger (Prompt 66). Keyed on
+// (domain, table, pk, name_hash) so an unchanged name is never re-scored, while a
+// rename (new name_hash) yields a fresh row and is re-judged. `enqueued` marks
+// whether an actionable proposal was persisted (vs. a kept/uncertain non-event).
+// Bulk upsert (merge-duplicates); best-effort — a failure only costs a re-score.
+async function recordJunkScored(scoredRows, sourceRunId) {
+  const rows = (scoredRows || []).map(({ cand, proposal }) => ({
+    subject_ref: cand.subject_ref,
+    domain: cand.domain, table_name: cand.table, pk_value: cand.pk,
+    name_hash: cand.name_hash != null ? cand.name_hash : junkNameHash(cand.entity_name),
+    entity_name: cand.entity_name,
+    verdict: proposal.verdict,
+    enqueued: isEnqueueableJunkVerdict(proposal.verdict),
+    source_run_id: sourceRunId,
+  }));
+  if (!rows.length) return { ok: true, skipped: 'empty' };
+  try {
+    return await opsQuery('POST', 'junk_prescreen_scored?on_conflict=domain,table_name,pk_value,name_hash', rows,
+      { headers: { Prefer: 'resolution=merge-duplicates,return=minimal' } });
+  } catch (e) {
+    console.warn('[junk-prescreen] scored-ledger write failed', e?.message || e);
+    return { ok: false, error: e?.message || String(e) };
+  }
+}
+
+// Close a scan-batch ledger row (Prompt 84 lifecycle): PATCH its status to a
+// terminal value and fold the honest apply bookkeeping (scored / by_verdict /
+// proposed / advanced scan_cursors) into details, so a scan row never lingers
+// 'open'. Best-effort — a failed close only leaves the row 'open' (the pre-84
+// behavior), never throws.
+async function closeJunkScanBatch(scanBatchId, status, summary) {
+  if (scanBatchId == null) return { ok: false, skipped: 'no_batch' };
+  try {
+    return await opsQuery('PATCH', 'junk_review_batch?batch_id=eq.' + encodeURIComponent(scanBatchId),
+      { status: status || 'closed', details: { summary,
+        scan_cursors: summary?.scan_cursors || {}, scan_errors: summary?.scan_errors || [],
+        naming_hygiene_backlog: summary?.naming_hygiene_backlog || { total: 0 },
+        by_verdict: summary?.by_verdict || {}, scored: summary?.scored || 0,
+        proposed: summary?.proposed || 0, closed: true } });
+  } catch (e) {
+    console.warn('[junk-prescreen] scan-batch close failed', e?.message || e);
+    return { ok: false, error: e?.message || String(e) };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Prompt 89 — one-shot TrafficMetrix-misparse seeder. Writes the misparse class
+// into junk_entity_review as DETERMINISTIC dismiss proposals (heuristic
+// tm_misparse, provider 'none', evidence = the verbatim name) so a human confirms
+// in the EXISTING U1 lane (no new machinery). Value-gated on the email fan-out:
+// only person entities whose email is shared by MORE than the suspect threshold
+// (a table-as-contact-list misparse signature) AND whose NAME trips the street/
+// label detector are seeded — so a lone real person with a unique email
+// ("Chris Way", "Ladonna Street") is never swept in, and the REAL cluster members
+// ("Richard Ehmer", "James Devincenti") are excluded (their names don't trip the
+// detector). Idempotent: on_conflict=subject_ref merges, so re-runs add nothing.
+// Dry-run by default; ?apply=1 (or body.apply) writes.
+// ENTC (2026-09-03) — PR5c-entities-c-junk80.
+//
+// A live PERSON entity holding a real mailbox under a guard-failing name is what
+// the ensureEntityLink email tier resolves an inbound person onto. This seeds
+// those rows into the EXISTING junk_entity_review lane rather than sweeping them:
+// the lane already carries the human verdict, the reversible junk_review_batch
+// ledger, and (via unstampMisparseMember) the exact remedy these rows need —
+// clear entities.email + detach the conflated external_identities, leaving the
+// entity and ALL its relationships intact, so the 480-edge vendor rows keep their
+// deal history. Nothing here retires anything; the verdict does.
+//
+// ⚠️ The 80 are NOT one class and the view says so: hold_email_corroborated (the
+// row IS the mailbox's person), hold_name_repairable (a real person behind a
+// CoStar section-label prefix), hold_salesforce_identity and hold_inbound_reference
+// all seed as `uncertain`, so a confirm can never be a default on them. Only
+// `sweep_candidate` proposes `dismiss`.
+//
+// GET  /api/admin?action=junk80-seed            -> dry run (default)
+// POST /api/admin?action=junk80-seed&apply=true -> seed the lane
+const JUNK80_HEURISTIC = 'junk80_email_holder';
+// Heuristics whose confirmed `dismiss` must ALSO un-stamp the conflated mailbox
+// + identities before the soft-retire. Add a heuristic here only when its rows
+// genuinely hold someone else's contact details.
+const EMAIL_CONFLATION_HEURISTICS = new Set([TM_MISPARSE_HEURISTIC, JUNK80_HEURISTIC]);
+
+async function handleJunk80Seed(req, res) {
+  const apply = String(req.query.apply || '') === 'true' && req.method === 'POST';
+  const sourceRunId = 'junk80_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+
+  const vr = await opsQuery('GET', 'v_lcc_entities_c_junk80?select=id,name,email,disposition,'
+    + 'proposed_verdict,guards_fired,n_edges,n_salesforce_ids,n_cadences,already_in_review_lane,'
+    + 'n_live_persons_on_mailbox,n_live_persons_on_mailbox_domain_scoped&order=n_edges.desc&limit=500');
+  if (!vr.ok) return res.status(502).json({ error: 'junk80_view_query_failed', detail: vr.data });
+  const rows = Array.isArray(vr.data) ? vr.data : [];
+
+  const summary = {
+    apply, source_run_id: sourceRunId, population: rows.length,
+    by_disposition: {}, by_proposed_verdict: {},
+    already_in_lane: 0, seeded: 0, errors: [], sample: [],
+    // the projection the sweep is verified on, computed BEFORE anything is written
+    projection: {
+      mailboxes_cleared_if_all_dismiss_confirmed:
+        new Set(rows.filter(r => r.proposed_verdict === 'dismiss').map(r => String(r.email || '').toLowerCase())).size,
+      alone_on_mailbox_domain_scoped: rows.filter(r => r.n_live_persons_on_mailbox_domain_scoped === 1).length,
+      alone_on_mailbox_domain_scoped_after:
+        rows.filter(r => r.n_live_persons_on_mailbox_domain_scoped === 1 && r.proposed_verdict !== 'dismiss').length,
+      relationships_touched: 0,
+    },
+  };
+  for (const r of rows) {
+    summary.by_disposition[r.disposition] = (summary.by_disposition[r.disposition] || 0) + 1;
+    summary.by_proposed_verdict[r.proposed_verdict] = (summary.by_proposed_verdict[r.proposed_verdict] || 0) + 1;
+    if (r.already_in_review_lane) { summary.already_in_lane += 1; continue; }
+    if (summary.sample.length < 25) {
+      summary.sample.push({ id: r.id, name: r.name, email: r.email,
+        disposition: r.disposition, proposed_verdict: r.proposed_verdict, guards: r.guards_fired });
+    }
+    if (!apply) continue;
+    const body = {
+      subject_ref: junkSubjectRef('lcc', 'entities', r.id), domain: 'lcc', table_name: 'entities',
+      pk_value: String(r.id), entity_name: r.name == null ? '' : String(r.name),
+      heuristic: JUNK80_HEURISTIC, proposed_verdict: r.proposed_verdict,
+      // an `uncertain` hold is NOT a confident proposal and must not sort like one
+      confidence: r.proposed_verdict === 'dismiss' ? 1 : 0,
+      evidence_quote: String(r.name || '').slice(0, 200),
+      reason: 'Live person entity holding a real mailbox (' + r.email + ') under a name that fails '
+        + (Array.isArray(r.guards_fired) ? r.guards_fired.join('+') : 'the name guards')
+        + ' — the ensureEntityLink email tier resolves inbound people onto it. Disposition: '
+        + r.disposition + '.',
+      model_provider: 'none', model_name: null, source_run_id: sourceRunId, scan_batch_id: null,
+      status: 'proposed',
+    };
+    const ur = await opsQuery('POST', 'junk_entity_review?on_conflict=subject_ref', body,
+      { headers: { Prefer: 'return=minimal,resolution=merge-duplicates' } });
+    if (ur.ok) summary.seeded += 1;
+    else summary.errors.push({ id: r.id, detail: ur.data });
+  }
+  return res.status(200).json({ ok: true, ...summary });
+}
+
+// ---------------------------------------------------------------------------
+// C13g-min-lane-placeholder (2026-09-09) — one-shot: a PLACEHOLDER entity
+// (e.g. "Research In Progress") is not a real party, so neither
+// `entity_type_review` verdict fits ("Retype to organization" asserts a
+// firm; "Keep as person" asserts a person). `v_lcc_entity_retype_candidates`
+// now excludes `lcc_is_placeholder_owner_name(name)` (migration
+// 20261101150000); this seeds the excluded row(s) into the EXISTING
+// junk_entity_review lane (retire, never merge — same machinery as the
+// TrafficMetrix/junk80 sweeps above) so the fact that they held 2 current
+// portfolio facts is not silently dropped.
+//
+// Deterministic (provider 'none'), `dismiss` — a placeholder name is not a
+// judgement call. Idempotent (on_conflict=subject_ref). Dry-run by default;
+// ?apply=1 (POST) writes.
+//
+// GET  /api/admin?action=entity-retype-placeholder-seed            -> dry run
+// POST /api/admin?action=entity-retype-placeholder-seed&apply=true -> seed
+const ENTITY_RETYPE_PLACEHOLDER_HEURISTIC = 'entity_retype_placeholder';
+
+async function handleEntityRetypePlaceholderSeed(req, res) {
+  const apply = String(req.query.apply || '') === 'true' && req.method === 'POST';
+  const sourceRunId = 'retype_ph_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+
+  // v_lcc_entity_retype_placeholder_excluded mirrors v_lcc_entity_retype_candidates'
+  // fact_pop CTE (person-typed, live, >= 2 current facts) restricted to the
+  // placeholder subset the candidates view now EXCLUDES — SQL is the single
+  // owner of that judgement (lcc_is_placeholder_owner_name); this handler never
+  // re-derives it in JS.
+  const vr = await opsQuery('GET', 'v_lcc_entity_retype_placeholder_excluded?select=entity_id,name,current_facts&limit=1000');
+  if (!vr.ok) return res.status(502).json({ error: 'placeholder_view_query_failed', detail: vr.data });
+  const candidates = (Array.isArray(vr.data) ? vr.data : []).map((r) => ({ id: r.entity_id, name: r.name, current_facts: r.current_facts }));
+
+  const summary = { apply, source_run_id: sourceRunId, candidates: candidates.length, seeded: 0, errors: [], sample: candidates };
+  if (!apply) return res.status(200).json({ ok: true, ...summary });
+
+  for (const c of candidates) {
+    const body = {
+      subject_ref: junkSubjectRef('lcc', 'entities', c.id), domain: 'lcc', table_name: 'entities',
+      pk_value: String(c.id), entity_name: c.name == null ? '' : String(c.name),
+      heuristic: ENTITY_RETYPE_PLACEHOLDER_HEURISTIC, proposed_verdict: 'dismiss', confidence: 1,
+      evidence_quote: String(c.name || '').slice(0, 200),
+      reason: 'Placeholder entity name (lcc_is_placeholder_owner_name), not a real party — held '
+        + c.current_facts + ' current portfolio facts. Excluded from entity_type_review '
+        + '(C13g-min-lane-placeholder) — neither verdict fits a placeholder.',
+      model_provider: 'none', model_name: null, source_run_id: sourceRunId, scan_batch_id: null,
+      status: 'proposed',
+    };
+    const ur = await opsQuery('POST', 'junk_entity_review?on_conflict=subject_ref', body,
+      { headers: { Prefer: 'return=minimal,resolution=merge-duplicates' } });
+    if (ur.ok) summary.seeded += 1;
+    else summary.errors.push({ id: c.id, detail: ur.data });
+  }
+  return res.status(200).json({ ok: true, ...summary });
+}
+
+async function handleTmMisparseSeed(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+  const apply = req.query.apply === '1' || req.query.apply === 'true' || req.body?.apply === true || req.body?.apply === '1';
+  const sourceRunId = 'tm_misparse_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+
+  // 1. Fan-out emails: shared by > threshold person entities (the misparse
+  //    signature). v_lcc_person_email_merge_candidates groups person entities by
+  //    normalized email with member_count; the fan-out gate is member_count > N.
+  const fr = await opsQuery('GET', 'v_lcc_person_email_merge_candidates?select=email,member_count'
+    + '&member_count=gt.' + EMAIL_FANOUT_SUSPECT_THRESHOLD + '&order=member_count.desc&limit=500');
+  if (!fr.ok) return res.status(502).json({ error: 'fanout_email_query_failed', detail: fr.data });
+  const fanoutEmails = (Array.isArray(fr.data) ? fr.data : []).map((r) => r.email).filter(Boolean);
+
+  const summary = {
+    apply, threshold: EMAIL_FANOUT_SUSPECT_THRESHOLD, fanout_email_count: fanoutEmails.length,
+    scanned: 0, misparse_hits: 0, seeded: 0, skipped_retired: 0, errors: [], sample: [],
+    // Prompt 95 — would-seed counts by detector class (street_suffix / tm_vocab /
+    // doc_label / bare_title / sentence_fragment) so the dry-run reports the mix.
+    by_class: {},
+  };
+
+  for (const email of fanoutEmails) {
+    // 2. Every person entity carrying this fan-out email (querying entities
+    //    directly — NOT the view, which hides already junk_name_flagged members —
+    //    so flagged street rows are still seeded into the lane).
+    const er = await opsQuery('GET', 'entities?select=id,name,metadata&entity_type=eq.person'
+      + '&merged_into_entity_id=is.null&email=eq.' + pgFilterVal(email) + '&limit=200');
+    if (!er.ok) { summary.errors.push({ email, detail: er.data }); continue; }
+    const rows = Array.isArray(er.data) ? er.data : [];
+    summary.scanned += rows.length;
+    for (const row of rows) {
+      const reason = tmMisparseReason(row.name);
+      if (!reason) continue; // real cluster member (Richard Ehmer / James Devincenti class)
+      summary.misparse_hits += 1;
+      summary.by_class[reason.signal] = (summary.by_class[reason.signal] || 0) + 1;
+      if (row.metadata && typeof row.metadata === 'object' && row.metadata.junk_retired) {
+        summary.skipped_retired += 1; continue;
+      }
+      if (summary.sample.length < 25) summary.sample.push({ id: row.id, name: row.name, signal: reason.signal });
+      if (!apply) continue;
+      const subjectRef = junkSubjectRef('lcc', 'entities', row.id);
+      const body = {
+        subject_ref: subjectRef, domain: 'lcc', table_name: 'entities', pk_value: String(row.id),
+        entity_name: row.name == null ? '' : String(row.name), heuristic: TM_MISPARSE_HEURISTIC,
+        proposed_verdict: 'dismiss', confidence: 1,
+        evidence_quote: String(reason.evidence).slice(0, 200),
+        reason: 'TrafficMetrix table-as-contact-list misparse: name is a ' + reason.signal
+          + ' ("' + String(reason.match || reason.evidence).slice(0, 60) + '") stamped with a fanned-out page email — not a real person.',
+        model_provider: 'none', model_name: null, source_run_id: sourceRunId, scan_batch_id: null,
+        status: 'proposed',
+      };
+      const ur = await opsQuery('POST', 'junk_entity_review?on_conflict=subject_ref', body,
+        { headers: { Prefer: 'return=minimal,resolution=merge-duplicates' } });
+      if (ur.ok) summary.seeded += 1;
+      else summary.errors.push({ id: row.id, detail: ur.data });
+    }
+  }
+  return res.status(200).json({ ok: true, ...summary });
+}
+
+// Prompt 89 — un-stamp a confirmed tm_misparse phantom (Do #2). Clears the
+// fanned-out email (the person_email cluster key) so the real broker's email
+// stops binding this phantom, flags the name (immediate pool/view exclusion), and
+// detaches the conflated external_identities (the costar contact + any real SF
+// contact wrongly conflated onto it). All captured into a junk_review_batch
+// reversal row FIRST, so it is fully reversible. Returns the reversal summary.
+async function unstampMisparseMember(entityId, sourceRunId, actorId) {
+  const er = await opsQuery('GET', 'entities?id=eq.' + pgFilterVal(entityId) + '&select=id,email,metadata&limit=1');
+  const ent = (er.ok && Array.isArray(er.data)) ? er.data[0] : null;
+  if (!ent) return { ok: false, skipped: 'entity_not_found' };
+  const ir = await opsQuery('GET', 'external_identities?entity_id=eq.' + pgFilterVal(entityId) + '&select=*');
+  const idents = (ir.ok && Array.isArray(ir.data)) ? ir.data : [];
+  const meta = (ent.metadata && typeof ent.metadata === 'object') ? ent.metadata : {};
+  const reversal = {
+    kind: 'tm_misparse_unstamp', entity_id: String(entityId),
+    old_email: ent.email || null,
+    old_junk_name_flagged: (meta.junk_name_flagged !== undefined ? meta.junk_name_flagged : null),
+    deleted_identities: idents,
+  };
+  const led = await opsQuery('POST', 'junk_review_batch',
+    { batch_kind: 'apply', source_run_id: sourceRunId || 'verdict', status: 'applied',
+      domain: 'lcc', table_name: 'entities', pk_value: String(entityId), actor: actorId || null,
+      reversal, details: { unit: 'prompt_89_tm_misparse_unstamp', cleared_email: ent.email || null, deleted_identity_count: idents.length } },
+    { headers: { Prefer: 'return=representation' } });
+  const batchId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].batch_id : null;
+  const newMeta = Object.assign({}, meta, {
+    junk_name_flagged: true,
+    tm_misparse_unstamped: { batch_id: batchId, at: new Date().toISOString() },
+  });
+  const pr = await opsQuery('PATCH', 'entities?id=eq.' + pgFilterVal(entityId), { email: null, metadata: newMeta });
+  if (!pr.ok) return { ok: false, batch_id: batchId, error: 'unstamp_patch_failed', detail: pr.data };
+  if (idents.length) {
+    await opsQuery('DELETE', 'external_identities?entity_id=eq.' + pgFilterVal(entityId)).catch(() => {});
+  }
+  return { ok: true, batch_id: batchId, cleared_email: ent.email || null, deleted_identity_count: idents.length };
+}
+
+async function handleJunkPrescreenTick(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const flag = await fetchJunkPrescreenFlag();
+  const enabled = junkPrescreenEnabled(flag);
+  const limit = Math.min(60, Math.max(1, parseInt(req.query.limit || req.body?.limit || '20', 10)));
+
+  // ---- POST apply path: flag-gated. No-op (honest health) while OFF. --------
+  if (req.method === 'POST') {
+    if (!enabled) {
+      await recordJunkPrescreenHealth({ status: 'amber', count: 0,
+        lastError: 'W8_U1_JUNK_PRESCREEN feature flag is off',
+        details: { enabled: false, flag_state: flag?.state || 'missing' } });
+      return res.status(200).json({ ok: true, skipped: 'feature_flag_off', enabled: false });
+    }
+    const sourceRunId = 'w8u1_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
+    // Prompt 84 — windowed resumable scan + a budget split that GUARANTEES scoring
+    // its slice. The scan gets at most (TICK − scoring-floor) wall-clock, so a
+    // full 7-target scan can never eat the invocation budget and strand scoring
+    // (the 0-scored nightly `scan` batch this fixes). The keyset cursor resumes
+    // where the last run stopped, so nightly runs WALK the corpus.
+    const tickStart = Date.now();
+    const tickDeadline = tickStart + JUNK_TICK_BUDGET_MS;
+    const scanDeadline = computeScanDeadline(tickStart, {
+      tickBudgetMs: JUNK_TICK_BUDGET_MS, scanBudgetMs: JUNK_SCAN_BUDGET_MS,
+      minScoreBudgetMs: JUNK_MIN_SCORE_BUDGET_MS });
+    const cursors = await fetchJunkScanCursors().catch(() => ({}));
+    const scan = await junkScanAll(cursors, { deadline: scanDeadline });
+    const scanErrors = junkScanErrors(scan.perDomain);
+    const fewShot = await fetchJunkFewShot();
+    const namingHygieneFlat = junkNamingHygieneFlat(scan.perDomain);
+    // Open the scan ledger row — carrying the ADVANCED keyset cursors so the next
+    // run resumes the corpus even if this run dies before it closes the batch.
+    let scanBatchId = null;
+    try {
+      const br = await opsQuery('POST', 'junk_review_batch',
+        { batch_kind: 'scan', source_run_id: sourceRunId, status: 'open', actor: user.id || null,
+          details: { per_domain: scan.perDomain, rollup: junkDomainRollup(scan.perDomain), fresh: scan.fresh.length,
+            scan_cursors: scan.nextCursors, scan_errors: scanErrors, scan_budget_exhausted: !!scan.budgetExhausted } },
+        { headers: { Prefer: 'return=representation' } });
+      if (br.ok && Array.isArray(br.data) && br.data[0]) scanBatchId = br.data[0].batch_id;
+    } catch (_e) { /* ledger best-effort */ }
+
+    // Prompt 66/84 — resumable batches. Score at most one ollama-sized batch per
+    // invocation (min of the request's limit and JUNK_SCORE_BATCH_SIZE) AND stop
+    // at scoring's GUARANTEED wall-clock slice, so one HTTP invocation never
+    // outruns the Railway proxy. The scored ledger is the resume cursor: the next
+    // nightly run's junkScanAll excludes what this run scored and drains the next.
+    const batchSize = Math.min(limit, JUNK_SCORE_BATCH_SIZE);
+    const scoreBudgetMs = Math.min(JUNK_SCORE_BUDGET_MS,
+      remainingScoreBudget(Date.now(), tickDeadline, JUNK_MIN_SCORE_BUDGET_MS));
+    const summary = { source_run_id: sourceRunId, scan_batch_id: scanBatchId,
+      per_domain: junkDomainRollup(scan.perDomain), candidates_new: scan.fresh.length,
+      batch_size: batchSize, budget_ms: scoreBudgetMs,
+      naming_hygiene_backlog: namingHygieneFlat,
+      scan_cursors: scan.nextCursors, scan_errors: scanErrors, scan_budget_exhausted: !!scan.budgetExhausted,
+      scored: 0, proposed: 0, kept_not_enqueued: 0, failed: 0,
+      deterministic_dismissed: 0, llm_scored: 0, llm_dismiss_share: 0,
+      budget_exhausted: false, remaining_unscored: scan.fresh.length, by_verdict: {} };
+    // Prompt 85 — batch composition: deterministic-certainty junk (blank /
+    // all-non-alpha / exact placeholder) spends NO LLM call, so it is drained
+    // FIRST (cheap, up to JUNK_DET_BATCH_SIZE), then the ollama budget is spent on
+    // JUDGMENT classes only. This drains the ~199 blank-name pool fast instead of
+    // burning the whole LLM budget refusing it every night.
+    const detCands = [], llmCands = [];
+    for (const c of scan.fresh) {
+      if (deterministicDismissReason(c.entity_name)) detCands.push(c);
+      else llmCands.push(c);
+    }
+    // Phase 1 — score with NO writes yet, so the verdict distribution is known
+    // before we persist anything. `scoreVerdicts` is EVERY verdict (honest
+    // by_verdict); `llmVerdicts` is only the LLM-judged subset — the ONLY input to
+    // the dismiss-share guard, whose job is catching a runaway MODEL, not vetoing
+    // the arithmetic certainty of a blank name.
+    const scoredRows = [];
+    const scoreVerdicts = {};
+    const llmVerdicts = {};
+    // Phase 1a — deterministic dismissals first (no LLM, no budget spend).
+    for (const cand of detCands.slice(0, JUNK_DET_BATCH_SIZE)) {
+      try {
+        const { proposal, provider, model } = await scoreJunkCandidate(cand, fewShot);
+        summary.scored += 1;
+        summary.deterministic_dismissed += 1;
+        scoreVerdicts[proposal.verdict] = (scoreVerdicts[proposal.verdict] || 0) + 1;
+        scoredRows.push({ cand, proposal, provider, model });
+      } catch (e) {
+        summary.failed += 1;
+        console.warn('[junk-prescreen] deterministic score failed', cand.subject_ref, e?.message || e);
+      }
+    }
+    // Phase 1b — judgment classes under the ollama wall-clock budget.
+    const budgetRun = await scoreWithBudget(llmCands, async (cand) => {
+      try {
+        const { proposal, provider, model, skipped_llm, deterministic } = await scoreJunkCandidate(cand, fewShot);
+        summary.scored += 1;
+        scoreVerdicts[proposal.verdict] = (scoreVerdicts[proposal.verdict] || 0) + 1;
+        if (deterministic) summary.deterministic_dismissed += 1;
+        else if (!skipped_llm) llmVerdicts[proposal.verdict] = (llmVerdicts[proposal.verdict] || 0) + 1;
+        scoredRows.push({ cand, proposal, provider, model });
+      } catch (e) {
+        summary.failed += 1;
+        console.warn('[junk-prescreen] score failed', cand.subject_ref, e?.message || e);
+      }
+      return null;
+    }, { budgetMs: scoreBudgetMs, maxN: batchSize });
+    summary.budget_exhausted = budgetRun.budget_exhausted;
+    summary.remaining_unscored = Math.max(0, scan.fresh.length - scoredRows.length - summary.failed);
+    // Distribution guard — measures ONLY LLM-judged verdicts. The guard exists to
+    // catch a runaway MODEL anchoring on the heuristic; deterministic dismissals
+    // are arithmetic, not judgment, so they are EXCLUDED from the denominator (a
+    // 100%-deterministic batch is therefore never "suspect" and persists — the
+    // livelock fix). >90% dismiss AMONG LLM verdicts still refuses the batch.
+    const dist = dismissDistributionGuard(llmVerdicts, JUNK_DISMISS_GUARD_THRESHOLD);
+    summary.by_verdict = scoreVerdicts;
+    summary.llm_by_verdict = llmVerdicts;
+    summary.llm_scored = dist.total;
+    summary.llm_dismiss_share = dist.dismiss_share;
+    summary.distribution = dist;
+    if (dist.suspect_distribution) {
+      // Close the scan batch even on the refusal path — cursor advanced, honest
+      // by_verdict recorded — so it never lingers 'open' (Prompt 84 lifecycle).
+      await closeJunkScanBatch(scanBatchId, 'closed', summary);
+      await recordJunkPrescreenHealth({ status: 'amber', count: 0,
+        lastError: 'suspect_distribution: ' + Math.round(dist.dismiss_share * 100) + '% dismiss (> ' + Math.round(dist.threshold * 100) + '%) — batch not persisted',
+        details: summary });
+      return res.status(200).json({ ok: true, mode: 'apply', skipped: 'suspect_distribution', proposed: 0, ...summary });
+    }
+    // Phase 2 — persist ONLY actionable proposals (Prompt 65). A keep (LLM or
+    // guard veto) or an uncertain is a non-event: counted as kept_not_enqueued
+    // and dropped, never written — persisting it would flood the lane with
+    // nothing-to-do cards (honest-counts).
+    for (const { cand, proposal, provider, model } of scoredRows) {
+      if (!isEnqueueableJunkVerdict(proposal.verdict)) { summary.kept_not_enqueued += 1; continue; }
+      try {
+        const wr = await upsertJunkProposal(cand, proposal, { provider, model, sourceRunId, scanBatchId });
+        if (wr.ok) summary.proposed += 1;
+        else summary.failed += 1;
+      } catch (e) {
+        summary.failed += 1;
+        console.warn('[junk-prescreen] write failed', cand.subject_ref, e?.message || e);
+      }
+    }
+    // Resume cursor (Prompt 66): record EVERY scored candidate — enqueued proposals
+    // AND keeps/uncertains — so none is re-scored next tick unless its name changes.
+    // (Skipped on the suspect-distribution early return above, so a refused batch is
+    // re-evaluated rather than silently buried.)
+    await recordJunkScored(scoredRows, sourceRunId);
+    // Close the scan batch: status lifecycle (not perpetual 'open'), with the
+    // honest apply bookkeeping (scored / by_verdict / proposed) folded in (Prompt 84).
+    await closeJunkScanBatch(scanBatchId, 'closed', summary);
+    const problems = summary.failed || scanErrors.length;
+    const healthErr = scanErrors.length ? scanErrors.length + ' target scan(s) failed: ' + scanErrors.map((e) => e.target).join(',')
+      : (summary.failed ? summary.failed + ' proposal(s) failed in ' + sourceRunId : null);
+    await recordJunkPrescreenHealth({ status: problems ? 'amber' : 'green', count: summary.proposed,
+      lastError: healthErr, details: summary });
+    return res.status(200).json({ ok: true, mode: 'apply', ...summary });
+  }
+
+  // ---- GET dry-run: deterministic per-domain report; ?score=1 adds inline ---
+  // model proposals for sampling. NEVER writes. Reads (does not advance) cursors.
+  const cursors = await fetchJunkScanCursors().catch(() => ({}));
+  const scanDeadline = computeScanDeadline(Date.now(), {
+    tickBudgetMs: JUNK_TICK_BUDGET_MS, scanBudgetMs: JUNK_SCAN_BUDGET_MS,
+    minScoreBudgetMs: JUNK_MIN_SCORE_BUDGET_MS });
+  const scan = await junkScanAll(cursors, { deadline: scanDeadline });
+  const rollup = junkDomainRollup(scan.perDomain);
+  const scanErrors = junkScanErrors(scan.perDomain);
+  const out = { ok: true, mode: 'dry_run', enabled, flag_state: flag?.state || 'missing',
+    per_target: scan.perDomain, per_domain: rollup, candidates_new: scan.fresh.length,
+    naming_hygiene_backlog: junkNamingHygieneFlat(scan.perDomain),
+    scan_cursors: scan.nextCursors, scan_errors: scanErrors, scan_budget_exhausted: !!scan.budgetExhausted,
+    sample: scan.fresh.slice(0, 20) };
+  if (req.query.score === '1' || req.query.score === 'true') {
+    const fewShot = await fetchJunkFewShot();
+    // Prompt 66 — the inline path is size- AND time-capped so it never outruns
+    // the Railway proxy on ollama latency (~16s/call): `n` (default 6) bounds the
+    // count, JUNK_SCORE_BUDGET_MS the wall-clock; scoring stops at whichever hits.
+    const inlineN = Math.min(60, Math.max(1, parseInt(req.query.n || String(JUNK_SCORE_INLINE_DEFAULT_N), 10) || JUNK_SCORE_INLINE_DEFAULT_N));
+    // Prompt 85 — mirror the apply path: deterministic dismissals first (no LLM),
+    // then the judgment classes under the ollama budget; the guard sees only the
+    // LLM subset.
+    const detCands = [], llmCands = [];
+    for (const c of scan.fresh) {
+      if (deterministicDismissReason(c.entity_name)) detCands.push(c);
+      else llmCands.push(c);
+    }
+    const proposals = [];
+    const byVerdict = {};       // every verdict (honest by_verdict)
+    const llmVerdicts = {};     // LLM-judged only (guard denominator)
+    let keptNotEnqueued = 0;
+    let deterministicDismissed = 0;
+    const pushProposal = (cand, proposal, provider, model) => {
+      byVerdict[proposal.verdict] = (byVerdict[proposal.verdict] || 0) + 1;
+      const enqueueable = isEnqueueableJunkVerdict(proposal.verdict);
+      if (!enqueueable) keptNotEnqueued += 1;
+      proposals.push({ subject_ref: cand.subject_ref, domain: cand.domain, table: cand.table,
+        entity_name: cand.entity_name, heuristic: cand.heuristic, ...proposal,
+        would_enqueue: enqueueable, model_provider: provider, model_name: model });
+    };
+    for (const cand of detCands.slice(0, JUNK_DET_BATCH_SIZE)) {
+      try {
+        const { proposal, provider, model } = await scoreJunkCandidate(cand, fewShot);
+        deterministicDismissed += 1;
+        pushProposal(cand, proposal, provider, model);
+      } catch (e) { proposals.push({ subject_ref: cand.subject_ref, error: e?.message || String(e) }); }
+    }
+    const budgetRun = await scoreWithBudget(llmCands, async (cand) => {
+      try {
+        const { proposal, provider, model, skipped_llm, deterministic } = await scoreJunkCandidate(cand, fewShot);
+        if (deterministic) deterministicDismissed += 1;
+        else if (!skipped_llm) llmVerdicts[proposal.verdict] = (llmVerdicts[proposal.verdict] || 0) + 1;
+        pushProposal(cand, proposal, provider, model);
+      } catch (e) { proposals.push({ subject_ref: cand.subject_ref, error: e?.message || String(e) }); }
+      return null;
+    }, { budgetMs: JUNK_SCORE_BUDGET_MS, maxN: inlineN });
+    const dist = dismissDistributionGuard(llmVerdicts, JUNK_DISMISS_GUARD_THRESHOLD);
+    out.scored = proposals.length;
+    out.batch_size = inlineN;
+    out.budget_ms = JUNK_SCORE_BUDGET_MS;
+    out.budget_exhausted = budgetRun.budget_exhausted;
+    out.remaining_unscored = Math.max(0, scan.fresh.length - proposals.length);
+    out.by_verdict = byVerdict;
+    out.llm_by_verdict = llmVerdicts;
+    out.deterministic_dismissed = deterministicDismissed;
+    out.llm_scored = dist.total;
+    out.llm_dismiss_share = dist.dismiss_share;
+    out.kept_not_enqueued = keptNotEnqueued;
+    out.would_enqueue = proposals.filter((p) => p.would_enqueue).length;
+    out.distribution = dist;
+    out.suspect_distribution = dist.suspect_distribution;
+    out.proposals = proposals;
+    out.note = (dist.suspect_distribution
+      ? 'dry-run scoring — NO rows written. ⚠️ SUSPECT DISTRIBUTION (' + Math.round(dist.dismiss_share * 100) + '% dismiss > ' + Math.round(dist.threshold * 100) + '%): a POST apply would be REFUSED for this batch.'
+      : 'dry-run scoring — NO rows written. Only dismiss/rename/parse_contact proposals persist; keeps are counted (kept_not_enqueued) and dropped. Review, then POST (with the flag ON).')
+      + (budgetRun.budget_exhausted ? ' Scoring stopped at the ' + JUNK_SCORE_BUDGET_MS + 'ms budget (' + out.remaining_unscored + ' unscored remain).' : '');
+  }
+  return res.status(200).json(out);
+}
+
+// ============================================================================
+// W8 U5 (Prompt 79, 2026-08-08): naming-hygiene campaign.
+//
+// The rename/normalize unit. U1 classifies + counts the naming-hygiene backlog
+// (known_abbreviation + address_as_name) but never enqueues it; this tick turns
+// it into two proposal types, DETERMINISTIC-FIRST:
+//   * known_abbreviation -> RENAME (unambiguous dictionary expansion, NO LLM;
+//     ambiguous tokens only get the model via invokeExtractionAI).
+//   * address_as_name    -> LINK-DON'T-RENAME (resolve the property at that
+//     address; propose the link + a fill-blanks display name).
+// Proposals land in naming_hygiene_review (the Decision Center federated lane);
+// the verdict is HUMAN. Deterministic renames are bulk-confirmable.
+//
+//   GET  /api/naming-hygiene-tick            -> dry-run report (per-class/domain)
+//   GET  /api/naming-hygiene-tick?score=1    -> dry-run + inline sample (deterministic
+//                                               renames + a few LLM/address, NO writes)
+//   POST /api/naming-hygiene-tick            -> apply: scan + enqueue proposals
+//                                               (flag-gated; no-ops while OFF)
+// ============================================================================
+// Prompt 83 (W8 U5 tick bounding): the per-invocation scan is a WINDOW, not the
+// whole table. A keyset cursor (U2 pattern) advances the window each run so a
+// nightly cadence walks the 128k / 7-target scan space in bounded slices instead
+// of rescanning everything (the weight that 502'd the GET behind the proxy).
+const HYG_SCAN_WINDOW = Math.max(1000, parseInt(process.env.NAMING_HYGIENE_SCAN_WINDOW || '20000', 10));
+// Deterministic renames are cheap (no LLM) — a large nightly batch. LLM-assisted
+// (ambiguous) + address-link resolution are I/O-bound — smaller batches, bounded
+// by a wall-clock budget so one HTTP invocation never outruns the Railway proxy.
+const HYG_DET_BATCH = Math.max(1, parseInt(process.env.NAMING_HYGIENE_DET_BATCH || '50', 10));
+const HYG_LLM_BATCH = Math.max(1, parseInt(process.env.NAMING_HYGIENE_LLM_BATCH || '15', 10));
+const HYG_ADDR_BATCH = Math.max(1, parseInt(process.env.NAMING_HYGIENE_ADDR_BATCH || '15', 10));
+const HYG_SCORE_BUDGET_MS = Math.max(5000, parseInt(process.env.NAMING_HYGIENE_BUDGET_MS || '120000', 10));
+// The WHOLE-invocation wall-clock budget (scan + sample/apply), so no single GET
+// or cron POST outruns the Railway proxy / pg_net timeout. `budget_exhausted` is
+// reported honestly; the keyset cursor holds so the next run resumes the slice.
+const HYG_TICK_BUDGET_MS = Math.max(5000, parseInt(process.env.HYGIENE_TICK_BUDGET_MS || '120000', 10));
+// Cap the number of distinct leading-street-numbers folded into one batched
+// properties prefilter `or=(…)` filter (keeps the URL + response bounded).
+const HYG_ADDR_NUM_CAP = Math.max(10, parseInt(process.env.NAMING_HYGIENE_ADDR_NUM_CAP || '60', 10));
+
+function namingHygieneEnabled(flagRow) {
+  const env = String(process.env.W8_U5_NAMING_HYGIENE || '').toLowerCase();
+  if (['on', '1', 'true', 'yes', 'enabled'].includes(env)) return true;
+  return String(flagRow?.state || '').toLowerCase() === 'on';
+}
+
+async function fetchNamingHygieneFlag() {
+  try {
+    const r = await opsQuery('GET', 'feature_flags_registry?flag=eq.W8_U5_NAMING_HYGIENE&select=flag,state&limit=1', undefined, { countMode: 'none' });
+    return r.ok && Array.isArray(r.data) ? r.data[0] : null;
+  } catch (_e) { return null; }
+}
+
+async function recordNamingHygieneHealth({ status, count, lastError, details }) {
+  try {
+    await opsQuery('POST', 'rpc/lcc_record_health_event', {
+      p_source: 'naming_hygiene', p_check_name: 'ollama_naming_hygiene',
+      p_status: status, p_count: count || 0, p_last_error: lastError || null,
+      p_external_url: null, p_details: details || {},
+    });
+  } catch (_e) { /* health is best-effort */ }
+}
+
+// Page a target's (pk, name[, domain]) rows and classify each as a naming-hygiene
+// candidate. `domain` is pulled for the entities target so an address_as_name row
+// can be resolved against the right domain's property table.
+async function pullHygieneCandidatesForTarget(target, startCursor, deadline) {
+  const wantDomain = target.table === 'entities';
+  const cols = [target.pkCol, target.nameCol].concat(wantDomain ? ['domain'] : []).join(',');
+  const mergedPred = target.mergedCol ? '&' + target.mergedCol + '=is.null' : '';
+  // W8 U5 fix (2026-08-13): NEVER scan `asset` entities. An LCC asset entity is
+  // named by its street address BY CONVENTION (the property anchor). The
+  // address_as_name classifier would otherwise flag every one as a mis-entered
+  // name and propose a bogus "link to property + rename to the owner" — but the
+  // asset is already the property's identity holder, so the link is a no-op and
+  // the rename would corrupt the asset's name. Exclude assets at the source
+  // (address_as_name only ever applies to owner/contact rows).
+  const assetPred = (target.domain === 'lcc' && target.table === 'entities')
+    ? '&entity_type=neq.asset' : '';
+  const found = [];
+  const perClass = { known_abbreviation: 0, address_as_name: 0, actionable_abbrev: 0, actionable_address: 0 };
+  const PAGE = 1000;
+  let scanned = 0, truncated = false, reachedEnd = false, lastPk = null;
+  let cursor = startCursor != null && String(startCursor) !== '' ? String(startCursor) : null;
+  for (let pulled = 0; pulled < HYG_SCAN_WINDOW; pulled += PAGE) {
+    // Wall-clock budget: stop BEFORE a page we can't afford; the cursor holds so
+    // the next run resumes this exact slice.
+    if (deadline && Date.now() >= deadline) { truncated = true; break; }
+    const cursorPred = cursor != null ? '&' + target.pkCol + '=gt.' + encodeURIComponent(cursor) : '';
+    const path = target.table + '?select=' + cols + mergedPred + assetPred + cursorPred
+      + '&order=' + target.pkCol + '.asc&limit=' + PAGE;
+    const r = target.domain === 'lcc'
+      ? await opsQuery('GET', path)
+      : await domainQuery(target.domain, 'GET', path);
+    if (!r.ok) {
+      // LOUD (Prompt 68/83): surface status + detail, never a silent records:0.
+      const detail = r.data && typeof r.data === 'object'
+        ? (r.data.message || r.data.error || JSON.stringify(r.data)) : String(r.data || '');
+      const err = 'HTTP ' + (r.status || '?') + (detail ? ': ' + String(detail).slice(0, 300) : '');
+      console.error('[naming-hygiene] SCAN FAILED', target.domain, target.table, err, 'path=', path);
+      return { candidates: found, scanned, truncated, perClass, error: err, status: r.status || null,
+        nextCursor: startCursor != null ? String(startCursor) : null, wrapped: false };
+    }
+    const rows = Array.isArray(r.data) ? r.data : [];
+    scanned += rows.length;
+    for (const row of rows) {
+      const pk = row[target.pkCol];
+      lastPk = pk;
+      cursor = String(pk);
+      const name = row[target.nameCol];
+      const cls = hygieneClass(name);
+      if (!cls) continue;
+      perClass[cls] = (perClass[cls] || 0) + 1;
+      const base = {
+        domain: target.domain, table: target.table, pk: String(pk),
+        entity_name: name == null ? '' : String(name),
+        row_domain: wantDomain ? (row.domain || null) : target.domain,
+        name_hash: hygieneNameHash(name),
+        hygiene_class: cls,
+        subject_ref: hygieneSubjectRef(target.domain, target.table, pk),
+      };
+      if (cls === 'known_abbreviation') {
+        const plan = planAbbreviationProposal(name);
+        if (!plan.actionable) continue; // e.g. only "Corp" — nothing to expand
+        perClass.actionable_abbrev += 1;
+        found.push({ ...base, plan });
+      } else { // address_as_name
+        perClass.actionable_address += 1;
+        found.push({ ...base, plan: { proposed_action: 'link_property' } });
+      }
+    }
+    if (rows.length < PAGE) { reachedEnd = true; break; }
+    if (pulled + PAGE >= HYG_SCAN_WINDOW) truncated = true;
+  }
+  if (truncated) console.warn('[naming-hygiene] scan window bounded', target.domain, target.table, HYG_SCAN_WINDOW);
+  // Wrap the keyset when the table end was reached OR the window under-filled, so
+  // the next run restarts from the top; otherwise advance to the last pk seen.
+  const wrapped = reachedEnd || !truncated;
+  const nextCursor = wrapped ? null
+    : (lastPk != null ? String(lastPk) : (startCursor != null ? String(startCursor) : null));
+  return { candidates: found, scanned, truncated, perClass, error: null, status: 200, nextCursor, wrapped };
+}
+
+// Prompt 83: BATCHED address resolution — ONE properties prefilter query per
+// domain over the batch's leading street numbers, then one bounded owner-name
+// fetch, then match in memory. Replaces the per-candidate property query that
+// turned a batch into thousands of round trips. Returns a Map subject_ref →
+// resolution (the shape planAddressLinkProposal consumes). Conservative + LOUD:
+// a failed prefilter marks every candidate in that domain resolveError.
+async function resolveHygieneAddressBatch(candidates) {
+  const out = new Map();
+  const byDom = new Map();
+  for (const c of (candidates || [])) {
+    const d = String(c.row_domain || c.domain || '').toLowerCase();
+    const dom = d === 'dialysis' ? 'dia' : d === 'government' ? 'gov' : d;
+    if (!byDom.has(dom)) byDom.set(dom, []);
+    byDom.get(dom).push(c);
+  }
+  for (const [dom, list] of byDom) {
+    if (dom !== 'dia' && dom !== 'gov') {
+      for (const c of list) out.set(c.subject_ref, { resolved: null, ambiguousCount: 0, skipped: 'domain_unsupported' });
+      continue;
+    }
+    const numbers = collectAddressNumbers(list).slice(0, HYG_ADDR_NUM_CAP);
+    if (!numbers.length) {
+      for (const c of list) out.set(c.subject_ref, { resolved: null, ambiguousCount: 0 });
+      continue;
+    }
+    const orFilter = 'or=(' + numbers.map((n) => 'address.ilike.' + encodeURIComponent(n + '*')).join(',') + ')';
+    let rows = null;
+    try {
+      const r = await domainQuery(dom, 'GET', 'properties?select=property_id,address,recorded_owner_id&' + orFilter + '&limit=1000');
+      if (r.ok && Array.isArray(r.data)) rows = r.data;
+      else { for (const c of list) out.set(c.subject_ref, { resolved: null, ambiguousCount: 0, resolveError: 'HTTP ' + (r.status || '?') }); continue; }
+    } catch (e) { for (const c of list) out.set(c.subject_ref, { resolved: null, ambiguousCount: 0, resolveError: e?.message || String(e) }); continue; }
+    // One bounded owner-name fetch (in.()) for all matched properties.
+    const ownerIds = [...new Set(rows.map((p) => p.recorded_owner_id).filter((x) => x != null).map(String))];
+    const ownerNameById = new Map();
+    const CH = 100;
+    for (let i = 0; i < ownerIds.length; i += CH) {
+      const slice = ownerIds.slice(i, i + CH);
+      try {
+        const orr = await domainQuery(dom, 'GET', 'recorded_owners?select=recorded_owner_id,name&recorded_owner_id=in.('
+          + slice.map(encodeURIComponent).join(',') + ')');
+        const orows = (orr.ok && Array.isArray(orr.data)) ? orr.data : [];
+        for (const o of orows) ownerNameById.set(String(o.recorded_owner_id), o.name);
+      } catch (_e) { /* owner name is best-effort (fill-blanks); link still proposable */ }
+    }
+    for (const c of list) out.set(c.subject_ref, matchCandidateToProperties(dom, c.entity_name, rows, ownerNameById));
+  }
+  return out;
+}
+
+// Deterministic scan across every target. Splits candidates into deterministic
+// renames (no LLM), LLM-assisted renames (ambiguous tokens), and address links.
+// Value-gate (Prompt 79): connected entities (relationships/portfolio) rank FIRST
+// — renaming a connected entity improves every surface it appears on.
+async function hygieneScanAll(cursors = {}, opts = {}) {
+  const deadline = Number.isFinite(opts.deadline) ? opts.deadline : null;
+  const [existing, decided, scoredKeys] = await Promise.all([
+    (async () => {
+      const set = new Set(); const PAGE = 1000;
+      for (let off = 0; ; off += PAGE) {
+        const r = await opsQuery('GET', 'naming_hygiene_review?select=subject_ref&order=review_id.asc&limit=' + PAGE + '&offset=' + off);
+        const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+        for (const x of rows) if (x.subject_ref) set.add(x.subject_ref);
+        if (rows.length < PAGE) break;
+      }
+      return set;
+    })(),
+    fetchExcludedRefs('naming_hygiene_review').catch(() => new Set()),
+    (async () => {
+      const set = new Set(); const PAGE = 1000;
+      try {
+        for (let off = 0; ; off += PAGE) {
+          const r = await opsQuery('GET', 'naming_hygiene_scored?select=subject_ref,name_hash&order=id.asc&limit=' + PAGE + '&offset=' + off);
+          if (!r.ok) break;
+          const rows = Array.isArray(r.data) ? r.data : [];
+          for (const x of rows) if (x.subject_ref) set.add(x.subject_ref + ':' + (x.name_hash || ''));
+          if (rows.length < PAGE) break;
+        }
+      } catch (_e) { /* degrade gracefully */ }
+      return set;
+    })(),
+  ]);
+  const perDomain = {};
+  const nextCursors = {};
+  const deterministic = [], llm = [], address = [];
+  let budgetExhausted = false;
+  for (const target of NAMING_HYGIENE_TARGETS) {
+    const key = target.domain + ':' + target.table;
+    // Whole-invocation budget: once spent, skip the remaining targets and HOLD
+    // their cursors so the next run resumes them (never a silent partial scan).
+    if (deadline && Date.now() >= deadline) {
+      budgetExhausted = true;
+      nextCursors[key] = cursors ? (cursors[key] || null) : null;
+      perDomain[key] = { domain: target.domain, table: target.table, skipped: 'budget_exhausted',
+        scanned: 0, candidates: 0, fresh: 0, deterministic: 0, llm_assisted: 0, address_links: 0 };
+      continue;
+    }
+    let pull;
+    try { pull = await pullHygieneCandidatesForTarget(target, cursors ? cursors[key] : null, deadline); }
+    catch (e) {
+      perDomain[key] = { domain: target.domain, table: target.table, error: e?.message || String(e), candidates: 0, scanned: 0, fresh: 0 };
+      nextCursors[key] = cursors ? (cursors[key] || null) : null;
+      continue;
+    }
+    if (pull.error) {
+      // A failed scan surfaces LOUDLY with candidates:0 AND the error — never a
+      // silent zero. The cursor holds (retry the same slice next run).
+      perDomain[key] = { domain: target.domain, table: target.table, error: pull.error,
+        status: pull.status || null, scanned: 0, candidates: 0, fresh: 0,
+        deterministic: 0, llm_assisted: 0, address_links: 0, per_class: pull.perClass, truncated: false };
+      nextCursors[key] = pull.nextCursor != null ? String(pull.nextCursor) : (cursors ? (cursors[key] || null) : null);
+      continue;
+    }
+    nextCursors[key] = pull.nextCursor != null ? String(pull.nextCursor) : null;
+    const notProposed = pull.candidates.filter((c) => !existing.has(c.subject_ref) && !decided.has(c.subject_ref));
+    const fresh = selectUnscoredCandidates(
+      notProposed.map((c) => ({ ...c })), scoredKeys,
+    );
+    // Value-rank: connected-first (reuse U1's batched FK-child probe).
+    let connectedSet = new Set();
+    try { connectedSet = await junkConnectedPkSet(target, fresh.map((c) => c.pk)); }
+    catch (_e) { connectedSet = new Set(); }
+    for (const c of fresh) c.connected = connectedSet.has(String(c.pk));
+    fresh.sort((a, b) => (b.connected === true) - (a.connected === true));
+    let detN = 0, llmN = 0, addrN = 0;
+    for (const c of fresh) {
+      if (c.hygiene_class === 'known_abbreviation') {
+        if (c.plan.deterministic) { deterministic.push(c); detN += 1; }
+        else { llm.push(c); llmN += 1; }
+      } else { address.push(c); addrN += 1; }
+    }
+    perDomain[key] = {
+      domain: target.domain, table: target.table,
+      scanned: pull.scanned, candidates: pull.candidates.length,
+      fresh: fresh.length, deterministic: detN, llm_assisted: llmN, address_links: addrN,
+      connected_ranked_first: fresh.filter((c) => c.connected).length,
+      per_class: pull.perClass, truncated: pull.truncated || false,
+      scan_cursor_from: (cursors && cursors[key]) || null, scan_cursor_to: nextCursors[key],
+      wrapped: pull.wrapped || false,
+    };
+  }
+  return { perDomain, deterministic, llm, address, nextCursors, budgetExhausted };
+}
+
+// Collect per-target scan failures for LOUD surfacing (Prompt 83). A non-empty
+// list means a target returned a real HTTP error instead of rows.
+function hygieneScanErrors(perDomain) {
+  const out = [];
+  for (const [key, v] of Object.entries(perDomain || {})) {
+    if (v && v.error) out.push({ target: key, status: v.status || null, error: v.error });
+  }
+  return out;
+}
+
+// Read the per-target keyset cursors persisted on the most recent scan batch
+// (details.scan_cursors) — U1/U2 pattern: the ledger IS the cursor. Best-effort.
+async function fetchHygieneScanCursors() {
+  try {
+    const r = await opsQuery('GET', 'naming_hygiene_batch?select=details&batch_kind=eq.scan&order=created_at.desc&limit=1');
+    if (r.ok && Array.isArray(r.data) && r.data[0] && r.data[0].details && r.data[0].details.scan_cursors) {
+      const c = r.data[0].details.scan_cursors;
+      return c && typeof c === 'object' ? c : {};
+    }
+  } catch (_e) { /* best-effort */ }
+  return {};
+}
+
+function hygieneDomainRollup(perDomain) {
+  const roll = {};
+  for (const v of Object.values(perDomain)) {
+    const d = v.domain || 'unknown';
+    roll[d] = roll[d] || { scanned: 0, candidates: 0, fresh: 0, deterministic: 0, llm_assisted: 0, address_links: 0,
+      known_abbreviation: 0, address_as_name: 0 };
+    roll[d].scanned += v.scanned || 0;
+    roll[d].candidates += v.candidates || 0;
+    roll[d].fresh += v.fresh || 0;
+    roll[d].deterministic += v.deterministic || 0;
+    roll[d].llm_assisted += v.llm_assisted || 0;
+    roll[d].address_links += v.address_links || 0;
+    const pc = v.per_class || {};
+    roll[d].known_abbreviation += pc.known_abbreviation || 0;
+    roll[d].address_as_name += pc.address_as_name || 0;
+  }
+  return roll;
+}
+
+async function upsertHygieneProposal(candidate, proposal, meta) {
+  const body = {
+    subject_ref: candidate.subject_ref,
+    domain: candidate.domain, table_name: candidate.table, pk_value: candidate.pk,
+    entity_name: candidate.entity_name, hygiene_class: candidate.hygiene_class,
+    proposed_action: proposal.proposed_action, proposed_name: proposal.proposed_name || null,
+    proposed_property: proposal.proposed_property || null,
+    deterministic: !!proposal.deterministic, confidence: proposal.confidence != null ? proposal.confidence : 0,
+    evidence_quote: proposal.evidence_quote || null, reason: proposal.reason || null,
+    model_provider: meta.provider || null, model_name: meta.model || null,
+    source_run_id: meta.sourceRunId, scan_batch_id: meta.scanBatchId || null,
+    status: 'proposed',
+  };
+  return opsQuery('POST', 'naming_hygiene_review?on_conflict=subject_ref', body,
+    { headers: { Prefer: 'return=representation,resolution=merge-duplicates' } });
+}
+
+async function recordHygieneScored(scoredRows, sourceRunId) {
+  const rows = (scoredRows || []).map(({ cand, action, enqueued }) => ({
+    subject_ref: cand.subject_ref, domain: cand.domain, table_name: cand.table, pk_value: cand.pk,
+    name_hash: cand.name_hash != null ? cand.name_hash : hygieneNameHash(cand.entity_name),
+    entity_name: cand.entity_name, hygiene_class: cand.hygiene_class,
+    action: action || 'keep', enqueued: !!enqueued, source_run_id: sourceRunId,
+  }));
+  if (!rows.length) return { ok: true, skipped: 'empty' };
+  try {
+    return await opsQuery('POST', 'naming_hygiene_scored?on_conflict=domain,table_name,pk_value,name_hash', rows,
+      { headers: { Prefer: 'resolution=merge-duplicates,return=minimal' } });
+  } catch (e) {
+    console.warn('[naming-hygiene] scored-ledger write failed', e?.message || e);
+    return { ok: false, error: e?.message || String(e) };
+  }
+}
+
+// Build the deterministic-rename proposal object for a candidate (no LLM).
+function hygieneDeterministicProposal(cand) {
+  return {
+    proposed_action: 'rename', proposed_name: cand.plan.proposed_name,
+    deterministic: true, confidence: 1,
+    evidence_quote: cand.plan.evidence, reason: cand.plan.reason,
+  };
+}
+
+// Prompt 83: crash-proof envelope. Any uncaught throw yields a JSON 500
+// ({ok:false, error, stage}) — never a response-less hang (the class of failure
+// that produced Railway's 502 "Application failed to respond").
+async function handleNamingHygieneTick(req, res) {
+  const stage = { at: 'entry' };
+  try {
+    return await namingHygieneTickImpl(req, res, stage);
+  } catch (e) {
+    if (res.headersSent) return;
+    return res.status(500).json({ ok: false, error: (e && e.message) ? e.message : String(e), stage: stage.at });
+  }
+}
+
+async function namingHygieneTickImpl(req, res, stage) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
+  stage.at = 'authenticate';
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  stage.at = 'fetch_flag';
+  const flag = await fetchNamingHygieneFlag();
+  const enabled = namingHygieneEnabled(flag);
+  const tickStart = Date.now();
+  const deadline = tickStart + HYG_TICK_BUDGET_MS;
+  const stageErrors = [];
+
+  // ---- POST apply path: flag-gated. No-op (honest health) while OFF. --------
+  if (req.method === 'POST') {
+    if (!enabled) {
+      await recordNamingHygieneHealth({ status: 'amber', count: 0,
+        lastError: 'W8_U5_NAMING_HYGIENE feature flag is off',
+        details: { enabled: false, flag_state: flag?.state || 'missing' } });
+      return res.status(200).json({ ok: true, skipped: 'feature_flag_off', enabled: false });
+    }
+    const sourceRunId = 'w8u5_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
+    // Resumable keyset: read where the last run stopped, scan the next window.
+    stage.at = 'fetch_cursors';
+    const cursors = await fetchHygieneScanCursors().catch((e) => { stageErrors.push({ stage: 'fetch_cursors', error: e?.message || String(e) }); return {}; });
+    stage.at = 'scan';
+    const scan = await hygieneScanAll(cursors, { deadline });
+    const scanErrors = hygieneScanErrors(scan.perDomain);
+    stage.at = 'record_batch';
+    let scanBatchId = null;
+    try {
+      const br = await opsQuery('POST', 'naming_hygiene_batch',
+        { batch_kind: 'scan', source_run_id: sourceRunId, status: 'open', actor: user.id || null,
+          details: { per_domain: scan.perDomain, rollup: hygieneDomainRollup(scan.perDomain),
+            deterministic: scan.deterministic.length, llm: scan.llm.length, address: scan.address.length,
+            scan_cursors: scan.nextCursors, scan_errors: scanErrors, budget_exhausted: scan.budgetExhausted } },
+        { headers: { Prefer: 'return=representation' } });
+      if (br.ok && Array.isArray(br.data) && br.data[0]) scanBatchId = br.data[0].batch_id;
+    } catch (_e) { /* ledger best-effort */ }
+
+    const summary = { source_run_id: sourceRunId, scan_batch_id: scanBatchId,
+      per_domain: hygieneDomainRollup(scan.perDomain),
+      deterministic_available: scan.deterministic.length, llm_available: scan.llm.length,
+      address_available: scan.address.length,
+      proposed_rename_deterministic: 0, proposed_rename_llm: 0, proposed_link: 0,
+      kept_not_enqueued: 0, failed: 0, budget_exhausted: !!scan.budgetExhausted,
+      scan_errors: scanErrors, scan_cursors: scan.nextCursors };
+    const scoredRows = [];
+    const meta = { sourceRunId, scanBatchId };
+
+    // Phase 1 — deterministic renames (NO LLM). Cheap; drain up to HYG_DET_BATCH,
+    // budget-bounded (stop before the deadline; the cursor resumes next run).
+    stage.at = 'phase_deterministic';
+    for (const cand of scan.deterministic.slice(0, HYG_DET_BATCH)) {
+      if (Date.now() >= deadline) { summary.budget_exhausted = true; break; }
+      const proposal = hygieneDeterministicProposal(cand);
+      try {
+        const wr = await upsertHygieneProposal(cand, proposal, meta);
+        if (wr.ok) { summary.proposed_rename_deterministic += 1; scoredRows.push({ cand, action: 'rename', enqueued: true }); }
+        else { summary.failed += 1; }
+      } catch (e) { summary.failed += 1; console.warn('[naming-hygiene] det write failed', cand.subject_ref, e?.message || e); }
+    }
+
+    // Phase 2 — LLM-assisted renames (ambiguous tokens), budget + batch bounded.
+    stage.at = 'phase_llm';
+    const llmRun = await scoreWithBudget(scan.llm, async (cand) => {
+      try {
+        const prompt = buildAbbrevExpansionPrompt({
+          entity_name: cand.entity_name, domain: cand.domain, table: cand.table,
+          ambiguous: cand.plan.ambiguous, partial_expansion: cand.plan.partial_expansion,
+        });
+        const ai = await invokeExtractionAI({ prompt, surface: 'naming_hygiene' });
+        const parsed = parseExpansionJson(ai?.data?.response || '');
+        const norm = normalizeExpansionProposal(parsed, cand);
+        if (norm.action === 'rename' && norm.proposed_name) {
+          const proposal = { proposed_action: 'rename', proposed_name: norm.proposed_name,
+            deterministic: false, confidence: norm.confidence,
+            evidence_quote: cand.plan.evidence, reason: norm.reason };
+          const wr = await upsertHygieneProposal(cand, proposal, { ...meta, provider: ai?.provider || null, model: ai?.data?.model || null });
+          if (wr.ok) { summary.proposed_rename_llm += 1; scoredRows.push({ cand, action: 'rename', enqueued: true }); }
+          else summary.failed += 1;
+        } else {
+          summary.kept_not_enqueued += 1;
+          scoredRows.push({ cand, action: norm.action, enqueued: false });
+        }
+      } catch (e) { summary.failed += 1; console.warn('[naming-hygiene] llm score failed', cand.subject_ref, e?.message || e); }
+      return null;
+    }, { budgetMs: Math.max(0, deadline - Date.now()), maxN: HYG_LLM_BATCH });
+    if (llmRun.budget_exhausted) summary.budget_exhausted = true;
+
+    // Phase 3 — address links, BATCH-resolved (one prefilter query per domain).
+    stage.at = 'phase_address';
+    const addrBatch = (Date.now() >= deadline) ? [] : scan.address.slice(0, HYG_ADDR_BATCH);
+    if (Date.now() >= deadline && scan.address.length) summary.budget_exhausted = true;
+    let addrResById = new Map();
+    if (addrBatch.length) {
+      try { addrResById = await resolveHygieneAddressBatch(addrBatch); }
+      catch (e) { stageErrors.push({ stage: 'phase_address', error: e?.message || String(e) }); }
+    }
+    for (const cand of addrBatch) {
+      try {
+        const resolution = addrResById.get(cand.subject_ref) || { resolved: null, ambiguousCount: 0 };
+        const plan = planAddressLinkProposal(cand.entity_name, resolution);
+        if (plan.actionable && isEnqueueableHygieneProposal(plan)) {
+          const proposal = { proposed_action: 'link_property', proposed_name: plan.proposed_name || null,
+            proposed_property: plan.proposed_property, deterministic: false, confidence: 0.9,
+            evidence_quote: cand.entity_name, reason: plan.reason };
+          const wr = await upsertHygieneProposal(cand, proposal, meta);
+          if (wr.ok) { summary.proposed_link += 1; scoredRows.push({ cand, action: 'link_property', enqueued: true }); }
+          else summary.failed += 1;
+        } else {
+          summary.kept_not_enqueued += 1;
+          scoredRows.push({ cand, action: plan.proposed_action, enqueued: false });
+        }
+      } catch (e) { summary.failed += 1; console.warn('[naming-hygiene] addr link failed', cand.subject_ref, e?.message || e); }
+    }
+
+    stage.at = 'record_scored';
+    await recordHygieneScored(scoredRows, sourceRunId);
+    const totalProposed = summary.proposed_rename_deterministic + summary.proposed_rename_llm + summary.proposed_link;
+    summary.stage_errors = stageErrors;
+    const problems = summary.failed || scanErrors.length || stageErrors.length;
+    const healthErr = scanErrors.length ? scanErrors.length + ' target scan(s) failed: ' + scanErrors.map((e) => e.target).join(',')
+      : (summary.failed ? summary.failed + ' proposal(s) failed in ' + sourceRunId : (stageErrors.length ? stageErrors.length + ' stage error(s)' : null));
+    stage.at = 'record_health';
+    await recordNamingHygieneHealth({ status: problems ? 'amber' : 'green', count: totalProposed,
+      lastError: healthErr, details: summary });
+    return res.status(200).json({ ok: true, mode: 'apply', total_proposed: totalProposed, ...summary });
+  }
+
+  // ---- GET dry-run: per-class/per-domain report; ?score=1 adds an inline -----
+  // sample. NEVER writes; address resolution runs ONLY for the sampled slice
+  // (the full pool is counted, not resolved). Reads (does not advance) cursors.
+  stage.at = 'fetch_cursors';
+  const cursors = await fetchHygieneScanCursors().catch(() => ({}));
+  stage.at = 'scan';
+  const scan = await hygieneScanAll(cursors, { deadline });
+  const scanErrors = hygieneScanErrors(scan.perDomain);
+  const rollup = hygieneDomainRollup(scan.perDomain);
+  const out = { ok: true, mode: 'dry_run', enabled, flag_state: flag?.state || 'missing',
+    per_target: scan.perDomain, per_domain: rollup, scan_errors: scanErrors, scan_cursors: scan.nextCursors,
+    budget_exhausted: !!scan.budgetExhausted,
+    available: { deterministic: scan.deterministic.length, llm_assisted: scan.llm.length, address_links: scan.address.length },
+    // Deterministic renames are the sampleable, no-LLM sheet — shown verbatim.
+    deterministic_sample: scan.deterministic.slice(0, 30).map((c) => ({
+      subject_ref: c.subject_ref, domain: c.domain, table: c.table, connected: c.connected,
+      from: c.entity_name, to: c.plan.proposed_name, evidence: c.plan.evidence })),
+    llm_pending_sample: scan.llm.slice(0, 20).map((c) => ({
+      subject_ref: c.subject_ref, domain: c.domain, table: c.table, connected: c.connected,
+      name: c.entity_name, ambiguous: c.plan.ambiguous })),
+    address_pending_sample: scan.address.slice(0, 20).map((c) => ({
+      subject_ref: c.subject_ref, domain: c.domain, row_domain: c.row_domain, table: c.table,
+      connected: c.connected, name: c.entity_name })),
+    note: 'dry-run — NO rows written. The full pool is counted; address resolution runs only for the sampled slice (?score=1&n=). Deterministic renames are unambiguous dictionary expansions (bulk-confirmable).' };
+  if (scanErrors.length) {
+    out.scan_error_note = scanErrors.length + ' target(s) FAILED to scan (surfaced, not swallowed): '
+      + scanErrors.map((e) => e.target + ' → ' + e.error).join(' | ');
+  }
+  if (req.query.score === '1' || req.query.score === 'true') {
+    // Inline sample: score a few ambiguous renames + BATCH-resolve a few address
+    // links, NO writes — a sheet Scott can review before flipping the flag. Both
+    // share the whole-invocation wall-clock budget.
+    const inlineN = Math.min(20, Math.max(1, parseInt(req.query.n || '6', 10) || 6));
+    stage.at = 'sample_llm';
+    const llmProposals = [];
+    const llmSample = await scoreWithBudget(scan.llm, async (cand) => {
+      try {
+        const prompt = buildAbbrevExpansionPrompt({ entity_name: cand.entity_name, domain: cand.domain,
+          table: cand.table, ambiguous: cand.plan.ambiguous, partial_expansion: cand.plan.partial_expansion });
+        const ai = await invokeExtractionAI({ prompt, surface: 'naming_hygiene' });
+        const norm = normalizeExpansionProposal(parseExpansionJson(ai?.data?.response || ''), cand);
+        llmProposals.push({ subject_ref: cand.subject_ref, name: cand.entity_name, ambiguous: cand.plan.ambiguous,
+          ...norm, model_provider: ai?.provider || null, model_name: ai?.data?.model || null });
+      } catch (e) { llmProposals.push({ subject_ref: cand.subject_ref, error: e?.message || String(e) }); }
+      return null;
+    }, { budgetMs: Math.max(0, deadline - Date.now()), maxN: inlineN });
+    stage.at = 'sample_address';
+    const addrProposals = [];
+    const addrSample = (Date.now() >= deadline) ? [] : scan.address.slice(0, inlineN);
+    let addrResById = new Map();
+    if (addrSample.length) {
+      try { addrResById = await resolveHygieneAddressBatch(addrSample); }
+      catch (e) { stageErrors.push({ stage: 'sample_address', error: e?.message || String(e) }); }
+    }
+    for (const cand of addrSample) {
+      const resolution = addrResById.get(cand.subject_ref) || { resolved: null, ambiguousCount: 0 };
+      addrProposals.push({ subject_ref: cand.subject_ref, name: cand.entity_name,
+        ...planAddressLinkProposal(cand.entity_name, resolution) });
+    }
+    out.llm_proposals = llmProposals;
+    out.address_proposals = addrProposals;
+    out.sample_budget_exhausted = !!(llmSample.budget_exhausted || (scan.address.length && !addrSample.length && Date.now() >= deadline));
+    if (stageErrors.length) out.stage_errors = stageErrors;
+  }
+  return res.status(200).json(out);
+}
+
+// ============================================================================
+// W8 U2 (Prompt 63, 2026-08-07): Ollama duplicate-pair proposals → resolver fuel.
+//
+// Reuses U1's shapes (pure planner module, GET dry-run / POST flag-gated apply,
+// nightly cron, in-migration flag). A deterministic near-miss generator (NO LLM,
+// api/_shared/dup-pair-planner.js) finds the name/address/abbrev pairs the
+// resolver's token-blocks skip; Ollama gives a same_party/distinct/unsure second
+// look via invokeExtractionAI({surface:'clean_assist'}); PROPOSABLE pairs
+// (decided verdict + confidence floor) land in w8_u2_dup_pair, surfaced through
+// the EXISTING owner_reconcile resolver review pool (seeder 'w8_u2_ollama_pair').
+// The verdict is HUMAN and writes an entity_match_labels row — NEVER a merge.
+//
+//   GET  /api/dup-pair-tick            -> dry-run report (per-domain counts)
+//   GET  /api/dup-pair-tick?score=1    -> dry-run + inline model proposals (NO writes)
+//   POST /api/dup-pair-tick            -> apply: generate + score + write proposals
+//                                         (flag-gated; no-ops while OFF)
+// ============================================================================
+const DUP_PAIR_MAX_RECORDS = Math.max(500, parseInt(process.env.DUP_PAIR_MAX_RECORDS || '8000', 10));
+const DUP_PAIR_MAX_PER_DOMAIN = Math.max(20, parseInt(process.env.DUP_PAIR_MAX_PER_DOMAIN || '200', 10));
+const DUP_PAIR_SCORE_BUDGET_MS = Math.max(5000, parseInt(process.env.DUP_PAIR_SCORE_BUDGET_MS || '120000', 10));
+const DUP_PAIR_SCORE_BATCH_SIZE = Math.max(1, parseInt(process.env.DUP_PAIR_SCORE_BATCH_SIZE || '25', 10));
+const DUP_PAIR_INLINE_DEFAULT_N = Math.max(1, parseInt(process.env.DUP_PAIR_INLINE_N || '6', 10));
+const DUP_PAIR_MIN_CONFIDENCE = (() => {
+  const v = parseFloat(process.env.DUP_PAIR_MIN_CONFIDENCE || '0.6');
+  return Number.isFinite(v) && v > 0 && v <= 1 ? v : 0.6;
+})();
+const DUP_PAIR_NAME_THRESHOLD = (() => {
+  const v = parseFloat(process.env.DUP_PAIR_NAME_THRESHOLD || '0.82');
+  return Number.isFinite(v) && v > 0 && v <= 1 ? v : 0.82;
+})();
+
+function dupPairEnabled(flagRow) {
+  const env = String(process.env.W8_U2_DUP_PAIRS || '').toLowerCase();
+  if (['on', '1', 'true', 'yes', 'enabled'].includes(env)) return true;
+  return String(flagRow?.state || '').toLowerCase() === 'on';
+}
+
+async function fetchDupPairFlag() {
+  try {
+    const r = await opsQuery('GET', 'feature_flags_registry?flag=eq.W8_U2_DUP_PAIRS&select=flag,state&limit=1', undefined, { countMode: 'none' });
+    return r.ok && Array.isArray(r.data) ? r.data[0] : null;
+  } catch (_e) { return null; }
+}
+
+// Few-shot grounding from real accrued human pair verdicts (entity_match_labels),
+// so the model scores against the operator's rubric. Best-effort; empty on failure.
+async function fetchDupPairFewShot() {
+  try {
+    const r = await opsQuery('GET', 'entity_match_labels?select=owner_a,owner_b,verdict'
+      + '&owner_a=not.is.null&owner_b=not.is.null&order=decided_at.desc.nullslast&limit=8');
+    if (!r.ok || !Array.isArray(r.data)) return [];
+    return r.data.map((d) => (d.owner_a && d.owner_b)
+      ? { a: d.owner_a, b: d.owner_b, verdict: String(d.verdict) } : null).filter(Boolean);
+  } catch (_e) { return []; }
+}
+
+// Pull (pk, name[, address]) rows for a target, bounded by DUP_PAIR_MAX_RECORDS.
+// The JS generator is authoritative; the pull is a nightly ceiling (logged on hit).
+//
+// Prompt 68 coverage fixes:
+//   * LOUD error surfacing — a non-ok PostgREST response (e.g. a 403 edge-allowlist
+//     block or a 400 on a non-existent column) is NO LONGER swallowed to records:0.
+//     It is captured, logged as an error, and propagated so the dry-run/health show
+//     the real failure instead of a silent zero.
+//   * Resumable keyset window — instead of always scanning the first
+//     DUP_PAIR_MAX_RECORDS by pk, the scan starts AFTER `startCursor` (a keyset on
+//     the ascending pk) so successive nightly runs cover DIFFERENT slices of a
+//     table larger than the window (the 60k lcc.entities case). Returns the last pk
+//     seen as `nextCursor`; when the table end is reached it wraps (nextCursor=null
+//     ⇒ the next run restarts from the beginning).
+async function pullDupPairRecordsForTarget(target, startCursor) {
+  const cols = target.pkCol + ',' + target.nameCol + (target.addrCol ? ',' + target.addrCol : '');
+  const mergedPred = target.mergedCol ? '&' + target.mergedCol + '=is.null' : '';
+  const extraPred = target.extraFilter ? '&' + target.extraFilter : '';
+  const namePred = '&' + target.nameCol + '=not.is.null';
+  const records = [];
+  const PAGE = 1000;
+  let scanned = 0;
+  let truncated = false;
+  let reachedEnd = false;
+  let lastPk = null;
+  let cursor = startCursor != null && String(startCursor) !== '' ? String(startCursor) : null;
+  for (let pulled = 0; pulled < DUP_PAIR_MAX_RECORDS; pulled += PAGE) {
+    const cursorPred = cursor != null ? '&' + target.pkCol + '=gt.' + encodeURIComponent(cursor) : '';
+    const path = target.table + '?select=' + cols + mergedPred + extraPred + namePred + cursorPred
+      + '&order=' + target.pkCol + '.asc&limit=' + PAGE;
+    const r = target.domain === 'lcc'
+      ? await opsQuery('GET', path)
+      : await domainQuery(target.domain, 'GET', path);
+    if (!r.ok) {
+      // LOUD: do not swallow to records:0. Surface status + detail.
+      const detail = r.data && typeof r.data === 'object'
+        ? (r.data.message || r.data.error || JSON.stringify(r.data)) : String(r.data || '');
+      const err = 'HTTP ' + (r.status || '?') + (detail ? ': ' + String(detail).slice(0, 300) : '');
+      console.error('[dup-pair] SCAN FAILED', target.domain, target.table, err, 'path=', path);
+      return { records, scanned, truncated, error: err, status: r.status || null,
+        nextCursor: startCursor != null ? String(startCursor) : null, wrapped: false };
+    }
+    const rows = Array.isArray(r.data) ? r.data : [];
+    scanned += rows.length;
+    for (const row of rows) {
+      const pk = row[target.pkCol];
+      lastPk = pk;
+      cursor = String(pk);
+      records.push({
+        ref: dupSideRef(target.domain, target.table, pk),
+        pk: String(pk),
+        name: row[target.nameCol] == null ? '' : String(row[target.nameCol]),
+        address: target.addrCol ? (row[target.addrCol] == null ? '' : String(row[target.addrCol])) : '',
+      });
+    }
+    if (rows.length < PAGE) { reachedEnd = true; break; }
+    if (pulled + PAGE >= DUP_PAIR_MAX_RECORDS) truncated = true;
+  }
+  if (truncated) console.warn('[dup-pair] record scan truncated at cap', target.domain, target.table, DUP_PAIR_MAX_RECORDS);
+  // Wrap the keyset when the table end was reached OR the window under-filled, so
+  // the next run restarts from the top; otherwise advance to the last pk seen.
+  const wrapped = reachedEnd || !truncated;
+  return { records, scanned, truncated, error: null, status: 200,
+    nextCursor: wrapped ? null : (lastPk == null ? null : String(lastPk)), wrapped };
+}
+
+// Extract the source pk from a dupSideRef (dom:table:pk → pk).
+function dupRefPk(ref) {
+  const s = String(ref || '');
+  const i = s.indexOf(':');
+  const j = i >= 0 ? s.indexOf(':', i + 1) : -1;
+  return j >= 0 ? s.slice(j + 1) : s;
+}
+
+// The exclusion key set for a domain/table: pairs already proposed (any status in
+// w8_u2_dup_pair) OR already labeled from this seeder (entity_match_labels
+// subject_ref like 'ownrec:w8u2:%'). Keyed on pair_key so generateCandidatePairs
+// output filters cleanly. Best-effort — a failed read yields an empty set.
+async function fetchDupPairKnownKeys() {
+  const set = new Set();
+  const PAGE = 1000;
+  try {
+    for (let off = 0; ; off += PAGE) {
+      const r = await opsQuery('GET', 'w8_u2_dup_pair?select=pair_key&order=pair_id.asc&limit=' + PAGE + '&offset=' + off);
+      if (!r.ok) break;
+      const rows = Array.isArray(r.data) ? r.data : [];
+      for (const x of rows) if (x.pair_key) set.add(x.pair_key);
+      if (rows.length < PAGE) break;
+    }
+  } catch (_e) { /* best-effort */ }
+  try {
+    for (let off = 0; ; off += PAGE) {
+      const r = await opsQuery('GET', 'entity_match_labels?select=subject_ref&subject_ref=like.ownrec:w8u2:*&order=id.asc&limit=' + PAGE + '&offset=' + off);
+      if (!r.ok) break;
+      const rows = Array.isArray(r.data) ? r.data : [];
+      for (const x of rows) if (x.subject_ref) set.add(String(x.subject_ref).replace(/^ownrec:w8u2:/, ''));
+      if (rows.length < PAGE) break;
+    }
+  } catch (_e) { /* best-effort */ }
+  return set;
+}
+
+// Read the per-target keyset cursors persisted on the most recent scan batch
+// (details.scan_cursors). U1-style: the ledger IS the cursor. Best-effort — an
+// empty map means every target starts from the top this run.
+async function fetchDupPairScanCursors() {
+  try {
+    const r = await opsQuery('GET', 'w8_u2_dup_pair_batch?select=details&batch_kind=eq.scan&order=created_at.desc&limit=1');
+    if (r.ok && Array.isArray(r.data) && r.data[0] && r.data[0].details && r.data[0].details.scan_cursors) {
+      const c = r.data[0].details.scan_cursors;
+      return c && typeof c === 'object' ? c : {};
+    }
+  } catch (_e) { /* best-effort */ }
+  return {};
+}
+
+// Deterministic generate + exclude across every target. Returns perDomain counts
+// + the capped fresh pair pool (unscored) + the advanced per-target cursors. NO
+// LLM here (auditable gate). `cursors` (from fetchDupPairScanCursors) starts each
+// target's keyset window; `nextCursors` is what the caller persists for next run.
+async function dupPairScanAll(cursors = {}) {
+  const knownKeys = await fetchDupPairKnownKeys();
+  const perDomain = {};
+  const nextCursors = {};
+  const fresh = [];
+  for (const target of DUP_PAIR_TARGETS) {
+    const key = target.domain + ':' + target.table;
+    let pull;
+    try { pull = await pullDupPairRecordsForTarget(target, cursors ? cursors[key] : null); }
+    catch (e) {
+      perDomain[key] = { domain: target.domain, table: target.table,
+        error: e?.message || String(e), records: 0, generated: 0, fresh: 0 };
+      nextCursors[key] = cursors ? (cursors[key] || null) : null;
+      continue;
+    }
+    // A failed scan (non-ok HTTP) surfaces LOUDLY with records:0 AND the error —
+    // never a silent zero. The cursor holds (retry the same slice next run).
+    if (pull.error) {
+      perDomain[key] = { domain: target.domain, table: target.table,
+        error: pull.error, status: pull.status || null, records: 0, generated: 0,
+        excluded_known: 0, fresh: 0, by_method: { name_near_miss: 0, same_address_diff_name: 0, abbrev_expansion: 0 },
+        truncated: false };
+      nextCursors[key] = pull.nextCursor != null ? String(pull.nextCursor) : (cursors ? (cursors[key] || null) : null);
+      continue;
+    }
+    const generated = generateCandidatePairs(pull.records, {
+      nameThreshold: DUP_PAIR_NAME_THRESHOLD, maxPairs: DUP_PAIR_MAX_PER_DOMAIN });
+    const freshPairs = excludeKnownPairs(generated, knownKeys);
+    const byMethod = { name_near_miss: 0, same_address_diff_name: 0, abbrev_expansion: 0 };
+    for (const p of freshPairs) {
+      byMethod[p.method] = (byMethod[p.method] || 0) + 1;
+      fresh.push({ domain: target.domain, table: target.table, pair: p,
+        entity_a: dupRefPk(p.a.ref), entity_b: dupRefPk(p.b.ref) });
+    }
+    nextCursors[key] = pull.nextCursor != null ? String(pull.nextCursor) : null;
+    perDomain[key] = {
+      domain: target.domain, table: target.table,
+      records: pull.scanned, generated: generated.length,
+      excluded_known: generated.length - freshPairs.length,
+      fresh: freshPairs.length, by_method: byMethod, truncated: pull.truncated || false,
+      scan_cursor_from: (cursors && cursors[key]) || null,
+      scan_cursor_to: nextCursors[key], wrapped: pull.wrapped || false,
+    };
+  }
+  return { perDomain, fresh, knownKeys, nextCursors };
+}
+
+function dupPairDomainRollup(perDomain) {
+  const roll = {};
+  for (const v of Object.values(perDomain)) {
+    const d = v.domain || 'unknown';
+    roll[d] = roll[d] || { records: 0, generated: 0, excluded_known: 0, fresh: 0 };
+    roll[d].records += v.records || 0;
+    roll[d].generated += v.generated || 0;
+    roll[d].excluded_known += v.excluded_known || 0;
+    roll[d].fresh += v.fresh || 0;
+  }
+  return roll;
+}
+
+// Collect per-target scan failures for LOUD surfacing (Prompt 68). A non-empty
+// list means a target returned a real HTTP error (e.g. 403 allowlist / 400 column)
+// instead of rows — never a silent records:0.
+function dupPairScanErrors(perDomain) {
+  const out = [];
+  for (const [key, v] of Object.entries(perDomain || {})) {
+    if (v && v.error) out.push({ target: key, status: v.status || null, error: v.error });
+  }
+  return out;
+}
+
+async function recordDupPairHealth({ status, count, lastError, details }) {
+  try {
+    await opsQuery('POST', 'rpc/lcc_record_health_event', {
+      p_source: 'dup_pair_prescreen', p_check_name: 'ollama_dup_pair',
+      p_status: status, p_count: count || 0, p_last_error: lastError || null,
+      p_external_url: null, p_details: details || {},
+    });
+  } catch (_e) { /* health is best-effort */ }
+}
+
+// Score one candidate pair with the local model → normalized proposal (+ meta).
+// Proposal-only: the model NEVER merges. The verdict is same_party/distinct/unsure.
+async function scoreDupPair(item, fewShot) {
+  const prompt = buildDupPairPrompt(item.pair, fewShot);
+  const ai = await invokeExtractionAI({ prompt, surface: 'clean_assist' });
+  const parsed = parseDupPairJson(ai?.data?.response || '');
+  const proposal = normalizeDupPairProposal(parsed, item.pair);
+  if (!parsed) { proposal.verdict = 'unsure'; proposal.confidence = 0; proposal.reason = 'AI response was not valid JSON; dropped as unsure.'; }
+  return { proposal, provider: ai?.provider || null, model: ai?.data?.model || null };
+}
+
+async function upsertDupPairProposal(item, proposal, meta) {
+  const body = {
+    pair_key: item.pair.pairKey,
+    subject_ref: dupPairSubjectRef(item.pair.a.ref, item.pair.b.ref),
+    domain: item.domain, table_name: item.table,
+    entity_a: item.entity_a, entity_b: item.entity_b,
+    name_a: item.pair.a.name, name_b: item.pair.b.name,
+    generator_method: item.pair.method, name_similarity: item.pair.similarity,
+    gen_evidence: item.pair.evidence,
+    proposed_verdict: proposal.verdict, confidence: proposal.confidence,
+    evidence_quote: proposal.evidence_quote, reason: proposal.reason,
+    seeder: 'w8_u2_ollama_pair',
+    model_provider: meta.provider || null, model_name: meta.model || null,
+    source_run_id: meta.sourceRunId, scan_batch_id: meta.scanBatchId || null,
+    status: 'proposed',
+  };
+  return opsQuery('POST', 'w8_u2_dup_pair?on_conflict=pair_key', body,
+    { headers: { Prefer: 'return=representation,resolution=merge-duplicates' } });
+}
+
+async function handleDupPairTick(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const flag = await fetchDupPairFlag();
+  const enabled = dupPairEnabled(flag);
+  const limit = Math.min(60, Math.max(1, parseInt(req.query.limit || req.body?.limit || '20', 10)));
+
+  // ---- POST apply path: flag-gated. No-op (honest health) while OFF. --------
+  if (req.method === 'POST') {
+    if (!enabled) {
+      await recordDupPairHealth({ status: 'amber', count: 0,
+        lastError: 'W8_U2_DUP_PAIRS feature flag is off',
+        details: { enabled: false, flag_state: flag?.state || 'missing' } });
+      return res.status(200).json({ ok: true, skipped: 'feature_flag_off', enabled: false });
+    }
+    const sourceRunId = 'w8u2_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
+    const cursors = await fetchDupPairScanCursors();
+    const scan = await dupPairScanAll(cursors);
+    const scanErrors = dupPairScanErrors(scan.perDomain);
+    const fewShot = await fetchDupPairFewShot();
+    let scanBatchId = null;
+    try {
+      const br = await opsQuery('POST', 'w8_u2_dup_pair_batch',
+        { batch_kind: 'scan', source_run_id: sourceRunId, status: 'open', actor: user.id || null,
+          details: { per_domain: scan.perDomain, rollup: dupPairDomainRollup(scan.perDomain),
+            fresh: scan.fresh.length, scan_cursors: scan.nextCursors, scan_errors: scanErrors } },
+        { headers: { Prefer: 'return=representation' } });
+      if (br.ok && Array.isArray(br.data) && br.data[0]) scanBatchId = br.data[0].batch_id;
+    } catch (_e) { /* ledger best-effort */ }
+
+    const batchSize = Math.min(limit, DUP_PAIR_SCORE_BATCH_SIZE);
+    const summary = { source_run_id: sourceRunId, scan_batch_id: scanBatchId,
+      per_domain: dupPairDomainRollup(scan.perDomain), pairs_generated: scan.fresh.length,
+      batch_size: batchSize, budget_ms: DUP_PAIR_SCORE_BUDGET_MS, min_confidence: DUP_PAIR_MIN_CONFIDENCE,
+      scan_errors: scanErrors, scan_cursors: scan.nextCursors,
+      scored: 0, proposed: 0, needs_human: 0, dropped_unsure: 0, failed: 0,
+      budget_exhausted: false, remaining_unscored: scan.fresh.length, by_verdict: {} };
+    const budgetRun = await scoreDupPairsWithBudget(scan.fresh, async (item) => {
+      try {
+        const { proposal, provider, model } = await scoreDupPair(item, fewShot);
+        summary.scored += 1;
+        summary.by_verdict[proposal.verdict] = (summary.by_verdict[proposal.verdict] || 0) + 1;
+        // Proposal-only, value-gated (Prompt 68 three-way disposition): a DECIDED
+        // verdict above the floor persists as a model proposal; a high-core-sim
+        // `unsure` ROUTES to the human review lane (persisted as unsure — its best
+        // finds are typo-variant judgment calls); a low-sim unsure / below-floor
+        // verdict is dropped (counted only). The LLM verdict never merges.
+        const disp = dupPairDisposition(proposal, item.pair, { minConfidence: DUP_PAIR_MIN_CONFIDENCE });
+        if (disp === 'drop') { summary.dropped_unsure += 1; return null; }
+        const wr = await upsertDupPairProposal(item, proposal, { provider, model, sourceRunId, scanBatchId });
+        if (wr.ok) { if (disp === 'needs_human') summary.needs_human += 1; else summary.proposed += 1; }
+        else summary.failed += 1;
+      } catch (e) {
+        summary.failed += 1;
+        console.warn('[dup-pair] score/write failed', item?.pair?.pairKey, e?.message || e);
+      }
+      return null;
+    }, { budgetMs: DUP_PAIR_SCORE_BUDGET_MS, maxN: batchSize });
+    summary.budget_exhausted = budgetRun.budget_exhausted;
+    summary.remaining_unscored = Math.max(0, scan.fresh.length - summary.scored - summary.failed);
+    const persisted = summary.proposed + summary.needs_human;
+    const healthErr = scanErrors.length ? scanErrors.length + ' target scan(s) failed: ' + scanErrors.map((e) => e.target).join(',')
+      : (summary.failed ? summary.failed + ' pair(s) failed in ' + sourceRunId : null);
+    await recordDupPairHealth({ status: (summary.failed || scanErrors.length) ? 'amber' : 'green', count: persisted,
+      lastError: healthErr, details: summary });
+    return res.status(200).json({ ok: true, mode: 'apply', ...summary });
+  }
+
+  // ---- GET dry-run: deterministic per-domain report; ?score=1 adds inline ---
+  // model proposals for sampling. NEVER writes. Reads (does not advance) the
+  // persisted keyset cursors so the sample reflects the slice the next run scans.
+  const cursors = await fetchDupPairScanCursors();
+  const scan = await dupPairScanAll(cursors);
+  const scanErrors = dupPairScanErrors(scan.perDomain);
+  const rollup = dupPairDomainRollup(scan.perDomain);
+  const out = { ok: true, mode: 'dry_run', enabled, flag_state: flag?.state || 'missing',
+    per_target: scan.perDomain, per_domain: rollup, pairs_generated: scan.fresh.length,
+    scan_errors: scanErrors, scan_cursors: scan.nextCursors,
+    sample: scan.fresh.slice(0, 20).map((i) => ({ domain: i.domain, table: i.table,
+      pair_key: i.pair.pairKey, name_a: i.pair.a.name, name_b: i.pair.b.name,
+      method: i.pair.method, similarity: i.pair.similarity, evidence: i.pair.evidence })) };
+  if (scanErrors.length) {
+    out.scan_error_note = scanErrors.length + ' target(s) FAILED to scan (surfaced, not swallowed): '
+      + scanErrors.map((e) => e.target + ' → ' + e.error).join(' | ');
+  }
+  if (req.query.score === '1' || req.query.score === 'true') {
+    const fewShot = await fetchDupPairFewShot();
+    const inlineN = Math.min(60, Math.max(1, parseInt(req.query.n || String(DUP_PAIR_INLINE_DEFAULT_N), 10) || DUP_PAIR_INLINE_DEFAULT_N));
+    const proposals = [];
+    const byVerdict = {};
+    let droppedUnsure = 0;
+    let needsHuman = 0;
+    const budgetRun = await scoreDupPairsWithBudget(scan.fresh, async (item) => {
+      try {
+        const { proposal, provider, model } = await scoreDupPair(item, fewShot);
+        byVerdict[proposal.verdict] = (byVerdict[proposal.verdict] || 0) + 1;
+        const disp = dupPairDisposition(proposal, item.pair, { minConfidence: DUP_PAIR_MIN_CONFIDENCE });
+        if (disp === 'drop') droppedUnsure += 1;
+        else if (disp === 'needs_human') needsHuman += 1;
+        proposals.push({ pair_key: item.pair.pairKey, domain: item.domain, table: item.table,
+          name_a: item.pair.a.name, name_b: item.pair.b.name, method: item.pair.method,
+          similarity: item.pair.similarity, ...proposal, disposition: disp,
+          would_propose: disp !== 'drop', model_provider: provider, model_name: model });
+      } catch (e) { proposals.push({ pair_key: item?.pair?.pairKey, error: e?.message || String(e) }); }
+      return null;
+    }, { budgetMs: DUP_PAIR_SCORE_BUDGET_MS, maxN: inlineN });
+    out.scored = proposals.length;
+    out.batch_size = inlineN;
+    out.budget_ms = DUP_PAIR_SCORE_BUDGET_MS;
+    out.min_confidence = DUP_PAIR_MIN_CONFIDENCE;
+    out.budget_exhausted = budgetRun.budget_exhausted;
+    out.remaining_unscored = Math.max(0, scan.fresh.length - proposals.length);
+    out.by_verdict = byVerdict;
+    out.dropped_unsure = droppedUnsure;
+    out.needs_human = needsHuman;
+    out.would_propose = proposals.filter((p) => p.would_propose).length;
+    out.proposals = proposals;
+    out.note = 'dry-run scoring — NO rows written. same_party/distinct proposals >= '
+      + DUP_PAIR_MIN_CONFIDENCE + ' confidence persist (both are training fuel); a high-core-similarity'
+      + ' unsure (>= ' + DUP_PAIR_NEEDS_HUMAN_SIM + ') routes to the human review lane (needs_human);'
+      + ' low-similarity unsure / below-floor is dropped (dropped_unsure). Review, then POST (with the flag ON).'
+      + (budgetRun.budget_exhausted ? ' Scoring stopped at the ' + DUP_PAIR_SCORE_BUDGET_MS + 'ms budget (' + out.remaining_unscored + ' unscored remain).' : '');
+  }
+  return res.status(200).json(out);
 }
 
 // ============================================================================
@@ -602,6 +4495,2785 @@ async function attachPqOppState(items) {
 }
 
 // ============================================================================
+// W8 U3 (Prompt 69, 2026-08-07): Ollama connection propagation — evidence-grounded
+// link proposals.
+//
+// Reuses U1/U2's shapes (pure planner module api/_shared/link-propagation-planner.js,
+// GET dry-run / ?score=1&n= inline sample / POST flag-gated apply, nightly cron,
+// in-migration flag, bounded+resumable scoring). For an ownership-chain gap
+// (v_ownership_chain_worklist) or a person-email-merge candidate
+// (v_lcc_person_email_merge_candidates), it assembles the evidence LCC ALREADY
+// holds (bounded), asks Ollama to propose the missing link WITH a VERBATIM quote,
+// DROPS + logs any proposal whose quote isn't a substring of that evidence (the
+// free precision floor, W7.4 pattern), and lands survivors in w8_u3_link_review for
+// a HUMAN verdict. No web search (internal evidence only). No evidence ⇒ no LLM
+// call (no_evidence counter). The verdict applies via the deterministic writer
+// (entity_relationships edge + provenance) — NEVER an auto-write.
+//
+//   GET  /api/link-propagation-tick             -> dry-run report (pool counts by gap)
+//   GET  /api/link-propagation-tick?score=1&n=  -> dry-run + inline model proposals (NO writes)
+//   POST /api/link-propagation-tick             -> apply: assemble + score + write proposals
+//                                                  (flag-gated; no-ops while OFF)
+// ============================================================================
+const LINK_MAX_CANDIDATES = Math.max(20, parseInt(process.env.LINK_MAX_CANDIDATES || '60', 10));
+const LINK_SCORE_BUDGET_MS = Math.max(5000, parseInt(process.env.LINK_SCORE_BUDGET_MS || '150000', 10));
+const LINK_SCORE_BATCH_SIZE = Math.max(1, parseInt(process.env.LINK_SCORE_BATCH_SIZE || '15', 10));
+const LINK_INLINE_DEFAULT_N = Math.max(1, parseInt(process.env.LINK_INLINE_N || '4', 10));
+const LINK_MIN_CONF = (() => {
+  const v = parseFloat(process.env.LINK_MIN_CONFIDENCE || String(LINK_MIN_CONFIDENCE));
+  return Number.isFinite(v) && v > 0 && v <= 1 ? v : LINK_MIN_CONFIDENCE;
+})();
+// The chain-gap catalogue keys (developer_unidentified | no_prior_owners_recorded).
+const LINK_CHAIN_GAPS = Object.keys(CHAIN_GAP_CATALOGUE);
+
+function linkPropagationEnabled(flagRow) {
+  const env = String(process.env.W8_U3_LINK_PROPAGATION || '').toLowerCase();
+  if (['on', '1', 'true', 'yes', 'enabled'].includes(env)) return true;
+  return String(flagRow?.state || '').toLowerCase() === 'on';
+}
+
+async function fetchLinkPropagationFlag() {
+  try {
+    const r = await opsQuery('GET', 'feature_flags_registry?flag=eq.W8_U3_LINK_PROPAGATION&select=flag,state&limit=1', undefined, { countMode: 'none' });
+    return r.ok && Array.isArray(r.data) ? r.data[0] : null;
+  } catch (_e) { return null; }
+}
+
+// Exclusion set: subject_refs already in w8_u3_link_review (any status). A re-scan
+// never re-proposes a subject a human already worked. Best-effort.
+async function fetchLinkKnownSubjects() {
+  const set = new Set();
+  const PAGE = 1000;
+  try {
+    for (let off = 0; ; off += PAGE) {
+      const r = await opsQuery('GET', 'w8_u3_link_review?select=subject_ref&order=review_id.asc&limit=' + PAGE + '&offset=' + off);
+      if (!r.ok) break;
+      const rows = Array.isArray(r.data) ? r.data : [];
+      for (const x of rows) if (x.subject_ref) set.add(String(x.subject_ref));
+      if (rows.length < PAGE) break;
+    }
+  } catch (_e) { /* best-effort */ }
+  return set;
+}
+
+// The resumable scored-marker set persisted on the most recent scan batch
+// (details.scored_markers) — a linkScoredKeyFor per candidate seen last run, so a
+// row is re-scored ONLY when its evidence-hash changes (evidence changed).
+async function fetchLinkScoredMarkers() {
+  const set = new Set();
+  try {
+    const r = await opsQuery('GET', 'w8_u3_link_batch?select=details&batch_kind=eq.scan&order=created_at.desc&limit=1');
+    if (r.ok && Array.isArray(r.data) && r.data[0] && r.data[0].details && Array.isArray(r.data[0].details.scored_markers)) {
+      for (const m of r.data[0].details.scored_markers) if (m) set.add(String(m));
+    }
+  } catch (_e) { /* best-effort */ }
+  return set;
+}
+
+// ── Evidence assembly (deterministic, bounded) — ONLY what LCC already holds. ──
+// Each helper is best-effort (a failed/absent source contributes nothing, never
+// throws). No web search. Returns an array of { source, ref, text } blocks.
+// Per-source LIMITS for chain evidence assembly. Prompt 71: raise the per-source
+// topK (an unreachable source contributes nothing; a reachable-but-thin one should
+// contribute all it has) — the assembleEvidence() char cap is the real bound.
+const CHAIN_EV_LIMITS = { sale_notes: 8, deed: 8, activity: 6, intake: 6 };
+
+// Gather chain evidence and report, per source, how many BLOCKS it contributed
+// and whether the query ERRORED (loud — mirrors U2's scan_errors; a swallowed 403
+// is exactly the starvation Prompt 71 diagnoses). Returns { blocks, sources, errors }.
+async function gatherChainEvidenceBlocks(row) {
+  const blocks = [];
+  const sources = { sale_notes: 0, deed: 0, activity: 0, intake: 0 };
+  const errors = [];
+  const dom = linkNormDomain(row.source_domain);
+  const pid = row.source_property_id;
+  if (pid == null) return { blocks, sources, errors };
+  const note = (src) => { sources[src] += 1; };
+  // 1. Domain sale notes (sale_notes_raw + dia notes) — the richest free text.
+  try {
+    const noteCols = dom === 'dia' ? 'sale_id,sale_notes_raw,notes' : 'sale_id,sale_notes_raw';
+    const sr = await domainQuery(dom, 'GET', 'sales_transactions?select=' + noteCols
+      + '&property_id=eq.' + encodeURIComponent(pid) + '&order=sale_date.desc.nullslast&limit=' + CHAIN_EV_LIMITS.sale_notes);
+    if (sr.ok && Array.isArray(sr.data)) {
+      for (const s of sr.data) {
+        if (s.sale_notes_raw) { blocks.push({ source: 'sale_notes', ref: s.sale_id, text: s.sale_notes_raw }); note('sale_notes'); }
+        if (s.notes) { blocks.push({ source: 'sale_notes', ref: s.sale_id, text: s.notes }); note('sale_notes'); }
+      }
+    } else if (!sr.ok) { errors.push({ source: 'sale_notes', status: sr.status || null, detail: _linkErrDetail(sr.data) }); }
+  } catch (e) { errors.push({ source: 'sale_notes', detail: e?.message || String(e) }); }
+  // 2. Domain deed grantor/grantee (names a prior owner / developer).
+  //    PK column differs by domain: gov deed_records.deed_id (uuid) vs dia
+  //    deed_records.id (uuid). Alias it to `ref` so the select column always
+  //    exists (the pre-fix `select=id` 400'd every gov chain candidate:
+  //    "column deed_records.id does not exist").
+  try {
+    const deedRefCol = dom === 'dia' ? 'ref:id' : 'ref:deed_id';
+    const dr = await domainQuery(dom, 'GET', 'deed_records?select=' + deedRefCol + ',grantor,grantee'
+      + '&property_id=eq.' + encodeURIComponent(pid) + '&limit=' + CHAIN_EV_LIMITS.deed);
+    if (dr.ok && Array.isArray(dr.data)) {
+      for (const d of dr.data) {
+        const t = ['grantor: ' + (d.grantor || ''), 'grantee: ' + (d.grantee || '')].filter((x) => x.length > 9).join('; ');
+        if (t) { blocks.push({ source: 'deed', ref: d.ref, text: t }); note('deed'); }
+      }
+    } else if (!dr.ok) { errors.push({ source: 'deed', status: dr.status || null, detail: _linkErrDetail(dr.data) }); }
+  } catch (e) { errors.push({ source: 'deed', detail: e?.message || String(e) }); }
+  // 3. Intake extraction snapshots matched to this property (party/owner free text).
+  //    The extraction lives at raw_payload->extraction_result (INTAKE_LANE_SELECT).
+  //    match_domain is stored LONG-FORM (government/dialysis/lcc), so an eq.<short-form>
+  //    filter silently missed every row (7,713 match_property_id rows, 0 hits). Accept
+  //    both forms (dia/gov alias footgun). match_property_id is a jsonb number; ->>
+  //    yields its text form so eq.<pid-string> still matches.
+  try {
+    const intakeForms = dom === 'gov' ? '(gov,government)'
+                      : dom === 'dia' ? '(dia,dialysis)'
+                      : '(' + dom + ')';
+    const ir = await opsQuery('GET', 'staged_intake_items?select=intake_id,snap:raw_payload->extraction_result'
+      + '&raw_payload->extraction_result->>match_domain=in.' + intakeForms
+      + '&raw_payload->extraction_result->>match_property_id=eq.' + encodeURIComponent(pid)
+      + '&order=created_at.desc.nullslast&limit=' + CHAIN_EV_LIMITS.intake);
+    if (ir.ok && Array.isArray(ir.data)) {
+      for (const it of ir.data) {
+        const t = _linkIntakeSnapshotText(it.snap);
+        if (t) { blocks.push({ source: 'intake', ref: it.intake_id, text: t }); note('intake'); }
+      }
+    } else if (!ir.ok) { errors.push({ source: 'intake', status: ir.status || null, detail: _linkErrDetail(ir.data) }); }
+  } catch (e) { errors.push({ source: 'intake', detail: e?.message || String(e) }); }
+  // 4. Ops correspondence summaries / activity for the current owner entity.
+  if (row.current_owner_entity_id) {
+    try {
+      // activity_events PK is `id` (uuid) and the headline column is `title`,
+      // not `activity_id`/`subject` (the pre-fix select 400'd every candidate:
+      // "column activity_events.activity_id does not exist").
+      const ar = await opsQuery('GET', 'activity_events?select=id,title,body'
+        + '&entity_id=eq.' + encodeURIComponent(row.current_owner_entity_id)
+        + '&order=occurred_at.desc.nullslast&limit=' + CHAIN_EV_LIMITS.activity);
+      if (ar.ok && Array.isArray(ar.data)) {
+        for (const a of ar.data) {
+          const t = [a.title || '', a.body || ''].filter(Boolean).join('\n');
+          if (t) { blocks.push({ source: 'activity', ref: a.id, text: t }); note('activity'); }
+        }
+      } else if (!ar.ok) { errors.push({ source: 'activity', status: ar.status || null, detail: _linkErrDetail(ar.data) }); }
+    } catch (e) { errors.push({ source: 'activity', detail: e?.message || String(e) }); }
+  }
+  return { blocks, sources, errors };
+}
+
+function _linkErrDetail(data) {
+  if (data == null) return null;
+  if (typeof data === 'string') return data.slice(0, 200);
+  try { return JSON.stringify(data).slice(0, 200); } catch (_e) { return String(data).slice(0, 200); }
+}
+
+// Pull the party/owner-bearing free text out of an intake extraction snapshot.
+function _linkIntakeSnapshotText(ex) {
+  if (!ex || typeof ex !== 'object') return '';
+  const parts = [];
+  for (const k of ['seller', 'buyer', 'owner', 'true_owner', 'developer', 'tenant_name',
+    'sale_notes_raw', 'notes', 'summary', 'tenants_raw', 'agency']) {
+    const v = ex[k];
+    if (v && typeof v === 'string') parts.push(k + ': ' + v);
+  }
+  return parts.join('\n').slice(0, 2000);
+}
+
+function gatherPersonEmailEvidenceBlocks(row) {
+  // The shared email + the record names ARE the verbatim evidence (already held).
+  const losers = Array.isArray(row.loser_names) ? row.loser_names : [];
+  const text = ['email: ' + (row.email || ''),
+    'winner: ' + (row.winner_name || ''),
+    'others: ' + losers.map((n) => String(n)).join(', ')].filter((s) => s.length > 7).join('\n');
+  const blocks = text ? [{ source: 'person_email', ref: row.winner_id, text }] : [];
+  return { blocks, sources: { person_email: blocks.length }, errors: [] };
+}
+
+// Build the fresh scored-ready item pool for one tick (both pools). Value-gated
+// (chain rows ordered by rank_value; person pool after). Assembles evidence,
+// short-circuits no-evidence (counted, NO LLM), and excludes already-known /
+// unchanged-evidence subjects. Returns { items, counts }.
+async function buildFreshLinkItems(opts = {}) {
+  const cap = Number.isFinite(opts.cap) ? opts.cap : LINK_MAX_CANDIDATES;
+  const known = opts.known instanceof Set ? opts.known : await fetchLinkKnownSubjects();
+  const markers = opts.markers instanceof Set ? opts.markers : await fetchLinkScoredMarkers();
+  const counts = { chain: { by_gap: {}, candidates: 0, no_evidence: 0, already_known: 0, fresh: 0,
+      evidence_sources: { sale_notes: 0, deed: 0, activity: 0, intake: 0 } },
+    person_email: { candidates: 0, no_evidence: 0, already_known: 0, fresh: 0,
+      evidence_sources: { person_email: 0 } } };
+  const items = [];
+  const scanErrors = [];   // loud per-source query errors (U2 scan_errors pattern)
+  const skipMarkers = [];  // assembly-level no-evidence markers (only re-enter when evidence lands)
+  const addSources = (agg, src) => { for (const k of Object.keys(src || {})) agg[k] = (agg[k] || 0) + src[k]; };
+  const pushErrors = (pool, subjectRef, errs) => {
+    for (const e of (errs || [])) scanErrors.push({ pool, subject_ref: subjectRef, ...e });
+  };
+
+  // --- Chain pool (value-ranked). ---
+  try {
+    const gapPred = '&gap=in.(' + LINK_CHAIN_GAPS.join(',') + ')';
+    const cr = await opsQuery('GET', 'v_ownership_chain_worklist?select=source_domain,source_property_id,'
+      + 'current_owner_entity_id,current_owner_name,true_owner_name,developer_name,earliest_known_owner,'
+      + 'owner_links,address,city,state,current_annual_rent,rank_value,gap' + gapPred
+      + '&order=rank_value.desc.nullslast&limit=' + cap);
+    const rows = valueGateChainRows((cr.ok && Array.isArray(cr.data)) ? cr.data : []);
+    counts.chain.candidates = rows.length;
+    for (const row of rows) {
+      counts.chain.by_gap[row.gap] = (counts.chain.by_gap[row.gap] || 0) + 1;
+      const subjectRef = chainSubjectRef(row.source_domain, row.source_property_id, row.gap);
+      if (known.has(subjectRef)) { counts.chain.already_known += 1; continue; }
+      const gathered = await gatherChainEvidenceBlocks(row);
+      addSources(counts.chain.evidence_sources, gathered.sources);
+      pushErrors(LINK_POOL_CHAIN, subjectRef, gathered.errors);
+      const assembled = assembleEvidence(gathered.blocks);
+      const evHash = evidenceHash(assembled, String(row.owner_links || '') + '|' + String(row.earliest_known_owner || ''));
+      const marker = linkScoredKeyFor(LINK_POOL_CHAIN, row.source_domain, row.source_property_id, row.gap, evHash);
+      if (evidenceIsEmpty(assembled)) {
+        // Assembly-level no-evidence: mark by evidence-hash so it only RE-ENTERS
+        // when new evidence lands (measured once for the U4 data-acquisition backlog).
+        if (!markers.has(marker)) { counts.chain.no_evidence += 1; skipMarkers.push(marker); }
+        continue; // NO LLM call
+      }
+      if (markers.has(marker)) continue; // evidence unchanged since last scan
+      counts.chain.fresh += 1;
+      items.push({ pool: LINK_POOL_CHAIN, subjectRef, row, assembled, evHash, marker,
+        domain: linkNormDomain(row.source_domain) });
+    }
+  } catch (e) { counts.chain.error = e?.message || String(e); }
+
+  // --- Person-email pool (smaller). ---
+  try {
+    const pr = await opsQuery('GET', 'v_lcc_person_email_merge_candidates?select=email,winner_id,winner_name,'
+      + 'loser_ids,loser_names,member_count,sf_linked_member_count,name_compatible'
+      + '&order=member_count.desc.nullslast&limit=' + cap);
+    const rows = (pr.ok && Array.isArray(pr.data)) ? pr.data : [];
+    counts.person_email.candidates = rows.length;
+    for (const row of rows) {
+      const subjectRef = personEmailSubjectRef(row.winner_id);
+      if (known.has(subjectRef)) { counts.person_email.already_known += 1; continue; }
+      // Prompt 89 — U3 pool hygiene: skip clusters whose winner OR any loser name
+      // trips the TrafficMetrix misparse detector (street label / TM vocab). Those
+      // members are pending quarantine in the junk lane; do not spend LLM cycles or
+      // lane clicks adjudicating garbage. Once quarantined (email un-stamped /
+      // junk_name_flagged), the view drops them and the real cluster shows normally.
+      const clusterNames = [row.winner_name, ...(Array.isArray(row.loser_names) ? row.loser_names : [])];
+      if (clusterNames.some((n) => isMisparseName(n))) {
+        counts.person_email.misparse_excluded = (counts.person_email.misparse_excluded || 0) + 1;
+        continue;
+      }
+      const gathered = gatherPersonEmailEvidenceBlocks(row);
+      addSources(counts.person_email.evidence_sources, gathered.sources);
+      pushErrors(LINK_POOL_PERSON_EMAIL, subjectRef, gathered.errors);
+      const assembled = assembleEvidence(gathered.blocks);
+      const evHash = evidenceHash(assembled, String(row.member_count || ''));
+      const marker = linkScoredKeyFor(LINK_POOL_PERSON_EMAIL, 'lcc', row.winner_id, 'person_email', evHash);
+      if (evidenceIsEmpty(assembled)) {
+        if (!markers.has(marker)) { counts.person_email.no_evidence += 1; skipMarkers.push(marker); }
+        continue;
+      }
+      if (markers.has(marker)) continue;
+      counts.person_email.fresh += 1;
+      items.push({ pool: LINK_POOL_PERSON_EMAIL, subjectRef, row, assembled, evHash, marker, domain: 'lcc' });
+    }
+  } catch (e) { counts.person_email.error = e?.message || String(e); }
+
+  return { items, counts, scan_errors: scanErrors, skip_markers: skipMarkers };
+}
+
+// Cheap pool counts by gap type for the plain dry-run (no evidence assembly).
+async function linkPoolCounts() {
+  const out = { chain: { by_gap: {}, total: 0 }, person_email: { total: 0 } };
+  try {
+    for (const gap of LINK_CHAIN_GAPS) {
+      const c = await opsCnt('v_ownership_chain_worklist?gap=eq.' + gap);
+      out.chain.by_gap[gap] = c || 0;
+      out.chain.total += c || 0;
+    }
+  } catch (_e) { /* best-effort */ }
+  try { out.person_email.total = (await opsCnt('v_lcc_person_email_merge_candidates')) || 0; } catch (_e) { /* best-effort */ }
+  return out;
+}
+
+// Score one item → validated proposal (+ meta). Proposal-only. The validator DROPS
+// (and the caller logs) any non-verbatim / no-entity quote — the free precision floor.
+async function scoreLinkItem(item) {
+  const prompt = buildLinkPropagationPrompt(item.row, item.assembled, item.pool);
+  const ai = await invokeExtractionAI({ prompt, surface: 'clean_assist' });
+  const parsed = parseLinkProposalJson(ai?.data?.response || '');
+  const proposal = normalizeLinkProposal(parsed);
+  if (!parsed) { proposal.verdict = 'no_evidence_found'; proposal.confidence = 0; proposal.reason = 'AI response was not valid JSON; treated as no_evidence_found.'; }
+  const validated = validateLinkProposal(proposal, item.assembled.combined, item.pool);
+  return { proposal, validated, provider: ai?.provider || null, model: ai?.data?.model || null };
+}
+
+async function logLinkDropped(item, proposal, drop, sourceRunId) {
+  try {
+    await opsQuery('POST', 'w8_u3_dropped_log', {
+      subject_ref: item.subjectRef, pool: item.pool, domain: item.domain,
+      proposed_verdict: proposal.verdict, linked_entity_name: proposal.linked_entity_name || null,
+      quote: drop && drop.quote != null ? String(drop.quote).slice(0, 400) : (proposal.evidence_quote || null),
+      reason: (drop && drop.reason) || 'dropped', source_run_id: sourceRunId,
+    }, { headers: { Prefer: 'return=minimal' } });
+  } catch (_e) { /* precision-floor log is best-effort */ }
+}
+
+async function upsertLinkProposal(item, proposal, meta) {
+  const row = item.row;
+  const spec = item.pool === LINK_POOL_CHAIN ? (chainGapSpec(row.gap) || {}) : { chain_position: 'same_person', proposal_type: 'person_email_merge' };
+  const body = {
+    subject_ref: item.subjectRef, pool: item.pool, domain: item.domain,
+    source_property_id: item.pool === LINK_POOL_CHAIN ? String(row.source_property_id) : null,
+    gap: item.pool === LINK_POOL_CHAIN ? row.gap : null,
+    proposal_type: spec.proposal_type || 'link',
+    current_owner_entity_id: item.pool === LINK_POOL_CHAIN ? (row.current_owner_entity_id || null) : null,
+    current_owner_name: item.pool === LINK_POOL_CHAIN ? (row.current_owner_name || null) : null,
+    winner_entity_id: item.pool === LINK_POOL_PERSON_EMAIL ? String(row.winner_id) : null,
+    proposed_verdict: proposal.verdict,
+    linked_entity_name: proposal.linked_entity_name || null,
+    role: proposal.role || spec.role || null,
+    confidence: proposal.confidence,
+    evidence_quote: proposal.evidence_quote || null,
+    evidence_source: proposal.evidence_source || null,
+    evidence_hash: item.evHash || null,
+    reason: proposal.reason || null,
+    rank_value: item.pool === LINK_POOL_CHAIN ? (Number(row.rank_value) || null) : (Number(row.member_count) || null),
+    seeder: 'w8_u3_link_propagation',
+    model_provider: meta.provider || null, model_name: meta.model || null,
+    source_run_id: meta.sourceRunId, scan_batch_id: meta.scanBatchId || null,
+    status: 'proposed',
+  };
+  return opsQuery('POST', 'w8_u3_link_review?on_conflict=subject_ref', body,
+    { headers: { Prefer: 'return=representation,resolution=merge-duplicates' } });
+}
+
+async function recordLinkHealth({ status, count, lastError, details }) {
+  try {
+    await opsQuery('POST', 'rpc/lcc_record_health_event', {
+      p_source: 'link_propagation', p_check_name: 'ollama_link_propagation',
+      p_status: status, p_count: count || 0, p_last_error: lastError || null,
+      p_external_url: null, p_details: details || {},
+    });
+  } catch (_e) { /* health is best-effort */ }
+}
+
+async function handleLinkPropagationTick(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const flag = await fetchLinkPropagationFlag();
+  const enabled = linkPropagationEnabled(flag);
+  const limit = Math.min(40, Math.max(1, parseInt(req.query.limit || req.body?.limit || '15', 10)));
+
+  // ---- POST apply path: flag-gated. No-op (honest health) while OFF. --------
+  if (req.method === 'POST') {
+    if (!enabled) {
+      await recordLinkHealth({ status: 'amber', count: 0,
+        lastError: 'W8_U3_LINK_PROPAGATION feature flag is off',
+        details: { enabled: false, flag_state: flag?.state || 'missing' } });
+      return res.status(200).json({ ok: true, skipped: 'feature_flag_off', enabled: false });
+    }
+    const sourceRunId = 'w8u3_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
+    const known = await fetchLinkKnownSubjects();
+    const markers = await fetchLinkScoredMarkers();
+    const { items, counts, scan_errors: scanErrors, skip_markers: skipMarkers } = await buildFreshLinkItems({ known, markers });
+    let scanBatchId = null;
+    try {
+      const br = await opsQuery('POST', 'w8_u3_link_batch',
+        { batch_kind: 'scan', source_run_id: sourceRunId, status: 'open', actor: user.id || null,
+          details: { counts, fresh: items.length, scan_errors: scanErrors } },
+        { headers: { Prefer: 'return=representation' } });
+      if (br.ok && Array.isArray(br.data) && br.data[0]) scanBatchId = br.data[0].batch_id;
+    } catch (_e) { /* ledger best-effort */ }
+
+    const batchSize = Math.min(limit, LINK_SCORE_BATCH_SIZE);
+    const summary = { source_run_id: sourceRunId, scan_batch_id: scanBatchId, pool_counts: counts,
+      evidence_sources: { chain: counts.chain.evidence_sources, person_email: counts.person_email.evidence_sources },
+      scan_errors: scanErrors,
+      candidates_fresh: items.length, batch_size: batchSize, budget_ms: LINK_SCORE_BUDGET_MS,
+      min_confidence: LINK_MIN_CONF, scored: 0, proposed: 0, no_evidence_found: 0, different_people: 0,
+      dropped_not_verbatim: 0, dropped_below_conf: 0, failed: 0,
+      budget_exhausted: false, remaining_unscored: items.length, by_verdict: {} };
+    const newMarkers = [];
+    const budgetRun = await scoreLinksWithBudget(items, async (item) => {
+      try {
+        const { proposal, validated, provider, model } = await scoreLinkItem(item);
+        summary.scored += 1;
+        newMarkers.push(item.marker);
+        summary.by_verdict[proposal.verdict] = (summary.by_verdict[proposal.verdict] || 0) + 1;
+        if (validated.verdict === 'no_evidence_found') { summary.no_evidence_found += 1; return null; }
+        if (validated.drop) { // fabricated / non-verbatim → precision-floor drop
+          summary.dropped_not_verbatim += 1;
+          await logLinkDropped(item, proposal, validated.drop, sourceRunId);
+          return null;
+        }
+        if (!isProposableLink(validated, LINK_MIN_CONF)) { // below confidence floor
+          summary.dropped_below_conf += 1;
+          await logLinkDropped(item, proposal, { reason: 'below_confidence', quote: proposal.evidence_quote }, sourceRunId);
+          return null;
+        }
+        const wr = await upsertLinkProposal(item, validated.proposal, { provider, model, sourceRunId, scanBatchId });
+        if (wr.ok) { summary.proposed += 1; if (validated.verdict === 'different_people') summary.different_people += 1; }
+        else summary.failed += 1;
+      } catch (e) {
+        summary.failed += 1;
+        console.warn('[link-propagation] score/write failed', item?.subjectRef, e?.message || e);
+      }
+      return null;
+    }, { budgetMs: LINK_SCORE_BUDGET_MS, maxN: batchSize });
+    summary.budget_exhausted = budgetRun.budget_exhausted;
+    summary.remaining_unscored = Math.max(0, items.length - summary.scored - summary.failed);
+    // Persist the scored-markers (union with prior) so a scored row isn't re-scored
+    // next run unless its evidence changes.
+    if (scanBatchId != null) {
+      try {
+        // Persist scored markers (LLM-scored) AND assembly-level no-evidence skip
+        // markers, so a no-evidence row only re-enters when its evidence changes.
+        const merged = Array.from(new Set([...markers, ...newMarkers, ...(skipMarkers || [])])).slice(-5000);
+        await opsQuery('PATCH', 'w8_u3_link_batch?batch_id=eq.' + scanBatchId,
+          { details: { counts, fresh: items.length, scored_markers: merged, scan_errors: scanErrors, summary } });
+      } catch (_e) { /* best-effort */ }
+    }
+    await recordLinkHealth({ status: summary.failed ? 'amber' : 'green', count: summary.proposed,
+      lastError: summary.failed ? summary.failed + ' proposal(s) failed in ' + sourceRunId : null, details: summary });
+    return res.status(200).json({ ok: true, mode: 'apply', ...summary });
+  }
+
+  // ---- GET dry-run: pool counts by gap. ?score=1 adds inline model proposals. --
+  const poolCounts = await linkPoolCounts();
+  const out = { ok: true, mode: 'dry_run', enabled, flag_state: flag?.state || 'missing',
+    pool_counts: poolCounts };
+  if (req.query.score === '1' || req.query.score === 'true') {
+    const inlineN = Math.min(30, Math.max(1, parseInt(req.query.n || String(LINK_INLINE_DEFAULT_N), 10) || LINK_INLINE_DEFAULT_N));
+    const { items, counts, scan_errors: scanErrors } = await buildFreshLinkItems({ cap: Math.max(LINK_MAX_CANDIDATES, inlineN * 4) });
+    out.scan_counts = counts;
+    out.evidence_sources = { chain: counts.chain.evidence_sources, person_email: counts.person_email.evidence_sources };
+    out.scan_errors = scanErrors;
+    out.candidates_fresh = items.length;
+    const proposals = [];
+    const byVerdict = {};
+    let noEvidence = 0;
+    let differentPeople = 0;
+    let droppedNotVerbatim = 0;
+    let droppedBelowConf = 0;
+    const budgetRun = await scoreLinksWithBudget(items, async (item) => {
+      try {
+        const { proposal, validated, provider, model } = await scoreLinkItem(item);
+        byVerdict[proposal.verdict] = (byVerdict[proposal.verdict] || 0) + 1;
+        let disposition = 'propose';
+        if (validated.verdict === 'no_evidence_found') { noEvidence += 1; disposition = 'no_evidence_found'; }
+        else if (validated.drop) { droppedNotVerbatim += 1; disposition = 'dropped:' + validated.drop.reason; }
+        else if (!isProposableLink(validated, LINK_MIN_CONF)) { droppedBelowConf += 1; disposition = 'dropped:below_confidence'; }
+        else if (validated.verdict === 'different_people') { differentPeople += 1; disposition = 'propose:different_people'; }
+        proposals.push({ subject_ref: item.subjectRef, pool: item.pool, domain: item.domain,
+          gap: item.row.gap || null, source_property_id: item.row.source_property_id || null,
+          current_owner_name: item.row.current_owner_name || item.row.winner_name || null,
+          evidence_chars: item.assembled.chars, evidence_source_blocks: item.assembled.blocks.length, ...proposal, disposition,
+          quote_verbatim: !!(validated.proposal),
+          would_propose: disposition === 'propose' || disposition === 'propose:different_people',
+          model_provider: provider, model_name: model });
+      } catch (e) { proposals.push({ subject_ref: item?.subjectRef, error: e?.message || String(e) }); }
+      return null;
+    }, { budgetMs: LINK_SCORE_BUDGET_MS, maxN: inlineN });
+    out.scored = proposals.length;
+    out.batch_size = inlineN;
+    out.budget_ms = LINK_SCORE_BUDGET_MS;
+    out.min_confidence = LINK_MIN_CONF;
+    out.budget_exhausted = budgetRun.budget_exhausted;
+    out.remaining_unscored = Math.max(0, items.length - proposals.length);
+    out.by_verdict = byVerdict;
+    out.no_evidence_found = noEvidence;
+    out.different_people = differentPeople;
+    out.dropped_not_verbatim = droppedNotVerbatim;
+    out.dropped_below_conf = droppedBelowConf;
+    out.would_propose = proposals.filter((p) => p.would_propose).length;
+    out.proposals = proposals;
+    out.note = 'dry-run scoring — NO rows written. Every would-propose carries a VERBATIM evidence_quote '
+      + '(quote_verbatim=true, validator-checked as a substring of the assembled evidence); a non-verbatim / '
+      + 'fabricated quote is DROPPED (dropped_not_verbatim → w8_u3_dropped_log); no_evidence_found is honest/counted. '
+      + 'Review, then POST (with the flag ON).'
+      + (budgetRun.budget_exhausted ? ' Scoring stopped at the ' + LINK_SCORE_BUDGET_MS + 'ms budget (' + out.remaining_unscored + ' unscored remain).' : '');
+  }
+  return res.status(200).json(out);
+}
+
+// ============================================================================
+// W9.4 accelerator (Prompt 101) — Outlook display-name BACKFILL.
+//   GET  /api/outlook-name-backfill[?limit=&after=<id>]   -> dry-run report (no writes)
+//   POST /api/outlook-name-backfill[?limit=&after=<id>]   -> apply ONE batch (cursored)
+//   POST /api/outlook-name-backfill?reverse=1&batch=<tag> -> reverse a batch
+// Reconstructs activity_events.metadata.from_name / to_names on historical
+// correspondence rows from the curated unified_contacts store (the ONLY structured
+// historical name source — email_bodies.from_name is empty; see
+// api/_shared/outlook-name-backfill.js header). Fill-blanks, provenance-marked
+// (metadata.name_backfill), reversible (in-row marker + lcc_outlook_name_backfill_log),
+// idempotent, cursored/resumable (id keyset). Unlocks harvestBuildCommsIndex's
+// header-name-pairs arm without waiting weeks for organic mail accrual.
+// ============================================================================
+// The email_intake path stores the sender in metadata.from (bare address) rather
+// than from_email; senderEmailFromMetadata handles both, so it is included.
+const NAME_BACKFILL_SOURCES = ['outlook', 'outlook_inbound', 'outlook_sent', 'outlook_tagged', 'email_intake'];
+const NAME_BACKFILL_MAX_LIMIT = Math.max(50, parseInt(process.env.NAME_BACKFILL_MAX_LIMIT || '2000', 10));
+
+// Batched, case-insensitive email -> display name over unified_contacts (RPC;
+// PostgREST in.() is case-sensitive and uc.email is not reliably lowercased).
+async function namesForEmails(emails) {
+  const map = new Map();
+  const uniq = [...new Set((emails || []).map((e) => String(e || '').toLowerCase()).filter(Boolean))];
+  if (!uniq.length) return map;
+  const CHUNK = 300;
+  for (let i = 0; i < uniq.length; i += CHUNK) {
+    const c = uniq.slice(i, i + CHUNK);
+    try {
+      const r = await opsQuery('POST', 'rpc/lcc_names_for_emails', { p_emails: c });
+      if (r.ok && Array.isArray(r.data)) {
+        for (const row of r.data) if (row && row.email_lower && row.full_name) map.set(String(row.email_lower), row.full_name);
+      }
+    } catch (_e) { /* best-effort per chunk */ }
+  }
+  return map;
+}
+
+async function handleOutlookNameBackfill(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+  const isPost = req.method === 'POST';
+  const q = req.query || {};
+
+  // ---- reverse mode ----
+  if (isPost && ['1', 'true', 'yes'].includes(String(q.reverse || '').toLowerCase())) {
+    const batch = String(q.batch || '').trim();
+    if (!batch) return res.status(400).json({ error: 'reverse requires batch=<tag>' });
+    const ids = [];
+    try {
+      const lr = await opsQuery('GET', 'lcc_outlook_name_backfill_log?select=activity_event_id&batch_tag=eq.' + pgFilterVal(batch) + '&limit=100000');
+      if (lr.ok && Array.isArray(lr.data)) for (const x of lr.data) if (x.activity_event_id) ids.push(String(x.activity_event_id));
+    } catch (_e) { /* fall through to marker scan */ }
+    let reverted = 0; const errors = [];
+    // Reverse by the in-row marker (authoritative), over the logged ids when we
+    // have them, else a bounded marker scan.
+    const targets = ids.length ? ids : null;
+    if (targets) {
+      for (const id of targets) {
+        try {
+          const gr = await opsQuery('GET', 'activity_events?select=id,metadata&id=eq.' + pgFilterVal(id) + '&limit=1');
+          const row = gr.ok && Array.isArray(gr.data) ? gr.data[0] : null;
+          if (!row) continue;
+          const rev = reverseNameBackfillPatch(row.metadata, batch);
+          if (!rev) continue;
+          const pr = await opsQuery('PATCH', 'activity_events?id=eq.' + pgFilterVal(id), { metadata: rev.metadata });
+          if (pr.ok) reverted += 1; else errors.push({ id, detail: _harvestErrDetail(pr.data) });
+        } catch (e) { errors.push({ id, detail: e?.message || String(e) }); }
+      }
+    }
+    return res.status(200).json({ mode: 'reverse', batch, logged_rows: ids.length, reverted, errors });
+  }
+
+  // ---- dry-run (GET) / apply (POST) ----
+  const limit = Math.min(NAME_BACKFILL_MAX_LIMIT, Math.max(1, parseInt(q.limit || (isPost ? '500' : '1000'), 10) || 500));
+  const after = q.after ? String(q.after) : null;
+  const batchTag = isPost ? ('nb_' + new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14)) : null;
+  const stamp = { batch: batchTag, at: new Date().toISOString() };
+
+  let sel = 'activity_events?select=id,source_type,metadata'
+    + '&category=in.(email,call)&source_type=in.(' + NAME_BACKFILL_SOURCES.join(',') + ')'
+    + '&order=id.asc&limit=' + limit;
+  if (after) sel += '&id=gt.' + pgFilterVal(after);
+  const r = await opsQuery('GET', sel);
+  if (!r.ok) return res.status(502).json({ error: 'scan_failed', detail: _harvestErrDetail(r.data) });
+  const rows = Array.isArray(r.data) ? r.data : [];
+  const nextCursor = rows.length ? String(rows[rows.length - 1].id) : after;
+  const done = rows.length < limit;
+
+  // Collect every candidate email in the page (fill-blanks candidates only), then
+  // ONE batched name resolve. NEVER per-row DB work in the scan.
+  const emailSet = new Set();
+  for (const row of rows) {
+    const md = row.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+    if (_harvestBlank(md.from_name)) { const fe = senderEmailFromMetadata(md); if (fe && isHarvestableParty(fe)) emailSet.add(fe); }
+    if (md.to_names == null) { for (const e of recipientEmailsFromMetadata(md)) if (isHarvestableParty(e)) emailSet.add(e); }
+  }
+  const nameMap = await namesForEmails([...emailSet]);
+
+  const counts = { scanned: rows.length, candidates: 0, fill_from_name: 0, fill_to_names: 0, rows_written: 0, distinct_names: nameMap.size, write_errors: 0 };
+  const sample = [];
+  const ledger = [];
+  for (const row of rows) {
+    const md = row.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+    const built = buildNameBackfillPatch(md, nameMap, stamp);
+    if (!built) continue;
+    counts.candidates += 1;
+    if (built.filled_from_name) counts.fill_from_name += 1;
+    if (built.filled_to_names) counts.fill_to_names += built.filled_to_names;
+    if (sample.length < 10) sample.push({ id: row.id, source_type: row.source_type, from_name: built.metadata.from_name || null, to_names: built.metadata.to_names || null });
+    if (isPost) {
+      try {
+        const pr = await opsQuery('PATCH', 'activity_events?id=eq.' + pgFilterVal(row.id), { metadata: built.metadata });
+        if (pr.ok) { counts.rows_written += 1; ledger.push({ batch_tag: batchTag, activity_event_id: row.id, filled_from_name: !!built.filled_from_name, filled_to_names: built.filled_to_names || 0, source: 'unified_contacts' }); }
+        else counts.write_errors += 1;
+      } catch (_e) { counts.write_errors += 1; }
+    }
+  }
+  if (isPost && ledger.length) {
+    try { await opsQuery('POST', 'lcc_outlook_name_backfill_log', ledger); } catch (_e) { /* audit best-effort */ }
+  }
+
+  return res.status(200).json({
+    mode: isPost ? 'apply' : 'dry_run',
+    batch: batchTag,
+    limit, after: after || null, next_cursor: nextCursor, done,
+    counts, sample,
+    note: 'Source: unified_contacts (email_bodies.from_name is empty live — see handler header). Resume with after=next_cursor until done=true.',
+  });
+}
+
+// ============================================================================
+// W9.2 (Prompt 88) — Contact-reachability INTERNAL harvest tick.
+//   GET  /api/reachability-harvest-tick             -> dry-run report (pool counts)
+//   GET  /api/reachability-harvest-tick?score=1&n=  -> dry-run + inline proposals
+//                                                      (deterministic + LLM; NO writes)
+//   POST /api/reachability-harvest-tick             -> apply: assemble + write
+//                                                      proposals (flag-gated; no-ops OFF)
+// Doctrine: deterministic-first (arm=deterministic, arithmetic exact-identity fills,
+// confidence 1.0, NO LLM) + LLM-attributed (arm=llm, verbatim-quote validator).
+// Proposal-only — a human verdict applies via the fill-blanks writer. Never fabricates.
+//
+// P136 (2026-08-26) — THE TARGET WINDOW ADVANCES. The tick used to take a FIXED
+// top-120 slice of the ~15k unreachable pool, ask "is there evidence for these?"
+// (donors_found:0 / with_evidence:0), write nothing, and re-select the SAME 120 the
+// next night — 16 review rows EVER, 0 in 11 days, while 5,000 intake records and
+// 7,926 harvestable comms rows sat unused. Two fixes, both live here:
+//   (1) a SELECTED target that produced no fresh work is MARKED
+//       (reachability_harvest_target_marker) and drops out of the window until its
+//       dated recheck_after passes — the cursor moves;
+//   (2) targets are chosen by an EVIDENCE JOIN (name in the intake/comms index, or
+//       an SF identity a donor could match) ahead of blind unreachability rank —
+//       targeting owners that can actually be resolved is what turns evidence into
+//       proposals. The remainder of the batch is topped up with no-evidence targets
+//       so they too get checked and marked (that is what advances a scarce night).
+// Honest counts: targets_selected / targets_with_evidence / targets_marked_no_evidence
+// / remaining_untargeted / target_scan_capped — a drained pool must be
+// distinguishable from a stuck window. Judge the unit by the PROPOSAL DELTA, never
+// by the flag or the tick's own tally.
+// ============================================================================
+const HARVEST_MAX_TARGETS = Math.max(20, parseInt(process.env.HARVEST_MAX_TARGETS || '120', 10));
+const HARVEST_SCORE_BUDGET_MS = Math.max(5000, parseInt(process.env.HARVEST_SCORE_BUDGET_MS || '150000', 10));
+const HARVEST_LLM_BATCH_SIZE = Math.max(1, parseInt(process.env.HARVEST_LLM_BATCH_SIZE || '15', 10));
+const HARVEST_DET_BATCH_SIZE = Math.max(1, parseInt(process.env.HARVEST_DET_BATCH_SIZE || '100', 10));
+const HARVEST_INLINE_DEFAULT_N = Math.max(1, parseInt(process.env.HARVEST_INLINE_N || '6', 10));
+const HARVEST_INTAKE_INDEX_CAP = Math.max(500, parseInt(process.env.HARVEST_INTAKE_INDEX_CAP || '5000', 10));
+// W9.4 comms-harvest — bounded scan of the correspondence spine (activity_events).
+const HARVEST_COMMS_INDEX_CAP = Math.max(500, parseInt(process.env.HARVEST_COMMS_INDEX_CAP || '8000', 10));
+const HARVEST_CREATE_CONTACT_BATCH_SIZE = Math.max(1, parseInt(process.env.HARVEST_CREATE_CONTACT_BATCH_SIZE || '40', 10));
+// P136 — the target-window scan. The window is a WINDOW: the tick pages through the
+// ranked unreachable slice skipping ACTIVE markers, and reports scan_capped so a
+// floor is never quoted as a total.
+const HARVEST_TARGET_SCAN_PAGE = Math.max(50, Math.min(RH.HARVEST_TARGET_SCAN_PAGE,
+  parseInt(process.env.HARVEST_TARGET_SCAN_PAGE || String(RH.HARVEST_TARGET_SCAN_PAGE), 10) || RH.HARVEST_TARGET_SCAN_PAGE));
+const HARVEST_TARGET_SCAN_MAX = Math.max(HARVEST_TARGET_SCAN_PAGE,
+  parseInt(process.env.HARVEST_TARGET_SCAN_MAX || String(RH.HARVEST_TARGET_SCAN_MAX), 10) || RH.HARVEST_TARGET_SCAN_MAX);
+const HARVEST_MIN_CONF = (() => {
+  const v = parseFloat(process.env.HARVEST_MIN_CONFIDENCE || String(RH.HARVEST_MIN_CONFIDENCE));
+  return Number.isFinite(v) && v > 0 && v <= 1 ? v : RH.HARVEST_MIN_CONFIDENCE;
+})();
+
+function reachabilityHarvestEnabled(flagRow) {
+  const env = String(process.env.W9_2_REACHABILITY_HARVEST || '').toLowerCase();
+  if (['on', '1', 'true', 'yes', 'enabled'].includes(env)) return true;
+  return String(flagRow?.state || '').toLowerCase() === 'on';
+}
+
+async function fetchReachabilityHarvestFlag() {
+  try {
+    const r = await opsQuery('GET', 'feature_flags_registry?flag=eq.W9_2_REACHABILITY_HARVEST&select=flag,state&limit=1', undefined, { countMode: 'none' });
+    return r.ok && Array.isArray(r.data) ? r.data[0] : null;
+  } catch (_e) { return null; }
+}
+
+// Exclusion set: subject_refs already in reachability_harvest_review (any status).
+async function fetchHarvestKnownSubjects() {
+  const set = new Set();
+  const PAGE = 1000;
+  try {
+    for (let off = 0; ; off += PAGE) {
+      const r = await opsQuery('GET', 'reachability_harvest_review?select=subject_ref&order=review_id.asc&limit=' + PAGE + '&offset=' + off);
+      if (!r.ok) break;
+      const rows = Array.isArray(r.data) ? r.data : [];
+      for (const x of rows) if (x.subject_ref) set.add(String(x.subject_ref));
+      if (rows.length < PAGE) break;
+    }
+  } catch (_e) { /* best-effort */ }
+  return set;
+}
+
+async function fetchHarvestScoredMarkers() {
+  const set = new Set();
+  try {
+    const r = await opsQuery('GET', 'reachability_harvest_batch?select=details&batch_kind=eq.scan&order=created_at.desc&limit=1');
+    if (r.ok && Array.isArray(r.data) && r.data[0] && r.data[0].details && Array.isArray(r.data[0].details.scored_markers)) {
+      for (const m of r.data[0].details.scored_markers) if (m) set.add(String(m));
+    }
+  } catch (_e) { /* best-effort */ }
+  return set;
+}
+
+// P136 — ACTIVE target markers (reachability_harvest_target_marker). A target the
+// tick already checked and found to yield no fresh work is excluded from the next
+// window until its recheck_after passes. FAILS OPEN: an unreadable marker table
+// means "nothing is excluded" (a read error must never suppress the whole pool).
+async function fetchHarvestTargetMarkers() {
+  const set = new Set();
+  const errors = [];
+  const PAGE = 1000;
+  try {
+    const nowIso = new Date().toISOString();
+    for (let off = 0; ; off += PAGE) {
+      const r = await opsQuery('GET', 'reachability_harvest_target_marker'
+        + '?select=domain,target_contact_id&recheck_after=gt.' + encodeURIComponent(nowIso)
+        + '&order=marker_id.asc&limit=' + PAGE + '&offset=' + off, undefined, { countMode: 'none' });
+      if (!r.ok) { errors.push({ source: 'target_markers', status: r.status || null, detail: _harvestErrDetail(r.data) }); break; }
+      const rows = Array.isArray(r.data) ? r.data : [];
+      for (const x of rows) set.add(RH.targetMarkerKey(x.domain, x.target_contact_id));
+      if (rows.length < PAGE) break;
+    }
+  } catch (e) { errors.push({ source: 'target_markers', detail: e?.message || String(e) }); }
+  return { markers: set, errors };
+}
+
+// Upsert the checked-and-empty markers for this run. Chunked; best-effort (a marker
+// write failure costs a repeated check, never a wrong proposal) but COUNTED, so a
+// window that silently stops advancing is visible instead of inferred.
+async function writeHarvestTargetMarkers(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  const out = { written: 0, failed: 0 };
+  const CHUNK = 200;
+  for (let i = 0; i < list.length; i += CHUNK) {
+    const chunk = list.slice(i, i + CHUNK);
+    try {
+      const r = await opsQuery('POST',
+        'reachability_harvest_target_marker?on_conflict=domain,target_contact_id', chunk,
+        { headers: { Prefer: 'return=minimal,resolution=merge-duplicates' } });
+      if (r.ok) out.written += chunk.length; else out.failed += chunk.length;
+    } catch (_e) { out.failed += chunk.length; }
+  }
+  return out;
+}
+
+function _harvestBlank(v) { return v == null || String(v).trim() === ''; }
+
+// Fetch target contacts (missing BOTH email and phone) for one domain, value-ranked
+// (owner-linked first — a coarse but honest proxy for owner portfolio value; the
+// domain contacts carry no portfolio rollup). Returns normalized target rows.
+async function fetchHarvestTargets(domain, cap, offset = 0) {
+  const d = RH.normDomain(domain);
+  const errors = [];
+  const targets = [];
+  let raw = 0;   // the DB page size before the '' -blank post-filter (paging truth)
+  try {
+    const sel = d === 'dia'
+      ? 'contact_id,contact_name,contact_email,contact_phone,sf_contact_id,salesforce_id,true_owner_id,recorded_owner_id,property_id'
+      : 'contact_id,name,email,phone,sf_contact_id,true_owner_id,recorded_owner_id,property_id';
+    const emailCol = RH.domainContactColumn(d, 'email');
+    const phoneCol = RH.domainContactColumn(d, 'phone');
+    // Missing BOTH: email null AND phone null. Ordered owner-linked first.
+    // P136: contact_id is the STABLE tiebreak — the rank columns tie for thousands
+    // of rows, and an unstable order makes OFFSET paging skip and repeat rows.
+    const q = 'contacts?select=' + sel
+      + '&' + emailCol + '=is.null&' + phoneCol + '=is.null'
+      + '&order=true_owner_id.desc.nullslast,property_id.desc.nullslast,contact_id.asc'
+      + '&limit=' + cap + (offset ? '&offset=' + offset : '');
+    const r = await domainQuery(d, 'GET', q);
+    if (r.ok && Array.isArray(r.data)) {
+      for (const row of r.data) {
+        const name = d === 'dia' ? row.contact_name : row.name;
+        // Post-filter '' blanks (query only caught NULLs).
+        const emailBlank = _harvestBlank(d === 'dia' ? row.contact_email : row.email);
+        const phoneBlank = _harvestBlank(d === 'dia' ? row.contact_phone : row.phone);
+        if (!emailBlank && !phoneBlank) continue;
+        const missing = [];
+        if (emailBlank) missing.push('email');
+        if (phoneBlank) missing.push('phone');
+        const rankValue = (row.true_owner_id ? 2000000 : 0) + (row.property_id != null ? 1 : 0);
+        targets.push({
+          domain: d, target_contact_id: String(row.contact_id), contact_name: name || null,
+          sf_contact_id: row.sf_contact_id || null, salesforce_id: d === 'dia' ? (row.salesforce_id || null) : null,
+          true_owner_id: row.true_owner_id ? String(row.true_owner_id) : null,
+          property_id: row.property_id != null ? String(row.property_id) : null,
+          missing_fields: missing, rank_value: rankValue,
+        });
+      }
+    } else if (!r.ok) { errors.push({ source: 'targets_' + d, status: r.status || null, detail: _harvestErrDetail(r.data) }); }
+    if (r.ok && Array.isArray(r.data)) raw = r.data.length;
+  } catch (e) { errors.push({ source: 'targets_' + d, detail: e?.message || String(e) }); }
+  return { targets: RH.valueGateTargets(targets), errors, raw };
+}
+
+function _harvestErrDetail(data) {
+  if (data == null) return null;
+  if (typeof data === 'string') return data.slice(0, 200);
+  try { return JSON.stringify(data).slice(0, 200); } catch (_e) { return String(data).slice(0, 200); }
+}
+
+// Build the deterministic donor maps (ARM 1) for a target batch — batched in.()
+// lookups over BOTH domains' contacts (an SF contact id is global), NEVER per-row.
+// Returns { bySf: Map(sfId -> {email,phone,contact_id,domain}), bySalesforce: Map,
+//   errors:[], sources:{sf_contact_id,salesforce_id} }.
+async function harvestBuildDonorMaps(targets) {
+  const sfIds = new Set();
+  const salesforceIds = new Set();
+  for (const t of targets) {
+    if (t.sf_contact_id) sfIds.add(String(t.sf_contact_id));
+    if (t.salesforce_id) salesforceIds.add(String(t.salesforce_id));
+  }
+  const bySf = new Map();
+  const bySalesforce = new Map();
+  const errors = [];
+  const sources = { sf_contact_id: 0, salesforce_id: 0 };
+  const ingest = (map, key, donorDomain, email, phone, contactId) => {
+    if (!key) return;
+    const cur = map.get(key) || { email: null, phone: null, contact_id: null, domain: donorDomain };
+    if (!cur.email && RH.looksLikeEmail(email)) { cur.email = RH.normalizeEmail(email); cur.contact_id = String(contactId); cur.domain = donorDomain; }
+    if (!cur.phone && RH.looksLikePhone(phone)) { cur.phone = RH.normalizePhone(phone); cur.contact_id = cur.contact_id || String(contactId); cur.domain = donorDomain; }
+    if (cur.email || cur.phone) map.set(key, cur);
+  };
+  const chunk = (arr, n) => { const out = []; for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n)); return out; };
+  // Donors from BOTH domains, keyed by the global sf_contact_id.
+  if (sfIds.size) {
+    for (const dom of ['dia', 'gov']) {
+      const emailCol = RH.domainContactColumn(dom, 'email');
+      const phoneCol = RH.domainContactColumn(dom, 'phone');
+      const sel = 'contact_id,sf_contact_id,' + emailCol + ',' + phoneCol;
+      for (const c of chunk([...sfIds], 200)) {
+        try {
+          const inList = c.map((v) => pgFilterVal(v)).join(',');
+          const r = await domainQuery(dom, 'GET', 'contacts?select=' + sel + '&sf_contact_id=in.(' + inList + ')&limit=1000');
+          if (r.ok && Array.isArray(r.data)) {
+            for (const row of r.data) {
+              if (!row.sf_contact_id) continue;
+              ingest(bySf, String(row.sf_contact_id), dom, row[emailCol], row[phoneCol], row.contact_id);
+              sources.sf_contact_id += 1;
+            }
+          } else if (!r.ok) { errors.push({ source: 'donor_sf_' + dom, status: r.status || null, detail: _harvestErrDetail(r.data) }); }
+        } catch (e) { errors.push({ source: 'donor_sf_' + dom, detail: e?.message || String(e) }); }
+      }
+    }
+  }
+  // salesforce_id donors exist only on dia.contacts.
+  if (salesforceIds.size) {
+    for (const c of chunk([...salesforceIds], 200)) {
+      try {
+        const inList = c.map((v) => pgFilterVal(v)).join(',');
+        const r = await domainQuery('dia', 'GET', 'contacts?select=contact_id,salesforce_id,contact_email,contact_phone&salesforce_id=in.(' + inList + ')&limit=1000');
+        if (r.ok && Array.isArray(r.data)) {
+          for (const row of r.data) {
+            if (!row.salesforce_id) continue;
+            ingest(bySalesforce, String(row.salesforce_id), 'dia', row.contact_email, row.contact_phone, row.contact_id);
+            sources.salesforce_id += 1;
+          }
+        } else if (!r.ok) { errors.push({ source: 'donor_salesforce_dia', status: r.status || null, detail: _harvestErrDetail(r.data) }); }
+      } catch (e) { errors.push({ source: 'donor_salesforce_dia', detail: e?.message || String(e) }); }
+    }
+  }
+  return { bySf, bySalesforce, errors, sources };
+}
+
+// Build the LLM-arm intake index (ARM 2) — ONE bounded scan of intake extraction
+// snapshots carrying a party contact detail (owner/seller/broker email+phone),
+// indexed by NORMALIZED party name. NEVER per-row. Returns { index: Map(normName ->
+// [{name, email, phone, quote, intake_id}]), errors, count }.
+async function harvestBuildIntakeIndex() {
+  const index = new Map();
+  const errors = [];
+  let scanned = 0;
+  const PAGE = 1000;
+  const add = (name, email, phone, quote, intakeId) => {
+    const nm = RH.normalizeForMatch(name);
+    if (!nm || nm.length < 4) return;
+    if (!RH.looksLikeEmail(email) && !RH.looksLikePhone(phone)) return;
+    const arr = index.get(nm) || [];
+    arr.push({ name: String(name), email: RH.looksLikeEmail(email) ? RH.normalizeEmail(email) : null,
+      phone: RH.looksLikePhone(phone) ? RH.normalizePhone(phone) : null, quote, intake_id: intakeId });
+    index.set(nm, arr);
+  };
+  try {
+    for (let off = 0; off < HARVEST_INTAKE_INDEX_CAP; off += PAGE) {
+      const r = await opsQuery('GET', 'staged_intake_extractions?select=intake_id,extraction_snapshot'
+        + '&order=created_at.desc&limit=' + PAGE + '&offset=' + off);
+      if (!r.ok) { errors.push({ source: 'intake', status: r.status || null, detail: _harvestErrDetail(r.data) }); break; }
+      const rows = Array.isArray(r.data) ? r.data : [];
+      for (const row of rows) {
+        const ex = row.extraction_snapshot;
+        if (!ex || typeof ex !== 'object') continue;
+        scanned += 1;
+        // Each named party with a contact detail becomes an index entry. The quote
+        // is the verbatim span the LLM must copy (name + value together).
+        const parties = [
+          ['owner_contact_name', 'owner_contact_email', 'owner_contact_phone'],
+          ['seller_name', 'seller_email', null],
+          ['listing_broker', 'listing_broker_email', null],
+        ];
+        for (const [nk, ek, pk] of parties) {
+          const nm = ex[nk];
+          if (!nm || typeof nm !== 'string') continue;
+          const em = ek && typeof ex[ek] === 'string' ? ex[ek] : null;
+          const ph = pk && typeof ex[pk] === 'string' ? ex[pk] : null;
+          if (!RH.looksLikeEmail(em) && !RH.looksLikePhone(ph)) continue;
+          const quote = [nk + ': ' + nm, em ? ek + ': ' + em : '', ph ? pk + ': ' + ph : '']
+            .filter(Boolean).join('; ');
+          add(nm, em, ph, quote, row.intake_id);
+        }
+      }
+      if (rows.length < PAGE) break;
+    }
+  } catch (e) { errors.push({ source: 'intake', detail: e?.message || String(e) }); }
+  return { index, errors, count: scanned };
+}
+
+// W9.4 — Build the COMMS index (ARM 3 feedstock) from the correspondence spine.
+// ONE bounded, paged scan of activity_events restricted to BUSINESS-ATTRIBUTED,
+// NON-PRIVATE correspondence (privacy-scope doctrine). Extracts, per row:
+//   * header pairs — parseHeaderAddress over from/to/cc (metadata.from/to strings +
+//     mailbox-mirror from_email/to_emails/cc_emails arrays). A display NAME bound to
+//     a valid, non-internal, non-generic EMAIL → nameIndex[normName] (deterministic
+//     class + also LLM evidence).
+//   * signature phones — extractSignaturePhones over the body's signature region →
+//     attached to the row's header names as LLM evidence (the verbatim validator
+//     gates them).
+//   * owner participants — every external {name?,email,phone?} keyed by the row's
+//     ops entity anchors, for the create-contact arm (resolved to owners-without-
+//     contacts downstream).
+// NEVER per-row DB work. Returns { nameIndex, ownerParticipants, counts, errors }.
+async function harvestBuildCommsIndex() {
+  const nameIndex = new Map();          // normName -> [{name,email,phone,quote,message_id,source_type}]
+  const ownerParticipants = new Map();  // ops entity id -> [{name,email,phone,quote,message_id,source_type}]
+  const errors = [];
+  const counts = { scanned: 0, harvestable: 0, skipped_private: 0, skipped_unattributed: 0,
+    header_name_pairs: 0, signature_phones: 0, participants: 0 };
+  const PAGE = 1000;
+  const SOURCES = ['email_intake', 'outlook_inbound', 'outlook_sent', 'outlook_tagged', 'outlook', 'dossier_seed'];
+  // kind: 'header' = a clean name↔value bind from a header token (deterministic-
+  // eligible); 'signature' = a phone parsed from the body signature (LLM-only —
+  // fuzzy attribution, MUST pass the verbatim validator, never an arithmetic fill).
+  const addName = (name, email, phone, quote, mid, st, kind) => {
+    const nm = RH.normalizeForMatch(name);
+    if (!nm || nm.length < 4) return;
+    const okEmail = email && RH.looksLikeEmail(email) && !RH.isInternalEmail(email) && !RH.isGenericInbox(email);
+    const okPhone = phone && RH.looksLikePhone(phone);
+    if (!okEmail && !okPhone) return;
+    const arr = nameIndex.get(nm) || [];
+    arr.push({ name: String(name), email: okEmail ? RH.normalizeEmail(email) : null,
+      phone: okPhone ? RH.normalizePhone(phone) : null, quote, message_id: mid, source_type: st,
+      kind: kind || 'header' });
+    nameIndex.set(nm, arr);
+    if (okEmail || okPhone) counts.header_name_pairs += 1;
+  };
+  const addParticipant = (anchors, name, email, phone, quote, mid, st) => {
+    const okEmail = email && RH.looksLikeEmail(email) && !RH.isInternalEmail(email) && !RH.isGenericInbox(email);
+    if (!okEmail) return; // a create-contact needs a real, external, personal email
+    const rec = { name: name ? String(name) : null, email: RH.normalizeEmail(email),
+      phone: phone && RH.looksLikePhone(phone) ? RH.normalizePhone(phone) : null,
+      quote, message_id: mid, source_type: st };
+    for (const a of anchors) {
+      const arr = ownerParticipants.get(a) || [];
+      arr.push(rec);
+      ownerParticipants.set(a, arr);
+    }
+    if (anchors.length) counts.participants += 1;
+  };
+  try {
+    for (let off = 0; off < HARVEST_COMMS_INDEX_CAP; off += PAGE) {
+      const q = 'activity_events?select=external_id,source_type,visibility,entity_id,body,metadata,occurred_at'
+        + '&category=in.(email,call)&visibility=neq.private'
+        + '&source_type=in.(' + SOURCES.join(',') + ')'
+        + '&order=occurred_at.desc.nullslast&limit=' + PAGE + '&offset=' + off;
+      const r = await opsQuery('GET', q);
+      if (!r.ok) { errors.push({ source: 'comms', status: r.status || null, detail: _harvestErrDetail(r.data) }); break; }
+      const rows = Array.isArray(r.data) ? r.data : [];
+      for (const row of rows) {
+        counts.scanned += 1;
+        if (String(row.visibility || '').toLowerCase() === 'private') { counts.skipped_private += 1; continue; }
+        if (!RH.commsRowHarvestable(row)) { counts.skipped_unattributed += 1; continue; }
+        counts.harvestable += 1;
+        const md = row.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+        const mid = row.external_id || md.internet_message_id || null;
+        const st = row.source_type || null;
+        const anchors = RH.commsRowEntityAnchors(row);
+        // ---- header pairs (name+email) ----
+        const rawHeaders = [];
+        if (typeof md.from === 'string') rawHeaders.push(md.from);
+        if (typeof md.to === 'string') rawHeaders.push(md.to);
+        if (typeof md.from_email === 'string') rawHeaders.push(md.from_email);
+        for (const k of ['to_emails', 'cc_emails']) {
+          if (Array.isArray(md[k])) for (const v of md[k]) if (typeof v === 'string') rawHeaders.push(v);
+        }
+        // Prompt 110: a full body (when the PA flow forwarded body_text/body_html
+        // into metadata) exposes the WHOLE signature block, not just the ~255-char
+        // preview tail — more signature phones become visible. Falls back to the
+        // preview body cleanly while bodies are still empty. The verbatim-quote
+        // validator downstream is unchanged.
+        const commsBody = pickBestCommsBody({ body_text: md.body_text, body_html: md.body_html, body: row.body });
+        const sigPhones = RH.extractSignaturePhones(RH.signatureRegion(commsBody));
+        if (sigPhones.length) counts.signature_phones += sigPhones.length;
+        // ---- Prompt 96 — structured name↔email pairs (from_name / to_names[]) ----
+        // Forward-only feedstock: the loggers now preserve Graph display names.
+        // A pair binds a display NAME to its address directly (no header string to
+        // parse), so it is the cleanest header-pair source when present.
+        const structuredPairs = [];
+        {
+          const fromEmailForName = (typeof md.from === 'string' && md.from) || (typeof md.from_email === 'string' && md.from_email) || null;
+          if (typeof md.from_name === 'string' && md.from_name.trim() && fromEmailForName) {
+            structuredPairs.push({ name: md.from_name.trim(), email: fromEmailForName });
+          }
+          if (Array.isArray(md.to_names)) {
+            for (const p of md.to_names) {
+              if (p && typeof p === 'object' && typeof p.name === 'string' && p.name.trim() && typeof p.email === 'string' && p.email) {
+                structuredPairs.push({ name: p.name.trim(), email: p.email });
+              }
+            }
+          }
+        }
+        for (const p of structuredPairs) {
+          if (RH.isInternalEmail(p.email) || RH.isGenericInbox(p.email)) continue;
+          const quote = `${p.name} <${p.email}>`;
+          addName(p.name, p.email, null, quote, mid, st, 'header');
+          for (const sp of sigPhones) addName(p.name, null, sp.phone, sp.span, mid, st, 'signature');
+          addParticipant(anchors, p.name, p.email, sigPhones[0] ? sigPhones[0].phone : null, quote, mid, st);
+        }
+        for (const raw of rawHeaders) {
+          const { name, email } = RH.parseHeaderAddress(raw);
+          if (email && (RH.isInternalEmail(email) || RH.isGenericInbox(email))) continue;
+          if (name) {
+            const quote = raw.slice(0, 300);
+            addName(name, email, null, quote, mid, st, 'header');
+            // signature phones ride as LLM evidence tied to this named sender (fuzzy)
+            for (const p of sigPhones) addName(name, null, p.phone, p.span, mid, st, 'signature');
+            addParticipant(anchors, name, email, sigPhones[0] ? sigPhones[0].phone : null, quote, mid, st);
+          } else if (email) {
+            // no display name → cannot key a fill, but a bare external email on an
+            // owner-attributed thread is a create-contact candidate (name null).
+            addParticipant(anchors, null, email, sigPhones[0] ? sigPhones[0].phone : null, raw.slice(0, 300), mid, st);
+          }
+        }
+      }
+      if (rows.length < PAGE) break;
+    }
+  } catch (e) { errors.push({ source: 'comms', detail: e?.message || String(e) }); }
+  return { nameIndex, ownerParticipants, counts, errors };
+}
+
+// W9.4 — resolve which owner ENTITY ids (ops) map to a domain true_owner that has
+// ZERO domain contact rows (the create-contact target set). Batched: one
+// external_identities lookup (entity_id -> {source_system, true_owner_id}) then one
+// contacts probe per domain over the candidate true_owner ids. Returns
+// Map(ownerEntityId -> { domain, true_owner_id, owner_name }). NEVER per-row.
+async function harvestResolveOwnersWithoutContacts(ownerEntityIds) {
+  const out = new Map();
+  const errors = [];
+  const ids = [...new Set((ownerEntityIds || []).map((x) => String(x)).filter(Boolean))];
+  if (!ids.length) return { owners: out, errors };
+  const chunk = (arr, n) => { const o = []; for (let i = 0; i < arr.length; i += n) o.push(arr.slice(i, i + n)); return o; };
+  // 1. ops entity -> domain true_owner via external_identities.
+  const byEntity = new Map(); // entityId -> {domain, true_owner_id}
+  const byDomain = { dia: new Set(), gov: new Set() };
+  for (const c of chunk(ids, 150)) {
+    try {
+      const inList = c.map((v) => pgFilterVal(v)).join(',');
+      const r = await opsQuery('GET', 'external_identities?select=entity_id,source_system,external_id'
+        + '&source_type=eq.true_owner&source_system=in.(dia,gov)&entity_id=in.(' + inList + ')&limit=1000');
+      if (r.ok && Array.isArray(r.data)) {
+        for (const row of r.data) {
+          const dom = RH.normDomain(row.source_system);
+          if ((dom === 'dia' || dom === 'gov') && row.entity_id && row.external_id) {
+            byEntity.set(String(row.entity_id), { domain: dom, true_owner_id: String(row.external_id) });
+            byDomain[dom].add(String(row.external_id));
+          }
+        }
+      } else if (!r.ok) { errors.push({ source: 'owner_extid', status: r.status || null, detail: _harvestErrDetail(r.data) }); }
+    } catch (e) { errors.push({ source: 'owner_extid', detail: e?.message || String(e) }); }
+  }
+  // 2. per domain: which true_owner ids ALREADY have ≥1 contact + fetch owner name.
+  const hasContact = { dia: new Set(), gov: new Set() };
+  const ownerName = new Map(); // domain:true_owner_id -> name
+  const isOperatorOwner = new Set(); // 'domain:true_owner_id' — P113 tenant, never a create-contact target
+  for (const dom of ['dia', 'gov']) {
+    const owners = [...byDomain[dom]];
+    for (const c of chunk(owners, 150)) {
+      try {
+        const inList = c.map((v) => pgFilterVal(v)).join(',');
+        const r = await domainQuery(dom, 'GET', 'contacts?select=true_owner_id&true_owner_id=in.(' + inList + ')&limit=1000');
+        if (r.ok && Array.isArray(r.data)) for (const row of r.data) if (row.true_owner_id) hasContact[dom].add(String(row.true_owner_id));
+      } catch (e) { errors.push({ source: 'owner_contacts_' + dom, detail: e?.message || String(e) }); }
+      try {
+        const inList = c.map((v) => pgFilterVal(v)).join(',');
+        const toSelect = 'true_owner_id,name,' + trueOwnerOperatorSelectFields(dom);
+        const rn = await domainQuery(dom, 'GET', 'true_owners?select=' + toSelect + '&true_owner_id=in.(' + inList + ')&limit=1000');
+        if (rn.ok && Array.isArray(rn.data)) for (const row of rn.data) {
+          if (!row.true_owner_id) continue;
+          // PDR2: never surface an operator-flagged true_owner as a create-contact TARGET
+          // OWNER — that would mint a contact under the tenant's true_owner_id, not the
+          // landlord's. Mark it so the harvest loop below skips it.
+          if (isTrueOwnerOperator(row)) { isOperatorOwner.add(dom + ':' + row.true_owner_id); continue; }
+          ownerName.set(dom + ':' + row.true_owner_id, row.name || null);
+        }
+      } catch (_e) { /* name is best-effort */ }
+    }
+  }
+  for (const [entityId, info] of byEntity.entries()) {
+    if (hasContact[info.domain].has(info.true_owner_id)) continue; // owner already reachable
+    if (isOperatorOwner.has(info.domain + ':' + info.true_owner_id)) continue; // P113: tenant, not the landlord
+    out.set(entityId, { domain: info.domain, true_owner_id: info.true_owner_id,
+      owner_name: ownerName.get(info.domain + ':' + info.true_owner_id) || null });
+  }
+  return { owners: out, errors };
+}
+
+// Build the fresh scored-ready item pool for one tick. Deterministic proposals
+// (arm=deterministic) are built directly (arithmetic, no LLM); LLM items (arm=llm)
+// carry assembled evidence for scoring. Value-gated, resumable, excludes known /
+// unchanged. Returns { deterministic, llmItems, counts, scan_errors, skip_markers }.
+async function buildFreshHarvestItems(opts = {}) {
+  const cap = Number.isFinite(opts.cap) ? opts.cap : HARVEST_MAX_TARGETS;
+  const known = opts.known instanceof Set ? opts.known : await fetchHarvestKnownSubjects();
+  const markers = opts.markers instanceof Set ? opts.markers : await fetchHarvestScoredMarkers();
+  const perDomain = Math.max(10, Math.floor(cap / 2));
+  const counts = {
+    targets: { dia: 0, gov: 0, total: 0 },
+    deterministic: { candidates: 0, donors_found: 0, proposed: 0, no_donor: 0, already_known: 0 },
+    llm: { candidates: 0, with_evidence: 0, no_evidence: 0, fresh: 0, already_known: 0 },
+    // W9.4 comms arm counters (kept separate so per-source yields are honest).
+    comms: { header_fills: 0, signature_evidence: 0, create_contact: 0, already_known: 0,
+      index_names: 0, index_participants: 0, fanout_suppressed: 0, brokerage_contact_suppressed: 0 },
+    evidence_sources: { sf_contact_id: 0, salesforce_id: 0, intake: 0, comms_names: 0 },
+  };
+  const deterministic = [];
+  const llmItems = [];
+  const createContact = [];   // W9.4 target_kind='owner' — minted only via the lane
+  const scanErrors = [];
+  const skipMarkers = [];
+  const pushErrors = (errs) => { for (const e of (errs || [])) scanErrors.push(e); };
+  // P136: which selected targets produced FRESH work this run. Everything else is
+  // checked-and-empty and gets a marker so the window advances (see step 6).
+  const producedTargetKeys = new Set();
+  const noteProduced = (t) => producedTargetKeys.add(RH.targetMarkerKey(t.domain, t.target_contact_id));
+
+  // 1. Evidence indexes FIRST — target selection joins against them (P136). Blind
+  //    unreachability rank picked 120 owners with zero evidence, nightly, forever.
+  const intake = await harvestBuildIntakeIndex();
+  pushErrors(intake.errors);
+  counts.evidence_sources.intake = intake.count;
+
+  // 1b. W9.4 comms index (ARM 3) — ONE bounded scan of the correspondence spine.
+  const comms = await harvestBuildCommsIndex();
+  pushErrors(comms.errors);
+  counts.comms.index_names = comms.nameIndex.size;
+  counts.comms.index_participants = comms.ownerParticipants.size;
+  counts.evidence_sources.comms_names = comms.counts.header_name_pairs;
+  counts.comms_scan = comms.counts;
+
+  // 2. Targets — paged THROUGH the ranked unreachable slice, skipping ACTIVE
+  //    markers, evidence-bearing first (P136). `targetMarkers` is injectable so
+  //    the selector is testable without a DB.
+  let targetMarkers = opts.targetMarkers instanceof Set ? opts.targetMarkers : null;
+  if (!targetMarkers) {
+    const tm = await fetchHarvestTargetMarkers();
+    targetMarkers = tm.markers;
+    pushErrors(tm.errors);
+  }
+  const evidenceOf = (t) => RH.targetEvidenceSignal(t, {
+    hasIntakeName: (nm) => intake.index.has(nm),
+    hasCommsName: (nm) => comms.nameIndex.has(nm),
+  });
+  // Per-domain active-marker count drives the adaptive scan ceiling (a fixed one
+  // silently refills with markers and re-stalls — see harvestTargetScanCeiling).
+  const markersForDomain = (dom) => {
+    const pfx = RH.normDomain(dom) + ':';
+    let n = 0;
+    for (const k of targetMarkers) if (k.startsWith(pfx)) n += 1;
+    return n;
+  };
+  const selectDomain = async (dom) => {
+    const errs = [];
+    const sel = await RH.selectHarvestTargets({
+      fetchPage: async (lim, off) => {
+        const page = await fetchHarvestTargets(dom, lim, off);
+        for (const e of (page.errors || [])) errs.push(e);
+        // `raw` (the DB page size) decides exhaustion, not the post-filtered list.
+        return { rows: page.targets, raw: page.raw };
+      },
+      isMarked: (t) => targetMarkers.has(RH.targetMarkerKey(t.domain, t.target_contact_id)),
+      evidenceOf,
+      want: perDomain,
+      pageSize: HARVEST_TARGET_SCAN_PAGE,
+      maxScan: RH.harvestTargetScanCeiling(markersForDomain(dom), perDomain, HARVEST_TARGET_SCAN_MAX),
+    });
+    return { sel, errs };
+  };
+  const diaSel = await selectDomain('dia');
+  const govSel = await selectDomain('gov');
+  pushErrors(diaSel.errs); pushErrors(govSel.errs);
+  counts.targets.dia = diaSel.sel.targets.length;
+  counts.targets.gov = govSel.sel.targets.length;
+  const allTargets = RH.valueGateTargets(diaSel.sel.targets.concat(govSel.sel.targets));
+  counts.targets.total = allTargets.length;
+  // Honest window counts — a genuinely quiet night (pool drained) must be
+  // distinguishable from a stuck window. `remaining_untargeted` is a FLOOR when
+  // the scan capped, a TOTAL when it exhausted the slice.
+  counts.target_window = {
+    selected: allTargets.length,
+    with_evidence: diaSel.sel.targets_with_evidence + govSel.sel.targets_with_evidence,
+    without_evidence: diaSel.sel.targets_without_evidence + govSel.sel.targets_without_evidence,
+    remaining_untargeted: diaSel.sel.remaining_untargeted + govSel.sel.remaining_untargeted,
+    marker_skipped: diaSel.sel.marker_skipped + govSel.sel.marker_skipped,
+    scanned: diaSel.sel.scanned + govSel.sel.scanned,
+    scan_capped: !!(diaSel.sel.scan_capped || govSel.sel.scan_capped),
+    active_markers: targetMarkers.size,
+    by_domain: {
+      dia: { selected: diaSel.sel.targets.length, with_evidence: diaSel.sel.targets_with_evidence,
+        remaining_untargeted: diaSel.sel.remaining_untargeted, marker_skipped: diaSel.sel.marker_skipped,
+        scanned: diaSel.sel.scanned, scan_capped: diaSel.sel.scan_capped },
+      gov: { selected: govSel.sel.targets.length, with_evidence: govSel.sel.targets_with_evidence,
+        remaining_untargeted: govSel.sel.remaining_untargeted, marker_skipped: govSel.sel.marker_skipped,
+        scanned: govSel.sel.scanned, scan_capped: govSel.sel.scan_capped },
+    },
+  };
+
+  // 3. Deterministic donor maps (batched, both domains) for the SELECTED batch.
+  const donor = await harvestBuildDonorMaps(allTargets);
+  pushErrors(donor.errors);
+  counts.evidence_sources.sf_contact_id = donor.sources.sf_contact_id;
+  counts.evidence_sources.salesforce_id = donor.sources.salesforce_id;
+
+  // 4. Per target × missing field: deterministic-first (SF donor → comms header),
+  //    else LLM (intake + comms signature evidence), else no_evidence.
+  for (const t of allTargets) {
+    for (const field of t.missing_fields) {
+      // -- ARM 1: deterministic exact-identity donor. --
+      counts.deterministic.candidates += 1;
+      let donorHit = null; let matchKey = null;
+      if (t.sf_contact_id && donor.bySf.has(String(t.sf_contact_id))) {
+        const cand = donor.bySf.get(String(t.sf_contact_id));
+        if (cand[field] && String(cand.contact_id) !== String(t.target_contact_id)) { donorHit = cand; matchKey = 'sf_contact_id'; }
+      }
+      if (!donorHit && t.salesforce_id && donor.bySalesforce.has(String(t.salesforce_id))) {
+        const cand = donor.bySalesforce.get(String(t.salesforce_id));
+        if (cand[field] && String(cand.contact_id) !== String(t.target_contact_id)) { donorHit = cand; matchKey = 'salesforce_id'; }
+      }
+      if (donorHit) {
+        counts.deterministic.donors_found += 1;
+        const subjectRef = RH.contactSubjectRef(RH.HARVEST_ARM_DETERMINISTIC, t.domain, t.target_contact_id, field);
+        if (known.has(subjectRef)) { counts.deterministic.already_known += 1; continue; }
+        const prop = RH.buildDeterministicProposal(field, { value: donorHit[field], match_key: matchKey,
+          donor_contact_id: donorHit.contact_id, donor_domain: donorHit.domain });
+        if (!prop) { counts.deterministic.no_donor += 1; continue; }
+        const evHash = RH.evidenceHash(null, matchKey + ':' + donorHit.contact_id + ':' + prop.value);
+        const marker = RH.harvestScoredKeyFor(RH.HARVEST_ARM_DETERMINISTIC, t.domain, t.target_contact_id, field, evHash);
+        if (markers.has(marker)) continue;
+        counts.deterministic.proposed += 1;
+        noteProduced(t);
+        deterministic.push({ arm: RH.HARVEST_ARM_DETERMINISTIC, subjectRef, target: t, field, proposal: prop,
+          evHash, marker, domain: t.domain });
+        continue; // deterministic wins — do not also LLM this field
+      }
+      counts.deterministic.no_donor += 1;
+
+      // -- ARM 3a: deterministic COMMS header. A correspondence header bound a
+      //    display NAME to a valid, non-internal, non-generic value that matches
+      //    THIS contact's name exactly. Arithmetic (provider none) but OBSERVED in
+      //    mail → provenance comms_observed. Routes through the deterministic arm.
+      const nmKey = RH.normalizeForMatch(t.contact_name || '');
+      const commsHits = nmKey ? (comms.nameIndex.get(nmKey) || []) : [];
+      let commsHeader = null;
+      for (const h of commsHits) {
+        // deterministic-eligible ONLY when the value came from a clean header bind
+        // (kind='header'); a signature-derived phone must go through the LLM validator.
+        if (h.kind === 'header' && h[field]) { commsHeader = h; break; }
+      }
+      if (commsHeader) {
+        const subjectRef = RH.contactSubjectRef(RH.HARVEST_ARM_DETERMINISTIC, t.domain, t.target_contact_id, field);
+        if (known.has(subjectRef)) { counts.comms.already_known += 1; continue; }
+        const prop = RH.buildCommsHeaderProposal(field, { value: commsHeader[field],
+          message_id: commsHeader.message_id, quote: commsHeader.quote, source_type: commsHeader.source_type });
+        if (prop) {
+          const evHash = RH.evidenceHash(null, 'comms:' + (commsHeader.message_id || '') + ':' + prop.value);
+          const marker = RH.harvestScoredKeyFor(RH.HARVEST_ARM_DETERMINISTIC, t.domain, t.target_contact_id, field, evHash);
+          if (!markers.has(marker)) {
+            counts.comms.header_fills += 1;
+            noteProduced(t);
+            deterministic.push({ arm: RH.HARVEST_ARM_DETERMINISTIC, subjectRef, target: t, field, proposal: prop,
+              evHash, marker, domain: t.domain, provenanceSource: RH.HARVEST_SOURCE_COMMS });
+          }
+          continue; // a deterministic comms fill wins — do not also LLM this field
+        }
+      }
+
+      // -- ARM 2: LLM attribution from the intake index + comms signatures (by name). --
+      counts.llm.candidates += 1;
+      const subjectRef = RH.contactSubjectRef(RH.HARVEST_ARM_LLM, t.domain, t.target_contact_id, field);
+      if (known.has(subjectRef)) { counts.llm.already_known += 1; continue; }
+      const nm = RH.normalizeForMatch(t.contact_name || '');
+      const hits = nm ? (intake.index.get(nm) || []) : [];
+      // Only evidence that carries THIS field.
+      const blocks = [];
+      for (const h of hits) {
+        if (field === 'email' && !h.email) continue;
+        if (field === 'phone' && !h.phone) continue;
+        blocks.push({ source: 'intake', ref: h.intake_id, text: h.quote });
+      }
+      // W9.4: comms signature/header evidence for THIS name + field (LLM-verified).
+      for (const h of commsHits) {
+        if (field === 'email' && !h.email) continue;
+        if (field === 'phone' && !h.phone) continue;
+        if (blocks.length) counts.comms.signature_evidence += 1;
+        blocks.push({ source: 'comms', ref: h.message_id, text: h.quote });
+      }
+      const assembled = RH.assembleEvidence(blocks);
+      const evHash = RH.evidenceHash(assembled, field + '|' + (t.contact_name || ''));
+      const marker = RH.harvestScoredKeyFor(RH.HARVEST_ARM_LLM, t.domain, t.target_contact_id, field, evHash);
+      if (RH.evidenceIsEmpty(assembled)) {
+        if (!markers.has(marker)) { counts.llm.no_evidence += 1; skipMarkers.push(marker); }
+        continue; // NO LLM call
+      }
+      if (markers.has(marker)) continue;
+      counts.llm.with_evidence += 1;
+      counts.llm.fresh += 1;
+      noteProduced(t);
+      llmItems.push({ arm: RH.HARVEST_ARM_LLM, subjectRef, target: t, field, assembled, evHash, marker, domain: t.domain });
+    }
+  }
+
+  // 5. W9.4 CREATE-CONTACT arm — thread participants attributable to an owner that
+  //    has NO contact row yet. Resolve the comms participant owners → domain owners
+  //    without contacts (batched), then propose ONE create-contact per (owner, email)
+  //    with a NAME + email (+ signature phone). Minted ONLY via a human verdict.
+  const participantEntityIds = [...comms.ownerParticipants.keys()];
+  if (participantEntityIds.length) {
+    const { owners, errors: ownerErrs } = await harvestResolveOwnersWithoutContacts(participantEntityIds);
+    pushErrors(ownerErrs);
+    // Build the RAW create-contact candidate set first so the fan-out cap can be
+    // computed GLOBALLY (a contact fanning across owners is only visible across
+    // the whole scan), then apply the Prompt-104 precision guards on the way out.
+    const createRaw = [];
+    for (const [entityId, info] of owners.entries()) {
+      const parts = comms.ownerParticipants.get(entityId) || [];
+      for (const p of parts) {
+        // Value-gate: a create-contact needs a real external email AND a name (gov
+        // contacts.name is NOT NULL; never fabricate a nameless contact).
+        if (!p.email || !p.name) continue;
+        createRaw.push({ info, p });
+      }
+    }
+    // Prompt-104 guard 1 (the strongest signal): fan-out cap. A contact (keyed by
+    // email, else name) proposed for >= HARVEST_MINT_FANOUT_MAX distinct owners is
+    // a broker/advisor/shared mailbox spreading across deals (the Sharrow class).
+    const fanoutSuppressed = RH.createContactFanoutSuppressed(
+      createRaw.map((r) => ({ contact_name: r.p.name, value: r.p.email,
+        domain: r.info.domain, target_owner_id: r.info.true_owner_id })),
+      RH.HARVEST_MINT_FANOUT_MAX);
+    const seenCreate = new Set();
+    for (const { info, p } of createRaw) {
+        const subjectRef = RH.commsNewContactSubjectRef(info.domain, info.true_owner_id, p.email);
+        if (seenCreate.has(subjectRef)) continue;
+        seenCreate.add(subjectRef);
+        if (known.has(subjectRef)) { counts.comms.already_known += 1; continue; }
+        // Prompt-104 guard 2: a brokerage/advisor NAME or EMAIL-DOMAIN is a deal
+        // party, never the owner's own principal — drop from the mint arm.
+        if (coaIsBrokerageContact(p.name, p.email)) { counts.comms.brokerage_contact_suppressed += 1; continue; }
+        // Prompt-104 guard 1: fan-out cap (one contact → many owners).
+        if (fanoutSuppressed.has(RH.createContactKey(p.name, p.email))) { counts.comms.fanout_suppressed += 1; continue; }
+        // Header-name+email is deterministic; a signature-only attribution is llm.
+        const arm = p.quote && RH.quoteVerbatimInEvidence(p.quote, p.quote) && p.name ? RH.HARVEST_ARM_DETERMINISTIC : RH.HARVEST_ARM_LLM;
+        counts.comms.create_contact += 1;
+        createContact.push({
+          arm, subjectRef, domain: info.domain, target_kind: 'owner',
+          target_owner_id: info.true_owner_id, owner_name: info.owner_name,
+          contact_name: p.name, field: 'email', value: p.email,
+          proposal: {
+            verdict: 'fill_proposal', field: 'email', value: RH.normalizeEmail(p.email),
+            confidence: arm === RH.HARVEST_ARM_DETERMINISTIC ? 1.0 : 0.7,
+            evidence_quote: p.quote ? String(p.quote).slice(0, 400) : null,
+            evidence_source: p.message_id ? ('comms:' + p.message_id) : 'comms_participant',
+            reason: 'Thread participant attributable to owner ' + (info.owner_name || info.true_owner_id) + ' with no contact on file.',
+            source_pointer: { create_contact: true, name: p.name, email: RH.normalizeEmail(p.email),
+              phone: p.phone || null, domain: info.domain, true_owner_id: info.true_owner_id,
+              message_id: p.message_id || null, source_type: p.source_type || null },
+          },
+          provenanceSource: RH.HARVEST_SOURCE_COMMS,
+        });
+    }
+  }
+
+  // 6. P136 — plan the target markers. A SELECTED target that produced no fresh
+  //    deterministic/LLM item is checked-and-empty; marking it is what makes run
+  //    N+1 see a different window. (create_contact is owner-keyed, not target-
+  //    keyed, so it deliberately does not clear a contact target's marker.)
+  const targetMarkerRows = RH.planHarvestTargetMarkers(allTargets, producedTargetKeys,
+    { sourceRunId: opts.sourceRunId || null });
+  counts.target_window.marked_no_evidence = targetMarkerRows.filter((m) => m.reason === 'no_evidence').length;
+  counts.target_window.marked_no_fresh_work = targetMarkerRows.filter((m) => m.reason === 'no_fresh_work').length;
+  counts.target_window.produced_fresh = producedTargetKeys.size;
+
+  return { deterministic, llmItems, createContact, counts, scan_errors: scanErrors,
+    skip_markers: skipMarkers, target_markers: targetMarkerRows };
+}
+
+// Cheap pool counts for the plain dry-run (no evidence assembly): the reachability
+// gap per domain (the campaign's headline number).
+async function harvestPoolCounts() {
+  const out = { dia: {}, gov: {} };
+  for (const d of ['dia', 'gov']) {
+    const emailCol = RH.domainContactColumn(d, 'email');
+    const phoneCol = RH.domainContactColumn(d, 'phone');
+    try {
+      const total = await domainCount(d, 'contacts');
+      const neither = await domainCount(d, 'contacts?' + emailCol + '=is.null&' + phoneCol + '=is.null');
+      out[d] = { contacts_total: total, contacts_missing_both: neither,
+        pct_unreachable: total ? Math.round((neither / total) * 1000) / 10 : null };
+    } catch (_e) { out[d] = { error: true }; }
+  }
+  return out;
+}
+
+async function domainCount(domain, path) {
+  try {
+    const sep = path.includes('?') ? '&' : '?';
+    const r = await domainQuery(RH.normDomain(domain), 'GET', path + sep + 'select=contact_id&limit=1',
+      undefined, { Prefer: 'count=exact' });
+    return (r && typeof r.count === 'number') ? r.count : null;
+  } catch (_e) { return null; }
+}
+
+// Score one LLM item → validated proposal (+ meta). The validator DROPS a value not
+// present verbatim in the quote — the free precision floor.
+async function scoreHarvestItem(item) {
+  const prompt = RH.buildReachabilityPrompt(item.target, item.assembled);
+  const ai = await invokeExtractionAI({ prompt, surface: 'clean_assist' });
+  const parsed = RH.parseHarvestJson(ai?.data?.response || '');
+  const proposal = RH.normalizeHarvestProposal(parsed);
+  if (!parsed) { proposal.verdict = 'no_evidence_found'; proposal.confidence = 0; proposal.reason = 'AI response was not valid JSON; treated as no_evidence_found.'; }
+  // The model may name a different field than the one we sought; only keep matches.
+  if (proposal.verdict === 'fill_proposal' && proposal.field !== item.field) {
+    proposal.verdict = 'no_evidence_found'; proposal.field = ''; proposal.value = ''; proposal.evidence_quote = '';
+  }
+  const validated = RH.validateHarvestProposal(proposal, item.assembled.combined);
+  return { proposal, validated, provider: ai?.provider || null, model: ai?.data?.model || null };
+}
+
+async function logHarvestDropped(item, proposal, drop, sourceRunId) {
+  try {
+    await opsQuery('POST', 'reachability_harvest_dropped_log', {
+      subject_ref: item.subjectRef, arm: item.arm, domain: item.domain, field: item.field,
+      proposed_value: proposal.value || null,
+      quote: drop && drop.quote != null ? String(drop.quote).slice(0, 400) : (proposal.evidence_quote || null),
+      reason: (drop && drop.reason) || 'dropped', source_run_id: sourceRunId,
+    }, { headers: { Prefer: 'return=minimal' } });
+  } catch (_e) { /* precision-floor log is best-effort */ }
+}
+
+async function upsertHarvestProposal(item, proposal, meta) {
+  const t = item.target || null;
+  const isCreate = item.target_kind === 'owner';
+  // provenance: comms fills/creates stamp comms_observed even when arithmetic; a
+  // non-comms deterministic (SF exact-identity) stamps w9_2_internal_harvest.
+  const provSource = item.provenanceSource
+    || (item.arm === RH.HARVEST_ARM_DETERMINISTIC ? RH.HARVEST_SOURCE_DETERMINISTIC : RH.HARVEST_SOURCE_LLM);
+  const body = {
+    subject_ref: item.subjectRef, arm: item.arm, domain: item.domain,
+    target_kind: isCreate ? 'owner' : 'contact',
+    target_contact_id: isCreate ? null : (t ? t.target_contact_id : null),
+    target_owner_id: isCreate ? (item.target_owner_id || null) : (t ? (t.true_owner_id || null) : null),
+    owner_name: isCreate ? (item.owner_name || null) : (t ? (t.owner_name || null) : null),
+    contact_name: isCreate ? (item.contact_name || null) : (t ? (t.contact_name || null) : null),
+    field: item.field, proposed_value: proposal.value,
+    proposed_verdict: 'fill_proposal',
+    evidence_quote: proposal.evidence_quote || null,
+    evidence_source: proposal.evidence_source || null,
+    evidence_hash: item.evHash || null,
+    source_pointer: proposal.source_pointer || {},
+    confidence: proposal.confidence,
+    reason: proposal.reason || null,
+    rank_value: t ? (Number(t.rank_value) || null) : (item.rank_value != null ? Number(item.rank_value) : null),
+    seeder: 'w9_2_reachability_harvest', provenance_source: provSource,
+    model_provider: meta.provider || null, model_name: meta.model || null,
+    source_run_id: meta.sourceRunId, scan_batch_id: meta.scanBatchId || null,
+    status: 'proposed',
+  };
+  return opsQuery('POST', 'reachability_harvest_review?on_conflict=subject_ref', body,
+    { headers: { Prefer: 'return=representation,resolution=merge-duplicates' } });
+}
+
+async function recordHarvestHealth({ status, count, lastError, details }) {
+  try {
+    await opsQuery('POST', 'rpc/lcc_record_health_event', {
+      p_source: 'reachability_harvest', p_check_name: 'contact_reachability_harvest',
+      p_status: status, p_count: count || 0, p_last_error: lastError || null,
+      p_external_url: null, p_details: details || {},
+    });
+  } catch (_e) { /* health is best-effort */ }
+}
+
+async function handleReachabilityHarvestTick(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const flag = await fetchReachabilityHarvestFlag();
+  const enabled = reachabilityHarvestEnabled(flag);
+  const limit = Math.min(60, Math.max(1, parseInt(req.query.limit || req.body?.limit || '15', 10)));
+
+  // ---- POST apply path: flag-gated. No-op (honest health) while OFF. --------
+  if (req.method === 'POST') {
+    if (!enabled) {
+      await recordHarvestHealth({ status: 'amber', count: 0,
+        lastError: 'W9_2_REACHABILITY_HARVEST feature flag is off',
+        details: { enabled: false, flag_state: flag?.state || 'missing' } });
+      return res.status(200).json({ ok: true, skipped: 'feature_flag_off', enabled: false });
+    }
+    const sourceRunId = 'w92_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
+    const known = await fetchHarvestKnownSubjects();
+    const markers = await fetchHarvestScoredMarkers();
+    const { deterministic, llmItems, createContact, counts, scan_errors: scanErrors,
+      skip_markers: skipMarkers, target_markers: targetMarkerRows } = await buildFreshHarvestItems({ known, markers, sourceRunId });
+    const createBatchArr = Array.isArray(createContact) ? createContact : [];
+    let scanBatchId = null;
+    try {
+      const br = await opsQuery('POST', 'reachability_harvest_batch',
+        { batch_kind: 'scan', source_run_id: sourceRunId, status: 'open', actor: user.id || null,
+          details: { counts, deterministic: deterministic.length, llm_fresh: llmItems.length, create_contact_fresh: createBatchArr.length, scan_errors: scanErrors } },
+        { headers: { Prefer: 'return=representation' } });
+      if (br.ok && Array.isArray(br.data) && br.data[0]) scanBatchId = br.data[0].batch_id;
+    } catch (_e) { /* ledger best-effort */ }
+
+    const detBatch = Math.min(HARVEST_DET_BATCH_SIZE, deterministic.length);
+    const createBatch = Math.min(HARVEST_CREATE_CONTACT_BATCH_SIZE, createBatchArr.length);
+    const llmBatch = Math.min(limit, HARVEST_LLM_BATCH_SIZE);
+    const summary = { source_run_id: sourceRunId, scan_batch_id: scanBatchId, pool_counts: counts,
+      evidence_sources: counts.evidence_sources, scan_errors: scanErrors,
+      deterministic_fresh: deterministic.length, llm_fresh: llmItems.length, create_contact_fresh: createBatchArr.length,
+      det_batch: detBatch, llm_batch: llmBatch, create_batch: createBatch, budget_ms: HARVEST_SCORE_BUDGET_MS, min_confidence: HARVEST_MIN_CONF,
+      create_fanout_suppressed: counts.comms.fanout_suppressed, create_brokerage_suppressed: counts.comms.brokerage_contact_suppressed,
+      det_proposed: 0, det_failed: 0, create_proposed: 0, create_failed: 0, scored: 0, proposed: 0, no_evidence_found: 0,
+      dropped_not_verbatim: 0, dropped_below_conf: 0, failed: 0,
+      // P136 honest window counts — a quiet night (pool drained) vs a stuck window.
+      targets_selected: counts.target_window.selected,
+      targets_with_evidence: counts.target_window.with_evidence,
+      targets_marked_no_evidence: counts.target_window.marked_no_evidence,
+      targets_marked_no_fresh_work: counts.target_window.marked_no_fresh_work,
+      remaining_untargeted: counts.target_window.remaining_untargeted,
+      target_scan_capped: counts.target_window.scan_capped,
+      target_markers_active: counts.target_window.active_markers,
+      target_markers_written: 0, target_markers_failed: 0,
+      budget_exhausted: false, remaining_unscored: llmItems.length, by_verdict: {} };
+    const newMarkers = [];
+
+    // -- ARM 1: deterministic proposals (arithmetic, no LLM: SF + comms-header fills). --
+    for (const item of deterministic.slice(0, detBatch)) {
+      try {
+        const wr = await upsertHarvestProposal(item, item.proposal, { provider: 'none', model: null, sourceRunId, scanBatchId });
+        newMarkers.push(item.marker);
+        if (wr.ok) summary.det_proposed += 1; else summary.det_failed += 1;
+      } catch (e) { summary.det_failed += 1; console.warn('[reachability-harvest] det write failed', item?.subjectRef, e?.message || e); }
+    }
+
+    // -- ARM 3 (create-contact): PROPOSAL-only rows (target_kind=owner). A human
+    //    verdict mints the contact; never auto. No LLM (the evidence is the pointer). --
+    for (const item of createBatchArr.slice(0, createBatch)) {
+      try {
+        const wr = await upsertHarvestProposal(item, item.proposal, { provider: 'none', model: null, sourceRunId, scanBatchId });
+        if (wr.ok) summary.create_proposed += 1; else summary.create_failed += 1;
+      } catch (e) { summary.create_failed += 1; console.warn('[reachability-harvest] create-contact write failed', item?.subjectRef, e?.message || e); }
+    }
+
+    // -- ARM 2: LLM-attributed proposals (validated). --
+    const budgetRun = await RH.scoreHarvestWithBudget(llmItems, async (item) => {
+      try {
+        const { proposal, validated, provider, model } = await scoreHarvestItem(item);
+        summary.scored += 1;
+        newMarkers.push(item.marker);
+        summary.by_verdict[proposal.verdict] = (summary.by_verdict[proposal.verdict] || 0) + 1;
+        if (validated.verdict === 'no_evidence_found') { summary.no_evidence_found += 1; return null; }
+        if (validated.drop) { summary.dropped_not_verbatim += 1; await logHarvestDropped(item, proposal, validated.drop, sourceRunId); return null; }
+        if (!RH.isProposableHarvest(validated, HARVEST_MIN_CONF)) {
+          summary.dropped_below_conf += 1;
+          await logHarvestDropped(item, proposal, { reason: 'below_confidence', quote: proposal.evidence_quote }, sourceRunId);
+          return null;
+        }
+        const wr = await upsertHarvestProposal(item, validated.proposal, { provider, model, sourceRunId, scanBatchId });
+        if (wr.ok) summary.proposed += 1; else summary.failed += 1;
+      } catch (e) {
+        summary.failed += 1;
+        console.warn('[reachability-harvest] score/write failed', item?.subjectRef, e?.message || e);
+      }
+      return null;
+    }, { budgetMs: HARVEST_SCORE_BUDGET_MS, maxN: llmBatch });
+    summary.budget_exhausted = budgetRun.budget_exhausted;
+    summary.remaining_unscored = Math.max(0, llmItems.length - summary.scored - summary.failed);
+
+    // P136 — persist the checked-and-empty markers LAST, so a target is only
+    // excluded once this run has genuinely finished with it. Without this the same
+    // 120 targets are re-selected every night and the harvest never advances.
+    const markerWrite = await writeHarvestTargetMarkers(targetMarkerRows || []);
+    summary.target_markers_written = markerWrite.written;
+    summary.target_markers_failed = markerWrite.failed;
+
+    if (scanBatchId != null) {
+      try {
+        const merged = Array.from(new Set([...markers, ...newMarkers, ...(skipMarkers || [])])).slice(-8000);
+        await opsQuery('PATCH', 'reachability_harvest_batch?batch_id=eq.' + scanBatchId,
+          { details: { counts, deterministic: deterministic.length, llm_fresh: llmItems.length,
+            create_contact_fresh: createBatchArr.length, scored_markers: merged, scan_errors: scanErrors, summary } });
+      } catch (_e) { /* best-effort */ }
+    }
+    const totalProposed = summary.det_proposed + summary.proposed + summary.create_proposed;
+    await recordHarvestHealth({ status: (summary.failed || summary.det_failed || summary.create_failed) ? 'amber' : 'green', count: totalProposed,
+      lastError: (summary.failed || summary.det_failed || summary.create_failed) ? (summary.failed + summary.det_failed + summary.create_failed) + ' write(s) failed in ' + sourceRunId : null, details: summary });
+    return res.status(200).json({ ok: true, mode: 'apply', total_proposed: totalProposed, ...summary });
+  }
+
+  // ---- GET dry-run: reachability gap counts. ?score=1 adds inline proposals. --
+  const poolCounts = await harvestPoolCounts();
+  const out = { ok: true, mode: 'dry_run', enabled, flag_state: flag?.state || 'missing', pool_counts: poolCounts };
+  // P136 — cheap window health: how many targets the tick has checked-and-parked.
+  // A marker count that never moves while the pool is large IS the stall signature.
+  try {
+    const mk = await opsQuery('GET', 'reachability_harvest_target_marker?select=domain,reason,recheck_after'
+      + '&order=marker_id.desc&limit=1', undefined, { countMode: 'exact' });
+    out.target_markers_total = (mk && typeof mk.count === 'number') ? mk.count : null;
+  } catch (_e) { out.target_markers_total = null; }
+  if (req.query.score === '1' || req.query.score === 'true') {
+    const inlineN = Math.min(30, Math.max(1, parseInt(req.query.n || String(HARVEST_INLINE_DEFAULT_N), 10) || HARVEST_INLINE_DEFAULT_N));
+    const { deterministic, llmItems, createContact, counts, scan_errors: scanErrors } = await buildFreshHarvestItems({ cap: Math.max(HARVEST_MAX_TARGETS, inlineN * 6) });
+    const createArr = Array.isArray(createContact) ? createContact : [];
+    out.scan_counts = counts;
+    out.evidence_sources = counts.evidence_sources;
+    out.comms_scan = counts.comms_scan || null;
+    out.comms_counts = counts.comms;
+    // P136 — the advancing target window (dry-run READS markers, never writes them).
+    out.target_window = counts.target_window;
+    out.targets_selected = counts.target_window.selected;
+    out.targets_with_evidence = counts.target_window.with_evidence;
+    out.targets_marked_no_evidence = counts.target_window.marked_no_evidence;
+    out.targets_would_mark = counts.target_window.marked_no_evidence + counts.target_window.marked_no_fresh_work;
+    out.remaining_untargeted = counts.target_window.remaining_untargeted;
+    out.scan_errors = scanErrors;
+    out.deterministic_fresh = deterministic.length;
+    out.llm_fresh = llmItems.length;
+    out.create_contact_fresh = createArr.length;
+    out.create_fanout_suppressed = counts.comms.fanout_suppressed;
+    out.create_brokerage_suppressed = counts.comms.brokerage_contact_suppressed;
+    const proposals = [];
+    // Deterministic sample (arithmetic — exact source pointers; SF + comms-header).
+    for (const item of deterministic.slice(0, inlineN)) {
+      proposals.push({ subject_ref: item.subjectRef, arm: item.arm, domain: item.domain,
+        provenance_source: item.provenanceSource || (item.arm === 'deterministic' ? 'w9_2_internal_harvest' : 'comms_observed'),
+        target_contact_id: item.target.target_contact_id, contact_name: item.target.contact_name,
+        field: item.field, proposed_value: item.proposal.value, confidence: item.proposal.confidence,
+        evidence_source: item.proposal.evidence_source, source_pointer: item.proposal.source_pointer,
+        reason: item.proposal.reason, disposition: 'propose', would_propose: true, quote_verbatim: null });
+    }
+    // Create-contact sample (target_kind=owner — clearly shaped; minted only via lane).
+    for (const item of createArr.slice(0, inlineN)) {
+      proposals.push({ subject_ref: item.subjectRef, arm: item.arm, domain: item.domain,
+        target_kind: 'owner', kind: 'create_contact', target_owner_id: item.target_owner_id,
+        owner_name: item.owner_name, contact_name: item.contact_name, field: item.field,
+        proposed_value: item.proposal.value, proposed_phone: item.proposal.source_pointer?.phone || null,
+        confidence: item.proposal.confidence, evidence_quote: item.proposal.evidence_quote,
+        evidence_source: item.proposal.evidence_source, source_pointer: item.proposal.source_pointer,
+        reason: item.proposal.reason, disposition: 'create_contact', would_propose: true });
+    }
+    // LLM sample (verbatim-quoted).
+    const byVerdict = {};
+    let noEvidence = 0; let droppedNotVerbatim = 0; let droppedBelowConf = 0;
+    const budgetRun = await RH.scoreHarvestWithBudget(llmItems, async (item) => {
+      try {
+        const { proposal, validated, provider, model } = await scoreHarvestItem(item);
+        byVerdict[proposal.verdict] = (byVerdict[proposal.verdict] || 0) + 1;
+        let disposition = 'propose';
+        if (validated.verdict === 'no_evidence_found') { noEvidence += 1; disposition = 'no_evidence_found'; }
+        else if (validated.drop) { droppedNotVerbatim += 1; disposition = 'dropped:' + validated.drop.reason; }
+        else if (!RH.isProposableHarvest(validated, HARVEST_MIN_CONF)) { droppedBelowConf += 1; disposition = 'dropped:below_confidence'; }
+        proposals.push({ subject_ref: item.subjectRef, arm: item.arm, domain: item.domain,
+          target_contact_id: item.target.target_contact_id, contact_name: item.target.contact_name,
+          field: item.field, evidence_chars: item.assembled.chars, evidence_source_blocks: item.assembled.blocks.length,
+          ...proposal, disposition, quote_verbatim: !!(validated.proposal),
+          would_propose: disposition === 'propose', model_provider: provider, model_name: model });
+      } catch (e) { proposals.push({ subject_ref: item?.subjectRef, error: e?.message || String(e) }); }
+      return null;
+    }, { budgetMs: HARVEST_SCORE_BUDGET_MS, maxN: inlineN });
+    out.batch_size = inlineN;
+    out.budget_ms = HARVEST_SCORE_BUDGET_MS;
+    out.min_confidence = HARVEST_MIN_CONF;
+    out.budget_exhausted = budgetRun.budget_exhausted;
+    out.by_verdict = byVerdict;
+    out.no_evidence_found = noEvidence;
+    out.dropped_not_verbatim = droppedNotVerbatim;
+    out.dropped_below_conf = droppedBelowConf;
+    out.would_propose = proposals.filter((p) => p.would_propose).length;
+    out.proposals = proposals;
+    out.note = 'dry-run scoring — NO rows written. THREE arms: (1) deterministic fills carry an exact source pointer — an SF exact-identity donor OR a correspondence header binding name+value (provenance comms_observed); (2) LLM fills (intake + comms signatures) carry a VERBATIM evidence_quote (quote_verbatim=true, the value is a substring of the assembled evidence); a value not in the quote is DROPPED (→ reachability_harvest_dropped_log); (3) create_contact proposals (target_kind=owner) shape a NEW contact for an owner with none on file — minted ONLY via a human verdict, never auto. no_evidence_found is honest/counted. TARGETS are chosen by an EVIDENCE JOIN and checked targets are MARKED on the POST path so the window advances (P136) — read targets_with_evidence / targets_would_mark / remaining_untargeted, and judge the unit by the proposal DELTA, never by this tally. Review, then POST (with the flag ON).'
+      + (budgetRun.budget_exhausted ? ' Scoring stopped at the ' + HARVEST_SCORE_BUDGET_MS + 'ms budget.' : '');
+  }
+  return res.status(200).json(out);
+}
+
+// ============================================================================
+// W9.5 (Prompt 97) — Propagation-integrity: the link-coverage tick.
+//   GET  /api/link-coverage-tick   -> the full unified cross-DB coverage table
+//                                     (computed, read-only, no flag). Honest zeros
+//                                     / n/a where a source is unreachable.
+//   POST /api/link-coverage-tick   -> ALSO persist the monthly snapshot (delta
+//                                     source). Read-only unit: writes ONLY its own
+//                                     snapshot row. Deterministic — NO LLM.
+// The monthly snapshot is normally written by the U4 cron POST path (no second
+// cron); this route lets an operator compute on-demand and snapshot explicitly.
+// ============================================================================
+
+// Each domain chain view exposes (link_name, total, linked, pct); we stamp the
+// domain + group. Failure of one source ⇒ that source's rows are simply absent
+// (measured:false downstream), never a thrown tick.
+async function fetchDomainChainCoverage(dom) {
+  const view = 'v_' + dom + '_w9_5_chain_coverage';
+  try {
+    const r = await domainQuery(dom, 'GET', view + '?select=link_name,total,linked');
+    if (r.ok && Array.isArray(r.data)) {
+      return r.data.map((row) => ({
+        link_name: row.link_name, domain: dom, group: 'chain',
+        total: Number(row.total) || 0, linked: Number(row.linked) || 0,
+      }));
+    }
+    return { error: dom + '_chain: ' + JSON.stringify(r.data || r.status) };
+  } catch (e) { return { error: dom + '_chain: ' + (e?.message || e) }; }
+}
+
+// The LCC-Opps mirror/correspondence rows (already unified in one view).
+async function fetchLccMirrorCoverage() {
+  try {
+    const r = await opsQuery('GET', 'v_lcc_w9_5_link_coverage?select=link_name,domain,group_name,total,linked');
+    if (r.ok && Array.isArray(r.data)) {
+      return r.data.map((row) => ({
+        link_name: row.link_name, domain: row.domain || 'lcc', group: row.group_name || 'mirror',
+        total: Number(row.total) || 0, linked: Number(row.linked) || 0,
+      }));
+    }
+    return { error: 'lcc_mirror: ' + JSON.stringify(r.data || r.status) };
+  } catch (e) { return { error: 'lcc_mirror: ' + (e?.message || e) }; }
+}
+
+// Domain-owner → ops-entity MIRROR coverage: a cross-DB join done in the tick.
+// total = the domain's true_owner count (from the chain view's true_to_contact
+// row); linked = the ops external_identities true_owner identities for that
+// source_system. A domain owner with no ops identity is un-mirrored — the gap
+// the mirror measures. Best-effort; a missing side ⇒ the row is omitted.
+async function fetchMirrorRows(domainChainRows) {
+  const rows = [];
+  let error = null;
+  // Ops side: per-source-system domain-owner identity counts.
+  const opsCounts = {};
+  try {
+    for (const ss of ['dia', 'gov']) {
+      const r = await opsQuery('GET',
+        'external_identities?source_type=eq.true_owner&source_system=eq.' + ss + '&select=external_id&limit=1',
+        undefined, { countMode: 'exact' });
+      opsCounts[ss] = (typeof r.count === 'number') ? r.count : 0;
+    }
+  } catch (e) { error = 'mirror_ops: ' + (e?.message || e); }
+  for (const ss of ['dia', 'gov']) {
+    const chain = (domainChainRows[ss] || []).find((x) => x.link_name === 'true_to_contact');
+    const total = chain ? chain.total : null;   // domain true_owner count
+    if (total == null) continue;                 // domain unreachable ⇒ skip honestly
+    rows.push({
+      link_name: 'owner_to_ops_mirror', domain: ss, group: 'mirror',
+      total, linked: opsCounts[ss] || 0,
+      note: 'domain true_owners with an ops external_identity mirror',
+    });
+  }
+  return { rows, error };
+}
+
+// Assemble the full unified coverage table for a period. Pure planner does the
+// math; this fn only gathers the cross-DB counts + prior snapshot. Read-only.
+async function computeLinkCoverage(period, now) {
+  const scanErrors = [];
+  const [dia, gov, lcc] = await Promise.all([
+    fetchDomainChainCoverage('dia'),
+    fetchDomainChainCoverage('gov'),
+    fetchLccMirrorCoverage(),
+  ]);
+  const domainChainRows = {};
+  const rawRows = [];
+  for (const [dom, res] of [['dia', dia], ['gov', gov]]) {
+    if (Array.isArray(res)) { domainChainRows[dom] = res; rawRows.push(...res); }
+    else if (res && res.error) scanErrors.push(res.error);
+  }
+  if (Array.isArray(lcc)) rawRows.push(...lcc);
+  else if (lcc && lcc.error) scanErrors.push(lcc.error);
+
+  const mirror = await fetchMirrorRows(domainChainRows);
+  if (mirror.error) scanErrors.push(mirror.error);
+  rawRows.push(...mirror.rows);
+
+  const prevLinks = await fetchPrevLinkCoverage(period);
+  const coverage = assembleCoverage(rawRows, { period, now: now ? now.toISOString() : null, prevLinks });
+  coverage.scan_errors = scanErrors;
+  return coverage;
+}
+
+async function recordLinkCoverageHealth({ status, count, lastError, details }) {
+  try {
+    await opsQuery('POST', 'rpc/lcc_record_health_event', {
+      p_source: 'link_coverage', p_check_name: 'w9_5_link_coverage',
+      p_status: status, p_count: count || 0, p_last_error: lastError || null,
+      p_external_url: null, p_details: details || {},
+    });
+  } catch (_e) { /* health is best-effort */ }
+}
+
+async function fetchPrevLinkCoverage(period) {
+  try {
+    const r = await opsQuery('GET', 'lcc_w9_5_link_coverage_snapshot?select=period,links&period=lt.'
+      + encodeURIComponent(period) + '&order=period.desc&limit=1');
+    if (r.ok && Array.isArray(r.data) && r.data[0] && Array.isArray(r.data[0].links)) return r.data[0].links;
+  } catch (_e) { /* best-effort */ }
+  return null;
+}
+
+// Persist the per-period unified snapshot (upsert on period). Read-only unit's
+// ONLY write. Returns the snapshot id (or null). Best-effort — a failed snapshot
+// never breaks the tick response.
+async function snapshotLinkCoverage(coverage, sourceRunId) {
+  try {
+    const up = await opsQuery('POST', 'lcc_w9_5_link_coverage_snapshot?on_conflict=period', {
+      period: coverage.period, computed_at: coverage.generated_at || new Date().toISOString(),
+      source_run_id: sourceRunId, links: coverage.links, totals: coverage.totals,
+    }, { headers: { Prefer: 'return=representation,resolution=merge-duplicates' } });
+    if (up.ok && Array.isArray(up.data) && up.data[0]) return up.data[0].snapshot_id;
+  } catch (e) { console.warn('[link-coverage] snapshot upsert failed', e?.message || e); }
+  return null;
+}
+
+async function handleLinkCoverageTick(req, res) {
+  try {
+    if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
+    const user = await authenticate(req, res);
+    if (!user) return;
+    const now = new Date();
+    const period = req.query.period || req.body?.period || currentPeriod(now);
+    const coverage = await computeLinkCoverage(period, now);
+
+    if (req.method === 'POST') {
+      const sourceRunId = 'w95_' + now.toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
+      const snapshotId = await snapshotLinkCoverage(coverage, sourceRunId);
+      await recordLinkCoverageHealth({ status: coverage.scan_errors.length ? 'amber' : 'green',
+        count: coverage.totals.measured || 0,
+        lastError: coverage.scan_errors.length ? coverage.scan_errors.length + ' source(s) unreachable' : null,
+        details: { period, snapshot_id: snapshotId, totals: coverage.totals,
+          scan_errors: coverage.scan_errors, source_run_id: sourceRunId } });
+      return res.status(200).json({ ok: true, mode: 'apply', period, source_run_id: sourceRunId,
+        snapshot_id: snapshotId, totals: coverage.totals, scan_errors: coverage.scan_errors,
+        coverage, doc_markdown: renderCoverageDoc(coverage, { generatedAt: now.toISOString() }) });
+    }
+
+    return res.status(200).json({ ok: true, mode: 'dry_run', period, coverage,
+      scan_errors: coverage.scan_errors,
+      doc_markdown: renderCoverageDoc(coverage, { generatedAt: now.toISOString() }),
+      note: 'W9.5 propagation-integrity: cross-DB link coverage computed deterministically (counts only, no LLM). '
+        + 'Read-only: no rows written. POST additionally persists the monthly snapshot (the MoM delta source the '
+        + 'U4 Connectedness section reads). The U4 monthly cron POST also writes this snapshot — no second cron.' });
+  } catch (e) {
+    if (res.headersSent) return;
+    return res.status(500).json({ ok: false, error: (e && e.message) ? e.message : String(e), section: 'handler' });
+  }
+}
+
+// ============================================================================
+// W8 U4 (Prompt 70) — Systemic-findings monthly report tick.
+//   GET  /api/systemic-findings-tick            -> dry-run: the full COMPUTED
+//                                                  findings JSON (honest zeros).
+//   GET  /api/systemic-findings-tick?narrate=1  -> dry-run + the figure-validated
+//                                                  model narrative (NO writes).
+//   POST /api/systemic-findings-tick            -> flag-gated: persist the monthly
+//                                                  snapshot + open a research_task +
+//                                                  return the rendered doc markdown.
+// Numbers are computed DETERMINISTICALLY (from the v_lcc_w8_u4_* views); the model
+// only drafts the narrative FROM those numbers, figure-validated. Creates NO lane.
+// ============================================================================
+function systemicFindingsEnabled(flagRow) {
+  const env = String(process.env.W8_U4_FINDINGS_REPORT || '').toLowerCase();
+  if (['on', '1', 'true', 'yes', 'enabled'].includes(env)) return true;
+  return String(flagRow?.state || '').toLowerCase() === 'on';
+}
+
+async function fetchSystemicFindingsFlag() {
+  try {
+    const r = await opsQuery('GET', 'feature_flags_registry?flag=eq.W8_U4_FINDINGS_REPORT&select=flag,state&limit=1', undefined, { countMode: 'none' });
+    return r.ok && Array.isArray(r.data) ? r.data[0] : null;
+  } catch (_e) { return null; }
+}
+
+function currentPeriod(d) {
+  const dt = d || new Date();
+  return dt.getUTCFullYear() + '-' + String(dt.getUTCMonth() + 1).padStart(2, '0');
+}
+
+// Read every section's raw input from the pre-grouped U4 views (all on LCC Opps).
+// Each read is best-effort — a failed source yields an honest empty/zero, never a
+// thrown tick. Naming-hygiene backlog is read from the latest U1 apply snapshot
+// (junk_review_batch.details.naming_hygiene_backlog); null when U1 has not applied.
+async function fetchSystemicFindingsInputs(period, now) {
+  const rows = async (path) => {
+    try { const r = await opsQuery('GET', path); return (r.ok && Array.isArray(r.data)) ? r.data : []; }
+    catch (_e) { return []; }
+  };
+  const one = async (path) => { const d = await rows(path); return d[0] || null; };
+
+  const [ingestClusters, flowClusters, windows, chainRollup, chainGaps,
+    extractionMix, junkVerdicts, dupDisp, matchSeeders, matchAssistAcc, u3Health] = await Promise.all([
+    rows('v_lcc_w8_u4_ingest_failure_clusters?select=domain,http_status,label,cnt,cnt_30d,last_seen&order=cnt.desc'),
+    rows('v_lcc_w8_u4_flow_failure_clusters?select=flow_name,error_kind,error_code,cnt,cnt_30d,last_seen&order=cnt.desc'),
+    one('v_lcc_w8_u4_failure_windows?select=iwf_total,iwf_30d,frf_total,frf_30d,frf_unresolved'),
+    one('v_lcc_w8_u4_chain_rollup?select=total,complete,incomplete'),
+    rows('v_lcc_w8_u4_chain_gaps?select=seg,cnt&order=cnt.desc'),
+    one('v_lcc_w8_u4_extraction_mix?select=total_30d,stamped,ollama,fell_back'),
+    rows('v_lcc_w8_u4_junk_verdicts?select=status,cnt'),
+    rows('v_lcc_w8_u4_dup_dispositions?select=status,cnt'),
+    rows('v_lcc_w8_u4_match_label_seeders?select=seeder,verdict,cnt&order=cnt.desc'),
+    rows('v_lcc_w8_u4_match_assist_accuracy?select=period,measured,agreed,disagreed&order=period.desc'),
+    one('v_lcc_w8_u3_link_health?select=details'),
+  ]);
+
+  // Provenance drift + conflicts (count-only views).
+  const provUnranked = await opsCntSafe('v_field_provenance_unranked');
+  const provConflicts = await opsCntSafe('v_field_provenance_conflicts');
+  // Precision floors.
+  const dealDropped = await opsCntSafe('lcc_deal_analysis_dropped_log');
+  const u3Dropped = await opsCntSafe('w8_u3_dropped_log');
+  const u3d = (u3Health && u3Health.details) || {};
+
+  // Naming-hygiene backlog from the latest U1 apply snapshot (best-effort).
+  let namingHygiene = null;
+  try {
+    const b = await opsQuery('GET', 'junk_review_batch?select=details&order=created_at.desc&limit=1');
+    if (b.ok && Array.isArray(b.data) && b.data[0] && b.data[0].details) {
+      const det = b.data[0].details;
+      const nh = det.naming_hygiene_backlog || det.summary?.naming_hygiene_backlog || null;
+      if (nh) namingHygiene = { total: nh.total || 0, known_abbreviation: nh.known_abbreviation || 0, address_as_name: nh.address_as_name || 0 };
+    }
+  } catch (_e) { /* honest null */ }
+
+  // W9.5 — cross-DB propagation-integrity coverage (best-effort; a failed compute
+  // yields null → the Connectedness section renders an honest "uncounted" note).
+  let connectedness = null;
+  try { connectedness = await computeLinkCoverage(period || currentPeriod(now || new Date()), now || new Date()); }
+  catch (_e) { connectedness = null; }
+
+  return {
+    ingest_clusters: ingestClusters, flow_clusters: flowClusters, windows: windows || {},
+    connectedness,
+    provenance: { unranked: provUnranked, conflicts: provConflicts },
+    chain: { ...(chainRollup || {}), gaps: chainGaps, u3: u3d },
+    precision: { deal_dropped: dealDropped, u3_dropped: u3Dropped,
+      u3_open: Number(u3d.open_proposals) || 0, u3_applied: Number(u3d.applied_total) || 0 },
+    lanes: { junk: junkVerdicts, dup: dupDisp, labels: matchSeeders },
+    match_assist: matchAssistAcc,
+    naming_hygiene: namingHygiene,
+    extraction: extractionMix || {},
+  };
+}
+
+// Count helper (exact count via PostgREST) that never throws.
+async function opsCntSafe(path) {
+  try {
+    const sep = path.includes('?') ? '&' : '?';
+    const r = await opsQuery('GET', path + sep + 'select=*&limit=1', undefined, { countMode: 'exact' });
+    if (typeof r.count === 'number') return r.count;
+    return Array.isArray(r.data) ? r.data.length : 0;
+  } catch (_e) { return 0; }
+}
+
+// Prior period's snapshot sections (for MoM deltas). null before month 2.
+async function fetchPrevSnapshotSections(period) {
+  try {
+    const r = await opsQuery('GET', 'lcc_w8_u4_findings_snapshot?select=period,sections&period=lt.'
+      + encodeURIComponent(period) + '&order=period.desc&limit=1');
+    if (r.ok && Array.isArray(r.data) && r.data[0] && Array.isArray(r.data[0].sections)) return r.data[0].sections;
+  } catch (_e) { /* best-effort */ }
+  return null;
+}
+
+// Draft + figure-validate the model narrative. Regenerate ONCE on a figure
+// mismatch, then fall back to the stock header (tables ship regardless). Never a
+// fabricated number. Returns { narrative|null, validation, note }.
+async function draftSystemicNarrative(report) {
+  const prompt = buildNarrativePrompt(report);
+  const computed = collectComputedValues(report);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let ai;
+    try { ai = await invokeExtractionAI({ prompt, surface: 'clean_assist' }); }
+    catch (e) { return { narrative: null, validation: null, note: 'model error (' + (e?.message || e) + ') — tables only' }; }
+    const parsed = parseNarrativeJson(ai?.data?.response || '');
+    if (!parsed || !parsed.executive_summary) {
+      if (attempt === 0) continue;
+      return { narrative: null, validation: null, note: 'model returned no valid JSON — tables only',
+        provider: ai?.provider || null, model: ai?.data?.model || null };
+    }
+    const proseAll = [parsed.executive_summary, ...Object.values(parsed.sections || {})].join('\n');
+    const validation = validateFigures(proseAll, computed);
+    if (validation.ok) {
+      return { narrative: parsed, validation, note: 'figure-validated',
+        provider: ai?.provider || null, model: ai?.data?.model || null };
+    }
+    // mismatch → regenerate once; on the second miss, drop the narrative.
+    if (attempt === 1) {
+      return { narrative: null, validation, note: 'figure validation failed ('
+        + validation.unmatched.slice(0, 6).join(', ') + ') — dropped, tables only',
+        provider: ai?.provider || null, model: ai?.data?.model || null };
+    }
+  }
+  return { narrative: null, validation: null, note: 'tables only' };
+}
+
+async function recordFindingsHealth({ status, count, lastError, details }) {
+  try {
+    await opsQuery('POST', 'rpc/lcc_record_health_event', {
+      p_source: 'systemic_findings', p_check_name: 'w8_u4_findings_report',
+      p_status: status, p_count: count || 0, p_last_error: lastError || null,
+      p_external_url: null, p_details: details || {},
+    });
+  } catch (_e) { /* health is best-effort */ }
+}
+
+async function handleSystemicFindingsTick(req, res) {
+  // Prompt 73: crash-proof envelope. Any uncaught throw in the handler path yields a
+  // JSON 500 ({ok:false, error, section}) — never a response-less hang (the class of
+  // failure that produced Railway's 502 "Application failed to respond").
+  try {
+    return await systemicFindingsTickImpl(req, res);
+  } catch (e) {
+    if (res.headersSent) return;
+    return res.status(500).json({ ok: false, error: (e && e.message) ? e.message : String(e), section: 'handler' });
+  }
+}
+
+async function systemicFindingsTickImpl(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const flag = await fetchSystemicFindingsFlag();
+  const enabled = systemicFindingsEnabled(flag);
+  const now = new Date();
+  const period = req.query.period || req.body?.period || currentPeriod(now);
+
+  const inputs = await fetchSystemicFindingsInputs(period, now);
+  const prevSections = await fetchPrevSnapshotSections(period);
+  const report = assembleReport(inputs, { period, now: now.toISOString(), prevSections });
+
+  // ---- POST apply: flag-gated. Persist snapshot + open research_task. ---------
+  // Narrative generation lives EXCLUSIVELY here (never on the interactive GET path):
+  // the monthly cron POSTs, so the single ollama call + one validator retry lands
+  // where no interactive proxy is waiting on the response.
+  if (req.method === 'POST') {
+    if (!enabled) {
+      await recordFindingsHealth({ status: 'amber', count: 0,
+        lastError: 'W8_U4_FINDINGS_REPORT feature flag is off',
+        details: { enabled: false, flag_state: flag?.state || 'missing', period } });
+      return res.status(200).json({ ok: true, skipped: 'feature_flag_off', enabled: false, period });
+    }
+    const sourceRunId = 'w8u4_' + now.toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
+    const drafted = await draftSystemicNarrative(report);
+    const docPath = 'docs/audits/systemic-findings/' + period + '.md';
+    const markdown = renderFindingsDoc(report, drafted.narrative,
+      { generatedAt: now.toISOString(), sourceRunId, narrativeNote: drafted.note });
+
+    // Persist the per-period snapshot (upsert on period — a same-month re-run refreshes).
+    let snapshotId = null;
+    try {
+      const up = await opsQuery('POST', 'lcc_w8_u4_findings_snapshot?on_conflict=period', {
+        period, computed_at: now.toISOString(), source_run_id: sourceRunId,
+        sections: report.sections, findings: report.findings_flat, totals: report.totals,
+        narrative_ok: drafted.validation ? drafted.validation.ok : null,
+        doc_path: docPath, doc_markdown: markdown,
+      }, { headers: { Prefer: 'return=representation,resolution=merge-duplicates' } });
+      if (up.ok && Array.isArray(up.data) && up.data[0]) snapshotId = up.data[0].snapshot_id;
+    } catch (e) { console.warn('[systemic-findings] snapshot upsert failed', e?.message || e); }
+
+    // W9.5 — the monthly link-coverage snapshot rides THIS cron POST (no second
+    // cron). inputs.connectedness is the coverage object already computed above.
+    if (inputs.connectedness && inputs.connectedness.period) {
+      await snapshotLinkCoverage(inputs.connectedness, sourceRunId).catch(() => null);
+    }
+
+    // The doc IS the consumer — open ONE research_task pointing at it (no new lane).
+    // Idempotent on (research_type, domain, source_table, source_record_id=period).
+    let taskId = null;
+    try {
+      const rt = await openResearchTask({
+        researchType: 'systemic_findings_report',
+        title: 'Systemic-findings report — ' + period,
+        instructions: 'Monthly W8 U4 systemic-defects report (' + report.totals.findings + ' findings, '
+          + report.totals.code_error_sections + ' code-error section(s)). Review the tables + fix-unit stubs; '
+          + 'feed the W6.6 audit. Doc: ' + docPath + '. ' + (drafted.note || ''),
+        domain: 'lcc', propertyId: period, sourceTable: 'systemic_findings_report',
+        metadata: { period, doc_path: docPath, snapshot_id: snapshotId, source_run_id: sourceRunId,
+          totals: report.totals, narrative_note: drafted.note },
+      });
+      if (rt && rt.ok) taskId = rt.id;
+      if (taskId && snapshotId) {
+        await opsQuery('PATCH', 'lcc_w8_u4_findings_snapshot?snapshot_id=eq.' + snapshotId,
+          { research_task_id: taskId }).catch(() => null);
+      }
+    } catch (e) { console.warn('[systemic-findings] research_task failed', e?.message || e); }
+
+    const bs = report.totals.by_severity || {};
+    const sectionErrors = report.section_errors || [];
+    // A failing section is loud: it degrades the health status to amber (not a silent
+    // green over a broken section) but the tick still persists + delivers a response.
+    await recordFindingsHealth({ status: sectionErrors.length ? 'amber' : 'green', count: report.totals.findings,
+      lastError: sectionErrors.length ? (sectionErrors.length + ' section(s) errored') : null,
+      details: { period, snapshot_id: snapshotId, research_task_id: taskId,
+        narrative_note: drafted.note, narrative_ok: drafted.validation ? drafted.validation.ok : null,
+        by_severity: bs, section_errors: sectionErrors, source_run_id: sourceRunId } });
+
+    return res.status(200).json({ ok: true, mode: 'apply', period, source_run_id: sourceRunId,
+      snapshot_id: snapshotId, research_task_id: taskId, doc_path: docPath,
+      narrative_note: drafted.note, narrative_ok: drafted.validation ? drafted.validation.ok : null,
+      totals: report.totals, section_errors: sectionErrors, doc_markdown: markdown });
+  }
+
+  // ---- GET dry-run: the full computed findings JSON — FAST, no narrate work. ----
+  // Prompt 73: inline narration is REMOVED from the GET path (it was the long ollama
+  // call + validator retry that hung behind the proxy → 502). The dry-run returns the
+  // computed JSON + the deterministic doc render only. `?narrate=1` is retired: it
+  // reports the deferral instead of doing model work here.
+  const out = { ok: true, mode: 'dry_run', enabled, flag_state: flag?.state || 'missing',
+    period, report, section_errors: report.section_errors || [],
+    fix_unit_stubs: renderFixUnitStubs(report),
+    doc_markdown: renderFindingsDoc(report, null, { generatedAt: now.toISOString() }),
+    note: 'Computed deterministically from the v_lcc_w8_u4_* views (honest zeros where a source is empty). '
+      + 'No rows written. POST (with the flag ON) persists the monthly snapshot, drafts the figure-validated '
+      + 'narrative, and opens the research_task.' };
+  if (req.query.narrate === '1' || req.query.narrate === 'true') {
+    // Narration is deferred to the POST/cron path (its own wall-clock budget) — the GET
+    // stays proxy-safe. No model call happens here.
+    out.narrate = 'deferred';
+    out.note += ' Narration is generated only on the POST/cron path; the dry-run ships tables + the '
+      + 'deterministic doc render.';
+  }
+  return res.status(200).json(out);
+}
+
+// ============================================================================
+// W9.3 — SF linkage drain + live re-score (Prompt 90).
+//   WS1  /api/sf-link-assist-tick    — Ollama pre-rank of the sf_link_candidate
+//                                       review lane (annotation-only).
+//   WS2  /api/sf-link-rescore-tick   — live re-score of no_match queue rows vs the
+//                                       refreshed SF-account registry.
+//   WS3  /api/sf-donor-handoff-tick  — account->contacts expansion: stamp the
+//                                       person-level sf_contact_id W9.2 keys on.
+// House pattern: GET dry-run / ?score=1 inline sample (NO writes) / POST flag-gated
+// apply; bounded + resumable + loud errors; every write reversible + provenance.
+// ============================================================================
+
+function w93FlagEnabled(envName, flagRow) {
+  const env = String(process.env[envName] || '').toLowerCase();
+  if (['on', '1', 'true', 'yes', 'enabled'].includes(env)) return true;
+  return String(flagRow?.state || '').toLowerCase() === 'on';
+}
+async function fetchW93Flag(flagName) {
+  try {
+    const r = await opsQuery('GET', 'feature_flags_registry?flag=eq.' + flagName + '&select=flag,state&limit=1', undefined, { countMode: 'none' });
+    return r.ok && Array.isArray(r.data) ? r.data[0] : null;
+  } catch (_e) { return null; }
+}
+async function recordW93Health(source, check, { status, count, lastError, details }) {
+  try {
+    await opsQuery('POST', 'rpc/lcc_record_health_event', {
+      p_source: source, p_check_name: check, p_status: status, p_count: count || 0,
+      p_last_error: lastError || null, p_external_url: null, p_details: details || {},
+    });
+  } catch (_e) { /* health is best-effort */ }
+}
+
+// Enumerate the LOCAL ops SF-Account registry: external_identities salesforce/Account
+// joined to entities for the display name. Paged 1000-stride (the PostgREST cap;
+// a larger stride silently SKIPS rows). This is the CURRENT (live-synced) registry —
+// grown since W4.3's frozen 15,987 snapshot — which is exactly why a re-score can
+// now match rows W4.3 could not.
+async function fetchSfAccountRegistry() {
+  const accounts = [];
+  const PAGE = 1000;
+  let error = null;
+  try {
+    for (let off = 0; ; off += PAGE) {
+      const r = await opsQuery('GET',
+        'external_identities?select=external_id,entities(canonical_name,name)'
+        + '&source_system=eq.salesforce&source_type=eq.Account'
+        + '&order=external_id.asc&limit=' + PAGE + '&offset=' + off, undefined, { countMode: 'none' });
+      if (!r.ok || !Array.isArray(r.data)) { error = 'registry_fetch_failed: ' + JSON.stringify(r.data || r.status); break; }
+      for (const row of r.data) {
+        const ent = row.entities || null;
+        const nm = ent ? (ent.canonical_name || ent.name) : null;
+        if (row.external_id) accounts.push({ sf_account_id: String(row.external_id), sf_account_name: nm });
+      }
+      if (r.data.length < PAGE) break;
+    }
+  } catch (e) { error = e?.message || String(e); }
+  return { accounts, error };
+}
+
+const RESCORE_DOMAINS = ['gov', 'dia'];
+const RESCORE_ROW_BATCH = 400;    // rows re-scored per tick
+const RESCORE_BUDGET_MS = 55000;
+
+// Count the no_match backlog still un-re-scored (score_resolved IS NULL is the
+// resumable cursor: a re-scored row gets a score, so it drops out).
+async function rescoreBacklogCount(dom) {
+  try {
+    const r = await domainQuery(dom, 'GET',
+      'sf_link_research_queue?status=eq.no_match&score_resolved=is.null&select=queue_id&limit=1',
+      undefined, { Prefer: 'count=exact' });
+    if (r.ok && r.count != null) return r.count;
+  } catch (_e) { /* fall through */ }
+  return null;
+}
+
+async function fetchNoMatchRows(dom, limit) {
+  const sel = 'queue_id,source_table,source_id,owner_name,canonical_name,state,priority_score';
+  const r = await domainQuery(dom, 'GET',
+    'sf_link_research_queue?status=eq.no_match&score_resolved=is.null&select=' + sel
+    + '&order=priority_score.desc.nullslast,queue_id&limit=' + limit);
+  return (r.ok && Array.isArray(r.data)) ? r.data : [];
+}
+
+async function handleSfLinkRescoreTick(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+  const flag = await fetchW93Flag('W9_3_RESCORE');
+  const enabled = w93FlagEnabled('W9_3_RESCORE', flag);
+
+  const registry = await fetchSfAccountRegistry();
+  const maps = RS.buildRegistryMaps(registry.accounts);
+  const today = new Date().toISOString().slice(0, 10);
+  const batchTag = RS.rescoreBatchTag(today);
+
+  // ---- POST apply: flag-gated. -------------------------------------------------
+  if (req.method === 'POST') {
+    if (!enabled) {
+      await recordW93Health('sf_link_rescore', 'sf_link_live_rescore', { status: 'amber', count: 0,
+        lastError: 'W9_3_RESCORE feature flag is off', details: { enabled: false, flag_state: flag?.state || 'missing' } });
+      return res.status(200).json({ ok: true, skipped: 'feature_flag_off', enabled: false });
+    }
+    if (registry.error || maps.size === 0) {
+      await recordW93Health('sf_link_rescore', 'sf_link_live_rescore', { status: 'red', count: 0,
+        lastError: 'registry unavailable: ' + (registry.error || 'empty'), details: { registry_size: maps.size } });
+      return res.status(200).json({ ok: false, error: 'registry_unavailable', registry_size: maps.size, registry_error: registry.error });
+    }
+    const sourceRunId = 'w93r_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
+    const summary = { source_run_id: sourceRunId, batch_tag: batchTag, registry_size: maps.size,
+      scanned: 0, auto_linked: 0, needs_review: 0, no_match: 0, conflicts: 0, idempotent: 0,
+      write_failed: 0, budget_exhausted: false, by_domain: {}, scan_errors: [] };
+
+    for (const dom of RESCORE_DOMAINS) {
+      const perDom = { scanned: 0, auto_linked: 0, needs_review: 0, no_match: 0, conflicts: 0 };
+      let rows = [];
+      try { rows = await fetchNoMatchRows(dom, RESCORE_ROW_BATCH); }
+      catch (e) { summary.scan_errors.push(dom + ':fetch:' + (e?.message || e)); summary.by_domain[dom] = perDom; continue; }
+
+      const budgetRun = RS.scoreRescoreWithBudget(rows, (row) => ({ row, score: RS.scoreQueueRow(row, maps) }),
+        { maxN: RESCORE_ROW_BATCH, budgetMs: RESCORE_BUDGET_MS });
+      if (budgetRun.budget_exhausted) summary.budget_exhausted = true;
+
+      for (const { row, score } of budgetRun.scored) {
+        summary.scanned += 1; perDom.scanned += 1;
+        try {
+          const tgt = sfLinkTarget(row.source_table);
+          const sfCol = sfLinkColumn(dom);
+          let currentSfId = null;
+          if (score.band === 'auto_link' && score.sf_account_id) {
+            const cur = await domainQuery(dom, 'GET', tgt.table + '?' + tgt.idColumn + '=eq.'
+              + encodeURIComponent(row.source_id) + '&select=' + sfCol + '&limit=1');
+            if (cur.ok && Array.isArray(cur.data) && cur.data[0]) currentSfId = cur.data[0][sfCol] || null;
+          }
+          const plan = RS.planRescoreDisposition({ score, currentSfId });
+          let applied = false;
+
+          if (plan.queueStatus === 'linked' && plan.writeSource) {
+            // Null-guarded owner write (filter re-asserts the column is still null).
+            const patchBody = { [sfCol]: plan.landedSfId };
+            if (dom === 'gov') patchBody.sf_last_synced = new Date().toISOString();
+            const wr = await domainQuery(dom, 'PATCH',
+              tgt.table + '?' + tgt.idColumn + '=eq.' + encodeURIComponent(row.source_id) + '&' + sfCol + '=is.null',
+              patchBody);
+            if (!wr.ok) { summary.write_failed += 1; summary.scan_errors.push(dom + ':owner_write:' + JSON.stringify(wr.data)); continue; }
+            applied = true;
+            // Provenance (splink_v2) — drained to LCC field_provenance by the flush.
+            await domainQuery(dom, 'POST', 'provenance_event_log', {
+              target_database: dom === 'gov' ? 'gov_db' : 'dia_db', target_table: tgt.table,
+              record_pk_value: String(row.source_id), field_name: sfCol,
+              old_value: null, new_value: plan.landedSfId, source: 'splink_v2',
+              confidence: plan.probability, metadata: { batch: batchTag, queue_id: row.queue_id, run: sourceRunId },
+            }, { Prefer: 'return=minimal' });
+          } else if (plan.queueStatus === 'linked') {
+            summary.idempotent += 1;
+          }
+
+          // Queue disposition (score_resolved set => drops out of the resumable cursor).
+          const qPatch = { status: plan.queueStatus, score_resolved: plan.probability,
+            last_attempted_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+          if (plan.queueStatus === 'linked' || plan.queueStatus === 'needs_review') {
+            qPatch.sf_account_id_resolved = plan.sfAccountId;
+            qPatch.sf_account_name_resolved = plan.sfAccountName;
+            if (plan.queueStatus === 'linked') qPatch.resolved_at = new Date().toISOString();
+          }
+          if (plan.conflict) qPatch.last_error = 'w9_3_conflict_existing_' + sfCol + '_' + plan.conflictExistingId;
+          const qr = await domainQuery(dom, 'PATCH',
+            'sf_link_research_queue?queue_id=eq.' + encodeURIComponent(row.queue_id), qPatch);
+          if (!qr.ok) { summary.write_failed += 1; summary.scan_errors.push(dom + ':queue:' + JSON.stringify(qr.data)); continue; }
+
+          // Reversible ledger row.
+          await domainQuery(dom, 'POST', 'w9_3_rescore_log', {
+            queue_id: row.queue_id, source_table: tgt.table, source_id: row.source_id,
+            prior_status: 'no_match', new_status: plan.queueStatus, band: plan.band, probability: plan.probability,
+            sf_account_id: plan.sfAccountId, sf_account_name: plan.sfAccountName,
+            prior_sf_value: currentSfId, conflict: !!plan.conflict, applied,
+            batch_tag: batchTag, source_run_id: sourceRunId,
+          }, { Prefer: 'return=minimal' });
+
+          if (plan.queueStatus === 'linked') { summary.auto_linked += 1; perDom.auto_linked += 1; if (plan.conflict) { summary.conflicts += 1; perDom.conflicts += 1; } }
+          else if (plan.queueStatus === 'needs_review') { summary.needs_review += 1; perDom.needs_review += 1; if (plan.conflict) { summary.conflicts += 1; perDom.conflicts += 1; } }
+          else { summary.no_match += 1; perDom.no_match += 1; }
+        } catch (e) {
+          summary.write_failed += 1;
+          summary.scan_errors.push(dom + ':' + (row?.queue_id) + ':' + (e?.message || e));
+        }
+      }
+      summary.by_domain[dom] = perDom;
+    }
+    await recordW93Health('sf_link_rescore', 'sf_link_live_rescore',
+      { status: summary.write_failed ? 'amber' : 'green', count: summary.auto_linked + summary.needs_review,
+        lastError: summary.write_failed ? summary.write_failed + ' write(s) failed in ' + sourceRunId : null, details: summary });
+    return res.status(200).json({ ok: true, mode: 'apply', ...summary });
+  }
+
+  // ---- GET dry-run: backlog + registry + (score=1) inline sample. -------------
+  const [govBl, diaBl] = await Promise.all([rescoreBacklogCount('gov'), rescoreBacklogCount('dia')]);
+  const out = { ok: true, mode: 'dry_run', enabled, flag_state: flag?.state || 'missing',
+    registry_size: maps.size, registry_error: registry.error, batch_tag: batchTag,
+    backlog: { gov: govBl, dia: diaBl, total: (govBl || 0) + (diaBl || 0) },
+    note: 'Deterministic conservative name gate (bands 0.9/0.1): exact clean-name UNIQUE match -> auto_link (splink_v2); ambiguous/near-exact -> needs_review (assist-ranked lane); else no_match re-tagged. Auto-link never overwrites a different existing id (-> conflict -> review). Reversible via w9_3_rescore_log + batch_tag.' };
+  if (req.query.score === '1' || req.query.score === 'true') {
+    const n = Math.min(50, Math.max(1, parseInt(req.query.n || '12', 10) || 12));
+    const sample = [];
+    const tally = { auto_link: 0, needs_review: 0, no_match: 0 };
+    for (const dom of RESCORE_DOMAINS) {
+      let rows = [];
+      try { rows = await fetchNoMatchRows(dom, Math.max(n * 4, 40)); } catch (_e) { /* skip */ }
+      for (const row of rows) {
+        const score = RS.scoreQueueRow(row, maps);
+        tally[score.band] = (tally[score.band] || 0) + 1;
+        if (sample.length < n && score.band !== 'no_match') {
+          sample.push({ domain: dom, queue_id: row.queue_id, owner_name: row.owner_name,
+            canonical_name: row.canonical_name, source_table: row.source_table, priority_score: row.priority_score,
+            band: score.band, probability: score.probability, match_key: score.match_key,
+            ambiguous: score.ambiguous, sf_account_id: score.sf_account_id, sf_account_name: score.sf_account_name });
+        }
+      }
+    }
+    out.sample_tally = tally;
+    out.sample = sample;
+    out.note += ' NO writes in dry-run. Sample shows would-be auto_link (exact unique) + needs_review (near/ambiguous) matches only.';
+  }
+  return res.status(200).json(out);
+}
+
+// ---------------------------------------------------------------------------
+// WS1 — sf_link_candidate assist pre-rank (annotation-only).
+// ---------------------------------------------------------------------------
+const SF_ASSIST_BATCH = 20;
+const SF_ASSIST_BUDGET_MS = 110000;
+
+// Subject_refs that already carry a W9.3 assist (resumable cursor).
+async function fetchSfAssistAnnotated() {
+  const set = new Set();
+  const PAGE = 1000;
+  try {
+    for (let off = 0; ; off += PAGE) {
+      const r = await opsQuery('GET', 'lcc_clean_assist_proposals?select=subject_ref'
+        + '&decision_type=eq.sf_link_candidate&source=eq.' + SA.SF_ASSIST_SOURCE
+        + '&order=proposal_id.asc&limit=' + PAGE + '&offset=' + off, undefined, { countMode: 'none' });
+      if (!r.ok || !Array.isArray(r.data)) break;
+      for (const row of r.data) if (row.subject_ref) set.add(row.subject_ref);
+      if (r.data.length < PAGE) break;
+    }
+  } catch (_e) { /* best-effort */ }
+  return set;
+}
+
+// Upsert a W9.3 sf-link assist annotation (source w9_3_sf_assist — distinct from
+// prompt-32's ollama_clean_assist so the two never collide on the unique key).
+async function upsertSfAssist(item, proposal, meta) {
+  return opsQuery('POST',
+    'lcc_clean_assist_proposals?on_conflict=decision_type,subject_ref,proposal_kind,source',
+    {
+      source: SA.SF_ASSIST_SOURCE, source_run_id: meta.sourceRunId, decision_id: null,
+      decision_type: SA.SF_ASSIST_DECISION_TYPE, subject_ref: item.subject_ref,
+      subject_domain: item.subject_domain || null, subject_property_id: null, subject_entity_id: null,
+      proposal_kind: SA.SF_ASSIST_KIND, verdict: proposal.verdict, reason: proposal.reason,
+      confidence: proposal.confidence, proposed_link: { sf_account_id: item.context?.sf_account_id_resolved || null },
+      conflict_summary: null, model_provider: meta.provider || null, model_name: meta.model || null,
+      ai_tried: Array.isArray(meta.tried) ? meta.tried : [], prompt_hash: meta.promptHash, status: 'proposed',
+    },
+    { headers: { Prefer: 'return=representation,resolution=merge-duplicates' } });
+}
+
+async function scoreSfAssistItem(item) {
+  const prompt = SA.buildSfAssistPrompt(item.context || {});
+  const promptHash = createHash('sha256').update(prompt).digest('hex');
+  const ai = await invokeExtractionAI({ prompt, surface: 'sf_link_assist' });
+  const parsed = SA.parseSfAssistJson(ai?.data?.response || '');
+  const proposal = SA.normalizeSfAssistProposal(parsed);
+  if (!parsed) { proposal.verdict = 'uncertain'; proposal.confidence = 0; proposal.reason = 'AI response was not valid JSON; queued as uncertain.'; }
+  return { proposal, promptHash, provider: ai?.provider || null, model: ai?.data?.model || null, tried: ai?.tried || [] };
+}
+
+async function handleSfLinkAssistTick(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+  const flag = await fetchW93Flag('W9_3_SF_ASSIST');
+  const enabled = w93FlagEnabled('W9_3_SF_ASSIST', flag);
+  const limit = Math.min(60, Math.max(1, parseInt(req.query.limit || req.body?.limit || String(SF_ASSIST_BATCH), 10)));
+
+  // Pull needs_review candidates (both domains) via the existing federated source.
+  // Anti-join against our OWN output: exclude subject_refs this source has already
+  // annotated so the tick WALKS the ~3.3k pool instead of re-scoring the same
+  // top-N nightly (prompt 92 — the walk-the-pool miss, 3rd instance of the class).
+  // The pool is finite + verdict-consumed, so annotated-exclusion is self-healing.
+  const annotated = await fetchSfAssistAnnotated();
+  let src = { items: [] };
+  try { src = await fetchFederatedSource('sf_link_candidate', Math.max(120, limit * 6)); } catch (e) { src = { items: [], error: e?.message || String(e) }; }
+  const laneItems = (src.items || []);
+  const alreadyAnnotatedExcluded = laneItems.filter((it) => it.subject_ref && annotated.has(it.subject_ref)).length;
+  const fresh = laneItems.filter((it) => it.subject_ref && !annotated.has(it.subject_ref));
+
+  if (req.method === 'POST') {
+    if (!enabled) {
+      await recordW93Health('sf_link_assist', 'sf_link_candidate_assist', { status: 'amber', count: 0,
+        lastError: 'W9_3_SF_ASSIST feature flag is off', details: { enabled: false, flag_state: flag?.state || 'missing' } });
+      return res.status(200).json({ ok: true, skipped: 'feature_flag_off', enabled: false });
+    }
+    const sourceRunId = 'w93a_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
+    const summary = { source_run_id: sourceRunId, candidates: fresh.length, annotated_existing: annotated.size,
+      already_annotated_excluded: alreadyAnnotatedExcluded, proposed: 0, failed: 0, skipped: 0,
+      budget_exhausted: false, by_verdict: {} };
+    const start = Date.now();
+    for (const item of fresh.slice(0, limit)) {
+      if (Date.now() - start >= SF_ASSIST_BUDGET_MS) { summary.budget_exhausted = true; break; }
+      // Belt + braces: skip-before-LLM if an annotation already exists for the subject
+      // (the fresh-filter already excludes these; this guards against paying ~16s to
+      // overwrite an existing annotation should the pool + set ever diverge).
+      if (annotated.has(item.subject_ref)) { summary.skipped += 1; continue; }
+      try {
+        const { proposal, promptHash, provider, model, tried } = await scoreSfAssistItem(item);
+        summary.by_verdict[proposal.verdict] = (summary.by_verdict[proposal.verdict] || 0) + 1;
+        const wr = await upsertSfAssist(item, proposal, { sourceRunId, promptHash, provider, model, tried });
+        if (wr.ok) summary.proposed += 1; else summary.failed += 1;
+      } catch (e) { summary.failed += 1; console.warn('[sf-link-assist] failed', item.subject_ref, e?.message || e); }
+    }
+    await recordW93Health('sf_link_assist', 'sf_link_candidate_assist',
+      { status: summary.failed ? 'amber' : 'green', count: summary.proposed,
+        lastError: summary.failed ? summary.failed + ' proposal(s) failed in ' + sourceRunId : null, details: summary });
+    return res.status(200).json({ ok: true, mode: 'apply', ...summary });
+  }
+
+  // GET dry-run (+ ?score=1 inline sample: NO writes).
+  const out = { ok: true, mode: 'dry_run', enabled, flag_state: flag?.state || 'missing',
+    lane_candidates: laneItems.length, annotated_existing: annotated.size,
+    already_annotated_excluded: alreadyAnnotatedExcluded, fresh: fresh.length,
+    note: 'Annotation-only. The assist ranks each owner<->SF-account candidate same-party/not/uncertain with confidence + one-line evidence, stored in lcc_clean_assist_proposals (source w9_3_sf_assist). NEVER a verdict; the lane sorts easy-first and each human verdict self-measures agree/disagree.' };
+  if (req.query.score === '1' || req.query.score === 'true') {
+    const n = Math.min(20, Math.max(1, parseInt(req.query.n || '6', 10) || 6));
+    const sample = [];
+    const start = Date.now();
+    for (const item of fresh.slice(0, n)) {
+      if (Date.now() - start >= SF_ASSIST_BUDGET_MS) break;
+      try {
+        const { proposal, provider, model } = await scoreSfAssistItem(item);
+        sample.push({ subject_ref: item.subject_ref, domain: item.subject_domain,
+          owner_name: item.context?.owner_name, sf_account_name: item.context?.sf_account_name_resolved,
+          machine_score: item.context?.score_resolved, ...proposal, sort_key: SA.sfAssistSortKey(proposal),
+          model_provider: provider, model_name: model });
+      } catch (e) { sample.push({ subject_ref: item.subject_ref, error: e?.message || String(e) }); }
+    }
+    out.sample = sample.sort((a, b) => (b.sort_key || 0) - (a.sort_key || 0));
+    out.note += ' NO writes in dry-run.';
+  }
+  return res.status(200).json(out);
+}
+
+// ---------------------------------------------------------------------------
+// WS3 — SF donor handoff: account->contacts expansion (fill-blanks sf_contact_id).
+// ---------------------------------------------------------------------------
+const DONOR_OWNER_BATCH = 120;    // owners processed per tick
+const DONOR_BUDGET_MS = 55000;
+
+// Blank owner-linked contacts missing a person key (the fill targets), one domain.
+// Prompt 93: KEYSET-CURSORED (order by pkCol asc, pkCol > startCursor) so nightly
+// runs WALK the full blank-contact pool instead of re-scanning a fixed top-slice
+// forever. The old fixed `order by owner_id desc` window meant that once night one
+// stamped that slice's unique matches, the permanently-unmatchable rows (ambiguous
+// / no owner SF key / no bridge contact) occupied the window and every later night
+// stamped 0 (gov stuck 19, dia 15). Same walk-the-pool class as prompts 83/84/92 —
+// this reuses the shared `nextScanCursor` keyset primitive (junk-prescreen.js).
+async function fetchDonorBlankContacts(dom, limit, startCursor) {
+  const c = DH.donorContactCols(dom);
+  const sel = c.pkCol + ',' + c.nameCol + ',sf_contact_id,true_owner_id,recorded_owner_id';
+  const cursorPred = (startCursor != null && String(startCursor) !== '')
+    ? '&' + c.pkCol + '=gt.' + encodeURIComponent(startCursor) : '';
+  const r = await domainQuery(dom, 'GET',
+    'contacts?select=' + sel + '&sf_contact_id=is.null&' + c.emailCol + '=is.null&' + c.phoneCol + '=is.null'
+    + '&or=(true_owner_id.not.is.null,recorded_owner_id.not.is.null)'
+    + cursorPred
+    + '&order=' + c.pkCol + '.asc&limit=' + limit);
+  return (r.ok && Array.isArray(r.data)) ? r.data.map((row) => ({
+    contact_id: row[c.pkCol], name: row[c.nameCol], sf_contact_id: row.sf_contact_id,
+    true_owner_id: row.true_owner_id || null, recorded_owner_id: row.recorded_owner_id || null,
+  })) : [];
+}
+
+// Prompt 93: read the keyset position + wrap count the last donor run walked to,
+// per domain — the coverage-log row IS the cursor (U5/U2 ledger pattern). A missing
+// cursor just restarts from the top of the pool.
+async function fetchDonorScanCursors() {
+  const out = {};
+  for (const dom of RESCORE_DOMAINS) out[dom] = { cursor: null, wrapped: 0 };
+  try {
+    for (const dom of RESCORE_DOMAINS) {
+      const r = await opsQuery('GET',
+        'lcc_w9_3_donor_coverage_log?domain=eq.' + dom
+        + '&select=scan_cursor_to,windows_wrapped&order=recorded_at.desc&limit=1', undefined, { countMode: 'none' });
+      if (r.ok && Array.isArray(r.data) && r.data[0]) {
+        out[dom] = {
+          cursor: r.data[0].scan_cursor_to != null ? String(r.data[0].scan_cursor_to) : null,
+          wrapped: Number(r.data[0].windows_wrapped) || 0,
+        };
+      }
+    }
+  } catch (_e) { /* best-effort — a missing cursor just restarts from the top */ }
+  return out;
+}
+
+// The blank-contact coverage metric (acceptance metric): total blank contacts vs
+// blank contacts carrying an sf_contact_id, one domain.
+async function donorCoverage(dom) {
+  const c = DH.donorContactCols(dom);
+  const base = 'contacts?' + c.emailCol + '=is.null&' + c.phoneCol + '=is.null&select=' + c.pkCol + '&limit=1';
+  let total = null; let withKey = null;
+  try {
+    const t = await domainQuery(dom, 'GET', base, undefined, { Prefer: 'count=exact' });
+    if (t.ok && t.count != null) total = t.count;
+    const w = await domainQuery(dom, 'GET', base + '&sf_contact_id=not.is.null', undefined, { Prefer: 'count=exact' });
+    if (w.ok && w.count != null) withKey = w.count;
+  } catch (_e) { /* best-effort */ }
+  return { total, withKey };
+}
+
+// Batched owner-sf-key lookup: map owner id -> sf account id, for a domain + table.
+async function fetchOwnerSfKeys(dom, table, idCol, ids) {
+  const map = new Map();
+  if (!ids.length) return map;
+  const sfCol = DH.donorOwnerSfCol(dom);
+  const PAGE = 300;
+  for (let i = 0; i < ids.length; i += PAGE) {
+    const chunk = ids.slice(i, i + PAGE);
+    const r = await domainQuery(dom, 'GET', table + '?' + idCol + '=in.(' + chunk.map(encodeURIComponent).join(',') + ')'
+      + '&' + sfCol + '=not.is.null&select=' + idCol + ',' + sfCol);
+    if (r.ok && Array.isArray(r.data)) for (const row of r.data) if (row[sfCol]) map.set(String(row[idCol]), String(row[sfCol]));
+  }
+  return map;
+}
+
+// Batched SF-contact bridge lookup: map sf_account_id -> [{sf_contact_id,name,email,phone}].
+async function fetchSfContactsForAccounts(dom, accountIds) {
+  const map = new Map();
+  if (!accountIds.length) return map;
+  const PAGE = 200;
+  for (let i = 0; i < accountIds.length; i += PAGE) {
+    const chunk = accountIds.slice(i, i + PAGE);
+    const inList = '(' + chunk.map(encodeURIComponent).join(',') + ')';
+    let rows = [];
+    if (dom === 'gov') {
+      const r = await domainQuery(dom, 'GET',
+        'sf_contacts_import?sf_account_id=in.' + inList + '&select=sf_account_id,sf_contact_id,full_name,email,phone');
+      if (r.ok && Array.isArray(r.data)) rows = r.data.map((x) => ({ acct: x.sf_account_id, sf_contact_id: x.sf_contact_id, name: x.full_name, email: x.email, phone: x.phone }));
+    } else {
+      const r = await domainQuery(dom, 'GET',
+        'salesforce_contacts?sf_account_id=in.' + inList + '&select=sf_account_id,sf_contact_id,first_name,last_name,email,phone');
+      if (r.ok && Array.isArray(r.data)) rows = r.data.map((x) => ({ acct: x.sf_account_id, sf_contact_id: x.sf_contact_id, name: [x.first_name, x.last_name].filter(Boolean).join(' '), email: x.email, phone: x.phone }));
+    }
+    for (const row of rows) {
+      if (!row.acct || !row.sf_contact_id) continue;
+      const k = String(row.acct);
+      let arr = map.get(k); if (!arr) { arr = []; map.set(k, arr); }
+      arr.push({ sf_contact_id: String(row.sf_contact_id), name: row.name, email: row.email, phone: row.phone });
+    }
+  }
+  return map;
+}
+
+async function handleSfDonorHandoffTick(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET/POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+  const flag = await fetchW93Flag('W9_3_DONOR_HANDOFF');
+  const enabled = w93FlagEnabled('W9_3_DONOR_HANDOFF', flag);
+  const today = new Date().toISOString().slice(0, 10);
+  const batchTag = 'w9_3_donor_' + today.replace(/-/g, '');
+  const apply = req.method === 'POST';
+  const dryScore = req.query.score === '1' || req.query.score === 'true';
+
+  if (apply && !enabled) {
+    await recordW93Health('sf_donor_handoff', 'sf_account_contact_expansion', { status: 'amber', count: 0,
+      lastError: 'W9_3_DONOR_HANDOFF feature flag is off', details: { enabled: false, flag_state: flag?.state || 'missing' } });
+    return res.status(200).json({ ok: true, skipped: 'feature_flag_off', enabled: false });
+  }
+
+  const sourceRunId = 'w93d_' + new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '_' + randomUUID().slice(0, 8);
+  // Prompt 93: resume the pool walk from where the last run stopped (keyset cursor).
+  const DONOR_WINDOW = DONOR_OWNER_BATCH * 4;   // blank-contact slice scanned per tick
+  const cursors = await fetchDonorScanCursors();
+
+  const summary = { source_run_id: sourceRunId, batch_tag: batchTag, mode: apply ? 'apply' : 'dry_run',
+    enabled, flag_state: flag?.state || 'missing', by_domain: {}, coverage: {}, sample: [], scan_errors: [] };
+
+  for (const dom of RESCORE_DOMAINS) {
+    const perDom = { blank_contacts: 0, owners: 0, unique_matches: 0, ambiguous: 0, no_match: 0, stamped: 0, write_failed: 0 };
+    // Coverage metric first (the acceptance number).
+    const cov = await donorCoverage(dom);
+    summary.coverage[dom] = cov;
+
+    // Keyset-cursored slice: resume past the last contact_id this domain walked to.
+    const startCursor = cursors[dom]?.cursor ?? null;
+    const priorWrapped = cursors[dom]?.wrapped || 0;
+    let blanks = [];
+    try { blanks = await fetchDonorBlankContacts(dom, DONOR_WINDOW, startCursor); }
+    catch (e) { summary.scan_errors.push(dom + ':contacts:' + (e?.message || e)); summary.by_domain[dom] = perDom; continue; }
+    perDom.blank_contacts = blanks.length;
+
+    // Advance (or wrap) the keyset cursor over the slice we SCANNED this run.
+    // reachedEnd = the slice under-filled (pool tail) -> wrap to the top so the
+    // next run re-checks from the start (re-score can mint new owner->SF links
+    // that create matches in already-scanned windows); else advance to the last
+    // contact_id seen. `nextScanCursor` is the shared keyset primitive.
+    const lastPk = blanks.length ? blanks[blanks.length - 1].contact_id : null;
+    const reachedEnd = blanks.length < DONOR_WINDOW;
+    const { nextCursor, wrapped } = nextScanCursor({
+      reachedEnd, truncated: !reachedEnd, lastPk, startCursor,
+    });
+    const windowsWrapped = priorWrapped + (wrapped ? 1 : 0);
+    perDom.scan_cursor_from = startCursor;
+    perDom.scan_cursor_to = nextCursor;
+    perDom.window_filled = blanks.length;
+    perDom.wrapped = wrapped;
+    perDom.windows_wrapped = windowsWrapped;
+
+    // Resolve each blank contact's owner -> sf account id (batched by table).
+    const trueIds = [...new Set(blanks.filter((b) => b.true_owner_id).map((b) => String(b.true_owner_id)))];
+    const recIds = [...new Set(blanks.filter((b) => !b.true_owner_id && b.recorded_owner_id).map((b) => String(b.recorded_owner_id)))];
+    const trueKeys = await fetchOwnerSfKeys(dom, 'true_owners', 'true_owner_id', trueIds);
+    const recKeys = dom === 'gov' ? await fetchOwnerSfKeys(dom, 'recorded_owners', 'recorded_owner_id', recIds) : new Map();
+
+    // Group blanks by resolved account id.
+    const byAccount = new Map();
+    for (const b of blanks) {
+      const acct = b.true_owner_id ? trueKeys.get(String(b.true_owner_id))
+        : (b.recorded_owner_id ? recKeys.get(String(b.recorded_owner_id)) : null);
+      if (!acct) continue;
+      b._acct = acct;
+      b._owner_table = b.true_owner_id ? 'true_owners' : 'recorded_owners';
+      b._owner_id = b.true_owner_id || b.recorded_owner_id;
+      let arr = byAccount.get(acct); if (!arr) { arr = []; byAccount.set(acct, arr); }
+      arr.push(b);
+    }
+    perDom.owners = byAccount.size;
+
+    // One bridge lookup for all resolved accounts.
+    let bridge = new Map();
+    try { bridge = await fetchSfContactsForAccounts(dom, [...byAccount.keys()]); }
+    catch (e) { summary.scan_errors.push(dom + ':bridge:' + (e?.message || e)); }
+
+    const start = Date.now();
+    let budgetHit = false;
+    const items = [...byAccount.entries()];
+    const driver = DH.scoreDonorWithBudget(items, ([acct, contacts]) => {
+      const sfContacts = bridge.get(acct) || [];
+      const sigIndex = DH.buildSfContactSig(sfContacts);
+      const plans = [];
+      for (const contact of contacts) {
+        const p = DH.planDonorStamp({ contact, sigIndex });
+        if (p.fill) { plans.push({ contact, plan: p, acct }); perDom.unique_matches += 1; }
+        else if (p.reason === 'ambiguous_sf_contact') perDom.ambiguous += 1;
+        else perDom.no_match += 1;
+      }
+      return plans;
+    }, { maxN: DONOR_OWNER_BATCH, budgetMs: DONOR_BUDGET_MS, now: () => Date.now() });
+    if (driver.budget_exhausted) budgetHit = true;
+
+    const flatPlans = driver.results.flat();
+    for (const { contact, plan, acct } of flatPlans) {
+      if (summary.sample.length < 20) summary.sample.push({ domain: dom, contact_id: contact.contact_id,
+        contact_name: contact.name, sf_contact_id: plan.sfContactId, owner_table: contact._owner_table,
+        sf_account_id: acct, would_stamp: true });
+      if (!apply) continue;
+      try {
+        // Fill-blanks stamp (filter re-asserts sf_contact_id still null — never overwrite).
+        const c = DH.donorContactCols(dom);
+        const wr = await domainQuery(dom, 'PATCH',
+          'contacts?' + c.pkCol + '=eq.' + encodeURIComponent(contact.contact_id) + '&sf_contact_id=is.null',
+          { sf_contact_id: plan.sfContactId });
+        if (!wr.ok) { perDom.write_failed += 1; summary.scan_errors.push(dom + ':stamp:' + JSON.stringify(wr.data)); continue; }
+        perDom.stamped += 1;
+        await domainQuery(dom, 'POST', 'provenance_event_log', {
+          target_database: dom === 'gov' ? 'gov_db' : 'dia_db', target_table: 'contacts',
+          record_pk_value: String(contact.contact_id), field_name: 'sf_contact_id',
+          old_value: null, new_value: plan.sfContactId, source: 'sf_account_contact_expansion',
+          confidence: 1.0, metadata: { batch: batchTag, sf_account_id: acct, run: sourceRunId },
+        }, { Prefer: 'return=minimal' });
+        await domainQuery(dom, 'POST', 'w9_3_donor_handoff_log', {
+          contact_id: contact.contact_id, sf_contact_id: plan.sfContactId, owner_table: contact._owner_table,
+          owner_id: contact._owner_id, sf_account_id: acct, matched_by: plan.reason, applied: true,
+          batch_tag: batchTag, source_run_id: sourceRunId,
+        }, { Prefer: 'return=minimal' });
+      } catch (e) { perDom.write_failed += 1; summary.scan_errors.push(dom + ':' + contact.contact_id + ':' + (e?.message || e)); }
+    }
+    if (budgetHit) perDom.budget_exhausted = true;
+    summary.by_domain[dom] = perDom;
+
+    // Record the coverage metric (with this run's stamps folded in) for the U4 trend.
+    if (apply) {
+      try {
+        await opsQuery('POST', 'lcc_w9_3_donor_coverage_log', {
+          domain: dom, blank_contacts_total: cov.total,
+          blank_with_sf_key: (cov.withKey != null ? cov.withKey + perDom.stamped : null),
+          stamped_this_run: perDom.stamped, batch_tag: batchTag, source_run_id: sourceRunId,
+          // Prompt 93: persist the keyset position + wrap count so the next run
+          // resumes the full-pool walk (fetchDonorScanCursors reads this back).
+          scan_cursor_to: perDom.scan_cursor_to, windows_wrapped: perDom.windows_wrapped,
+        }, { headers: { Prefer: 'return=minimal' } });
+      } catch (_e) { /* best-effort */ }
+    }
+  }
+
+  if (apply) {
+    const totalStamped = Object.values(summary.by_domain).reduce((a, d) => a + (d.stamped || 0), 0);
+    const totalFailed = Object.values(summary.by_domain).reduce((a, d) => a + (d.write_failed || 0), 0);
+    await recordW93Health('sf_donor_handoff', 'sf_account_contact_expansion',
+      { status: totalFailed ? 'amber' : 'green', count: totalStamped,
+        lastError: totalFailed ? totalFailed + ' write(s) failed in ' + sourceRunId : null, details: summary });
+  }
+  summary.note = "Account->contacts expansion. For an owner linked to SF account A, unique-name-match A's SF contacts (gov sf_contacts_import / dia salesforce_contacts) against the owner's blank domain contacts and FILL-BLANKS stamp the person-level sf_contact_id (W9.2's donor key). Ambiguous name matches skipped (never guessed). Coverage = blank contacts carrying an SF key (the acceptance metric, rising = W9.2 unlock). Prompt 93: keyset-cursored (per-domain scan_cursor_to/windows_wrapped in each by_domain entry) so nightly runs WALK the full blank-contact pool instead of re-scanning a fixed slice; on wrap (pool tail reached) it restarts from the top." + (dryScore ? ' NO writes in dry-run.' : '');
+  return res.status(200).json({ ok: true, ...summary });
+}
+
+// ============================================================================
 // PRIORITY QUEUE LIST (BD front door, 2026-06-03)
 // GET /api/priority-queue?band=<P1|P0.5|...>&limit=<n>&offset=<n>
 //   The 'start here' worklist: the doctrinal priority bands from
@@ -681,10 +7353,20 @@ async function handlePriorityQueueList(req, res) {
   const orderClause = (band && CONNECT_BANDS.has(band))
     ? 'rank_annual_rent.desc.nullslast,days_overdue.desc.nullslast'
     : 'priority_band.asc,days_overdue.desc.nullslast,rank_annual_rent.desc.nullslast';
+  // UX-T1a Unit 3 (2026-09-03): the operator surface serves only bands that earn a
+  // human. P0.4 / P-CONTACT / P0.5 / P-BUYER (941 of 1,635 rows) each already have an
+  // AUTOMATED consumer — A2/cron 244, the Tier 0 auto-attach sweep, CRM hygiene, and
+  // "buyers are pursued by showing them deals" — so 58% of this queue was plumbing
+  // wearing an operator badge. They are HIDDEN, not deleted: the flag lives on the view
+  // (lcc_priority_band_is_human_surface) and the automated consumers still read their
+  // bands. Human surface = 694 rows.
+  //   An explicit ?band= request is honoured even for a hidden band, so a deliberate
+  //   drill-in still works and the rows are never unreachable — only un-defaulted.
   let itemsPath = 'v_priority_queue_enriched?select=' + selectCols
     + '&order=' + orderClause
     + '&limit=' + limit + '&offset=' + offset;
   if (band) itemsPath += '&priority_band=eq.' + pgFilterVal(band);
+  else itemsPath += '&human_surface=is.true';
   if (domainFilter) itemsPath += '&effective_domain=eq.' + pgFilterVal(domainFilter);
 
   // Per-band counts for the chip row. Unfiltered: read the pre-aggregated view
@@ -692,9 +7374,11 @@ async function handlePriorityQueueList(req, res) {
   // collapses the queue to one row per band. Domain-filtered (R31): the
   // band-counts view isn't domain-aware, so count from the enriched view scoped
   // to effective_domain (bounded — dia/gov are each well under 1000 rows).
+  // Both count paths gate on the SAME human_surface predicate as the item list above.
+  // A chip counting a band the list does not show is a lying badge (P139).
   const countsPath = domainFilter
-    ? ('v_priority_queue_enriched?select=priority_band&effective_domain=eq.' + pgFilterVal(domainFilter) + '&limit=2000')
-    : 'v_priority_queue_band_counts?select=priority_band,n';
+    ? ('v_priority_queue_enriched?select=priority_band&human_surface=is.true&effective_domain=eq.' + pgFilterVal(domainFilter) + '&limit=2000')
+    : 'v_priority_queue_band_counts?select=priority_band,n&human_surface=is.true';
 
   // R7 Phase 0 (2026-06-07): the ~5-7s queue floor is gone. v_priority_queue
   // and its buyer-SPE root are now materialized into cron-refreshed cache
@@ -758,6 +7442,79 @@ async function handlePriorityQueueList(req, res) {
     .map(b => ({ band: b, n: countMap[b] }));
 
   return res.status(200).json({ counts, total, band: band || null, domain: domainFilter || null, items });
+}
+
+// ============================================================================
+// SELLER PROSPECT QUEUE (UX-T1a-queue, 2026-09-03)
+// GET /api/seller-prospect-queue?chip=<key>&domain=<gov|dia>&limit=&offset=
+//
+//   The doctrine's queue: $2.5M-$25M per property, a newer lease OR a recorded
+//   reason to sell, an owner nobody has reached. Reads v_lcc_seller_prospect_queue,
+//   which owns every gate; this handler only filters, pages and ranks.
+//
+//   ⚠️ THIS IS A NEW SURFACE, NOT A RE-RANK OF /api/priority-queue, and the number
+//   that decides that is the OVERLAP: of the 259 in-band newer-lease assets Part A
+//   measured, 27 appear in v_priority_queue at the (owner, asset) grain and 232 do
+//   not -- 89.6% disjoint, because P1/P2/P3 select assets LATE in their term and the
+//   doctrine's sweet spot is the FIRST two or three years. The two surfaces are about
+//   different assets, so this one sits BESIDE the band queue rather than replacing it;
+//   the band queue keeps serving its six seller-timing bands (694 rows) and its four
+//   hidden automated ones.
+//
+//   Every row carries its own gate columns (value_basis, newer_lease_basis,
+//   reason_to_sell, reach_state, months_to_maturity, owners_on_asset) so the card can
+//   say WHY this owner and WHY now -- C11's rule: the basis rides on the card, because
+//   a legible sheet that names a party without a basis is more dangerous than an
+//   illegible one.
+// ============================================================================
+async function handleSellerProspectQueue(req, res) {
+  if (req.method !== 'GET') return res.status(405).json({ error: 'GET only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const chip = resolveChip(req.query.chip);
+  const domain = normalizeDomain(req.query.domain);
+  const limit = clampLimit(req.query.limit);
+  const offset = clampOffset(req.query.offset);
+
+  // count=exact on the list gives the pager an exact total for the ACTIVE filter --
+  // so `has_more` is a fact, not "the page came back full".
+  const itemsR = await opsQuery('GET', buildQueuePath({ chipKey: chip.key, domain, limit, offset }),
+    undefined, { countMode: 'exact' });
+  if (!itemsR.ok) {
+    console.warn('[seller-prospect-queue] items query failed:', itemsR.status, itemsR.data);
+    // Pass the DB's own message through. A handler that discards it turns a one-line
+    // fix into an outage of unknown duration (P132).
+    return res.status(502).json({ error: 'list_failed', detail: itemsR.data });
+  }
+  const items = Array.isArray(itemsR.data) ? itemsR.data : [];
+
+  // Chip counts: ONE query per chip, each carrying the SAME predicate its click sends,
+  // so a chip can never report a population the list would not show (P139). Chips
+  // soft-fail independently -- a hiccup on the counts must not take down the page --
+  // and a failed chip reports n: null (not 0), because "we could not count" and "there
+  // are none" are different facts (P180).
+  const countResults = await Promise.all(SELLER_QUEUE_CHIPS.map((c) =>
+    opsQuery('GET', buildChipCountPath({ chipKey: c.key, domain }), undefined, { countMode: 'exact' })
+      .then((r) => ({ key: c.key, label: c.label, n: r.ok ? r.count : null }))
+      .catch((e) => {
+        console.warn('[seller-prospect-queue] chip count threw:', c.key, e?.message || e);
+        return { key: c.key, label: c.label, n: null };
+      })));
+
+  // The funnel, so the EXCLUDED populations stay visible instead of silently vanishing
+  // (the producer/consumer honest-counts rule). Soft-fails to null.
+  const summaryR = await opsQuery('GET', 'v_lcc_seller_prospect_queue_summary?select=*',
+    undefined, { countMode: 'none' }).catch(() => ({ ok: false, data: null }));
+
+  return res.status(200).json({
+    chip: chip.key,
+    domain: domain || null,
+    chips: countResults,
+    pagination: buildPagination({ total: itemsR.count, limit, offset }),
+    funnel: (summaryR.ok && Array.isArray(summaryR.data)) ? summaryR.data : null,
+    items,
+  });
 }
 
 // ============================================================================
@@ -845,7 +7602,103 @@ async function refreshQueueAfterDecision() {
 //     (universe − decided), each labeled with its mode.
 // ============================================================================
 const FEDERATED_DECISION_TYPES = new Set([
+  // W8 U1 (Prompt 62): Ollama junk-entity pre-screen proposals. Source =
+  // v_junk_entity_review_open; a verdict soft-retires (reversible) or routes an
+  // FK-referenced row to a conflict, all human-gated.
+  'junk_entity_review',
+  // W8 U3 (Prompt 69): Ollama connection-propagation link proposals. Source =
+  // v_w8_u3_link_review_open; every proposal carries a VERBATIM evidence quote.
+  // confirm -> the deterministic writer creates the entity_relationships edge +
+  // provenance (reversible w8_u3_link_apply_log); reject -> kept. NEVER auto-writes.
+  'w8_u3_link_review',
+  // W8 U5 (Prompt 79): naming-hygiene proposals. Source = v_naming_hygiene_review_open;
+  // confirm+rename -> name write via the house normalizer (reversible ledger +
+  // provenance); confirm+link_property -> ensureEntityLink asset link + fill-blanks
+  // display name; reject/keep -> close. Deterministic dictionary renames are
+  // bulk-confirmable. NEVER auto-writes.
+  'naming_hygiene_review',
+  // W9.2 (Prompt 88): contact-reachability internal-harvest proposals. Source =
+  // v_reachability_harvest_review_open; a deterministic fill (arm=deterministic,
+  // arithmetic exact-identity) or an LLM-attributed fill with a VERBATIM quote.
+  // Confirm runs the deterministic fill-blanks writer (domain contacts email/phone).
+  'reachability_harvest_review',
+  // W9.1 (Prompt 98): contact-acquisition engine (Stage 1) proposals. Source =
+  // v_contact_acquisition_review_open; an ATTACH (cross-reference / institution) or
+  // a MINT (deed signatory / OM broker-of-record, VERBATIM-quoted). Confirm resolves
+  // into the ops entity graph via the shared contact-attach helpers (reversible).
+  'contact_acquisition_review',
+  // W9.6 (Prompt 102): correspondence → owner-LLC attribution proposals. Source =
+  // v_comms_owner_attribution_review_open; Path A (property_bridge, arithmetic
+  // owns-edge) or Path B (person_match, verbatim). Confirm appends the owner ops
+  // entity to the correspondence rows' metadata.linked_entity_ids (reversible) —
+  // feeds owner-record history + the harvest create-contact arm. NEVER auto-writes.
+  'comms_owner_attribution_review',
+  // Prompt 114 (BREAK-1 Unit 3): the owner-contact review lane Prompt 111 filled
+  // and left without a consumer. Source = v_lcc_owner_contact_attach_review_open
+  // (pending, owner still asset-resolved, owner still hero-unreachable — so the
+  // badge counts real work only). THREE shape-aware verdicts, because the lane
+  // holds two different candidate kinds: attach_person mints/links a PERSON via
+  // entity_relationships (never stamps them onto the org); same_party fills the
+  // OWNER's own blank email/phone from an abbreviation/acronym name variant;
+  // reject is recorded so a transaction counterparty is never re-proposed. The
+  // server re-runs the shape gate before writing, so a verdict that does not
+  // match the candidate's shape is refused. Reversible via lcc_owner_contact_attach_log.
+  'owner_contact_attach_review',
+  // Prompt 188: the TIER 0 owner-contact confirm lane. Source =
+  // v_lcc_tier0_owner_contact_lane_open, ONE card per (owner, email domain) --
+  // RMR's 20 people at rmrgroup.com are one judgement, not twenty. Verdicts:
+  // attach (write owner_contact_pivot.active_contact_entity_id + an
+  // entity_relationships edge for the ONE person the operator picks), reject
+  // (terminal for that (owner, domain)), research. Deliberately NOT an
+  // unattended promoter: measured link precision is ~91% only for owners at
+  // roughly $16M+ of rent and ~60-70% in the ~$2M SPE band, so one in eleven
+  // silent writes at the TOP of the book would put the wrong firm's employee on
+  // an owner. The server re-runs the pure shape gate (tier0-confirm-planner)
+  // before writing and refuses a person that is not on the card.
+  'tier0_owner_contact',
+  // OWN-T0e (2026-09-09): the sponsor-family confirm lane over the OWN-T0
+  // `unclassified_rival` conflict store. Source = lcc_ownt0e_sponsor_family_
+  // proposals_cache (a 4-hourly snapshot of the ~20 s proposals view), ONE card
+  // per (sponsor entity, brand token) — A3 measured `boyd` clearing 20 of 24
+  // chains on one confirm. Sponsor = the side holding MORE current properties (a
+  // recorded fact); a tied group makes the operator name the sponsor. Verdicts:
+  // confirm_family (the ONE write: an INSERT into lcc_ownership_sponsor_family,
+  // reversible by DELETE), same_party (record + forward to
+  // merge_duplicate_entities — a family row over a duplicate entity papers over
+  // the merge), not_family (record-only), research. No lexical sponsor guess
+  // ever decides (A3: 3 of 74 on GSA SPEs; P198: 7%). Nothing here writes a
+  // portfolio fact, end-dates a row, or touches gov/dia owner tables.
+  'sponsor_family_confirm',
+  // C13g-min-lane (2026-09-09): the human verdict over C13g-min's retype write
+  // (lcc_retype_entity, service_role-only, migration 20261101120000). Source =
+  // v_lcc_entity_retype_candidates -- live person-typed entities holding >=2
+  // current portfolio facts, plus any person-typed OWN-T0e spe_props_max>=2
+  // member whose sponsor is an organization. Both name-shape instruments are
+  // documented useless on this population (owner-role-classification.md
+  // sec 9b) -- retype_organization is the ONE write, keep_person is
+  // record-only, research spawns a task. Reverse: rpc/lcc_unretype_entity.
+  'entity_type_review',
+  // PDR1 / P13#1 (2026-09-10) — the needs_human half of the ambiguous-entity
+  // automerge lane (api/_shared/ambiguous-entity-merge-planner.js). Source =
+  // `entities` rows carrying `metadata.ambiguous_resolution` whose planner
+  // score does not clear the documented auto-merge threshold (no single
+  // candidate, or the top two are too close). Card shows the placeholder plus
+  // its scored candidate list, best-to-worst, EXACTLY what the auto-merge
+  // tick's planner saw. Verdicts: merge (repoint to the human-chosen
+  // candidate, via rpc/reconcile_entity -- the SAME writer the auto-merge tick
+  // uses, never a second one) / keep_new (reconcile_entity's p_keep_new path)
+  // / research. Population is CLOSED (documented 189 entities, nothing minted
+  // since 2026-08-04) -- see PLANNED-BACKLOG.md P17/P13#1 and STATUS.md for
+  // the "DB access unavailable at build time" caveat on any real count.
+  'ambiguous_entity_resolution',
   'intake_disposition', 'property_merge', 'provenance_conflict',
+  // dia geospatial "address twin" review (2026-08-14). The dia_merge_twins engine
+  // auto-merges only blank-operator husks; every twin with a competing clinical
+  // identity (operator conflict / distinct clinic name / multiple anchors) lands in
+  // the pending slice of dia_property_twin_review. Merge rides the REVERSIBLE wrapper
+  // dia_merge_property_reversible (snapshot-before-hard-delete). keep = the CCN
+  // anchor; drop = the shadow. Verdicts: merge / not_twin / research.
+  'property_twin',
   'pending_update', 'cms_link_suspect', 'implausible_value',
   // R17 Unit 2: steady-state duplicate-entity merges. The one-time backlog of
   // 430 auto_mergeable groups was drained live; new auto_mergeable groups
@@ -908,6 +7761,20 @@ const FEDERATED_DECISION_TYPES = new Set([
   // hard-negative training data). Mint-at-verdict (no 3,452-row lcc_decisions
   // pre-mint); the sublane badge reads the live view count via /api/review-counts.
   'sf_link_candidate',
+  // W5.2 (signal -> task automation, audit 3.4.1): three orphaned signal streams
+  // get deterministic, value-gated consumers (NO LLM in the gate). Two route to
+  // DECISION lanes here (a human picks between options); the research-work
+  // streams (state-lease distress, npi missing/new) are pushed straight to
+  // research_tasks by their ticks, not surfaced as lanes.
+  //   agency_risk_action  — a gov agency with elevated/high risk composite AND
+  //                         tracked portfolio exposure. pursue_disposition,
+  //                         monitor, or dismiss. Seam = gov processed_at.
+  //   npi_dedup_review    — a data_error duplicate-NPI cluster; the human picks
+  //                         (confirm/not) — never an auto-collapse (never-guess).
+  //   npi_dedup_autoapprove — the auto_resolvable duplicate slice: the tick
+  //                         proposes the deterministic survivor, a human APPROVES
+  //                         (never a silent auto-resolve). Ledgered ops-side.
+  'agency_risk_action', 'npi_dedup_review', 'npi_dedup_autoapprove',
 ]);
 
 // Decision types posted as (type + subject) from the PROPERTY-DETAIL signal
@@ -930,6 +7797,7 @@ function federatedSubjectRef(type, s) {
   switch (type) {
     case 'intake_disposition': return s.intake_id ? 'intake:' + s.intake_id : null;
     case 'property_merge':     return (s.domain && s.property_id != null) ? 'merge:' + s.domain + ':' + s.property_id : null;
+    case 'property_twin':      return s.review_id != null ? 'twin:dia:' + s.review_id : null;
     case 'provenance_conflict':return s.provenance_id != null ? 'prov:' + s.provenance_id
                                      : (s.record_id != null ? 'prov:dia_xref:' + s.record_id : null);
     case 'pending_update':     return s.pending_id != null ? 'pending:gov:' + s.pending_id : null;
@@ -940,6 +7808,13 @@ function federatedSubjectRef(type, s) {
     case 'bad_rent_lease':     return (s.domain && s.review_id != null) ? 'badrent:' + s.domain + ':' + s.review_id : null;
     case 'resolve_owner_parent': return (s.domain && s.cluster_token) ? 'ownerparent:' + s.domain + ':' + s.cluster_token : null;
     case 'listing_event_action': return s.event_id ? 'listevt:' + s.event_id : null;
+    // W5.2: gov agency_risk_signals keyed by its signal_id (uuid).
+    case 'agency_risk_action': return s.signal_id ? 'arisk:' + s.signal_id : null;
+    // W5.2: dia NPI signals keyed by the stable identity hash (the matview has no
+    // pk); both dedup lanes share the npi: namespace — exclusion is per
+    // decision_type so the two lanes never collide.
+    case 'npi_dedup_review':
+    case 'npi_dedup_autoapprove': return s.signal_hash ? 'npi:' + s.signal_hash : null;
     case 'owner_source_conflict': return (s.domain && s.property_id != null) ? 'osrc:' + s.domain + ':' + s.property_id : null;
     case 'suspected_sale': return (s.domain && s.property_id != null && s.signal_source)
                                   ? 'susp:' + s.domain + ':' + s.property_id + ':' + s.signal_source : null;
@@ -960,10 +7835,41 @@ function federatedSubjectRef(type, s) {
       }
       if (s.kind === 'owner_unification') return s.queue_id != null ? 'ownrec:govu:' + s.queue_id : null;
       if (s.kind === 'entity_match_candidate') return (s.domain && s.candidate_id != null) ? 'ownrec:emc:' + s.domain + ':' + s.candidate_id : null;
+      // W8 U2: the pre-built subject_ref rides straight through (ownrec:w8u2:<pair_key>).
+      if (s.kind === 'w8_u2_ollama_pair') return s.subject_ref
+        ? String(s.subject_ref)
+        : ((s.entity_a != null && s.entity_b != null) ? dupPairSubjectRef(s.entity_a, s.entity_b) : null);
       return null;
     }
     // W4.3: one card per queued owner (queue_id), namespaced by domain.
     case 'sf_link_candidate': return (s.domain && s.queue_id != null) ? 'sf_link:' + s.domain + ':' + s.queue_id : null;
+    // W8 U1: the pre-built subject_ref rides straight through (junk:<dom>:<tbl>:<pk>).
+    case 'junk_entity_review': return s.subject_ref
+      ? String(s.subject_ref)
+      : ((s.domain && s.table_name && s.pk_value != null) ? junkSubjectRef(s.domain, s.table_name, s.pk_value) : null);
+    // W8 U3: the pre-built subject_ref rides straight through
+    // (link:chain:<dom>:<propId>:<gap> | link:pmail:<winnerId>).
+    case 'w8_u3_link_review': return s.subject_ref ? String(s.subject_ref) : null;
+    case 'naming_hygiene_review': return s.subject_ref ? String(s.subject_ref) : null;
+    case 'reachability_harvest_review': return s.subject_ref ? String(s.subject_ref) : null;
+    case 'contact_acquisition_review': return s.subject_ref ? String(s.subject_ref) : null;
+    // Prompt 114: the review row's own subject_ref ('ocp:<owner>:<domain>:<contact>').
+    case 'owner_contact_attach_review': return s.subject_ref ? String(s.subject_ref) : null;
+    case 'comms_owner_attribution_review': return s.subject_ref ? String(s.subject_ref) : null;
+    // Prompt 188: keyed on (owner, DOMAIN), never on the owner alone -- rejecting
+    // RMR at rmrgroupinc.com must not also close rmrgroup.com, which is a
+    // different judgement about a different firm domain.
+    case 'tier0_owner_contact': return tier0SubjectRef(s.owner_entity_id || s.owner_id, s.domain);
+    // OWN-T0e: keyed on the (sponsor, token) QUESTION — t0e:<sponsor_id>:<tok>,
+    // or t0e:tied:<group_key_id>:<tok> when no side is decided. Deciding a tied
+    // group under a chosen sponsor keeps its `tied` ref: the ref names the
+    // question, the verdict payload names the answer.
+    case 'sponsor_family_confirm': return sponsorFamilySubjectRef(s);
+    // C13g-min-lane: etype:<entity_id> -- the question is scoped to one entity.
+    case 'entity_type_review': return entityRetypeSubjectRef(s);
+    // PDR1 / P13#1: keyed on the placeholder entity alone (amb:<id>).
+    case 'ambiguous_entity_resolution':
+      return ambiguousEntitySubjectRef(s.placeholder_id || s.subject_entity_id);
   }
   return null;
 }
@@ -1095,8 +8001,160 @@ const INTAKE_LANE_SELECT = 'intake_id,source_type,status,created_at,'
   + 'match_status:raw_payload->extraction_result->>match_status,'
   + 'match_domain:raw_payload->extraction_result->>match_domain,'
   + 'match_property_id:raw_payload->extraction_result->>match_property_id';
-const _provImportance = (f) => /(?:price|rent|cap|noi|value|sold|owner)/i.test(String(f || '')) ? 1000
-  : /(?:tenant|address|agency|name|sf_)/i.test(String(f || '')) ? 300 : 50;
+// ── P139 — ONE COMPARABLE RANK SCALE FOR THE provenance_conflict LANE ────────
+// The lane carries two structurally different sub-populations: LCC
+// `field_provenance` cross-source conflicts (454 live) and dia sales-price xref
+// conflicts (65 live). They were ranked on two INCOMPARABLE scales sharing one
+// budget — field_provenance on `_provImportance` (ceiling 1000), xref on
+// `1000 + severity`.
+//
+// Measured live 2026-08-26: the dia view hard-codes `1::int AS severity` on the
+// xref arm, so `1000 + severity` is the CONSTANT 1001 for all 65 rows. It was
+// never a value expression — just an offset one point above the other scale's
+// ceiling, which parked the WHOLE xref population permanently ahead of the WHOLE
+// field_provenance population. That is what masked P137: 433 of 454
+// field_provenance rows are ladder-decidable, and not one had ever reached the
+// head of the lane or the clean-assist model, because xref (which has no ladder
+// BY DESIGN — three unlabelled numbers) always went first and always answers
+// `uncertain`.
+//
+// Both sub-populations now score on ONE 0–1000 band, on the same two axes:
+//
+//   WHAT IS IN DISPUTE   money/valuation 600 · identity/party 250 · other 80
+//   CAN IT BE ANSWERED   +300 when the registered ladder actually decides it
+//   (tiebreak)           +0–99 by the magnitude of the thing being argued about
+//
+// The magnitude term is a strict SUB-band tiebreak — the band gaps (350, 170)
+// and the decidability bonus (300) all exceed 99, so it can never move a row
+// across a band. `provRankBandsAreSeparable()` asserts that invariant.
+//
+// The xref arm scores as money (it IS a sale price) and earns NO decidability
+// bonus, so a ladder-decidable price conflict outranks it while a $22.7M xref
+// row outranks a $780k one — the 29× spread the constant threw away.
+//
+// This REORDERS the human Decision Center lane; it HIDES nothing. Both
+// sub-populations interleave through the head instead of one monopolising it.
+// The clean-assist tick additionally takes a per-sub-population FAIR SHARE (see
+// takeInterleavedByKind) so neither can starve the other on rank alone — rank
+// decides order, fair share guarantees reach.
+const PROV_BAND_MONEY = 600;
+const PROV_BAND_IDENTITY = 250;
+const PROV_BAND_OTHER = 80;
+const PROV_DECIDABLE_BONUS = 300;
+const PROV_TIEBREAK_MAX = 99;
+
+// What KIND of thing is in dispute. Field classification is deliberately
+// unchanged from the pre-P139 `_provImportance` regexes — only the band values
+// were rescaled to leave room for the two new terms.
+const _provBand = (f) => /(?:price|rent|cap|noi|value|sold|owner)/i.test(String(f || '')) ? PROV_BAND_MONEY
+  : /(?:tenant|address|agency|name|sf_)/i.test(String(f || '')) ? PROV_BAND_IDENTITY : PROV_BAND_OTHER;
+
+// In-band magnitude tiebreak from whatever numbers the row is arguing about.
+// log-scaled and capped, so $22.7M vs $780k separates but a year (1985) or a
+// parcel number can never outrun its own band.
+export function _provMagnitudeTiebreak(values) {
+  let max = 0;
+  for (const v of values) {
+    const n = Math.abs(Number(String(v == null ? '' : v).replace(/[$,\s]/g, '')));
+    if (Number.isFinite(n) && n > max) max = n;
+  }
+  if (!(max > 1)) return 0;
+  // log10 8 == $100M == full tiebreak.
+  return Math.max(0, Math.min(PROV_TIEBREAK_MAX, Math.round((Math.log10(max) / 8) * PROV_TIEBREAK_MAX)));
+}
+
+// ── P139 — THE EXPLICIT INTERLEAVE KEY ───────────────────────────────────────
+// A single comparable rank scale is necessary but NOT sufficient, because the
+// two sub-populations are internally homogeneous and the surfaces that read the
+// lane are BOUNDED WINDOWS:
+//
+//   · the human Decision Center lane fetches `limit=50` and does not page
+//     (dc-lanes.js renderFederatedLane), and
+//   · the clean-assist tick takes `perType` (3–20) items per run.
+//
+// Measured live 2026-08-26 on the new scale: 155 field_provenance rows score
+// above the xref band (673–691) and 299 below it. So strict rank order would put
+// all 50 shown cards on field_provenance and drop xref off the human surface
+// entirely — the exact mirror of the bug being fixed, where all 50 were xref and
+// no field_provenance conflict was reachable. A re-rank alone just swaps which
+// population is invisible.
+//
+// So the sub-populations are merged on an explicit POSITION key rather than
+// concatenated: each bucket keeps its own rank order and is spread evenly across
+// the whole list, so any prefix of length N carries both in (near) proportion.
+// Element i of a bucket of size m within a list of size T claims position
+// (i + 0.5) · T/m; ties fall back to rank. With 454 field_provenance and 65
+// xref rows that puts the first xref card at ~position 4 and ~6 of them in the
+// visible 50 — value-ordered, and neither population starved.
+//
+// `mode`:
+//   'proportional' — bucket share tracks bucket size. Right for the human lane,
+//                    whose window (50) is large enough to represent the real mix.
+//   'equal'        — strict round-robin. Right for the assist tick, whose window
+//                    is 3–20, where proportional rounds the smaller population to
+//                    ZERO and it would take ~39 runs to reach the first xref card.
+//
+// A list with one bucket (or none) is returned UNCHANGED in both modes, so this
+// can only ever affect a genuinely mixed lane.
+export function interleaveByKind(items, mode) {
+  const list = Array.isArray(items) ? items : [];
+  const buckets = new Map();
+  for (const it of list) {
+    const k = (it && it.context && it.context.kind) ? String(it.context.kind) : '_unkeyed';
+    if (!buckets.has(k)) buckets.set(k, []);
+    buckets.get(k).push(it);
+  }
+  if (buckets.size <= 1) return list.slice();
+  const queues = [...buckets.values()];
+  if (mode === 'equal') {
+    const out = [];
+    for (let round = 0; out.length < list.length; round += 1) {
+      let progressed = false;
+      for (const q of queues) {
+        if (round >= q.length) continue;
+        out.push(q[round]);
+        progressed = true;
+      }
+      if (!progressed) break;
+    }
+    return out;
+  }
+  const total = list.length;
+  const keyed = [];
+  for (const q of queues) {
+    const stride = total / q.length;
+    q.forEach((it, i) => keyed.push({ it, pos: (i + 0.5) * stride, rank: Number(it && it.rank_value) || 0 }));
+  }
+  keyed.sort((a, b) => (a.pos - b.pos) || (b.rank - a.rank));
+  return keyed.map((k) => k.it);
+}
+
+// A field_provenance row's rank. Decidability reads the SHARED `laddersSay`
+// judgement the clean-assist gate uses, so the order the operator sees and the
+// answer the model gets can never drift apart.
+export function _provRankFieldProvenance(row) {
+  const says = CA.laddersSay(
+    row.attempted_priority == null ? null : Number(row.attempted_priority),
+    row.current_priority == null ? null : Number(row.current_priority));
+  const decidable = says === 'attempted_source_outranks_current' || says === 'current_source_outranks_attempted';
+  return _provBand(row.field_name)
+    + (decidable ? PROV_DECIDABLE_BONUS : 0)
+    + _provMagnitudeTiebreak([row.attempted_value, row.current_value]);
+}
+
+// A dia sales-price xref row's rank. `severity` is a hard-coded constant on the
+// source view, so it is deliberately NOT read here — the disputed sale price is
+// the only real value signal the row carries.
+export function _provRankSalesXref(row) {
+  return PROV_BAND_MONEY + _provMagnitudeTiebreak([row.detail_2, row.detail_3]);
+}
+
+// Invariant the tiebreak depends on: no magnitude term can promote a row out of
+// its band, and no undecidable row can outrank the same band decided.
+export function provRankBandsAreSeparable() {
+  const gaps = [PROV_BAND_MONEY - PROV_BAND_IDENTITY, PROV_BAND_IDENTITY - PROV_BAND_OTHER, PROV_DECIDABLE_BONUS];
+  return gaps.every((g) => g > PROV_TIEBREAK_MAX);
+}
 
 // Set of subject_refs already decided (decided/skipped/superseded) for a lane.
 // Pages in 1000-row strides: PostgREST caps EVERY response at 1000 rows
@@ -1124,6 +8182,25 @@ async function fetchExcludedRefs(type) {
   return set;
 }
 
+// W5.2: stable identity hash for a dia.mv_npi_inventory_signals row. The matview
+// has no pk, so consumption is ledgered (lcc_npi_signal_consumed) by this hash.
+// `npi` is NULL for the 504 missing_inventory rows, so clinic_id MUST be in the
+// key (validated live: 1,452/1,452 distinct across the mv). The consumer is the
+// sole hasher; SQL never recomputes it.
+function npiSignalHash(r) {
+  r = r || {};
+  const parts = [r.signal_type || '', r.clinic_id || '', r.npi || '', r.cluster_winner_medicare_id || ''];
+  return createHash('md5').update(parts.join('|')).digest('hex');
+}
+
+// W5.2: the deep-link the app understands (client hash routing — see CLAUDE.md
+// "Client routing"). property/clinic detail = #/<slug>?d=prop:<db>:<id>:Overview;
+// with no resolvable id we fall back to the domain page (#/gov | #/dia). NEVER a
+// prose instruction — a structured, clickable target only.
+function w52PropDeepLink(db, id) {
+  return (id != null && id !== '') ? '#/' + db + '?d=prop:' + db + ':' + id + ':Overview' : '#/' + db;
+}
+
 // Per-lane source fetch. Returns { items, total } where each item carries the
 // subject_ref + display context + rank_value. `cap` bounds the source pull
 // (top-of-funnel; exclusion + paging happen in JS).
@@ -1140,6 +8217,275 @@ async function fetchFederatedSource(type, cap, opts) {
       undefined, { countMode: 'exact' });
     return (r.ok && typeof r.count === 'number') ? r.count : null;
   };
+
+  if (type === 'junk_entity_review') {
+    // W8 U1: open Ollama junk-entity proposals, most-confidently-junk first.
+    const r = await opsQuery('GET', 'v_junk_entity_review_open?select=review_id,subject_ref,'
+      + 'domain,table_name,pk_value,entity_name,heuristic,proposed_verdict,confidence,'
+      + 'evidence_quote,reason,model_provider,model_name&limit=' + cap);
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    out.items = rows.map((row) => ({
+      subject_ref: row.subject_ref,
+      subject_domain: row.domain,
+      subject_property_id: null,
+      subject_entity_id: null,
+      rank_value: Number(row.confidence) || 0,
+      context: {
+        review_id: row.review_id, domain: row.domain, table_name: row.table_name,
+        pk_value: row.pk_value, entity_name: row.entity_name, heuristic: row.heuristic,
+        proposed_verdict: row.proposed_verdict, confidence: row.confidence,
+        evidence_quote: row.evidence_quote, reason: row.reason,
+        model_provider: row.model_provider, model_name: row.model_name,
+      },
+    }));
+    out.total = await opsCnt('junk_entity_review?status=eq.proposed');
+    return out;
+  }
+
+  if (type === 'naming_hygiene_review') {
+    // W8 U5: open naming-hygiene proposals. Deterministic dictionary renames
+    // first (bulk-confirmable), then by confidence.
+    const r = await opsQuery('GET', 'v_naming_hygiene_review_open?select=review_id,subject_ref,'
+      + 'domain,table_name,pk_value,entity_name,hygiene_class,proposed_action,proposed_name,'
+      + 'proposed_property,deterministic,confidence,evidence_quote,reason,model_provider,model_name&limit=' + cap);
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    out.items = rows.map((row) => ({
+      subject_ref: row.subject_ref,
+      subject_domain: row.domain,
+      subject_property_id: (row.proposed_property && row.proposed_property.property_id != null)
+        ? String(row.proposed_property.property_id) : null,
+      subject_entity_id: null,
+      // deterministic renames rank first (like the view), then by confidence.
+      rank_value: (row.deterministic ? 1e6 : 0) + (Number(row.confidence) || 0),
+      context: {
+        review_id: row.review_id, domain: row.domain, table_name: row.table_name,
+        pk_value: row.pk_value, entity_name: row.entity_name, hygiene_class: row.hygiene_class,
+        proposed_action: row.proposed_action, proposed_name: row.proposed_name,
+        proposed_property: row.proposed_property, deterministic: row.deterministic,
+        confidence: row.confidence, evidence_quote: row.evidence_quote, reason: row.reason,
+        model_provider: row.model_provider, model_name: row.model_name,
+        kind: row.deterministic ? 'deterministic_rename' : (row.proposed_action === 'link_property' ? 'address_link' : 'llm_rename'),
+      },
+    }));
+    out.total = await opsCnt('naming_hygiene_review?status=eq.proposed');
+    return out;
+  }
+
+  if (type === 'reachability_harvest_review') {
+    // W9.2: open contact-reachability proposals. Deterministic fills (arm=deterministic,
+    // confidence 1.0 — bulk-confirmable) rank first, then by $ value / confidence.
+    const r = await opsQuery('GET', 'v_reachability_harvest_review_open?select=review_id,subject_ref,'
+      + 'arm,domain,target_kind,target_contact_id,target_owner_id,owner_name,contact_name,field,'
+      + 'proposed_value,evidence_quote,evidence_source,source_pointer,confidence,reason,rank_value,'
+      + 'provenance_source,model_provider,model_name&limit=' + cap);
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    out.items = rows.map((row) => ({
+      subject_ref: row.subject_ref,
+      subject_domain: row.domain,
+      subject_property_id: null,
+      subject_entity_id: null,
+      // deterministic fills rank first (like the view), then by confidence + $ value.
+      rank_value: (row.arm === 'deterministic' ? 1e12 : 0) + (Number(row.confidence) || 0) * 1e6 + (Number(row.rank_value) || 0),
+      context: {
+        review_id: row.review_id, arm: row.arm, domain: row.domain, target_kind: row.target_kind,
+        target_contact_id: row.target_contact_id, target_owner_id: row.target_owner_id,
+        owner_name: row.owner_name, contact_name: row.contact_name, field: row.field,
+        proposed_value: row.proposed_value, evidence_quote: row.evidence_quote,
+        evidence_source: row.evidence_source, source_pointer: row.source_pointer,
+        confidence: row.confidence, reason: row.reason, rank_value: row.rank_value,
+        provenance_source: row.provenance_source, model_provider: row.model_provider, model_name: row.model_name,
+        kind: row.target_kind === 'owner' ? 'create_contact'
+          : (row.arm === 'deterministic' ? 'deterministic_fill' : 'llm_fill'),
+        // create-contact carries the proposed name/phone in source_pointer.
+        proposed_phone: (row.source_pointer && row.source_pointer.phone) || null,
+      },
+    }));
+    out.total = await opsCnt('reachability_harvest_review?status=eq.proposed');
+    return out;
+  }
+
+  if (type === 'contact_acquisition_review') {
+    // W9.1: open contact-acquisition proposals. Attach (cross-reference / institution)
+    // rank first (cheap/deterministic), then by owner $ value / confidence.
+    const r = await opsQuery('GET', 'v_contact_acquisition_review_open?select=review_id,subject_ref,'
+      + 'stage,proposed_kind,domain,owner_entity_id,owner_name,rank_value,candidate_entity_id,'
+      + 'candidate_name,candidate_role,candidate_title,proposed_contact_role,evidence_quote,'
+      + 'evidence_source,source_pointer,confidence,reason,model_provider,model_name&limit=' + cap);
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    out.items = rows.map((row) => ({
+      subject_ref: row.subject_ref,
+      subject_domain: row.domain,
+      subject_property_id: null,
+      subject_entity_id: row.owner_entity_id,
+      // attach proposals rank first (like the view), then by confidence + $ value.
+      rank_value: (row.proposed_kind === 'attach' ? 1e12 : 0) + (Number(row.confidence) || 0) * 1e6 + (Number(row.rank_value) || 0),
+      context: {
+        review_id: row.review_id, stage: row.stage, proposed_kind: row.proposed_kind, domain: row.domain,
+        owner_entity_id: row.owner_entity_id, owner_name: row.owner_name, rank_value: row.rank_value,
+        candidate_entity_id: row.candidate_entity_id, candidate_name: row.candidate_name,
+        candidate_role: row.candidate_role, candidate_title: row.candidate_title,
+        proposed_contact_role: row.proposed_contact_role, evidence_quote: row.evidence_quote,
+        evidence_source: row.evidence_source, source_pointer: row.source_pointer,
+        confidence: row.confidence, reason: row.reason,
+        model_provider: row.model_provider, model_name: row.model_name,
+        kind: row.proposed_kind === 'attach' ? 'attach_contact' : 'create_contact',
+      },
+    }));
+    out.total = await opsCnt('contact_acquisition_review?status=eq.proposed');
+    return out;
+  }
+
+  if (type === 'owner_contact_attach_review') {
+    // Prompt 114 (BREAK-1 Unit 3). The view supplies the ACTIONABLE population
+    // (already-reachable owners excluded inline, so the badge stays honest); the
+    // PURE planner supplies each row's shape + eligible verdicts + lean, so the
+    // card, the bulk action and the server-side write gate all read one rule.
+    const { classifyLaneRow } = await import('./_shared/owner-contact-verdict-planner.js');
+    const r = await opsQuery('GET', 'v_lcc_owner_contact_attach_review_open?select=review_id,subject_ref,'
+      + 'owner_entity_id,owner_name,source_domain,source_contact_id,source_bound_by,contact_name,'
+      + 'contact_email,contact_phone,contact_type,data_source,reason,evidence,rank_value,asset_count'
+      + '&order=rank_value.desc.nullslast,review_id.asc&limit=' + cap);
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    out.items = rows.map((row) => {
+      const cls = classifyLaneRow(row);
+      return {
+        subject_ref: row.subject_ref,
+        subject_domain: row.source_domain,
+        subject_property_id: null,
+        subject_entity_id: row.owner_entity_id,
+        // A same_party card is the cheapest, safest work (it fills the owner's
+        // OWN blank from a name variant), so it ranks first; then person
+        // attaches; then the reject-leaning counterparty bulk. Owner $ value
+        // orders within each band.
+        rank_value: (cls.lean === 'same_party' ? 2e12 : cls.lean === 'attach_person' ? 1e12 : 0)
+          + (Number(row.rank_value) || 0),
+        context: {
+          review_id: row.review_id, owner_entity_id: row.owner_entity_id, owner_name: row.owner_name,
+          domain: row.source_domain, source_contact_id: row.source_contact_id,
+          source_bound_by: row.source_bound_by, contact_name: row.contact_name,
+          contact_email: row.contact_email, contact_phone: row.contact_phone,
+          contact_type: row.contact_type, data_source: row.data_source,
+          reason: row.reason, evidence: row.evidence,
+          rank_value: row.rank_value, asset_count: row.asset_count,
+          shape: cls.shape, allowed: cls.allowed, lean: cls.lean, note: cls.note,
+          counterparty: cls.counterparty, variant_hint: cls.variant_hint,
+          proposed_role: cls.role,
+        },
+      };
+    });
+    // Honest total: the ACTIONABLE population, not every row ever proposed.
+    out.total = await opsCnt('v_lcc_owner_contact_attach_review_open');
+    return out;
+  }
+
+  if (type === 'comms_owner_attribution_review') {
+    // W9.6: open correspondence→owner-LLC attribution proposals. Path A
+    // (property_bridge, arithmetic) ranks first, then by owner $ value / confidence.
+    const r = await opsQuery('GET', 'v_comms_owner_attribution_review_open?select=review_id,subject_ref,'
+      + 'path,domain,corr_entity_id,owner_entity_id,target_owner_id,owner_name,corr_entity_name,tie_kind,'
+      + 'correspondent_name,correspondent_email,thread_count,sample_activity_id,evidence_quote,evidence_source,'
+      + 'confidence,reason,rank_value&limit=' + cap);
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    out.items = rows.map((row) => ({
+      subject_ref: row.subject_ref,
+      subject_domain: row.domain,
+      subject_property_id: null,
+      subject_entity_id: row.owner_entity_id,
+      // property_bridge (arithmetic) ranks first, then by confidence + owner $ value.
+      rank_value: (row.path === 'property_bridge' ? 1e12 : 0) + (Number(row.confidence) || 0) * 1e6 + (Number(row.rank_value) || 0),
+      context: {
+        review_id: row.review_id, path: row.path, domain: row.domain,
+        corr_entity_id: row.corr_entity_id, owner_entity_id: row.owner_entity_id,
+        target_owner_id: row.target_owner_id, owner_name: row.owner_name,
+        corr_entity_name: row.corr_entity_name, tie_kind: row.tie_kind,
+        correspondent_name: row.correspondent_name, correspondent_email: row.correspondent_email,
+        thread_count: row.thread_count, sample_activity_id: row.sample_activity_id,
+        evidence_quote: row.evidence_quote, evidence_source: row.evidence_source,
+        confidence: row.confidence, reason: row.reason, rank_value: row.rank_value,
+        kind: row.path === 'property_bridge' ? 'property_bridge' : 'person_match',
+      },
+    }));
+    out.total = await opsCnt('comms_owner_attribution_review?status=eq.proposed');
+    return out;
+  }
+
+  if (type === 'w8_u3_link_review') {
+    // W8 U3: open Ollama connection-propagation link proposals, most-confident /
+    // highest-$ first. Every row carries a validated VERBATIM evidence quote.
+    const r = await opsQuery('GET', 'v_w8_u3_link_review_open?select=review_id,subject_ref,pool,domain,'
+      + 'source_property_id,gap,proposal_type,current_owner_entity_id,current_owner_name,winner_entity_id,'
+      + 'proposed_verdict,linked_entity_name,role,confidence,evidence_quote,evidence_source,reason,rank_value,'
+      + 'model_provider,model_name&limit=' + cap);
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    out.items = rows.map((row) => ({
+      subject_ref: row.subject_ref,
+      subject_domain: row.domain,
+      subject_property_id: row.source_property_id || null,
+      subject_entity_id: row.current_owner_entity_id || row.winner_entity_id || null,
+      rank_value: (Number(row.confidence) || 0) * 100 + (Number(row.rank_value) || 0) / 1e9,
+      context: {
+        review_id: row.review_id, subject_ref: row.subject_ref, pool: row.pool, domain: row.domain,
+        source_property_id: row.source_property_id, gap: row.gap, proposal_type: row.proposal_type,
+        current_owner_entity_id: row.current_owner_entity_id, current_owner_name: row.current_owner_name,
+        winner_entity_id: row.winner_entity_id, proposed_verdict: row.proposed_verdict,
+        linked_entity_name: row.linked_entity_name, role: row.role, confidence: row.confidence,
+        evidence_quote: row.evidence_quote, evidence_source: row.evidence_source, reason: row.reason,
+        rank_value: row.rank_value, model_provider: row.model_provider, model_name: row.model_name,
+      },
+    }));
+    // Prompt 77 (W8 U3 polish): conflict rows (status='conflict') are real,
+    // resolvable work — the canonical-resolve guard found ≥2 entities sharing the
+    // proposed name and refused to guess (ambiguous_entity_match). v_w8_u3_link_review_open
+    // excludes them, so they were a dead-end. Surface them as pick-the-survivor
+    // cards: the candidate entities (name/domain + link & portfolio counts so the
+    // right one is obvious) + an explicit "Mint new". Mirrors the sf_link three-way
+    // conflict card. Only chain-pool rows with a current-owner endpoint AND a
+    // still-reproducing ≥2-candidate ambiguity are pick-resolvable.
+    const cf = await opsQuery('GET', 'w8_u3_link_review?status=eq.conflict&pool=eq.chain&select=review_id,subject_ref,pool,domain,'
+      + 'source_property_id,gap,proposal_type,current_owner_entity_id,current_owner_name,winner_entity_id,'
+      + 'proposed_verdict,linked_entity_name,role,confidence,evidence_quote,evidence_source,reason,rank_value,'
+      + 'model_provider,model_name&order=confidence.desc&limit=25');
+    const confRows = (cf.ok && Array.isArray(cf.data)) ? cf.data : [];
+    for (const row of confRows) {
+      if (!row.current_owner_entity_id) continue; // no_current_owner_entity → not pick-resolvable
+      const canon = normalizeCanonicalName(row.linked_entity_name || '');
+      if (!canon) continue;
+      const er = await opsQuery('GET', 'entities?select=id,name,domain,entity_type,canonical_name&canonical_name=eq.'
+        + pgFilterVal(canon) + '&merged_into_entity_id=is.null&order=created_at.asc&limit=10');
+      const ents = (er.ok && Array.isArray(er.data)) ? er.data : [];
+      if (ents.length < 2) continue; // ambiguity no longer reproduces (entities merged/removed)
+      const candidates = await Promise.all(ents.map(async (e) => ({
+        entity_id: e.id, name: e.name, domain: e.domain, entity_type: e.entity_type,
+        relationship_count: (await opsCnt('entity_relationships?or=(from_entity_id.eq.' + e.id + ',to_entity_id.eq.' + e.id + ')')) || 0,
+        portfolio_count: (await opsCnt('lcc_entity_portfolio_facts?entity_id=eq.' + e.id)) || 0,
+      })));
+      out.items.push({
+        subject_ref: row.subject_ref, subject_domain: row.domain,
+        subject_property_id: row.source_property_id || null,
+        subject_entity_id: row.current_owner_entity_id || null,
+        rank_value: (Number(row.confidence) || 0) * 100,
+        context: {
+          review_id: row.review_id, subject_ref: row.subject_ref, pool: row.pool, domain: row.domain,
+          source_property_id: row.source_property_id, gap: row.gap, proposal_type: row.proposal_type,
+          current_owner_entity_id: row.current_owner_entity_id, current_owner_name: row.current_owner_name,
+          winner_entity_id: row.winner_entity_id, proposed_verdict: row.proposed_verdict,
+          linked_entity_name: row.linked_entity_name, role: row.role, confidence: row.confidence,
+          evidence_quote: row.evidence_quote, evidence_source: row.evidence_source, reason: row.reason,
+          rank_value: row.rank_value, model_provider: row.model_provider, model_name: row.model_name,
+          conflict: true, conflict_reason: 'ambiguous_entity_match', conflict_canonical: canon, candidates,
+        },
+      });
+    }
+    // Honest count: open proposals + conflict rows (both are workable). Prompt 89
+    // (Do #5): when BOTH count probes come back null (count header missing / a
+    // timed-out probe), report null — NOT 0 — so the lane header does not read
+    // "1 shown · 0 workable" over a workable card. Mirrors the merge_duplicate_
+    // entities null-guard. total stays a number whenever either probe succeeded.
+    const u3OpenCnt = await opsCnt('w8_u3_link_review?status=eq.proposed&proposed_verdict=in.(link_proposal,different_people)');
+    const u3ConfCnt = await opsCnt('w8_u3_link_review?status=eq.conflict');
+    out.total = (u3OpenCnt == null && u3ConfCnt == null) ? null : (u3OpenCnt || 0) + (u3ConfCnt || 0);
+    return out;
+  }
 
   if (type === 'listing_event_action') {
     // R48: unprocessed sale events, value-ranked by sale price. The queue view
@@ -1171,6 +8517,111 @@ async function fetchFederatedSource(type, cap, opts) {
     return out;
   }
 
+  if (type === 'agency_risk_action') {
+    // W5.2: gov agency_risk_signals, unconsumed (processed_at NULL), value-gated:
+    //   high      -> always a card (15 ever — cheap, always actionable)
+    //   elevated  -> a card ONLY when the agency links to >=1 tracked gov
+    //               property (by agency name); unlinked elevated is auto-dismissed
+    //               by the tick, so it normally never reaches here.
+    //   low/moderate never surface (excluded at the query).
+    // Ranked by risk_score desc. Cross-DB read via domainQuery('government').
+    const r = await domainQuery('government', 'GET', 'agency_risk_signals'
+      + '?select=signal_id,agency,agency_code,risk_level,risk_score,signal_date,severity,details,created_at'
+      + '&processed_at=is.null&risk_level=in.(high,elevated)'
+      + '&order=risk_score.desc.nullslast,created_at.desc&limit=' + cap);
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    // One batched properties read (never N+1): which candidate agencies have
+    // tracked gov properties, and a few property_ids each for the deep link.
+    const agencies = [...new Set(rows.map((x) => x.agency).filter(Boolean))];
+    const propByAgency = new Map();
+    if (agencies.length) {
+      const inList = agencies.map((a) => '"' + String(a).replace(/"/g, '') + '"').join(',');
+      const pr = await domainQuery('government', 'GET', 'properties'
+        + '?select=property_id,agency&agency=in.(' + encodeURIComponent(inList) + ')&limit=1000');
+      const prows = (pr.ok && Array.isArray(pr.data)) ? pr.data : [];
+      for (const p of prows) {
+        const k = String(p.agency || '').toLowerCase();
+        if (!propByAgency.has(k)) propByAgency.set(k, []);
+        const arr = propByAgency.get(k);
+        if (arr.length < 25) arr.push(p.property_id);
+      }
+    }
+    out.items = rows.map((row) => {
+      const pids = propByAgency.get(String(row.agency || '').toLowerCase()) || [];
+      return {
+        row, _pids: pids,
+        subject_ref: row.signal_id ? 'arisk:' + row.signal_id : null,
+        subject_domain: 'gov',
+        subject_property_id: pids.length ? String(pids[0]) : null,
+        subject_entity_id: null,
+        rank_value: Number(row.risk_score) || 0,
+        context: {
+          signal_id: row.signal_id, domain: 'gov', agency: row.agency,
+          agency_code: row.agency_code, risk_level: row.risk_level,
+          risk_score: row.risk_score, signal_date: row.signal_date,
+          severity: row.severity, signals: row.details || null,
+          tracked_property_count: pids.length,
+          property_ids: pids.slice(0, 10),
+          deep_link: w52PropDeepLink('gov', pids.length ? pids[0] : null),
+        },
+      };
+    // elevated with no tracked exposure is not actionable BD work — drop it from
+    // the lane (the tick auto-dismisses it so it never accretes).
+    }).filter((it) => it.subject_ref && (it.row.risk_level === 'high' || it._pids.length > 0))
+      .map(({ row, _pids, ...it }) => it);
+    out.total = out.items.length;
+    return out;
+  }
+
+  if (type === 'npi_dedup_review' || type === 'npi_dedup_autoapprove') {
+    // W5.2: dia.mv_npi_inventory_signals duplicate-NPI clusters. data_error ->
+    // review (human picks the survivor); auto_resolvable -> autoapprove (human
+    // APPROVES the deterministic proposed survivor). NEVER an auto-collapse here
+    // (never-guess / fill-blanks doctrine for destructive dedup). The matview has
+    // no seam, so exclusion is the ops ledger (consumed hashes) + fetchExcludedRefs.
+    const sev = type === 'npi_dedup_review' ? 'data_error' : 'auto_resolvable';
+    const r = await domainQuery('dialysis', 'GET', 'mv_npi_inventory_signals'
+      + '?select=signal_type,clinic_id,npi,facility_name,address,city,state,operator_name,'
+      + 'cluster_size,cluster_winner_medicare_id,severity,signal_priority,signal_reason,latest_total_patients'
+      + '&signal_type=eq.duplicate_inventory_npi&severity=eq.' + sev
+      + '&order=signal_priority.asc,cluster_size.desc.nullslast&limit=' + cap);
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    // Ledger exclusion (consumed hashes for this signal_type).
+    const consumed = new Set();
+    for (let off = 0; ; off += 1000) {
+      const cr = await opsQuery('GET', 'lcc_npi_signal_consumed?select=signal_hash'
+        + '&signal_type=eq.duplicate_inventory_npi&order=signal_hash.asc&limit=1000&offset=' + off,
+        undefined, { countMode: 'none' });
+      const crows = (cr.ok && Array.isArray(cr.data)) ? cr.data : [];
+      for (const x of crows) consumed.add(x.signal_hash);
+      if (crows.length < 1000) break;
+    }
+    out.items = rows.map((row) => {
+      const hash = npiSignalHash(row);
+      return {
+        _hash: hash,
+        subject_ref: 'npi:' + hash,
+        subject_domain: 'dia',
+        subject_property_id: row.clinic_id != null ? String(row.clinic_id) : null,
+        subject_entity_id: null,
+        rank_value: Number(row.latest_total_patients) || 0,
+        context: {
+          signal_hash: hash, signal_type: row.signal_type, severity: row.severity,
+          domain: 'dia', clinic_id: row.clinic_id, npi: row.npi,
+          facility_name: row.facility_name, operator_name: row.operator_name,
+          address: row.address, city: row.city, state: row.state,
+          cluster_size: row.cluster_size,
+          cluster_winner_medicare_id: row.cluster_winner_medicare_id,
+          signal_priority: row.signal_priority, signal_reason: row.signal_reason,
+          latest_total_patients: row.latest_total_patients,
+          deep_link: w52PropDeepLink('dia', row.clinic_id),
+        },
+      };
+    }).filter((it) => !consumed.has(it._hash)).map(({ _hash, ...it }) => it);
+    out.total = out.items.length;
+    return out;
+  }
+
   if (type === 'intake_disposition') {
     // Two views, one lane (Consumption-Layer: default to the workable set, honest
     // count, "show all" toggle):
@@ -1182,12 +8633,23 @@ async function fetchFederatedSource(type, cap, opts) {
     // classify in JS — the alias normalization (offering_memorandum→om) can't be
     // a clean server-side count filter. `cap` only bounds the items RETURNED.
     const view = opts.intakeView === 'all' ? 'all' : 'create';
-    const r = await opsQuery('GET', 'staged_intake_items?select=' + INTAKE_LANE_SELECT
-      + '&status=in.(review_required,failed)&order=created_at.desc&limit=1000');
-    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    // UX-T1c-intake-cap (2026-09-08): PAGE the population at the PostgREST cap
+    // and stop on the RETURNED count. A single `limit=1000` silently dropped the
+    // oldest rows once the population passed 1,000 (measured 1,011 that day —
+    // 11 rows, 5 of them create_candidate, never shown). See pageIntakeReviewRows.
+    const paged = await pageIntakeReviewRows(
+      (path) => opsQuery('GET', path),
+      'staged_intake_items?select=' + INTAKE_LANE_SELECT
+      + '&status=in.(review_required,failed)&order=created_at.desc,intake_id.desc');
+    const rows = paged.rows;
+    out.intake_pages = paged.pages;
+    if (paged.truncated) out.intake_truncated = true;
+    if (paged.failed) out.intake_fetch_failed = true;
     const wanted = (view === 'all')
       ? (k) => k !== 'no_data'   // show-all surfaces every workable klass; the
-                                 // no-data empties are auto-retired, not shown
+                                 // no-data empties are hidden here by filter —
+                                 // NOT retired (they stay review_required/failed;
+                                 // 111 on 2026-09-08). Backlog UX-T1c-intake-cap.
       : (k) => k === 'create_candidate';
     const classified = rows.map((row) => {
       const cls = _intakeRowClass(row);
@@ -1220,7 +8682,11 @@ async function fetchFederatedSource(type, cap, opts) {
   if (type === 'property_merge') {
     const fetchDom = async (dom) => {
       // R17 Unit 4: group-level true-duplicate candidates (de-noised lane source).
-      const r = await domainQuery(dom, 'GET', 'v_property_merge_lane?select=record_id,detail_1,detail_2,detail_3,severity'
+      // P134: member_property_ids comes FROM the view, so a consumer never
+      // re-derives the group. (Measured 2026-08-26: re-deriving it by
+      // state+normalized-address returned 150 properties for a 2-member gov
+      // group, because the view also excludes archived rows.)
+      const r = await domainQuery(dom, 'GET', 'v_property_merge_lane?select=record_id,detail_1,detail_2,detail_3,severity,member_property_ids'
         + '&order=severity.desc&limit=' + cap);
       const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
       return rows.map((row) => ({
@@ -1228,7 +8694,8 @@ async function fetchFederatedSource(type, cap, opts) {
         subject_domain: dom, subject_property_id: String(row.record_id), subject_entity_id: null,
         rank_value: Number(row.severity) || 0,
         context: { domain: dom, property_id: row.record_id, address: row.detail_1, state: row.detail_2,
-          label: row.detail_3, cluster_size: Number(row.severity) || null },
+          label: row.detail_3, cluster_size: Number(row.severity) || null,
+          member_property_ids: Array.isArray(row.member_property_ids) ? row.member_property_ids : [] },
       }));
     };
     const [g, d, gc, dc] = await Promise.all([
@@ -1238,6 +8705,63 @@ async function fetchFederatedSource(type, cap, opts) {
     ]);
     out.items = g.concat(d).sort((a, b) => b.rank_value - a.rank_value);
     out.total = (gc == null && dc == null) ? null : (gc || 0) + (dc || 0);
+    return out;
+  }
+
+  if (type === 'property_twin') {
+    // dia geospatial address-twin review lane (2026-08-14). Source is the pending
+    // slice of dia_property_twin_review — every twin the dia_merge_twins engine
+    // classified as needing a human (operator conflict / distinct clinic name /
+    // multiple anchors / blank-but-far). Value-ranked closest-first (a tighter
+    // co-location is a stronger twin signal). auto_blank husks are already merged
+    // and never appear here (status<>'pending').
+    const r = await domainQuery('dia', 'GET',
+      'dia_property_twin_review?select=id,shadow_property_id,anchor_property_id,classification,distance_miles,detail'
+      + '&status=eq.pending&order=distance_miles.asc,id.asc&limit=' + cap);
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    // Batch-enrich with addresses/tenants for a legible card (one lookup, not N).
+    const ids = Array.from(new Set(rows.flatMap((x) => [x.shadow_property_id, x.anchor_property_id]).filter((v) => v != null)));
+    const addr = {};
+    if (ids.length) {
+      const pr = await domainQuery('dia', 'GET',
+        'properties?select=property_id,address,city,state,tenant,medicare_id,total_chairs&property_id=in.(' + ids.join(',') + ')');
+      if (pr.ok && Array.isArray(pr.data)) for (const p of pr.data) addr[p.property_id] = p;
+    }
+    out.items = rows.map((row) => {
+      const a = addr[row.anchor_property_id] || {};
+      const s = addr[row.shadow_property_id] || {};
+      const d = row.detail || {};
+      return {
+        subject_ref: 'twin:dia:' + row.id,
+        subject_domain: 'dia', subject_property_id: String(row.shadow_property_id), subject_entity_id: null,
+        // closer twins rank higher: invert distance into a positive rank
+        rank_value: (row.distance_miles != null) ? (1 / (Number(row.distance_miles) + 0.001)) : 0,
+        context: {
+          domain: 'dia', review_id: row.id, classification: row.classification,
+          distance_miles: row.distance_miles,
+          shadow_property_id: row.shadow_property_id, anchor_property_id: row.anchor_property_id,
+          shadow_address: s.address || null, anchor_address: a.address || null,
+          city: a.city || s.city || null, state: a.state || s.state || null,
+          shadow_tenant: s.tenant ?? d.shadow_tenant ?? null, anchor_tenant: a.tenant ?? d.anchor_tenant ?? null,
+          shadow_operator: d.shadow_operator || null, anchor_operator: d.anchor_operator || null,
+          anchor_medicare_id: a.medicare_id || null, anchor_chairs: a.total_chairs ?? null,
+          n_anchors: d.n_anchors ?? null, same_norm_address: d.same_norm_address ?? null,
+        },
+      };
+    });
+    // Prompt 106: attach the property_twin_assist annotation (deterministic/LLM
+    // suggest + confidence + evidence) and sort easy-first so the operator clears
+    // the confident merges fast and spends judgment on the residue. Read-only; the
+    // merge stays a HUMAN verdict.
+    out.items = await attachPropertyTwinAssist(out.items);
+    out.items.sort((x, y) => {
+      const kx = PT.twinAssistSortKey(x.context && x.context.assist);
+      const ky = PT.twinAssistSortKey(y.context && y.context.assist);
+      if (ky !== kx) return ky - kx;
+      return (y.rank_value || 0) - (x.rank_value || 0);
+    });
+    const cnt = await domCnt('dia', 'dia_property_twin_review?status=eq.pending');
+    out.total = (cnt == null) ? null : cnt;
     return out;
   }
 
@@ -1252,8 +8776,14 @@ async function fetchFederatedSource(type, cap, opts) {
       + 'latest_deed_grantee,latest_deed_date,deed_conflict_kind,deed_auto_fixable,'
       + 'suspected_grantor,suspected_grantee,suspected_sale_date,lessor_signal_source,'
       + 'discrepancy_source,discrepancy_proposed,has_deed_signal,has_lessor_signal,has_discrepancy_signal';
-    const r = await domainQuery('gov', 'GET', 'v_ownership_resolution?select=' + sel
-      + '&order=recency_rank.asc,annual_rent.desc.nullslast,property_id&limit=' + cap);
+    // RO1 (UX-T1c §10, 2026-09-08): 836 of 1,597 rows proposed the owner ALREADY
+    // recorded (the lessor of record changed *to* the party we hold) — a
+    // confirmation presented as a question. `proposal_is_recorded` is an
+    // appended view column; the lane reads only the genuine disputes, and the
+    // badge counts the same population (never the raw view count).
+    const roFilter = '&proposal_is_recorded=eq.false';
+    const r = await domainQuery('gov', 'GET', 'v_ownership_resolution?select=' + sel + ',proposal_is_recorded'
+      + roFilter + '&order=recency_rank.asc,annual_rent.desc.nullslast,property_id&limit=' + cap);
     const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
     out.items = rows.map((row) => ({
       subject_ref: 'resolveown:gov:' + row.property_id,
@@ -1279,7 +8809,7 @@ async function fetchFederatedSource(type, cap, opts) {
         has_discrepancy_signal: row.has_discrepancy_signal,
       },
     }));
-    out.total = await domCnt('gov', 'v_ownership_resolution');
+    out.total = await domCnt('gov', 'v_ownership_resolution?proposal_is_recorded=eq.false');
     return out;
   }
 
@@ -1409,10 +8939,21 @@ async function fetchFederatedSource(type, cap, opts) {
     // no_current_authority conflicts (~249) — all still queryable via
     // v_field_provenance_conflict_classified.
     const [pv, xr, pc, xc] = await Promise.all([
+      // P134: attempted_priority / attempted_confidence / decision_reason /
+      // current_recorded_at were ALREADY on this view and simply never selected —
+      // without them the clean-assist model was asked "which source wins?" with
+      // no ladder position and no writer narration to reason from.
+      // P137: current_priority / priority_ladder are the OTHER half of that
+      // ladder — appended to the view (migration 20260826231000) because they did
+      // not exist on it at all, then selected here. Diff the view's columns
+      // against this select whenever the lane's evidence reads thin.
       opsQuery('GET', 'v_field_provenance_conflict_classified?select=provenance_id,target_database,target_table,'
-        + 'record_pk_value,field_name,attempted_value,attempted_source,current_value,current_source,'
-        + 'decision,enforce_mode,recorded_at&conflict_class=eq.cross_source&order=recorded_at.desc&limit=' + cap),
-      domainQuery('dia', 'GET', 'v_data_quality_issues?select=record_id,detail_1,detail_2,detail_3,severity'
+        + 'record_pk_value,field_name,attempted_value,attempted_source,attempted_priority,attempted_confidence,'
+        + 'current_value,current_source,current_recorded_at,current_priority,priority_ladder,'
+        + 'decision,decision_reason,enforce_mode,recorded_at&conflict_class=eq.cross_source&order=recorded_at.desc&limit=' + cap),
+      // suggested_action is the VIEW's own narration of which detail column is
+      // which — the three detail_* numbers are unlabelled on their own.
+      domainQuery('dia', 'GET', 'v_data_quality_issues?select=record_id,detail_1,detail_2,detail_3,severity,suggested_action'
         + '&issue_kind=eq.sales_price_xref_conflict&order=severity.desc&limit=' + cap),
       opsCnt('v_field_provenance_conflict_classified?conflict_class=eq.cross_source'),
       domCnt('dia', 'v_data_quality_issues?issue_kind=eq.sales_price_xref_conflict'),
@@ -1422,22 +8963,47 @@ async function fetchFederatedSource(type, cap, opts) {
     const pvItems = pvRows.map((row) => ({
       subject_ref: 'prov:' + row.provenance_id,
       subject_domain: row.target_database || null, subject_property_id: null, subject_entity_id: null,
-      rank_value: _provImportance(row.field_name),
+      rank_value: _provRankFieldProvenance(row),
       context: { kind: 'field_provenance', provenance_id: row.provenance_id,
         target_database: row.target_database, target_table: row.target_table,
         record_pk_value: row.record_pk_value, field_name: row.field_name,
         attempted_value: row.attempted_value, attempted_source: row.attempted_source,
+        attempted_priority: row.attempted_priority, attempted_confidence: row.attempted_confidence,
         current_value: row.current_value, current_source: row.current_source,
-        decision: row.decision, enforce_mode: row.enforce_mode },
+        current_recorded_at: row.current_recorded_at,
+        // P137: the CURRENT source's rung + the whole registered ladder. P134
+        // wired the CONSUMER (assessProvenanceConflict reads both and computes
+        // `ladder_says`) but never the PRODUCER — the view had no current-side
+        // priority and no ladder, so `laddersSay(ap, undefined)` always returned
+        // `unregistered_source_no_ladder_answer` and every proposal punted with
+        // "the evidence does not specify which source is more authoritative".
+        // Measured live: 454/454 cross-source rows resolve a current_priority,
+        // 433 are ladder-decidable, 21 are genuine equal-priority ties.
+        current_priority: row.current_priority, priority_ladder: row.priority_ladder,
+        decision: row.decision, decision_reason: row.decision_reason, enforce_mode: row.enforce_mode },
     }));
     const xrItems = xrRows.map((row) => ({
       subject_ref: 'prov:dia_xref:' + row.record_id,
       subject_domain: 'dia', subject_property_id: String(row.record_id), subject_entity_id: null,
-      rank_value: 1000 + (Number(row.severity) || 0),
+      rank_value: _provRankSalesXref(row),
       context: { kind: 'sales_price_xref', record_id: row.record_id,
-        detail_1: row.detail_1, detail_2: row.detail_2, detail_3: row.detail_3, severity: row.severity },
+        detail_1: row.detail_1, detail_2: row.detail_2, detail_3: row.detail_3, severity: row.severity,
+        issue_narration: row.suggested_action },
     }));
-    out.items = pvItems.concat(xrItems).sort((a, b) => b.rank_value - a.rank_value);
+    // P139: rank first on the ONE comparable scale — ties are now REAL (an
+    // undecidable money conflict and an xref row of the same magnitude score
+    // identically), so break them on subject_ref rather than leaving the head to
+    // concat order, which is exactly how one sub-population monopolised it.
+    const ranked = pvItems.concat(xrItems)
+      .sort((a, b) => (b.rank_value - a.rank_value) || String(a.subject_ref).localeCompare(String(b.subject_ref)));
+    // Then merge the two sub-populations on the explicit interleave key, so the
+    // bounded 50-card window the Decision Center actually renders carries both.
+    out.items = interleaveByKind(ranked, 'proportional');
+    // Sub-population counts for the lane's filter chips — the P179 answer to
+    // "ranked but behind other work": a filter, so the smaller population is one
+    // click away regardless of where its highest-value row lands.
+    out.parts = { field_provenance: (pc == null ? pvItems.length : pc),
+                  sales_price_xref: (xc == null ? xrItems.length : xc) };
     out.total = (pc == null && xc == null) ? null : (pc || 0) + (xc || 0);
     return out;
   }
@@ -1620,6 +9186,183 @@ async function fetchFederatedSource(type, cap, opts) {
     return out;
   }
 
+  // ---- tier0_owner_contact (Prompt 188) -----------------------------------
+  // The Tier 0 confirm lane. ONE card per (owner, email domain), value-ranked by
+  // owner rent so the operator meets the reliable end of the precision curve
+  // first (~91% only above roughly $16M of owner rent; ~60-70% in the ~$2M SPE
+  // band -- see tier0-confirm-planner's rentBand for the anchors).
+  //
+  // The whole universe is pulled (237 open cards live, far under the PostgREST
+  // 1000-row cap) and the shape gate runs in JS, exactly like intake_disposition:
+  // the SQL view's eligibility uses the two HOUSE guards, and the planner adds
+  // the name-shape gate the shared JS modules own. Filtering in JS then counting
+  // in SQL would report a badge that does not match the list -- the P132 defect
+  // where the badge and the list read different sources. So `total` is computed
+  // AFTER the JS gate and `complete` lets listFederatedLane derive an exact
+  // count by subtracting only this lane's decided subjects.
+  if (type === 'tier0_owner_contact') {
+    const r = await opsQuery('GET', 'v_lcc_tier0_owner_contact_lane_open?select=owner_id,owner_name,'
+      + 'owner_rent,domain,n_candidates,n_eligible,n_excluded,n_link_evidence,n_person_evidence,'
+      + 'n_already_linked,match_arms,match_keys,people,owner_workspace_id,owner_domain_cards,rank_value,'
+      + 'employer_sources'
+      + '&order=rank_value.desc.nullslast,owner_name,domain&limit=1000');
+    const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+    const cards = rows.map((row) => buildTier0Card(row))
+      // A card whose every candidate was blocked by the JS gate is not work.
+      .filter((card) => card.n_eligible > 0);
+    out.total = cards.length;
+    out.items = cards.slice(0, cap).map((card) => ({
+      subject_ref: tier0SubjectRef(card.owner_entity_id, card.domain),
+      subject_domain: null, subject_property_id: null,
+      subject_entity_id: card.owner_entity_id,
+      rank_value: card.rank_value,
+      context: card,
+    }));
+    out.complete = out.items.length === cards.length;
+    return out;
+  }
+
+  // ---- sponsor_family_confirm (OWN-T0e, 2026-09-09) ------------------------
+  // Reads the CACHE, never the view: v_lcc_ownt0e_sponsor_family_proposals
+  // costs ~20 s (it scans the whole OWN-T0 reconciled store) and this function
+  // runs for every federated type on /api/decisions?summary=1. The cache is
+  // refreshed 4-hourly (cron lcc-ownt0e-proposals-refresh) — so
+  // `already_confirmed` is re-derived LIVE from the registry here, because a
+  // family confirmed five minutes ago must not be re-asked for four hours. The
+  // registry is tiny (6 rows at build); the whole thing is read.
+  //
+  // Universe is 182 rows at build, far under the PostgREST cap, but the read
+  // still asks for the cap and flags a full page (A5a: a returned count equal
+  // to the request window is a truncation, never a total).
+  if (type === 'sponsor_family_confirm') {
+    const [cr, rr] = await Promise.all([
+      opsQuery('GET', SPONSOR_FAMILY_CACHE_TABLE + '?select=*&limit=1000'),
+      opsQuery('GET', SPONSOR_FAMILY_REGISTRY_TABLE + '?select=sponsor_entity_id,sponsor_token&limit=1000'),
+    ]);
+    const rows = (cr.ok && Array.isArray(cr.data)) ? cr.data : [];
+    const reg = new Set(((rr.ok && Array.isArray(rr.data)) ? rr.data : [])
+      .map((f) => String(f.sponsor_entity_id) + ':' + String(f.sponsor_token)));
+    const live = rows.filter((r) => !(r.sponsor_id && reg.has(String(r.sponsor_id) + ':' + String(r.sponsor_token))));
+    // OWN-T0e-c: annotate over the WHOLE live population before ordering/paging,
+    // so a card's own sponsor can be recognised as a duplicate of a sponsor that
+    // sits anywhere else in the lane (never only the page being served).
+    const annotated = annotateSponsorDuplicates(live);
+    const ordered = orderSponsorFamilyRows(annotated);
+    out.total = ordered.length;
+    out.parts = {
+      breadth: ordered.filter((r) => r.sponsor_side !== 'tied').length,
+      tied: ordered.filter((r) => r.sponsor_side === 'tied').length,
+      duplicate_entity_suspect: ordered.filter((r) => Number(r.spe_props_max) >= 2).length,
+      sponsor_is_duplicate_of: ordered.filter((r) => r.duplicate_of_sponsor_id).length,
+      cache_refreshed_at: rows.length ? rows[0].refreshed_at : null,
+      cache_truncated: rows.length >= 1000,
+      cache_fetch_failed: !cr.ok,
+    };
+    out.items = ordered.slice(0, cap).map((row) => {
+      const card = buildSponsorFamilyCard(row);
+      return {
+        subject_ref: sponsorFamilySubjectRef(row),
+        subject_domain: null, subject_property_id: null,
+        subject_entity_id: card.sponsor_id || card.group_key_id,
+        rank_value: card.annual_rent,
+        context: card,
+      };
+    });
+    out.complete = out.items.length === ordered.length;
+    return out;
+  }
+
+  // ---- entity_type_review (C13g-min-lane, 2026-09-09) -----------------------
+  // Reads v_lcc_entity_retype_candidates live -- 18 rows at build, far under
+  // any pagination concern, so no cache is needed (unlike sponsor_family_confirm,
+  // which reads a ~20s view). lcc_decisions exclusion works the same as every
+  // other federated lane (already-decided subject_refs are filtered upstream).
+  if (type === 'entity_type_review') {
+    const vr = await opsQuery('GET', ENTITY_RETYPE_SOURCE_VIEW + '?select=*&limit=1000');
+    const rows = (vr.ok && Array.isArray(vr.data)) ? vr.data : [];
+    const ordered = orderEntityRetypeRows(rows);
+    out.total = ordered.length;
+    out.parts = {
+      blocks_own_t0e: ordered.filter((r) => r.blocks_own_t0e_sponsor_id).length,
+      has_salesforce_contact: ordered.filter((r) => r.has_salesforce_contact === true).length,
+      fetch_failed: !vr.ok,
+      truncated: rows.length >= 1000,
+    };
+    out.items = ordered.slice(0, cap).map((row) => {
+      const card = buildEntityRetypeCard(row);
+      return {
+        subject_ref: entityRetypeSubjectRef(row),
+        subject_domain: null, subject_property_id: null,
+        subject_entity_id: card.entity_id,
+        rank_value: card.current_rent,
+        context: card,
+      };
+    });
+    out.complete = out.items.length === ordered.length;
+    return out;
+  }
+
+  // ---- ambiguous_entity_resolution (PDR1 / P13#1, 2026-09-10) --------------
+  // Reads `entities` directly (metadata.ambiguous_resolution IS NOT NULL and
+  // not yet merged), enriches each raw {id,name} candidate with address/
+  // normalization from `entities`, and re-runs the SAME pure planner the
+  // auto-merge tick uses (planAmbiguousEntityMerge) -- only the needs_human
+  // rows are surfaced here; the tick drains the auto-mergeable rows on its
+  // own, flag-gated pass. Population is documented as ~189 at build time
+  // (PLANNED-BACKLOG.md P17/P13#1) and read live here, never assumed.
+  if (type === 'ambiguous_entity_resolution') {
+    const er = await opsQuery('GET', 'entities?select=id,name,city,state,metadata'
+      + '&metadata->>ambiguous_resolution=not.is.null'
+      + '&metadata->>merged_into=is.null&order=name.asc&limit=1000');
+    const entRows = (er.ok && Array.isArray(er.data)) ? er.data : [];
+    const allCandidateIds = new Set();
+    for (const row of entRows) {
+      for (const c of (row?.metadata?.ambiguous_resolution || [])) {
+        if (c && c.id) allCandidateIds.add(c.id);
+      }
+    }
+    let candidateById = new Map();
+    if (allCandidateIds.size) {
+      const inList = [...allCandidateIds].map((id) => encodeURIComponent(id)).join(',');
+      const cr = await opsQuery('GET', 'entities?select=id,name,address,normalized_address'
+        + '&id=in.(' + inList + ')');
+      if (cr.ok && Array.isArray(cr.data)) {
+        candidateById = new Map(cr.data.map((c) => [c.id, c]));
+      }
+    }
+    const needsHuman = [];
+    for (const entity of entRows) {
+      const rawCandidates = entity?.metadata?.ambiguous_resolution || [];
+      const enriched = rawCandidates.map((c) => {
+        const found = candidateById.get(c.id) || {};
+        return {
+          id: c.id, name: c.name || found.name || null,
+          address: found.address ?? null, normalized_address: found.normalized_address ?? null,
+          entity_relationships_count: null, portfolio_facts_count: null, external_identities_count: null,
+        };
+      });
+      const plan = planAmbiguousEntityMerge(entity, enriched);
+      if (!plan.eligible) needsHuman.push({ entity, plan });
+    }
+    out.total = needsHuman.length;
+    out.parts = {
+      scanned: entRows.length, needs_human: needsHuman.length,
+      fetch_failed: !er.ok, truncated: entRows.length >= 1000,
+    };
+    out.items = needsHuman.slice(0, cap).map(({ entity, plan }) => {
+      const card = buildAmbiguousEntityCard(entity, plan);
+      return {
+        subject_ref: ambiguousEntitySubjectRef(entity.id),
+        subject_domain: null, subject_property_id: null,
+        subject_entity_id: entity.id,
+        rank_value: null,
+        context: card,
+      };
+    });
+    out.complete = out.items.length === needsHuman.length;
+    return out;
+  }
+
   if (type === 'owner_reconcile') {
     // Three folded seeders -> one drain (audit 3.2.3 / 3.4):
     //   A. LCC ORE reconcile - v_lcc_owner_reconcile_review (flagged_review +
@@ -1706,20 +9449,54 @@ async function fetchFederatedSource(type, cap, opts) {
     };
     const [cGov, cDia] = await Promise.all([fetchEmc('gov'), fetchEmc('dia')]);
 
-    out.items = aItems.concat(bItems).concat(cGov).concat(cDia)
-      .sort((a, b) => b.rank_value - a.rank_value);
+    // Seeder D (W8 U2): Ollama duplicate-pair PROPOSALS from the near-miss
+    // generator, landed in the resolver review pool (NOT a new lane). Proposal-
+    // only: approve labels the pair (same_party) + dispositions the row; it NEVER
+    // merges (dupes are the resolver's job). Read from the LCC Opps proposal view.
+    const dR = await opsQuery('GET', 'v_w8_u2_dup_pair_open?select=pair_id,pair_key,subject_ref,'
+      + 'domain,table_name,entity_a,entity_b,name_a,name_b,generator_method,name_similarity,'
+      + 'gen_evidence,proposed_verdict,confidence,evidence_quote,reason&limit=' + cap);
+    const dItems = ((dR.ok && Array.isArray(dR.data)) ? dR.data : []).map((row) => ({
+      subject_ref: row.subject_ref, subject_domain: row.domain, subject_property_id: null,
+      subject_entity_id: null, rank_value: (Number(row.confidence) || 0) * 100,
+      context: { kind: 'w8_u2_ollama_pair', domain: row.domain, table_name: row.table_name,
+        pair_id: row.pair_id, subject_ref: row.subject_ref,
+        entity_a: row.entity_a, entity_b: row.entity_b,
+        owner_name: row.name_a, candidate_name: row.name_b,
+        generator_method: row.generator_method, name_similarity: row.name_similarity,
+        gen_evidence: row.gen_evidence, proposed_verdict: row.proposed_verdict,
+        confidence: row.confidence, evidence_quote: row.evidence_quote, reason: row.reason },
+    }));
+
+    // W8: the 38 Ollama dup-pair proposals were undiscoverable inside the ~5.3k
+    // folded lane (ranked by confidence, they sank below the shown cap). Sort the
+    // w8_u2_ollama_pair seeder FIRST (then by rank within each group) so every one
+    // is in the shown window + reachable via the "Ollama pairs" chip.
+    const seederRank = (it) => (it && it.context && it.context.kind === 'w8_u2_ollama_pair') ? 0 : 1;
+    out.items = aItems.concat(bItems).concat(cGov).concat(cDia).concat(dItems)
+      .sort((a, b) => (seederRank(a) - seederRank(b)) || (b.rank_value - a.rank_value));
 
     // Honest counts (each seeder's pending universe). The LCC review count is an
     // upper bound (multiple evidence rows can exist per pair - deduped in items);
     // the deduped item list is authoritative (mirrors merge_duplicate_entities).
-    const [ac, bc, ccGov, ccDia] = await Promise.all([
+    const [ac, bc, ccGov, ccDia, dc] = await Promise.all([
       opsCnt('v_lcc_owner_reconcile_review'),
       domCnt('gov', 'owner_unification_review_queue?status=eq.pending_review'),
       domCnt('gov', 'entity_match_candidates?status=eq.pending_review'),
       domCnt('dia', 'entity_match_candidates?status=eq.pending_review'),
+      opsCnt('w8_u2_dup_pair?status=eq.proposed'),
     ]);
-    out.total = (ac == null && bc == null && ccGov == null && ccDia == null)
-      ? null : (ac || 0) + (bc || 0) + (ccGov || 0) + (ccDia || 0);
+    out.total = (ac == null && bc == null && ccGov == null && ccDia == null && dc == null)
+      ? null : (ac || 0) + (bc || 0) + (ccGov || 0) + (ccDia || 0) + (dc || 0);
+    // Per-seeder sub-counts so the lane can render seeder filter chips (the
+    // w8_u2_ollama_pair chip is the one that surfaces the buried 38). Keyed by the
+    // context.kind the frontend filters on.
+    out.parts = {
+      w8_u2_ollama_pair: dc || 0,
+      ore: ac || 0,
+      owner_unification: bc || 0,
+      entity_match_candidate: (ccGov || 0) + (ccDia || 0),
+    };
     return out;
   }
 
@@ -1750,6 +9527,9 @@ async function fetchFederatedSource(type, cap, opts) {
           sf_account_name_resolved: row.sf_account_name_resolved,
           score_resolved: row.score_resolved,
           conflict_existing_id: parseConflictExistingId(row.last_error),
+          // P134: the raw tag is the MATCH BASIS on a non-conflict row (which
+          // matcher/model produced this candidate) — evidence the assist needs.
+          last_error: row.last_error,
         },
       }));
     };
@@ -1758,12 +9538,66 @@ async function fetchFederatedSource(type, cap, opts) {
       domCnt('gov', 'v_sf_link_review_queue'),
       domCnt('dia', 'v_sf_link_review_queue'),
     ]);
-    out.items = g.concat(d).sort((a, b) => b.rank_value - a.rank_value);
+    // W9.3 WS1: pre-rank EASY-FIRST by the Ollama assist (decisive high-confidence
+    // calls first) so the lane finally moves; rank_value (owner impact) is the
+    // tiebreak. Attach the w9_3_sf_assist annotation for the sort; the render/verdict
+    // paths remain unchanged.
+    out.items = await attachSfLinkAssist(g.concat(d));
+    out.items.sort((a, b) => {
+      const ka = SA.sfAssistSortKey(a._sf_assist);
+      const kb = SA.sfAssistSortKey(b._sf_assist);
+      if (kb !== ka) return kb - ka;
+      return b.rank_value - a.rank_value;
+    });
     out.total = (gc == null && dc == null) ? null : (gc || 0) + (dc || 0);
     return out;
   }
 
   return out;
+}
+
+// W9.3 WS1: attach each sf_link candidate's latest w9_3_sf_assist annotation (verdict
+// + confidence) so the lane can order easy-first. Read-only; returns the same items.
+async function attachSfLinkAssist(items) {
+  const refs = [...new Set((items || []).map((it) => it.subject_ref).filter(Boolean))].slice(0, 200);
+  if (!refs.length) return items;
+  try {
+    const inList = '("' + refs.map((r) => String(r).replace(/"/g, '\\"')).join('","') + '")';
+    const r = await opsQuery('GET', 'lcc_clean_assist_proposals?select=subject_ref,verdict,confidence,reason'
+      + '&decision_type=eq.sf_link_candidate&source=eq.' + SA.SF_ASSIST_SOURCE
+      + '&subject_ref=in.' + encodeURIComponent(inList) + '&order=id.desc', undefined, { countMode: 'none' });
+    if (!r.ok || !Array.isArray(r.data)) return items;
+    const by = new Map();
+    for (const row of r.data) if (!by.has(row.subject_ref)) by.set(row.subject_ref, row); // id.desc => first = latest
+    return items.map((it) => {
+      const a = by.get(it.subject_ref);
+      return a ? { ...it, _sf_assist: { verdict: a.verdict, confidence: a.confidence, reason: a.reason } } : it;
+    });
+  } catch (_e) { return items; }
+}
+
+function cleanAssistInList(refs) {
+  return '("' + refs.map((r) => String(r).replace(/"/g, '\\"')).join('","') + '")';
+}
+
+async function attachCleanAssistProposals(items) {
+  const refs = [...new Set((items || []).map((it) => it.subject_ref).filter(Boolean))].slice(0, 100);
+  if (!refs.length) return items;
+  try {
+    // P137: `source` rides along so the clean-assist tick can tell an annotation
+    // IT wrote from one another producer wrote, and page past only its own.
+    const r = await opsQuery('GET', 'v_lcc_clean_assist_latest?select=decision_type,subject_ref,proposal_kind,source,verdict,reason,confidence,proposed_link,conflict_summary,source_run_id,model_provider,model_name,created_at'
+      + '&subject_ref=in.' + encodeURIComponent(cleanAssistInList(refs)), undefined, { countMode: 'none' });
+    if (!r.ok || !Array.isArray(r.data)) return items;
+    const byKey = new Map();
+    for (const row of r.data) byKey.set(row.decision_type + '|' + row.subject_ref, row);
+    return items.map((it) => {
+      const prop = byKey.get(it.decision_type + '|' + it.subject_ref);
+      return prop ? { ...it, clean_assist: prop } : it;
+    });
+  } catch (_e) {
+    return items;
+  }
 }
 
 // List a federated lane: source top-N minus already-decided subjects.
@@ -1781,7 +9615,11 @@ async function listFederatedLane(type, limit, offset, opts) {
     subject_property_id: it.subject_property_id, subject_ref: it.subject_ref,
     context: it.context, rank_value: it.rank_value,
   }));
-  return { type, mode: 'federated', total, items };
+  const ret = { type, mode: 'federated', total, items: await attachCleanAssistProposals(items) };
+  // Surface per-seeder sub-counts (e.g. owner_reconcile's w8_u2_ollama_pair) so the
+  // lane can render seeder filter chips against the honest universe counts.
+  if (src.parts) ret.parts = src.parts;
+  return ret;
 }
 
 async function handleDecisionsList(req, res) {
@@ -1794,14 +9632,38 @@ async function handleDecisionsList(req, res) {
   // workable count (universe − decided), each labeled with its mode so the chip
   // number means the same thing ("things to work") regardless of mode.
   if (req.query.summary) {
-    const seededR = await opsQuery('GET', 'v_lcc_decision_open_counts?select=decision_type,n');
+    // PERF 2026-08-15: this branch used to call fetchExcludedRefs(t) per lane,
+    // which PAGES every non-open subject_ref for the type in 1000-row
+    // SEQUENTIAL pages and materialises them into a Set — purely to read
+    // `.size`. Roughly 18 sequential cross-region round-trips to produce 17
+    // integers, on a page-load path measured at 16.2s. `summary` never needs
+    // the refs themselves, only the count, so it now reads them all in ONE
+    // query from v_lcc_decision_excluded_counts.
+    //
+    // The view uses count(DISTINCT subject_ref) because fetchExcludedRefs
+    // returns a Set: match_disambiguation has 1,231 decided rows but only
+    // 1,044 distinct refs, so a plain count(*) would under-report that badge
+    // by 187. The LIST branch below still uses fetchExcludedRefs — it needs
+    // the actual refs to filter rows, not just the size.
+    const [seededR, exclR] = await Promise.all([
+      opsQuery('GET', 'v_lcc_decision_open_counts?select=decision_type,n'),
+      opsQuery('GET', 'v_lcc_decision_excluded_counts?select=decision_type,n_excluded'),
+    ]);
     const seeded = (seededR.ok && Array.isArray(seededR.data)) ? seededR.data : [];
+    const exclByType = new Map();
+    if (exclR.ok && Array.isArray(exclR.data)) {
+      for (const row of exclR.data) exclByType.set(row.decision_type, Number(row.n_excluded) || 0);
+    }
     const lanes = seeded.map((l) => ({ decision_type: l.decision_type, n: Number(l.n) || 0, mode: 'seeded' }));
     const fed = await Promise.all([...FEDERATED_DECISION_TYPES].map(async (t) => {
       try {
-        const [src, excl] = await Promise.all([fetchFederatedSource(t, 1), fetchExcludedRefs(t)]);
-        const n = (typeof src.total === 'number') ? Math.max(0, src.total - excl.size)
-                : Math.max(0, src.items.length - excl.size);
+        const src = await fetchFederatedSource(t, 1);
+        // Fall back to the paged Set only if the view read failed outright, so
+        // a view/grant problem degrades to the old behaviour rather than
+        // silently reporting inflated badges.
+        const exclN = exclR.ok ? (exclByType.get(t) || 0) : (await fetchExcludedRefs(t)).size;
+        const n = (typeof src.total === 'number') ? Math.max(0, src.total - exclN)
+                : Math.max(0, src.items.length - exclN);
         return { decision_type: t, n, mode: 'federated' };
       } catch (_e) { return { decision_type: t, n: 0, mode: 'federated' }; }
     }));
@@ -1854,10 +9716,17 @@ async function handleDecisionsList(req, res) {
   // Seeded lane: workable top-N from lcc_decisions ranked by $ value; universe
   // count returned separately so the UI can demote it to a subtitle.
   const selectCols = 'id,decision_type,status,subject_entity_id,subject_domain,'
-    + 'subject_property_id,subject_ref,question,context,rank_value,created_at';
+    + 'subject_property_id,subject_ref,question,context,metadata,rank_value,created_at';
+  // Prompt 80: the match_disambiguation lane sorts by the Ollama assist's top
+  // confidence FIRST (metadata.assist_top_conf; unannotated ⇒ SQL NULL ⇒ last),
+  // so the high-confidence easy calls surface first for momentum. Every other
+  // seeded lane keeps the $-value-then-age order.
+  const orderClause = (type === 'match_disambiguation')
+    ? 'metadata->assist_top_conf.desc.nullslast,rank_value.desc.nullslast,created_at.asc'
+    : 'rank_value.desc.nullslast,created_at.asc';
   const itemsPath = 'lcc_decisions?select=' + selectCols
     + '&status=eq.open&decision_type=eq.' + pgFilterVal(type)
-    + '&order=rank_value.desc.nullslast,created_at.asc'
+    + '&order=' + orderClause
     + '&limit=' + limit + '&offset=' + offset;
   const [itemsR, countR] = await Promise.all([
     opsQuery('GET', itemsPath),
@@ -1868,7 +9737,7 @@ async function handleDecisionsList(req, res) {
   return res.status(200).json({
     type, mode: 'seeded',
     total: (countR.ok && typeof countR.count === 'number') ? countR.count : null,
-    items: Array.isArray(itemsR.data) ? itemsR.data : [],
+    items: await attachCleanAssistProposals(Array.isArray(itemsR.data) ? itemsR.data : []),
   });
 }
 
@@ -2036,6 +9905,16 @@ async function handleJunkBucket(req, res) {
       // Effect FIRST.
       const pr = await opsQuery('PATCH', 'entities?id=eq.' + pgFilterVal(e.id), patch);
       if (!pr.ok) { failed++; errors.push({ id: e.id, error: pr.data }); continue; }
+      // CONTACT1b — an operator picked this verdict for this bucket; the
+      // parsed values are not a source's own claim, so recorded as the
+      // registered rung-1 source `manual_resolution` (a human resolving a
+      // junk-bucket row) rather than the bare, UNREGISTERED string 'manual'
+      // (field_source_priority has no such rung for entities.email/phone —
+      // an unregistered source silently takes lcc_merge_field's weakest,
+      // never-override branch). Audit-only.
+      await recordContactFieldWrites({
+        recordPk: e.id, source: 'manual_resolution', workspaceId, fields: patch,
+      });
 
       // Record the verdict on the existing seeded decision (best-effort — the
       // entity effect is the source of truth; a missing decision row is rare).
@@ -2215,10 +10094,17 @@ async function handleDecisionVerdict(req, res) {
     if (!subjectRef) return res.status(400).json({ error: 'subject missing identifying fields for ' + dtype });
     // Idempotent guard: a subject already decided is not re-minted (a double-
     // click or a re-surfaced row is a no-op, not a duplicate row).
+    // EXCEPTION (Prompt 77): a w8_u3 conflict resolution re-decides a subject
+    // whose first confirm hit ambiguous_entity_match and recorded a terminal
+    // 'decided' — resolving that conflict is legitimate new work, so bypass the
+    // guard (the w8_u3 handler gates on review.status='conflict', so this can't
+    // resurrect an applied/rejected row).
+    const isU3ConflictResolve = (dtype === 'w8_u3_link_review'
+      && payload && payload.resolve_conflict === true);
     const prior = await opsQuery('GET', 'lcc_decisions?select=id,status&decision_type=eq.'
       + pgFilterVal(dtype) + '&subject_ref=eq.' + pgFilterVal(subjectRef)
       + '&status=neq.open&order=decided_at.desc&limit=1');
-    if (prior.ok && Array.isArray(prior.data) && prior.data[0]) {
+    if (!isU3ConflictResolve && prior.ok && Array.isArray(prior.data) && prior.data[0]) {
       return res.status(409).json({ error: 'already_decided', status: prior.data[0].status, decision_id: prior.data[0].id });
     }
     let ws = null; try { ws = primaryWorkspace(user)?.workspace_id || null; } catch (_e) { ws = null; }
@@ -2295,6 +10181,1151 @@ async function handleDecisionVerdict(req, res) {
       { effects, updated_at: new Date().toISOString() });
 
   try {
+    // ---- junk_entity_review (W8 U1 / Prompt 62) ------------------------------
+    // The human verdict on an Ollama junk-entity proposal. confirm -> the
+    // proposed disposition is applied (dismiss => reversible soft-retire, unless
+    // the row is FK-referenced -> conflict card; rename/parse_contact => the edit
+    // lane; keep => close). reject -> the row is kept. NEVER hard-deletes; every
+    // outcome writes the lcc_decisions verdict (exclusion + audit) + a
+    // junk_review_batch ledger row + stamps the proposal.
+    if (decision.decision_type === 'junk_entity_review') {
+      const parsed = parseJunkSubjectRef(decision.subject_ref);
+      if (!parsed) return res.status(400).json({ error: 'junk_entity_review: unparseable subject_ref' });
+      const revR = await opsQuery('GET', 'junk_entity_review?subject_ref=eq.'
+        + pgFilterVal(decision.subject_ref) + '&select=*&limit=1');
+      const review = (revR.ok && Array.isArray(revR.data)) ? revR.data[0] : null;
+      if (!review) return res.status(404).json({ error: 'junk_entity_review: proposal not found' });
+      const CONFIRM = new Set(['confirm', 'accept', 'junk', 'retire', 'yes', 'merge', 'apply']);
+      const REJECT = new Set(['reject', 'keep', 'not', 'no', 'dismiss']);
+      const humanAction = CONFIRM.has(verdict) ? 'confirm' : (REJECT.has(verdict) ? 'reject' : null);
+      if (!humanAction) return res.status(400).json({ error: 'junk_entity_review: unknown verdict ' + verdict });
+
+      const target = findJunkTarget(parsed.domain, parsed.table);
+      if (!target) return res.status(400).json({ error: 'junk_entity_review: unknown target ' + parsed.domain + ':' + parsed.table });
+
+      // Prompt 89 — tm_misparse: BEFORE the FK check, un-stamp the fanned-out
+      // email + detach the conflated identities from the phantom, so the real
+      // broker's email/SF stop binding it and the (now identity-less) phantom can
+      // soft-retire cleanly. Reversible via junk_review_batch. A genuine remaining
+      // child (relationship/portfolio/cadence/opp) still routes to a conflict card.
+      let tmUnstamp = null;
+      // ENTC (2026-09-03): the un-stamp is not a TrafficMetrix fact — it is the
+      // remedy for "this row holds someone else's mailbox/identity", which is
+      // exactly what a junk80 row is too. Keyed on the CLASS, not on the one
+      // heuristic that happened to need it first; labelling junk80 rows
+      // `tm_misparse` to reach this branch would have been a lie in the ledger.
+      if (humanAction === 'confirm' && review.proposed_verdict === 'dismiss'
+          && EMAIL_CONFLATION_HEURISTICS.has(review.heuristic) && target.domain === 'lcc') {
+        tmUnstamp = await unstampMisparseMember(review.pk_value, review.source_run_id, user.id);
+      }
+      // FK guard only matters when a confirm could retire. Compute lazily (AFTER
+      // the tm_misparse un-stamp above removed the phantom's identities).
+      let fk = { referenced: false };
+      if (humanAction === 'confirm' && review.proposed_verdict === 'dismiss') {
+        fk = await junkFkReferenced(target, review.pk_value);
+      }
+      const plan = planJunkApply({ humanVerdict: humanAction, proposedVerdict: review.proposed_verdict, fkReferenced: fk.referenced });
+      const nowIso = new Date().toISOString();
+      const effects = { plan: plan.action, proposed_verdict: review.proposed_verdict, fk };
+      if (tmUnstamp) effects.tm_unstamp = tmUnstamp;
+      let reversal = {};
+
+      if (plan.action === 'soft_retire') {
+        // Capture the old marker value (reversal), then merge the retire marker.
+        const selPath = target.table + '?select=' + target.markerCol + '&' + target.pkCol
+          + '=eq.' + encodeURIComponent(review.pk_value) + '&limit=1';
+        const cur = target.domain === 'lcc' ? await opsQuery('GET', selPath) : await domainQuery(target.domain, 'GET', selPath);
+        const oldVal = (cur.ok && Array.isArray(cur.data) && cur.data[0]) ? cur.data[0][target.markerCol] : null;
+        // Ledger apply row FIRST (so a reversal record exists even if the PATCH
+        // partially applies), then the mutation, then stamp the proposal.
+        const led = await opsQuery('POST', 'junk_review_batch',
+          { batch_kind: 'apply', source_run_id: review.source_run_id || 'verdict', status: 'applied',
+            domain: target.domain, table_name: target.table, pk_value: review.pk_value, review_id: review.review_id,
+            actor: user.id || null,
+            reversal: { domain: target.domain, table: target.table, pk_col: target.pkCol, pk: review.pk_value, marker_col: target.markerCol, marker_kind: target.markerKind, old_value: oldVal },
+            details: { entity_name: review.entity_name, heuristic: review.heuristic, subject_ref: review.subject_ref } },
+          { headers: { Prefer: 'return=representation' } });
+        const applyBatchId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].batch_id : null;
+        const body = buildRetireMarker(target, oldVal, applyBatchId, review.source_run_id || 'verdict', nowIso);
+        const patchPath = target.table + '?' + target.pkCol + '=eq.' + encodeURIComponent(review.pk_value);
+        const pr = target.domain === 'lcc'
+          ? await opsQuery('PATCH', patchPath, body)
+          : await domainQuery(target.domain, 'PATCH', patchPath, body);
+        if (!pr.ok) {
+          if (applyBatchId != null) await opsQuery('PATCH', 'junk_review_batch?batch_id=eq.' + applyBatchId, { status: 'open', details: { error: 'soft_retire PATCH failed', detail: pr.data } }).catch(() => {});
+          await recordEffectFailure({ ...effects, error: 'soft_retire_write_failed', detail: pr.data });
+          return res.status(502).json({ error: 'junk_soft_retire_failed', detail: pr.data });
+        }
+        reversal = { apply_batch_id: applyBatchId, marker_col: target.markerCol };
+        await opsQuery('PATCH', 'junk_entity_review?review_id=eq.' + review.review_id,
+          { status: 'applied', applied_batch_id: applyBatchId, retired_at: nowIso, decided_by: user.id || null, decided_at: nowIso });
+        effects.apply_batch_id = applyBatchId;
+      } else if (plan.action === 'conflict_fk') {
+        const led = await opsQuery('POST', 'junk_review_batch',
+          { batch_kind: 'apply', source_run_id: review.source_run_id || 'verdict', status: 'conflict',
+            domain: target.domain, table_name: target.table, pk_value: review.pk_value, review_id: review.review_id,
+            actor: user.id || null, reversal: {}, details: { reason: plan.reason, fk } },
+          { headers: { Prefer: 'return=representation' } });
+        const applyBatchId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].batch_id : null;
+        await opsQuery('PATCH', 'junk_entity_review?review_id=eq.' + review.review_id,
+          { status: 'conflict', applied_batch_id: applyBatchId, decided_by: user.id || null, decided_at: nowIso });
+        effects.apply_batch_id = applyBatchId;
+      } else if (plan.action === 'accept_edit_lane') {
+        await opsQuery('PATCH', 'junk_entity_review?review_id=eq.' + review.review_id,
+          { status: 'accepted_edit', decided_by: user.id || null, decided_at: nowIso });
+        effects.edit_kind = plan.edit_kind;
+      } else { // dismiss_proposal (reject, or confirmed keep)
+        await opsQuery('PATCH', 'junk_entity_review?review_id=eq.' + review.review_id,
+          { status: 'dismissed', decided_by: user.id || null, decided_at: nowIso });
+      }
+
+      // Record the lcc_decisions verdict so the lane excludes this subject +
+      // keeps the human-decision audit trail.
+      // The lcc_decisions row only needs status != open to exclude the subject;
+      // the disposition nuance (applied / conflict / dismissed / edit) lives on
+      // the junk_entity_review row. Close with a CHECK-valid status matching the
+      // sf_link_candidate/owner_reconcile house semantic: a keep/not-junk verdict
+      // (dismiss_proposal) is 'skipped'; an applied disposition is 'decided'.
+      const decStatus = plan.action === 'dismiss_proposal' ? 'skipped' : 'decided';
+      const rr = await record(verdict, decStatus, { plan: plan.action, review_id: review.review_id }, effects);
+      if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+      return res.status(200).json({ ok: true, verdict, action: plan.action, review_id: review.review_id, conflict: plan.action === 'conflict_fk', tm_unstamp: tmUnstamp || undefined, ...reversal });
+    }
+
+    // ---- reachability_harvest_review (W9.2 / Prompt 88) ----------------------
+    // The human verdict on a contact-reachability harvest proposal. confirm ->
+    // the deterministic fill-blanks writer sets the domain contact's missing
+    // email/phone (ONLY if still blank — a now-populated field routes to a conflict
+    // card, never a clobber), stamps field_provenance (source per arm:
+    // w9_2_internal_harvest / comms_observed), all recorded in
+    // reachability_harvest_apply_log so it is reversible. reject -> the row is kept
+    // (rubric fuel). NEVER auto-writes without this verdict; NEVER fabricated.
+    if (decision.decision_type === 'reachability_harvest_review') {
+      const revR = await opsQuery('GET', 'reachability_harvest_review?subject_ref=eq.'
+        + pgFilterVal(decision.subject_ref) + '&select=*&limit=1');
+      const review = (revR.ok && Array.isArray(revR.data)) ? revR.data[0] : null;
+      if (!review) return res.status(404).json({ error: 'reachability_harvest_review: proposal not found' });
+      const CONFIRM = new Set(['confirm', 'accept', 'approve', 'yes', 'apply', 'fill']);
+      const REJECT = new Set(['reject', 'keep', 'not', 'no', 'dismiss']);
+      const humanAction = CONFIRM.has(verdict) ? 'confirm' : (REJECT.has(verdict) ? 'reject' : null);
+      if (!humanAction) return res.status(400).json({ error: 'reachability_harvest_review: unknown verdict ' + verdict });
+      const nowIso = new Date().toISOString();
+      const effects = { arm: review.arm, domain: review.domain, field: review.field };
+
+      if (humanAction === 'reject') {
+        await opsQuery('PATCH', 'reachability_harvest_review?review_id=eq.' + review.review_id,
+          { status: 'rejected', decided_by: user.id || null, decided_at: nowIso });
+        const rr = await record(verdict, 'skipped', { review_id: review.review_id }, effects);
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict, action: 'rejected', review_id: review.review_id });
+      }
+
+      // --- confirm (W9.4 create-contact): target_kind='owner' → MINT a new domain
+      //     contact for the owner (name + email + phone) with provenance. Never auto;
+      //     idempotent (skip if a contact with this email already exists for the owner).
+      if (review.target_kind === 'owner') {
+        const dom = review.domain === 'gov' ? 'gov' : 'dia';
+        const sp = review.source_pointer && typeof review.source_pointer === 'object' ? review.source_pointer : {};
+        const ownerId = review.target_owner_id || sp.true_owner_id || null;
+        const name = review.contact_name || sp.name || null;
+        const email = review.proposed_value || sp.email || null;
+        const phone = sp.phone || null;
+        const emailCol = RH.domainContactColumn(dom, 'email');
+        const phoneCol = RH.domainContactColumn(dom, 'phone');
+        const nameCol = RH.domainContactNameColumn(dom);
+        const fspTable = dom === 'dia' ? 'dia.contacts' : 'gov.contacts';
+        if (!ownerId || !name || !email || !RH.looksLikeEmail(email)) {
+          return res.status(400).json({ error: 'reachability_harvest_review: incomplete create-contact proposal' });
+        }
+        // Idempotency / no-dup: a contact with this email under this owner already exists?
+        const dupR = await domainQuery(dom, 'GET', 'contacts?select=contact_id&true_owner_id=eq.' + pgFilterVal(ownerId)
+          + '&' + emailCol + '=eq.' + pgFilterVal(RH.normalizeEmail(email)) + '&limit=1');
+        const dup = (dupR.ok && Array.isArray(dupR.data)) ? dupR.data[0] : null;
+        if (dup) {
+          const led = await opsQuery('POST', 'reachability_harvest_apply_log',
+            { review_id: review.review_id, subject_ref: review.subject_ref, source_run_id: review.source_run_id || 'verdict',
+              status: 'conflict', actor: user.id || null, reversal: {},
+              details: { reason: 'contact_already_exists', existing_contact_id: dup.contact_id } },
+            { headers: { Prefer: 'return=representation' } });
+          const applyLogId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].apply_id : null;
+          await opsQuery('PATCH', 'reachability_harvest_review?review_id=eq.' + review.review_id,
+            { status: 'conflict', applied_log_id: applyLogId, decided_by: user.id || null, decided_at: nowIso });
+          const rr = await record(verdict, 'decided', { review_id: review.review_id }, { ...effects, conflict: 'contact_already_exists' });
+          if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+          return res.status(200).json({ ok: true, verdict, action: 'conflict', reason: 'contact_already_exists', review_id: review.review_id });
+        }
+        // Ledger FIRST (reversal exists before the mutation), then INSERT the contact.
+        const led = await opsQuery('POST', 'reachability_harvest_apply_log',
+          { review_id: review.review_id, subject_ref: review.subject_ref, source_run_id: review.source_run_id || 'verdict',
+            status: 'applied', actor: user.id || null,
+            reversal: { target_database: dom, target_table: 'contacts', record_id: null, field: '__create__', prior_value: null, provenance_ids: [] },
+            details: { arm: review.arm, create_contact: true, owner_id: ownerId, name, email: RH.normalizeEmail(email), phone } },
+          { headers: { Prefer: 'return=representation' } });
+        const applyLogId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].apply_id : null;
+
+        const insertBody = { [nameCol]: name, [emailCol]: RH.normalizeEmail(email), true_owner_id: ownerId,
+          normalized_name: RH.normalizeForMatch(name), data_source: 'comms_observed' };
+        if (phone && RH.looksLikePhone(phone)) insertBody[phoneCol] = RH.normalizePhone(phone);
+        const ins = await domainQuery(dom, 'POST', 'contacts', insertBody, { Prefer: 'return=representation' });
+        const created = (ins.ok && Array.isArray(ins.data) && ins.data[0]) ? ins.data[0] : null;
+        if (!ins.ok || !created) {
+          if (applyLogId != null) await opsQuery('PATCH', 'reachability_harvest_apply_log?apply_id=eq.' + applyLogId,
+            { status: 'conflict', details: { error: 'contact_insert_failed', detail: ins.data } }).catch(() => {});
+          await recordEffectFailure({ ...effects, error: 'contact_insert_failed', detail: ins.data });
+          return res.status(502).json({ error: 'contact_insert_failed', detail: ins.data });
+        }
+        const newContactId = created.contact_id;
+        // Provenance stamps (name + email + phone) on the NEW contact.
+        const provIds = [];
+        for (const [fld, colName, val] of [['name', nameCol, name], ['email', emailCol, RH.normalizeEmail(email)], ['phone', phoneCol, insertBody[phoneCol]]]) {
+          if (val == null) continue;
+          try {
+            const pv = await opsQuery('POST', 'rpc/lcc_merge_field', {
+              p_workspace_id: decision.workspace_id || null,
+              // PR5c: `dom` is 'dia'/'gov'; field_provenance only accepts
+              // dia_db/gov_db/lcc_opps, so the raw value 23514'd every call.
+              p_target_database: provenanceTargetDatabase(dom), p_target_table: fspTable,
+              p_record_pk: String(newContactId), p_field_name: colName,
+              // PR5c: p_value is a jsonb PARAM -- PostgREST hands the parsed JSON
+              // value straight to it. JSON.stringify() here double-encodes a
+              // string into '"\"x\""'::jsonb, which no other source can ever
+              // compare equal to. Pass the raw value (the comms_owner_bridge
+              // site at ~9888 already says so).
+              p_value: val, p_source: 'comms_observed',
+              p_source_run_id: review.source_run_id || 'verdict', p_confidence: Number(review.confidence) || null,
+              p_recorded_by: user.id || null,
+            });
+            if (pv.ok && Array.isArray(pv.data) && pv.data[0] && pv.data[0].provenance_id) provIds.push(pv.data[0].provenance_id);
+          } catch (_e) { /* provenance best-effort; the insert + ledger are the record */ }
+        }
+        if (applyLogId != null) await opsQuery('PATCH', 'reachability_harvest_apply_log?apply_id=eq.' + applyLogId,
+          { reversal: { target_database: dom, target_table: 'contacts', record_id: newContactId, field: '__create__', prior_value: null, provenance_ids: provIds } }).catch(() => {});
+        await opsQuery('PATCH', 'reachability_harvest_review?review_id=eq.' + review.review_id,
+          { status: 'applied', applied_log_id: applyLogId, decided_by: user.id || null, decided_at: nowIso });
+        effects.created_contact = { contact_id: newContactId, name, email: RH.normalizeEmail(email), phone: insertBody[phoneCol] || null };
+        effects.apply_log_id = applyLogId;
+        const rr = await record(verdict, 'decided', { review_id: review.review_id }, effects);
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict, action: 'created_contact', contact_id: newContactId, review_id: review.review_id });
+      }
+
+      // --- confirm: the deterministic fill-blanks writer. ---
+      const dom = review.domain === 'gov' ? 'gov' : 'dia';
+      const col = RH.domainContactColumn(dom, review.field);
+      const fspTable = dom === 'dia' ? 'dia.contacts' : 'gov.contacts';
+      const contactId = review.target_contact_id;
+      const value = review.proposed_value;
+      if (!col || !contactId || !value) {
+        return res.status(400).json({ error: 'reachability_harvest_review: incomplete proposal' });
+      }
+      // Re-check the field is STILL blank (fill-blanks only). A now-populated field
+      // (someone else filled it) routes to a conflict card — never a clobber.
+      const curR = await domainQuery(dom, 'GET', 'contacts?select=' + col + '&contact_id=eq.' + pgFilterVal(contactId) + '&limit=1');
+      const curRow = (curR.ok && Array.isArray(curR.data)) ? curR.data[0] : null;
+      if (!curRow) return res.status(404).json({ error: 'reachability_harvest_review: target contact not found' });
+      if (!_harvestBlank(curRow[col])) {
+        const led = await opsQuery('POST', 'reachability_harvest_apply_log',
+          { review_id: review.review_id, subject_ref: review.subject_ref, source_run_id: review.source_run_id || 'verdict',
+            status: 'conflict', actor: user.id || null, reversal: {},
+            details: { reason: 'field_no_longer_blank', field: col, current_value_present: true } },
+          { headers: { Prefer: 'return=representation' } });
+        const applyLogId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].apply_id : null;
+        await opsQuery('PATCH', 'reachability_harvest_review?review_id=eq.' + review.review_id,
+          { status: 'conflict', applied_log_id: applyLogId, decided_by: user.id || null, decided_at: nowIso });
+        const rr = await record(verdict, 'decided', { review_id: review.review_id }, { ...effects, conflict: 'field_no_longer_blank' });
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict, action: 'conflict', reason: 'field_no_longer_blank', review_id: review.review_id });
+      }
+
+      // Ledger FIRST (reversal record exists before the mutation), then the fill,
+      // then provenance, then stamp the proposal. fill-blanks: prior_value is null.
+      const led = await opsQuery('POST', 'reachability_harvest_apply_log',
+        { review_id: review.review_id, subject_ref: review.subject_ref, source_run_id: review.source_run_id || 'verdict',
+          status: 'applied', actor: user.id || null,
+          reversal: { target_database: dom, target_table: 'contacts', record_id: contactId, field: col, prior_value: null, provenance_ids: [] },
+          details: { arm: review.arm, field: col, value, provenance_source: review.provenance_source } },
+        { headers: { Prefer: 'return=representation' } });
+      const applyLogId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].apply_id : null;
+
+      const wr = await domainQuery(dom, 'PATCH', 'contacts?contact_id=eq.' + pgFilterVal(contactId),
+        { [col]: value }, { Prefer: 'return=minimal' });
+      if (!wr.ok) {
+        if (applyLogId != null) await opsQuery('PATCH', 'reachability_harvest_apply_log?apply_id=eq.' + applyLogId,
+          { status: 'conflict', details: { error: 'contact_patch_failed', detail: wr.data } }).catch(() => {});
+        await recordEffectFailure({ ...effects, error: 'contact_patch_failed', detail: wr.data });
+        return res.status(502).json({ error: 'contact_patch_failed', detail: wr.data });
+      }
+
+      // Provenance stamp (fill-blanks semantics; source per arm, ranked below record sources).
+      let provenanceId = null;
+      try {
+        const pv = await opsQuery('POST', 'rpc/lcc_merge_field', {
+          p_workspace_id: decision.workspace_id || null,
+              // PR5c: `dom` is 'dia'/'gov'; field_provenance only accepts
+              // dia_db/gov_db/lcc_opps, so the raw value 23514'd every call.
+              p_target_database: provenanceTargetDatabase(dom), p_target_table: fspTable,
+          p_record_pk: String(contactId), p_field_name: col,
+          // PR5c: p_value is a jsonb PARAM -- PostgREST hands the parsed JSON
+          // value straight to it. JSON.stringify() here double-encodes a
+          // string into '"\"x\""'::jsonb, which no other source can ever
+          // compare equal to. Pass the raw value (the comms_owner_bridge
+          // site at ~9888 already says so).
+          p_value: value, p_source: review.provenance_source || 'w9_2_internal_harvest',
+          p_source_run_id: review.source_run_id || 'verdict', p_confidence: Number(review.confidence) || null,
+          p_recorded_by: user.id || null,
+        });
+        if (pv.ok && Array.isArray(pv.data) && pv.data[0]) provenanceId = pv.data[0].provenance_id || null;
+      } catch (_e) { /* provenance is best-effort; the fill + ledger are the record */ }
+
+      if (applyLogId != null) {
+        await opsQuery('PATCH', 'reachability_harvest_apply_log?apply_id=eq.' + applyLogId,
+          { reversal: { target_database: dom, target_table: 'contacts', record_id: contactId, field: col, prior_value: null, provenance_ids: provenanceId ? [provenanceId] : [] } }).catch(() => {});
+      }
+      await opsQuery('PATCH', 'reachability_harvest_review?review_id=eq.' + review.review_id,
+        { status: 'applied', applied_log_id: applyLogId, decided_by: user.id || null, decided_at: nowIso });
+      effects.filled = { field: col, value }; effects.apply_log_id = applyLogId; effects.provenance_id = provenanceId;
+      const rr = await record(verdict, 'decided', { review_id: review.review_id }, effects);
+      if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+      return res.status(200).json({ ok: true, verdict, action: 'filled', field: col, review_id: review.review_id });
+    }
+
+    // ---- comms_owner_attribution_review (W9.6 / Prompt 102) ------------------
+    // The human verdict on a correspondence→owner-LLC attribution proposal. confirm
+    // -> the DETERMINISTIC writer appends the owner ops entity to the correspondence
+    // rows' metadata.linked_entity_ids (dedup, fill-append — never a clobber) for
+    // EVERY activity_events row the corr entity attributes to, stamps field_provenance
+    // (comms_owner_bridge), all recorded in comms_owner_attribution_apply_log (reversal
+    // FIRST) so it is reversible. This one anchor feeds BOTH consumers: the owner-record
+    // correspondence history AND the W9.2/W9.4 reachability create-contact arm. reject
+    // -> the row is kept (rubric fuel). NEVER auto-writes; NEVER fabricated.
+    if (decision.decision_type === 'comms_owner_attribution_review') {
+      const revR = await opsQuery('GET', 'comms_owner_attribution_review?subject_ref=eq.'
+        + pgFilterVal(decision.subject_ref) + '&select=*&limit=1');
+      const review = (revR.ok && Array.isArray(revR.data)) ? revR.data[0] : null;
+      if (!review) return res.status(404).json({ error: 'comms_owner_attribution_review: proposal not found' });
+      const CONFIRM = new Set(['confirm', 'accept', 'approve', 'yes', 'apply', 'attribute']);
+      const REJECT = new Set(['reject', 'keep', 'not', 'no', 'dismiss']);
+      const humanAction = CONFIRM.has(verdict) ? 'confirm' : (REJECT.has(verdict) ? 'reject' : null);
+      if (!humanAction) return res.status(400).json({ error: 'comms_owner_attribution_review: unknown verdict ' + verdict });
+      const nowIso = new Date().toISOString();
+      const effects = { path: review.path, domain: review.domain, owner_entity_id: review.owner_entity_id, corr_entity_id: review.corr_entity_id };
+
+      if (humanAction === 'reject') {
+        await opsQuery('PATCH', 'comms_owner_attribution_review?review_id=eq.' + review.review_id,
+          { status: 'rejected', decided_by: user.id || null, decided_at: nowIso });
+        const rr = await record(verdict, 'skipped', { review_id: review.review_id }, effects);
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict, action: 'rejected', review_id: review.review_id });
+      }
+
+      // confirm: attribute the thread. Fetch every correspondence row the corr entity
+      // attributes to that does NOT already carry the owner (fill-append, dedup).
+      const ownerEid = String(review.owner_entity_id);
+      const corrEid = String(review.corr_entity_id);
+      const aeR = await opsQuery('GET', 'activity_events?entity_id=eq.' + pgFilterVal(corrEid) + '&select=id,metadata&limit=1000');
+      const aeRows = (aeR.ok && Array.isArray(aeR.data)) ? aeR.data : [];
+      const toPatch = [];
+      for (const row of aeRows) {
+        const md = row.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+        const cur = Array.isArray(md.linked_entity_ids) ? md.linked_entity_ids.map(String) : [];
+        if (cur.includes(ownerEid)) continue;
+        toPatch.push({ id: row.id, metadata: { ...md, linked_entity_ids: cur.concat([ownerEid]) } });
+      }
+      // Ledger FIRST (reversal exists before the mutation).
+      const led = await opsQuery('POST', 'comms_owner_attribution_apply_log',
+        { review_id: review.review_id, subject_ref: review.subject_ref, source_run_id: review.source_run_id || 'verdict',
+          status: 'applied', actor: user.id || null,
+          reversal: { owner_entity_id: ownerEid, activity_event_ids: toPatch.map((x) => x.id), provenance_ids: [] },
+          details: { path: review.path, domain: review.domain, corr_entity_id: corrEid, target_owner_id: review.target_owner_id, threads: toPatch.length } },
+        { headers: { Prefer: 'return=representation' } });
+      const applyLogId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].apply_id : null;
+
+      let patched = 0;
+      for (const p of toPatch) {
+        const wr = await opsQuery('PATCH', 'activity_events?id=eq.' + pgFilterVal(p.id),
+          { metadata: p.metadata }, { headers: { Prefer: 'return=minimal' } });
+        if (wr.ok) patched += 1;
+      }
+      // Provenance stamp on the representative row (attribution edge; source ranked
+      // comms_owner_bridge@45 so v_field_provenance_unranked stays 0).
+      const provIds = [];
+      const sampleId = review.sample_activity_id || (toPatch[0] && toPatch[0].id) || null;
+      if (sampleId) {
+        // Provenance stamp. p_value is a jsonb param: pass the raw owner-entity id
+        // (the RPC casts it to jsonb) — do NOT JSON.stringify it, which would
+        // double-encode into '"\"<id>\""'. p_target_database='lcc_opps' matches the
+        // ops-local convention (sf-promotion-worker, availability-checker). Loud on
+        // failure — a provenance miss must surface in logs, not vanish (the append +
+        // ledger remain the reversible record either way).
+        try {
+          const provArgs = buildOwnerBridgeProvenanceArgs({
+            sampleId, ownerEid, sourceRunId: review.source_run_id,
+            confidence: review.confidence, workspaceId: decision.workspace_id, recordedBy: user.id,
+          });
+          const pv = await opsQuery('POST', 'rpc/lcc_merge_field', provArgs,
+            { headers: { Prefer: 'return=representation' } });
+          if (pv.ok && Array.isArray(pv.data) && pv.data[0] && pv.data[0].provenance_id) {
+            provIds.push(pv.data[0].provenance_id);
+          } else {
+            console.warn('[comms_owner_bridge] provenance stamp did not land',
+              { review_id: review.review_id, sample_id: sampleId, status: pv.status, detail: pv.data });
+          }
+        } catch (e) {
+          console.warn('[comms_owner_bridge] provenance stamp failed',
+            { review_id: review.review_id, sample_id: sampleId, error: e && e.message });
+        }
+      }
+      if (applyLogId != null) {
+        await opsQuery('PATCH', 'comms_owner_attribution_apply_log?apply_id=eq.' + applyLogId,
+          { reversal: { owner_entity_id: ownerEid, activity_event_ids: toPatch.map((x) => x.id), provenance_ids: provIds } }).catch(() => {});
+      }
+      await opsQuery('PATCH', 'comms_owner_attribution_review?review_id=eq.' + review.review_id,
+        { status: 'applied', applied_log_id: applyLogId, decided_by: user.id || null, decided_at: nowIso });
+      effects.attributed_threads = patched; effects.apply_log_id = applyLogId;
+      const rr = await record(verdict, 'decided', { review_id: review.review_id }, effects);
+      if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+      return res.status(200).json({ ok: true, verdict, action: 'attributed', threads: patched, review_id: review.review_id });
+    }
+
+    // ---- contact_acquisition_review (W9.1 / Prompt 98) -----------------------
+    // The human verdict on a contact-acquisition proposal. confirm ->
+    //   attach : link the EXISTING person entity to the owner (associated_with + role);
+    //   mint   : create the person entity (ensureEntityLink) then link.
+    //   Then seed a value-gated prospecting cadence (stampContactOnActiveCadence).
+    //   All recorded in contact_acquisition_apply_log (reversal captured FIRST) so it
+    //   is reversible. reject -> the row is marked rejected (kept as rubric fuel). A
+    //   broker_of_record contact is linked with role broker_of_record — NEVER the
+    //   owner's own prospecting contact. NEVER auto-writes without this verdict.
+    if (decision.decision_type === 'contact_acquisition_review') {
+      const revR = await opsQuery('GET', 'contact_acquisition_review?subject_ref=eq.'
+        + pgFilterVal(decision.subject_ref) + '&select=*&limit=1');
+      const review = (revR.ok && Array.isArray(revR.data)) ? revR.data[0] : null;
+      if (!review) return res.status(404).json({ error: 'contact_acquisition_review: proposal not found' });
+      const CONFIRM = new Set(['confirm', 'accept', 'approve', 'yes', 'apply', 'attach', 'mint']);
+      const REJECT = new Set(['reject', 'keep', 'not', 'no', 'dismiss']);
+      const humanAction = CONFIRM.has(verdict) ? 'confirm' : (REJECT.has(verdict) ? 'reject' : null);
+      if (!humanAction) return res.status(400).json({ error: 'contact_acquisition_review: unknown verdict ' + verdict });
+      const nowIso = new Date().toISOString();
+      const effects = { stage: review.stage, kind: review.proposed_kind, owner_entity_id: review.owner_entity_id };
+
+      if (humanAction === 'reject') {
+        await opsQuery('PATCH', 'contact_acquisition_review?review_id=eq.' + review.review_id,
+          { status: 'rejected', decided_by: user.id || null, decided_at: nowIso });
+        const rr = await record(verdict, 'skipped', { review_id: review.review_id }, effects);
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict, action: 'rejected', review_id: review.review_id });
+      }
+
+      // confirm: resolve into the ops entity graph. Fetch the owner's workspace.
+      const ownerId = review.owner_entity_id;
+      const ownerR = await opsQuery('GET', 'entities?id=eq.' + pgFilterVal(ownerId) + '&select=workspace_id&limit=1');
+      const ownerRow = (ownerR.ok && Array.isArray(ownerR.data)) ? ownerR.data[0] : null;
+      const workspaceId = ownerRow ? ownerRow.workspace_id : null;
+      const role = review.proposed_contact_role || 'prospecting_contact';
+      const { linkPersonToEntity, stampContactOnActiveCadence } = await import('./_shared/contact-attach.js');
+
+      // Ledger FIRST (reversal exists before any mutation).
+      const led = await opsQuery('POST', 'contact_acquisition_apply_log',
+        { review_id: review.review_id, subject_ref: review.subject_ref, source_run_id: review.source_run_id || 'verdict',
+          status: 'applied', actor: user.id || null,
+          reversal: { kind: review.proposed_kind, owner_entity_id: ownerId, contact_entity_id: null, minted_entity_id: null },
+          details: { stage: review.stage, candidate_name: review.candidate_name, role } },
+        { headers: { Prefer: 'return=representation' } });
+      const applyLogId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].apply_id : null;
+
+      // Resolve the contact entity: attach = the existing person; mint = create one.
+      let contactEntityId = review.candidate_entity_id || null;
+      let mintedEntityId = null;
+      if (review.proposed_kind === 'mint' || !contactEntityId) {
+        const { ensureEntityLink } = await import('./_shared/entity-link.js');
+        const sp = review.source_pointer && typeof review.source_pointer === 'object' ? review.source_pointer : {};
+        // A lane-only research contact (deed signatory / OM broker), not a domain-identity binding.
+        const srcSystem = review.stage === 'broker_of_record' ? 'costar' : 'email_intake';
+        const el = await ensureEntityLink({
+          workspaceId, userId: user.id,
+          sourceSystem: srcSystem, sourceType: 'Contact', externalId: 'w91:' + review.subject_ref,
+          domain: 'lcc',
+          seedFields: { name: review.candidate_name, title: review.candidate_title || undefined },
+          metadata: { via: 'contact_acquisition_w9_1', stage: review.stage, source_pointer: sp },
+        });
+        if (!el || !el.ok || !el.entity || !el.entity.id) {
+          if (applyLogId != null) await opsQuery('PATCH', 'contact_acquisition_apply_log?apply_id=eq.' + applyLogId,
+            { status: 'conflict', details: { error: 'mint_failed', detail: el && el.reason } }).catch(() => {});
+          await opsQuery('PATCH', 'contact_acquisition_review?review_id=eq.' + review.review_id,
+            { status: 'conflict', applied_log_id: applyLogId, decided_by: user.id || null, decided_at: nowIso });
+          return res.status(502).json({ error: 'contact_acquisition_review: mint_failed', detail: el && el.reason });
+        }
+        contactEntityId = el.entity.id;
+        mintedEntityId = review.proposed_kind === 'mint' ? el.entity.id : null;
+      }
+
+      // Link person -> owner (associated_with + role). broker_of_record stays distinct.
+      const link = await linkPersonToEntity({
+        workspaceId, entityId: ownerId, contactEntityId, role, via: 'contact_acquisition_w9_1',
+      });
+      // Seed a value-gated prospecting cadence so the freshly-contacted owner surfaces
+      // in the focus session (cadence-safe; onlyContactless never clobbers a pick).
+      let seedInfo = null;
+      try {
+        seedInfo = await stampContactOnActiveCadence({
+          entityId: ownerId, contactEntityId, onlyContactless: true, seedIfValuable: true,
+        });
+      } catch (_e) { /* cadence seed best-effort */ }
+
+      if (applyLogId != null) await opsQuery('PATCH', 'contact_acquisition_apply_log?apply_id=eq.' + applyLogId,
+        { reversal: { kind: review.proposed_kind, owner_entity_id: ownerId, contact_entity_id: contactEntityId,
+            minted_entity_id: mintedEntityId, relationship: (link && link.linked) ? 'created' : 'existed',
+            cadence_seeded: !!(seedInfo && seedInfo.seeded) } }).catch(() => {});
+      await opsQuery('PATCH', 'contact_acquisition_review?review_id=eq.' + review.review_id,
+        { status: 'applied', applied_log_id: applyLogId, decided_by: user.id || null, decided_at: nowIso });
+      // Staleness: the owner just became reachable — refresh the queue cache.
+      try { await opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved', {}); } catch (_e) { /* soft */ }
+      effects.contact_entity_id = contactEntityId; effects.minted = !!mintedEntityId; effects.apply_log_id = applyLogId;
+      const rr = await record(verdict, 'decided', { review_id: review.review_id }, effects);
+      if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+      return res.status(200).json({ ok: true, verdict,
+        action: review.proposed_kind === 'mint' ? 'minted_and_attached' : 'attached',
+        contact_entity_id: contactEntityId, review_id: review.review_id });
+    }
+
+    // ---- owner_contact_attach_review (BREAK-1 Unit 1 / Prompt 114) -----------
+    // The human verdict on an owner-contact review proposal. THREE shapes, and
+    // the server re-runs the pure shape gate before writing anything so a stale
+    // card or a crafted request cannot produce the wrong one:
+    //   attach_person : mint/resolve the PERSON entity (ensureEntityLink), carry
+    //                   the contact detail onto THAT person (fill-blanks), then
+    //                   link person→owner via entity_relationships with a role.
+    //                   The person is RELATED to the org, never stamped AS it —
+    //                   the conflation sf-account-link.js C1/C2 guards against.
+    //   same_party    : the candidate is an abbreviation/acronym variant of the
+    //                   owner's OWN name, so fill-blanks entities.email/phone on
+    //                   the OWNER. This is the fill_org write Prompt 111's
+    //                   planner deliberately refused to automate.
+    //   reject        : recorded, terminal. The seeder is idempotent on
+    //                   subject_ref, so a rejected counterparty is never
+    //                   re-proposed.
+    // Every effect lands in lcc_owner_contact_attach_log (ledger written FIRST)
+    // so a single verdict or a whole batch reverses. NO cadence is seeded or
+    // stamped here — cadence enrolment for newly-reachable owners is prompt 112
+    // Unit A2, deliberately separate so this lane cannot quietly create a pile
+    // of un-worked cadences.
+    if (decision.decision_type === 'owner_contact_attach_review') {
+      const revR = await opsQuery('GET', 'lcc_owner_contact_propagate_review?subject_ref=eq.'
+        + pgFilterVal(decision.subject_ref) + '&select=*&limit=1');
+      const review = (revR.ok && Array.isArray(revR.data)) ? revR.data[0] : null;
+      if (!review) return res.status(404).json({ error: 'owner_contact_attach_review: proposal not found' });
+      if (review.status !== 'pending') {
+        return res.status(409).json({ error: 'owner_contact_attach_review: already ' + review.status,
+          review_id: review.review_id });
+      }
+
+      const { validateVerdict } = await import('./_shared/owner-contact-verdict-planner.js');
+      const gate = validateVerdict(review, verdict);
+      if (!gate.ok) {
+        return res.status(400).json({ error: 'owner_contact_attach_review: ' + gate.error,
+          shape: gate.classification.shape, allowed: gate.classification.allowed });
+      }
+      const action = gate.verdict;
+      const cls = gate.classification;
+      const nowIso = new Date().toISOString();
+      const batchTag = 'ocpv_' + nowIso.slice(0, 10).replace(/-/g, '');
+      const ownerId = review.owner_entity_id;
+      const effects = { review_id: review.review_id, owner_entity_id: ownerId, shape: cls.shape, action };
+
+      const ledgerBase = {
+        batch_tag: batchTag, review_id: review.review_id, subject_ref: review.subject_ref,
+        verdict: action, owner_entity_id: ownerId, owner_name: review.owner_name || null,
+        source_domain: review.source_domain || null, source_contact_id: review.source_contact_id || null,
+        contact_name: review.contact_name || null, shape: cls.shape, actor: user.id || null,
+      };
+      const ledgerWrite = (rows) => opsQuery('POST',
+        'lcc_owner_contact_attach_log?on_conflict=review_id,verdict,field_name,batch_tag',
+        rows, { headers: { Prefer: 'resolution=ignore-duplicates,return=representation' } });
+
+      // ---- reject -----------------------------------------------------------
+      if (action === 'reject') {
+        await ledgerWrite([ledgerBase]);
+        await opsQuery('PATCH', 'lcc_owner_contact_propagate_review?review_id=eq.' + review.review_id,
+          { status: 'rejected', applied_verdict: 'reject', decided_by: user.id || null, decided_at: nowIso });
+        const rr = await record(verdict, 'skipped', { review_id: review.review_id }, effects);
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict: action, action: 'rejected', review_id: review.review_id });
+      }
+
+      const ownerR = await opsQuery('GET', 'entities?id=eq.' + pgFilterVal(ownerId)
+        + '&select=id,name,email,phone,workspace_id&limit=1');
+      const ownerRow = (ownerR.ok && Array.isArray(ownerR.data)) ? ownerR.data[0] : null;
+      if (!ownerRow) return res.status(404).json({ error: 'owner_contact_attach_review: owner entity vanished' });
+      const workspaceId = ownerRow.workspace_id;
+
+      // ---- same_party: fill the OWNER's own blank contact detail -------------
+      if (action === 'same_party') {
+        // Fill-blanks re-checked HERE, at write time, so a curated edit that
+        // landed after the card was rendered is never clobbered.
+        const patch = {};
+        if (cls.has_email && !String(ownerRow.email || '').trim()) patch.email = String(review.contact_email).trim().toLowerCase();
+        if (cls.has_phone && !String(ownerRow.phone || '').trim()) patch.phone = String(review.contact_phone).trim();
+        if (!Object.keys(patch).length) {
+          await opsQuery('PATCH', 'lcc_owner_contact_propagate_review?review_id=eq.' + review.review_id,
+            { status: 'withdrawn', retire_reason: 'no_longer_blank', decided_by: user.id || null, decided_at: nowIso });
+          return res.status(200).json({ ok: true, verdict: action, action: 'no_longer_blank', review_id: review.review_id });
+        }
+        const led = await ledgerWrite(Object.keys(patch).map((f) => ({
+          ...ledgerBase, field_name: f, old_value: null, new_value: patch[f],
+        })));
+        const applyLogId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].log_id : null;
+        const upd = await opsQuery('PATCH', 'entities?id=eq.' + pgFilterVal(ownerId), patch);
+        if (!upd.ok) {
+          if (applyLogId != null) await opsQuery('PATCH', 'lcc_owner_contact_attach_log?log_id=eq.' + applyLogId,
+            { reverted_at: nowIso }).catch(() => {});
+          return res.status(502).json({ error: 'owner_contact_attach_review: owner_patch_failed', detail: upd.data });
+        }
+        // CONTACT1b — a human confirmed this via the Decision Center verdict;
+        // recorded as the registered rung-1 source `manual_resolution` (the
+        // ladder's highest rung for a resolved verdict), not the proposal's
+        // originating capture source and not the bare, UNREGISTERED string
+        // 'manual' (see the same-name guard note in the junk-bucket branch
+        // above). Already governed by the ledger above; this additionally
+        // makes it visible on the shared field_provenance ledger. Audit-only.
+        await recordContactFieldWrites({
+          recordPk: ownerId, source: 'manual_resolution', workspaceId, fields: patch,
+        });
+        await opsQuery('PATCH', 'lcc_owner_contact_propagate_review?review_id=eq.' + review.review_id,
+          { status: 'confirmed', applied_verdict: 'same_party', applied_log_id: applyLogId,
+            decided_by: user.id || null, decided_at: nowIso });
+        try { await opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved', {}); } catch (_e) { /* soft */ }
+        effects.fields = Object.keys(patch);
+        const rr = await record(verdict, 'decided', { review_id: review.review_id }, effects);
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict: action, action: 'owner_contact_filled',
+          fields: Object.keys(patch), review_id: review.review_id });
+      }
+
+      // ---- attach_person: mint/resolve the person, then LINK it --------------
+      const { ensureEntityLink } = await import('./_shared/entity-link.js');
+      const { linkPersonToEntity } = await import('./_shared/contact-attach.js');
+      // A lane-only research contact keyed deterministically off the proposal,
+      // so replaying the verdict resolves the SAME person instead of minting a
+      // duplicate. Domain 'lcc': this is not a dia/gov domain identity binding.
+      const el = await ensureEntityLink({
+        workspaceId, userId: user.id,
+        sourceSystem: 'costar', sourceType: 'Contact',
+        externalId: 'ocp:' + review.subject_ref,
+        domain: 'lcc',
+        seedFields: { name: review.contact_name },
+        metadata: { via: 'owner_contact_attach_p114', source_domain: review.source_domain,
+          source_contact_id: review.source_contact_id, owner_entity_id: ownerId },
+      });
+      if (!el || !el.ok || !el.entity || !el.entity.id) {
+        return res.status(502).json({ error: 'owner_contact_attach_review: mint_failed', detail: el && el.reason });
+      }
+      const personId = el.entity.id;
+
+      // The contact detail belongs to the PERSON. Fill-blanks — a curated value
+      // on an existing person entity always wins over this proposal.
+      const personPatch = {};
+      if (cls.has_email && !String(el.entity.email || '').trim()) personPatch.email = String(review.contact_email).trim().toLowerCase();
+      if (cls.has_phone && !String(el.entity.phone || '').trim()) personPatch.phone = String(review.contact_phone).trim();
+      if (Object.keys(personPatch).length) {
+        await opsQuery('PATCH', 'entities?id=eq.' + pgFilterVal(personId), personPatch).catch(() => {});
+        // CONTACT1b — same human-verdict reasoning as the same_party branch
+        // above: recorded as the registered rung-1 source `manual_resolution`,
+        // never the bare, UNREGISTERED string 'manual'. Audit-only.
+        await recordContactFieldWrites({
+          recordPk: personId, source: 'manual_resolution', workspaceId, fields: personPatch,
+        }).catch(() => {});
+      }
+
+      const role = cls.role || 'prospecting_contact';
+      const link = await linkPersonToEntity({
+        workspaceId, entityId: ownerId, contactEntityId: personId,
+        role, via: 'owner_contact_attach_p114',
+      });
+      // Recover the edge id so the reversal runbook can drop exactly this edge.
+      let relationshipId = null;
+      try {
+        const relR = await opsQuery('GET', 'entity_relationships?select=id&relationship_type=eq.associated_with'
+          + '&from_entity_id=eq.' + pgFilterVal(ownerId) + '&to_entity_id=eq.' + pgFilterVal(personId)
+          + '&order=created_at.desc&limit=1');
+        relationshipId = (relR.ok && Array.isArray(relR.data) && relR.data[0]) ? relR.data[0].id : null;
+      } catch (_e) { /* soft — the ledger still records the pair */ }
+
+      const led = await ledgerWrite([{
+        ...ledgerBase,
+        person_entity_id: personId,
+        person_minted: !!(el.created || el.is_new),
+        relationship_id: relationshipId,
+        relationship_created: !!(link && link.linked),
+        relationship_role: role,
+        new_value: personPatch.email || personPatch.phone || null,
+        field_name: personPatch.email ? 'email' : (personPatch.phone ? 'phone' : null),
+      }]);
+      const applyLogId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].log_id : null;
+
+      await opsQuery('PATCH', 'lcc_owner_contact_propagate_review?review_id=eq.' + review.review_id,
+        { status: 'confirmed', applied_verdict: 'attach_person', applied_log_id: applyLogId,
+          decided_by: user.id || null, decided_at: nowIso });
+      try { await opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved', {}); } catch (_e) { /* soft */ }
+      effects.person_entity_id = personId;
+      effects.relationship = (link && link.linked) ? 'created' : 'existed';
+      const rr = await record(verdict, 'decided', { review_id: review.review_id }, effects);
+      if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+      return res.status(200).json({ ok: true, verdict: action, action: 'person_attached',
+        person_entity_id: personId, role, review_id: review.review_id });
+    }
+
+    // ---- naming_hygiene_review (W8 U5 / Prompt 79) ---------------------------
+    // The human verdict on a naming-hygiene proposal. confirm ->
+    //   rename        : write the expanded display name via the house normalizer
+    //                   (entities also recompute canonical_name; a unique-canonical
+    //                   collision routes to conflict — never a silent clobber),
+    //                   record field_provenance (source w8_u5_naming_hygiene) + a
+    //                   reversible ledger row (old name captured).
+    //   link_property : attach the entity to the resolved property via
+    //                   ensureEntityLink (asset identity) + fill-blanks the display
+    //                   name from the property owner. Reversible (link id logged).
+    // reject/keep -> the row is left untouched. NEVER hard-deletes; every outcome
+    // records the lcc_decisions verdict + a naming_hygiene_batch ledger row.
+    if (decision.decision_type === 'naming_hygiene_review') {
+      const parsed = parseHygieneSubjectRef(decision.subject_ref);
+      if (!parsed) return res.status(400).json({ error: 'naming_hygiene_review: unparseable subject_ref' });
+      const revR = await opsQuery('GET', 'naming_hygiene_review?subject_ref=eq.'
+        + pgFilterVal(decision.subject_ref) + '&select=*&limit=1');
+      const review = (revR.ok && Array.isArray(revR.data)) ? revR.data[0] : null;
+      if (!review) return res.status(404).json({ error: 'naming_hygiene_review: proposal not found' });
+      const CONFIRM = new Set(['confirm', 'accept', 'apply', 'yes', 'rename', 'link']);
+      const REJECT = new Set(['reject', 'keep', 'not', 'no', 'dismiss']);
+      const humanAction = CONFIRM.has(verdict) ? 'confirm' : (REJECT.has(verdict) ? 'reject' : null);
+      if (!humanAction) return res.status(400).json({ error: 'naming_hygiene_review: unknown verdict ' + verdict });
+
+      const target = findHygieneTarget(parsed.domain, parsed.table);
+      if (!target) return res.status(400).json({ error: 'naming_hygiene_review: unknown target ' + parsed.domain + ':' + parsed.table });
+      const plan = planHygieneApply({ humanVerdict: humanAction, proposedAction: review.proposed_action });
+      const nowIso = new Date().toISOString();
+      const effects = { plan: plan.action, proposed_action: review.proposed_action, hygiene_class: review.hygiene_class };
+      let reversal = {};
+
+      if (plan.action === 'apply_rename') {
+        const newName = review.proposed_name;
+        if (!newName) return res.status(400).json({ error: 'naming_hygiene_review: rename has no proposed_name' });
+        // Capture the old name (reversal).
+        const selPath = target.table + '?select=' + target.nameCol + '&' + target.pkCol
+          + '=eq.' + encodeURIComponent(review.pk_value) + '&limit=1';
+        const cur = target.domain === 'lcc' ? await opsQuery('GET', selPath) : await domainQuery(target.domain, 'GET', selPath);
+        const oldVal = (cur.ok && Array.isArray(cur.data) && cur.data[0]) ? cur.data[0][target.nameCol] : null;
+        // Ledger apply row FIRST (reversal payload), then the mutation.
+        const led = await opsQuery('POST', 'naming_hygiene_batch',
+          { batch_kind: 'apply', source_run_id: review.source_run_id || 'verdict', status: 'applied',
+            domain: target.domain, table_name: target.table, pk_value: review.pk_value, review_id: review.review_id,
+            actor: user.id || null,
+            reversal: { domain: target.domain, table: target.table, pk_col: target.pkCol, pk: review.pk_value,
+              field: target.nameCol, old_value: oldVal, canonical_col: target.canonicalCol || null },
+            details: { from: oldVal, to: newName, hygiene_class: review.hygiene_class, deterministic: review.deterministic } },
+          { headers: { Prefer: 'return=representation' } });
+        const applyBatchId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].batch_id : null;
+        // Build the PATCH body. Renames the display name only; canonical_name is
+        // derived by the trigger (see below). A unique-canonical collision ->
+        // conflict, handled after the PATCH.
+        const patchBody = { [target.nameCol]: newName };
+        // N15c: this used to recompute canonical_name here via
+        // rpc/lcc_normalize_entity_name — the AGGRESSIVE normalizer, which is
+        // documented banned-for-identity (it collides `Century Park Partners`
+        // with `Century Park Properties LLC` and returns NULL for 1,070 live
+        // entities). It was the 8th of ten writers of this column and the only
+        // one using that rule. The BEFORE trigger `trg_lcc_entities_canonical_name`
+        // now derives canonical_name from the new name on this very PATCH, so the
+        // rename below is sufficient and there is exactly one writer.
+        void target.canonicalCol;
+        const patchPath = target.table + '?' + target.pkCol + '=eq.' + encodeURIComponent(review.pk_value);
+        const pr = target.domain === 'lcc'
+          ? await opsQuery('PATCH', patchPath, patchBody)
+          : await domainQuery(target.domain, 'PATCH', patchPath, patchBody);
+        if (!pr.ok) {
+          // A unique-canonical collision (23505) is an ambiguous-name conflict, not
+          // a failure — route to conflict (never clobber another entity's name).
+          const isUnique = /23505|duplicate key|unique/i.test(JSON.stringify(pr.data || ''));
+          if (applyBatchId != null) await opsQuery('PATCH', 'naming_hygiene_batch?batch_id=eq.' + applyBatchId,
+            { status: isUnique ? 'conflict' : 'open', details: { error: 'rename PATCH failed', detail: pr.data } }).catch(() => {});
+          if (isUnique) {
+            await opsQuery('PATCH', 'naming_hygiene_review?review_id=eq.' + review.review_id,
+              { status: 'conflict', applied_batch_id: applyBatchId, decided_by: user.id || null, decided_at: nowIso });
+            const rr0 = await record(verdict, 'decided', { plan: 'conflict', review_id: review.review_id },
+              { ...effects, error: 'canonical_collision', detail: pr.data });
+            if (!rr0.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr0.data });
+            return res.status(200).json({ ok: true, verdict, action: 'conflict', conflict: true, review_id: review.review_id });
+          }
+          await recordEffectFailure({ ...effects, error: 'rename_write_failed', detail: pr.data });
+          return res.status(502).json({ error: 'hygiene_rename_failed', detail: pr.data });
+        }
+        // Record field_provenance (audit; fsp row registered in-migration so the
+        // unranked view stays clean). Best-effort — the write already landed.
+        try {
+          const provDb = target.provDatabase || (target.domain === 'dia' ? 'dia_db' : target.domain === 'gov' ? 'gov_db' : 'ops');
+          await opsQuery('POST', 'field_provenance', {
+            target_database: provDb, target_table: target.provTable, record_pk_value: String(review.pk_value),
+            field_name: target.nameCol, value: newName, source: 'w8_u5_naming_hygiene',
+            source_run_id: review.source_run_id || 'verdict',
+            confidence: review.confidence != null ? review.confidence : null,
+            recorded_by: user.id || null, decision: 'write',
+            decision_reason: 'W8 U5 human-confirmed naming-hygiene rename', metadata: { review_id: review.review_id },
+          });
+          if (patchBody[target.canonicalCol]) {
+            await opsQuery('POST', 'field_provenance', {
+              target_database: provDb, target_table: target.provTable, record_pk_value: String(review.pk_value),
+              field_name: target.canonicalCol, value: patchBody[target.canonicalCol], source: 'w8_u5_naming_hygiene',
+              source_run_id: review.source_run_id || 'verdict', recorded_by: user.id || null, decision: 'write',
+              decision_reason: 'W8 U5 canonical recompute after confirmed rename', metadata: { review_id: review.review_id },
+            });
+          }
+        } catch (_e) { /* provenance is an audit log — never block the verdict */ }
+        await opsQuery('PATCH', 'naming_hygiene_review?review_id=eq.' + review.review_id,
+          { status: 'applied', applied_batch_id: applyBatchId, decided_by: user.id || null, decided_at: nowIso });
+        reversal = { apply_batch_id: applyBatchId, field: target.nameCol, old_value: oldVal };
+        effects.apply_batch_id = applyBatchId;
+        effects.renamed = { from: oldVal, to: newName };
+      } else if (plan.action === 'apply_link') {
+        // address_as_name -> attach the entity to the resolved property (asset
+        // identity) via the ensureEntityLink choke point; fill-blanks the display
+        // name from the property owner. Only meaningful for LCC-native entities.
+        const prop = review.proposed_property || {};
+        if (target.domain !== 'lcc' || !target.propertyLink || prop.property_id == null) {
+          // Not link-applicable here (domain owner/contact rows already carry FK
+          // links) — close as a non-destructive disposition.
+          await opsQuery('PATCH', 'naming_hygiene_review?review_id=eq.' + review.review_id,
+            { status: 'dismissed', decided_by: user.id || null, decided_at: nowIso });
+          const rr1 = await record(verdict, 'skipped', { plan: 'link_not_applicable', review_id: review.review_id }, effects);
+          if (!rr1.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr1.data });
+          return res.status(200).json({ ok: true, verdict, action: 'link_not_applicable', review_id: review.review_id });
+        }
+        // W8 U5 fix (2026-08-13): guard against the asset false-positive. An
+        // `asset` entity is named by its street address BY CONVENTION and is
+        // already the property's identity holder — the "link" is a no-op and the
+        // owner-name fill would corrupt the asset name. If the subject entity is
+        // an asset (or already carries the exact (domain, asset, property_id)
+        // identity), close as already_linked instead of attempting a write that
+        // (a) does nothing useful and (b) surfaced as hygiene_link_failed.
+        const subjR = await opsQuery('GET', 'entities?select=id,entity_type&id=eq.'
+          + pgFilterVal(review.pk_value) + '&limit=1');
+        const subjEntity = (subjR.ok && Array.isArray(subjR.data)) ? subjR.data[0] : null;
+        let alreadyLinked = false;
+        if (subjEntity) {
+          const eiR = await opsQuery('GET', 'external_identities?select=id&entity_id=eq.'
+            + pgFilterVal(review.pk_value)
+            + '&source_system=eq.' + pgFilterVal(prop.domain)
+            + '&source_type=eq.asset&external_id=eq.' + pgFilterVal(String(prop.property_id)) + '&limit=1');
+          alreadyLinked = eiR.ok && Array.isArray(eiR.data) && eiR.data.length > 0;
+        }
+        if (subjEntity && (subjEntity.entity_type === 'asset' || alreadyLinked)) {
+          await opsQuery('PATCH', 'naming_hygiene_review?review_id=eq.' + review.review_id,
+            { status: 'dismissed', decided_by: user.id || null, decided_at: nowIso });
+          const rrA = await record(verdict, 'skipped',
+            { plan: 'already_property_anchor', review_id: review.review_id,
+              entity_type: subjEntity.entity_type, already_linked: alreadyLinked },
+            { ...effects, skipped: 'asset_already_property_anchor' });
+          if (!rrA.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rrA.data });
+          return res.status(200).json({ ok: true, verdict, action: 'already_property_anchor',
+            already_linked: alreadyLinked, review_id: review.review_id });
+        }
+        let ws = null; try { ws = primaryWorkspace(user)?.workspace_id || null; } catch (_e) { ws = null; }
+        const seedFields = {};
+        if (review.proposed_name) seedFields.name = review.proposed_name; // fill-blanks display name
+        let linkRes;
+        try {
+          linkRes = await ensureEntityLink({
+            workspaceId: ws, userId: user.id || null,
+            sourceSystem: prop.domain, sourceType: 'asset', externalId: String(prop.property_id),
+            domain: prop.domain, entityId: review.pk_value, seedFields,
+            metadata: { w8_u5_naming_hygiene: true, source_run_id: review.source_run_id || 'verdict' },
+          });
+        } catch (e) { linkRes = { ok: false, error: e?.message || String(e) }; }
+        if (!linkRes || linkRes.ok === false) {
+          await recordEffectFailure({ ...effects, error: 'link_write_failed', detail: linkRes });
+          return res.status(502).json({ error: 'hygiene_link_failed', detail: linkRes });
+        }
+        const led = await opsQuery('POST', 'naming_hygiene_batch',
+          { batch_kind: 'apply', source_run_id: review.source_run_id || 'verdict', status: 'applied',
+            domain: target.domain, table_name: target.table, pk_value: review.pk_value, review_id: review.review_id,
+            actor: user.id || null,
+            reversal: { kind: 'property_link', entity_id: review.pk_value, property: prop,
+              created_identity: !!linkRes.createdIdentity },
+            details: { property: prop, filled_name: review.proposed_name || null } },
+          { headers: { Prefer: 'return=representation' } });
+        const applyBatchId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].batch_id : null;
+        await opsQuery('PATCH', 'naming_hygiene_review?review_id=eq.' + review.review_id,
+          { status: 'applied', applied_batch_id: applyBatchId, decided_by: user.id || null, decided_at: nowIso });
+        reversal = { apply_batch_id: applyBatchId, linked_property: prop };
+        effects.apply_batch_id = applyBatchId;
+        effects.linked = { property: prop, created_identity: !!linkRes.createdIdentity };
+      } else { // dismiss_proposal (reject, or confirmed keep/uncertain)
+        await opsQuery('PATCH', 'naming_hygiene_review?review_id=eq.' + review.review_id,
+          { status: 'dismissed', decided_by: user.id || null, decided_at: nowIso });
+      }
+
+      const decStatus = plan.action === 'dismiss_proposal' ? 'skipped' : 'decided';
+      const rr = await record(verdict, decStatus, { plan: plan.action, review_id: review.review_id }, effects);
+      if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+      return res.status(200).json({ ok: true, verdict, action: plan.action, review_id: review.review_id, ...reversal });
+    }
+
+    // ---- w8_u3_link_review (W8 U3 / Prompt 69) -------------------------------
+    // The human verdict on an Ollama connection-propagation proposal. confirm ->
+    // the deterministic writer resolves/mints the proposed entity, creates the
+    // entity_relationships edge, and stamps provenance (fill-blanks, source
+    // w8_u3_link_propagation) — all recorded in w8_u3_link_apply_log so it is
+    // reversible. A person-email-merge proposal (dupes are the resolver's job) is
+    // routed to a research_task, NEVER auto-merged. reject -> the row is kept.
+    // NEVER auto-writes without this verdict.
+    if (decision.decision_type === 'w8_u3_link_review') {
+      const revR = await opsQuery('GET', 'w8_u3_link_review?subject_ref=eq.'
+        + pgFilterVal(decision.subject_ref) + '&select=*&limit=1');
+      const review = (revR.ok && Array.isArray(revR.data)) ? revR.data[0] : null;
+      if (!review) return res.status(404).json({ error: 'w8_u3_link_review: proposal not found' });
+      const CONFIRM = new Set(['confirm', 'accept', 'approve', 'yes', 'apply', 'link']);
+      const REJECT = new Set(['reject', 'keep', 'not', 'no', 'dismiss', 'distinct']);
+      const humanAction = CONFIRM.has(verdict) ? 'confirm' : (REJECT.has(verdict) ? 'reject' : null);
+      if (!humanAction) return res.status(400).json({ error: 'w8_u3_link_review: unknown verdict ' + verdict });
+      const nowIso = new Date().toISOString();
+      const effects = { pool: review.pool, proposal_type: review.proposal_type };
+      // Prompt 77: a conflict-resolution verdict (operator picked the survivor
+      // entity from an ambiguous_entity_match card, or chose Mint new). The chain
+      // path below reads this to skip the canonical resolve/ambiguity guard (that
+      // guard is what produced the conflict) and go straight to the writer.
+      const isConflictResolve = !!(payload && payload.resolve_conflict === true);
+      // Idempotency: once resolved/applied/rejected there is nothing to re-do.
+      if (isConflictResolve && humanAction === 'confirm'
+          && review.status !== 'conflict' && review.status !== 'proposed') {
+        await record(verdict, 'skipped', { review_id: review.review_id }, { ...effects, already_resolved: true });
+        return res.status(200).json({ ok: true, verdict, action: 'already_resolved', review_id: review.review_id });
+      }
+
+      if (humanAction === 'reject') {
+        await opsQuery('PATCH', 'w8_u3_link_review?review_id=eq.' + review.review_id,
+          { status: 'rejected', decided_by: user.id || null, decided_at: nowIso });
+        const rr = await record(verdict, 'skipped', { review_id: review.review_id }, effects);
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict, action: 'rejected', review_id: review.review_id });
+      }
+
+      // --- confirm: person-email pool. Branch on the PROPOSED verdict. ---
+      if (review.pool === 'person_email') {
+        // different_people: RESOLVE the merge candidate as distinct (NEVER a merge,
+        // NEVER research). Write an entity_match_labels 'distinct' hard-negative
+        // (seeder w8_u3_shared_email — W4.4 corpus) + a minimal reversible dismissed
+        // mark on the winner entity. Reverse by clearing the metadata key.
+        if (review.proposed_verdict === 'different_people') {
+          let winnerName = review.current_owner_name || null;
+          let winnerMeta = {};
+          if (review.winner_entity_id) {
+            try {
+              const wr = await opsQuery('GET', 'entities?select=name,metadata&id=eq.'
+                + pgFilterVal(review.winner_entity_id) + '&limit=1');
+              if (wr.ok && Array.isArray(wr.data) && wr.data[0]) {
+                winnerName = winnerName || wr.data[0].name || null;
+                winnerMeta = (wr.data[0].metadata && typeof wr.data[0].metadata === 'object') ? wr.data[0].metadata : {};
+              }
+            } catch (_e) { /* best-effort */ }
+          }
+          const lw = await writeEntityMatchLabel({
+            seeder: 'w8_u3_shared_email', source_domain: 'lcc',
+            verdict: 'distinct', raw_verdict: verdict,
+            owner_a: winnerName, owner_b: review.evidence_quote || null,
+            entity_a: review.winner_entity_id != null ? String(review.winner_entity_id) : null,
+            entity_b: null,
+            match_score: review.confidence != null ? Number(review.confidence) : null,
+            evidence_json: { finding: 'different_people', evidence_quote: review.evidence_quote || null,
+              email: review.subject_ref, model_provider: review.model_provider, model_name: review.model_name },
+            decision_id: decisionId, subject_ref: review.subject_ref,
+            decided_by: user.id || null, decided_at: nowIso });
+          effects.label_written = !!lw.ok;
+          effects.merged = false; // NEVER a merge from this finding
+          // Reversible dismissed mark on the candidate surface (winner entity).
+          if (review.winner_entity_id) {
+            try {
+              const merged = { ...winnerMeta, w8_u3_email_distinct: { at: nowIso, subject_ref: review.subject_ref,
+                reason: 'different_people (shared mailbox)', review_id: review.review_id } };
+              await opsQuery('PATCH', 'entities?id=eq.' + pgFilterVal(review.winner_entity_id), { metadata: merged });
+              effects.dismissed_mark = true;
+            } catch (_e) { /* mark is best-effort; the label + review status are the record */ }
+          }
+          await opsQuery('PATCH', 'w8_u3_link_review?review_id=eq.' + review.review_id,
+            { status: 'applied', decided_by: user.id || null, decided_at: nowIso });
+          const rr = await record(verdict, 'decided', { review_id: review.review_id }, { ...effects, different_people: true });
+          if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+          return res.status(200).json({ ok: true, verdict, action: 'resolved_distinct', label_written: !!lw.ok, review_id: review.review_id });
+        }
+        // link_proposal (SAME person) → route to the resolver (research task).
+        const rt = await createResearchTask({ research_type: 'person_email_merge_review',
+          title: 'Confirm person merge: ' + (review.current_owner_name || review.linked_entity_name || review.subject_ref),
+          instructions: 'Ollama proposed these email-sharing person records are the SAME person. '
+            + 'Dupes are the resolver\'s job — confirm/merge via the entity resolver, not here. Evidence: '
+            + (review.evidence_quote || '') });
+        if (!rt.ok) { await recordEffectFailure({ ...effects, error: 'research_task_failed', detail: rt.data });
+          return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
+        await opsQuery('PATCH', 'w8_u3_link_review?review_id=eq.' + review.review_id,
+          { status: 'applied', decided_by: user.id || null, decided_at: nowIso });
+        const rr = await record(verdict, 'decided', { review_id: review.review_id }, { ...effects, research_task: true });
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict, action: 'routed_to_resolver', review_id: review.review_id });
+      }
+
+      // --- confirm: chain pool → the deterministic edge writer. ---
+      const targetOwner = review.current_owner_entity_id;
+      if (!targetOwner) {
+        // No current-owner entity to attach the edge to → conflict card, not a guess.
+        const led = await opsQuery('POST', 'w8_u3_link_apply_log',
+          { review_id: review.review_id, subject_ref: review.subject_ref, source_run_id: review.source_run_id || 'verdict',
+            status: 'conflict', actor: user.id || null, reversal: {},
+            details: { reason: 'no_current_owner_entity', linked_entity_name: review.linked_entity_name } },
+          { headers: { Prefer: 'return=representation' } });
+        const applyLogId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].apply_id : null;
+        await opsQuery('PATCH', 'w8_u3_link_review?review_id=eq.' + review.review_id,
+          { status: 'conflict', applied_log_id: applyLogId, decided_by: user.id || null, decided_at: nowIso });
+        const rr = await record(verdict, 'decided', { review_id: review.review_id }, { ...effects, conflict: 'no_current_owner_entity' });
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict, action: 'conflict', reason: 'no_current_owner_entity', review_id: review.review_id });
+      }
+
+      const relType = (review.role === 'developed' || review.role === 'developer') ? 'developed' : 'owns';
+      const linkedName = String(review.linked_entity_name || '').trim();
+      if (!linkedName) return res.status(400).json({ error: 'w8_u3_link_review: proposal has no linked_entity_name' });
+      let ws = decision.workspace_id;
+      if (!ws) { try { ws = primaryWorkspace(user)?.workspace_id || null; } catch (_e) { ws = null; } }
+      if (!ws) {
+        try { const wr = await opsQuery('GET', 'workspaces?select=id&order=created_at.asc&limit=1');
+          if (wr.ok && Array.isArray(wr.data) && wr.data[0]) ws = wr.data[0].id; } catch (_e) { /* honest fail below */ }
+      }
+
+      // Resolve the linked entity (by HOUSE canonical_name, unambiguous) or mint
+      // it fresh — mirrors ensureEntityLink's resolve-before-mint. Matching on the
+      // normalized canonical_name (not the raw name) collapses "Trammell Crow" /
+      // "TRAMMELL CROW" variants onto one entity instead of minting a duplicate.
+      // ≥2 canonical matches is genuine ambiguity → conflict card, never guess.
+      let linkedEntityId = null; let createdEntityId = null;
+      const edom = review.domain === 'lcc' ? 'lcc' : review.domain;
+      const linkedCanonical = normalizeCanonicalName(linkedName);
+      if (isConflictResolve) {
+        // Prompt 77 conflict resolution: the operator picked the survivor entity
+        // (or Mint new). Skip the ambiguity guard — validate the chosen id exists,
+        // is unmerged, and actually shares the proposed canonical_name (never trust
+        // an arbitrary id from the client), then drop into the writer. mint_new
+        // leaves linkedEntityId null so the shared mint block below fires.
+        if (payload.mint_new !== true) {
+          const chosen = payload.chosen_entity_id != null ? String(payload.chosen_entity_id).trim() : '';
+          if (!chosen) return res.status(400).json({ error: 'w8_u3_link_review: chosen_entity_id or mint_new required' });
+          const cr = await opsQuery('GET', 'entities?select=id,canonical_name,merged_into_entity_id&id=eq.'
+            + pgFilterVal(chosen) + '&limit=1');
+          const cent = (cr.ok && Array.isArray(cr.data)) ? cr.data[0] : null;
+          if (!cent || cent.merged_into_entity_id) return res.status(400).json({ error: 'w8_u3_link_review: chosen entity not found or merged' });
+          if (linkedCanonical && cent.canonical_name && String(cent.canonical_name) !== String(linkedCanonical)) {
+            return res.status(400).json({ error: 'w8_u3_link_review: chosen entity does not match the proposed name' });
+          }
+          linkedEntityId = cent.id;
+        }
+      } else {
+        let canonMatches = [];
+        if (linkedCanonical) {
+          try {
+            const er = await opsQuery('GET', 'entities?select=id,name&canonical_name=eq.' + pgFilterVal(linkedCanonical)
+              + '&merged_into_entity_id=is.null&order=created_at.asc&limit=2');
+            if (er.ok && Array.isArray(er.data)) canonMatches = er.data;
+          } catch (_e) { /* fall through to mint */ }
+        }
+        if (canonMatches.length === 1) {
+          linkedEntityId = canonMatches[0].id;
+        } else if (canonMatches.length >= 2) {
+          // ≥2 entities share this canonical_name — ambiguous. Never guess which one
+          // the proposal means → conflict card (mirrors no_current_owner_entity).
+          // Prompt 77 surfaces this row as a pick-the-survivor card to resolve.
+          const led = await opsQuery('POST', 'w8_u3_link_apply_log',
+            { review_id: review.review_id, subject_ref: review.subject_ref, source_run_id: review.source_run_id || 'verdict',
+              status: 'conflict', actor: user.id || null, reversal: {},
+              details: { reason: 'ambiguous_entity_match', linked_entity_name: linkedName,
+                canonical_name: linkedCanonical, match_count: canonMatches.length } },
+            { headers: { Prefer: 'return=representation' } });
+          const applyLogId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].apply_id : null;
+          await opsQuery('PATCH', 'w8_u3_link_review?review_id=eq.' + review.review_id,
+            { status: 'conflict', applied_log_id: applyLogId, decided_by: user.id || null, decided_at: nowIso });
+          const rr = await record(verdict, 'decided', { review_id: review.review_id }, { ...effects, conflict: 'ambiguous_entity_match' });
+          if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+          return res.status(200).json({ ok: true, verdict, action: 'conflict', reason: 'ambiguous_entity_match', review_id: review.review_id });
+        }
+      }
+      if (!linkedEntityId) {
+        // entities.canonical_name is NOT NULL — always mint WITH the house canonical
+        // (fall back to the lowercased name when the normalizer strips to empty).
+        const mintCanonical = linkedCanonical || linkedName.trim().toLowerCase();
+        const mr = await opsQuery('POST', 'entities',
+          { workspace_id: ws, name: linkedName, canonical_name: mintCanonical, entity_type: 'organization', domain: edom,
+            metadata: { created_by: 'w8_u3_link_propagation', evidence_quote: review.evidence_quote || null } },
+          { headers: { Prefer: 'return=representation' } });
+        if (!mr.ok || !Array.isArray(mr.data) || !mr.data[0]) {
+          await recordEffectFailure({ ...effects, error: 'entity_mint_failed', detail: mr.data });
+          return res.status(502).json({ error: 'entity_mint_failed', detail: mr.data });
+        }
+        linkedEntityId = mr.data[0].id; createdEntityId = linkedEntityId;
+      }
+      if (String(linkedEntityId) === String(targetOwner)) {
+        return res.status(409).json({ error: 'self_loop', detail: 'proposed entity equals current owner' });
+      }
+
+      // Ledger FIRST (reversal record exists before the mutation), then the edge,
+      // then provenance, then stamp the proposal.
+      const led = await opsQuery('POST', 'w8_u3_link_apply_log',
+        { review_id: review.review_id, subject_ref: review.subject_ref, source_run_id: review.source_run_id || 'verdict',
+          status: 'applied', actor: user.id || null,
+          reversal: { relationship_id: null, created_entity_id: createdEntityId, provenance_ids: [] },
+          details: { linked_entity_name: linkedName, relationship_type: relType, from_entity_id: linkedEntityId, to_entity_id: targetOwner } },
+        { headers: { Prefer: 'return=representation' } });
+      const applyLogId = (led.ok && Array.isArray(led.data) && led.data[0]) ? led.data[0].apply_id : null;
+
+      const relBody = { workspace_id: ws, from_entity_id: linkedEntityId, to_entity_id: targetOwner,
+        relationship_type: relType,
+        metadata: { role: review.role || relType, chain_position: review.proposal_type, source: 'w8_u3_link_propagation',
+          evidence_quote: review.evidence_quote || null, review_id: review.review_id, apply_log_id: applyLogId } };
+      const rel = await opsQuery('POST', 'entity_relationships', relBody, { headers: { Prefer: 'return=representation' } });
+      if (!rel.ok || !Array.isArray(rel.data) || !rel.data[0]) {
+        if (applyLogId != null) await opsQuery('PATCH', 'w8_u3_link_apply_log?apply_id=eq.' + applyLogId,
+          { status: 'conflict', details: { error: 'edge_insert_failed', detail: rel.data } }).catch(() => {});
+        await recordEffectFailure({ ...effects, error: 'edge_insert_failed', detail: rel.data });
+        return res.status(502).json({ error: 'edge_insert_failed', detail: rel.data });
+      }
+      const relId = rel.data[0].id;
+
+      // Provenance stamp (fill-blanks semantics; source w8_u3_link_propagation@85).
+      let provenanceId = null;
+      try {
+        const pv = await opsQuery('POST', 'rpc/lcc_merge_field', {
+          p_workspace_id: ws || null,
+          // PR5c: 'lcc' is not in the field_provenance vocabulary; this lane's
+          // stamp has never once landed. entity_relationships is LCC-internal.
+          p_target_database: provenanceTargetDatabase('lcc'), p_target_table: 'entity_relationships',
+          p_record_pk: String(relId), p_field_name: relType,
+          // PR5c: p_value is a jsonb PARAM -- PostgREST hands the parsed JSON
+          // value straight to it. JSON.stringify() here double-encodes a
+          // string into '"\"x\""'::jsonb, which no other source can ever
+          // compare equal to. Pass the raw value (the comms_owner_bridge
+          // site at ~9888 already says so).
+          p_value: linkedName, p_source: 'w8_u3_link_propagation',
+          p_source_run_id: review.source_run_id || 'verdict', p_confidence: Number(review.confidence) || null,
+          p_recorded_by: user.id || null,
+        });
+        if (pv.ok && Array.isArray(pv.data) && pv.data[0]) provenanceId = pv.data[0].provenance_id || null;
+      } catch (_e) { /* provenance is best-effort; the edge + ledger are the record */ }
+
+      if (applyLogId != null) {
+        await opsQuery('PATCH', 'w8_u3_link_apply_log?apply_id=eq.' + applyLogId,
+          { reversal: { relationship_id: relId, created_entity_id: createdEntityId, provenance_ids: provenanceId ? [provenanceId] : [] } }).catch(() => {});
+      }
+      await opsQuery('PATCH', 'w8_u3_link_review?review_id=eq.' + review.review_id,
+        { status: 'applied', applied_log_id: applyLogId, decided_by: user.id || null, decided_at: nowIso });
+      effects.relationship_id = relId; effects.linked_entity_id = linkedEntityId; effects.created_entity = !!createdEntityId; effects.apply_log_id = applyLogId;
+      if (isConflictResolve) { effects.resolved_conflict = 'ambiguous_entity_match'; effects.picked_mint = payload.mint_new === true; }
+      const rr = await record(verdict, 'decided', { review_id: review.review_id }, effects);
+      if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+      return res.status(200).json({ ok: true, verdict, action: 'linked', relationship_id: relId,
+        linked_entity_id: linkedEntityId, created_entity: !!createdEntityId, review_id: review.review_id });
+    }
+
     // ---- owner_reconcile (W3.2 / audit 3.2.3) --------------------------------
     // Three folded seeders, one verdict shape. Every verdict writes lcc_decisions
     // (don't-re-ask) AND a labeled pair into entity_match_labels (Wave 4 corpus).
@@ -2385,6 +11416,27 @@ async function handleDecisionVerdict(req, res) {
           entity_b: rc.target_id != null ? String(rc.target_id) : null,
           match_score: rc.similarity != null ? Number(rc.similarity) : null,
           evidence_json: { match_method: rc.match_method, source_table: rc.source_table, target_table: rc.target_table } };
+      } else if (kind === 'w8_u2_ollama_pair') {
+        // W8 U2 — Ollama duplicate-pair PROPOSAL. Proposal-only: a verdict ONLY
+        // dispositions the w8_u2_dup_pair row + labels the pair. It NEVER merges
+        // (dupes are the resolver's job) — that is the whole point of the unit.
+        const pairId = rc.pair_id;
+        if (pairId == null) return res.status(400).json({ error: 'w8_u2_ollama_pair pair_id missing' });
+        const patch = { status: isApprove ? 'confirmed_match' : 'rejected',
+          decided_by: user.id || null, decided_at: new Date().toISOString() };
+        const pr = await opsQuery('PATCH', 'w8_u2_dup_pair?pair_id=eq.' + encodeURIComponent(pairId), patch);
+        if (!pr.ok) { await recordEffectFailure({ dispositioned: false, error: pr.data });
+          return res.status(502).json({ error: 'disposition_failed', detail: pr.data }); }
+        effects.dispositioned = patch.status;
+        effects.merged = false;   // NEVER a merge from this unit
+        labelRow = { owner_a: rc.owner_name || rc.name_a || null,
+          owner_b: rc.candidate_name || rc.name_b || null,
+          entity_a: rc.entity_a != null ? String(rc.entity_a) : null,
+          entity_b: rc.entity_b != null ? String(rc.entity_b) : null,
+          match_score: rc.confidence != null ? Number(rc.confidence) : null,
+          evidence_json: { generator_method: rc.generator_method, gen_evidence: rc.gen_evidence,
+            name_similarity: rc.name_similarity, proposed_verdict: rc.proposed_verdict,
+            evidence_quote: rc.evidence_quote } };
       } else {
         return res.status(400).json({ error: 'unknown owner_reconcile seeder kind: ' + kind });
       }
@@ -2517,6 +11569,27 @@ async function handleDecisionVerdict(req, res) {
         if (!lw.ok) { await recordEffectFailure(Object.assign({ label_written: false, error: lw.data }, effects));
           return res.status(502).json({ error: 'label_write_failed', detail: lw.data }); }
         effects.label_written = true;
+
+        // W9.3 WS1: self-measure the assist. If a w9_3_sf_assist annotation exists
+        // for this subject, compare its verdict (merge/not) to the human label
+        // (same_party/distinct) and append a measurement (metadata-only; never a
+        // verdict). Best-effort — a measurement failure never blocks the verdict.
+        try {
+          const ar = await opsQuery('GET', 'lcc_clean_assist_proposals?select=verdict,confidence'
+            + '&decision_type=eq.sf_link_candidate&source=eq.' + SA.SF_ASSIST_SOURCE
+            + '&subject_ref=eq.' + encodeURIComponent(decision.subject_ref) + '&order=id.desc&limit=1',
+            undefined, { countMode: 'none' });
+          const assist = (ar.ok && Array.isArray(ar.data)) ? ar.data[0] : null;
+          if (assist) {
+            const agr = SA.sfAssistAgreement(assist.verdict, plan.labelVerdict);
+            await opsQuery('POST', 'rpc/lcc_record_sf_assist_agreement', {
+              p_subject_ref: decision.subject_ref, p_domain: dom,
+              p_assist_verdict: assist.verdict, p_assist_conf: assist.confidence != null ? Number(assist.confidence) : null,
+              p_human_verdict: plan.labelVerdict, p_agreed: agr.measured ? agr.agreed : null,
+              p_decided_by: user.id || null,
+            });
+          }
+        } catch (_e) { /* measurement is best-effort */ }
       }
 
       const finalStatus = (plan.verdictKind === 'reject') ? 'skipped' : 'decided';
@@ -2586,6 +11659,133 @@ async function handleDecisionVerdict(req, res) {
       await record(verdict, 'decided', payload, { research_task: true, marked_processed: true });
       const taskId = Array.isArray(rt.data) ? (rt.data[0] && rt.data[0].id) : (rt.data && rt.data.id);
       return res.status(200).json({ ok: true, verdict, event_id: eventId, research_task_id: taskId || true });
+    }
+
+    // ---- agency_risk_action (W5.2) ------------------------------------------
+    // A gov agency's risk composite is a BD signal, never a fact. Effect-FIRST
+    // (spawn the disposition research_task), then mark the gov signal processed
+    // so the lane drains; a failed effect keeps the decision open and does NOT
+    // mark processed. Human-gated — never auto-blasts.
+    if (decision.decision_type === 'agency_risk_action') {
+      const ac = decision.context || {};
+      const sid = ac.signal_id || null;
+      if (!sid) return res.status(400).json({ error: 'signal_id missing from decision context' });
+      const markProcessed = async (reason) =>
+        domainQuery('government', 'PATCH', 'agency_risk_signals?signal_id=eq.' + encodeURIComponent(sid),
+          { processed_at: new Date().toISOString(), processed_reason: reason });
+      if (verdict === 'monitor' || verdict === 'dismiss') {
+        const mp = await markProcessed(verdict);
+        if (!mp.ok) { await recordEffectFailure({ marked_processed: false, error: mp.data });
+          return res.status(502).json({ error: 'mark_processed_failed', detail: mp.data }); }
+        await record(verdict, 'decided', payload, { marked_processed: true });
+        return res.status(200).json({ ok: true, verdict, signal_id: sid });
+      }
+      if (verdict === 'pursue_disposition') {
+        const rt = await createResearchTask({
+          research_type: 'agency_risk_disposition',
+          title: 'Agency risk — pursue disposition: ' + (ac.agency || 'agency')
+            + ' (' + (ac.risk_level || '') + ', ' + (ac.tracked_property_count || 0) + ' tracked)',
+          instructions: null });
+        if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data });
+          return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
+        const mp = await markProcessed(verdict);
+        if (!mp.ok) { await recordEffectFailure({ research_task: true, marked_processed: false, error: mp.data });
+          return res.status(502).json({ error: 'mark_processed_failed', detail: mp.data }); }
+        await record(verdict, 'decided', payload, { research_task: true, marked_processed: true });
+        const taskId = Array.isArray(rt.data) ? (rt.data[0] && rt.data[0].id) : (rt.data && rt.data.id);
+        return res.status(200).json({ ok: true, verdict, signal_id: sid, research_task_id: taskId || true });
+      }
+      return res.status(400).json({ error: 'unknown verdict for agency_risk_action: ' + verdict });
+    }
+
+    // ---- milestone_confirm (W7.2) -------------------------------------------
+    // An LLM-surfaced milestone candidate from the deal-comms propagation tick
+    // with NO deterministic cue. The LLM never writes a milestone directly — a
+    // human confirms here. approve/confirm → the DETERMINISTIC idempotent writer
+    // lcc_deal_record_milestone (source='comms_tick_confirmed'); reject/dismiss →
+    // record only (stops asking). Effect-first: a failed write keeps it open.
+    if (decision.decision_type === 'milestone_confirm') {
+      const mc = decision.context || {};
+      const entId = mc.entity_id || decision.subject_entity_id || null;
+      if (!entId || !mc.milestone_key) {
+        return res.status(400).json({ error: 'entity_id / milestone_key missing from decision context' });
+      }
+      if (verdict === 'reject' || verdict === 'dismiss' || verdict === 'not_a_milestone') {
+        await record(verdict, 'decided', payload, { wrote_milestone: false });
+        return res.status(200).json({ ok: true, verdict, milestone_key: mc.milestone_key });
+      }
+      if (verdict === 'approve' || verdict === 'confirm' || verdict === 'log') {
+        const wr = await opsQuery('POST', 'rpc/lcc_deal_record_milestone', {
+          p_entity: entId, p_key: mc.milestone_key,
+          p_on: mc.occurred_on || null, p_status: mc.status || 'past',
+          p_summary: mc.label || mc.milestone_key, p_source: 'comms_tick_confirmed',
+          p_detail_ref: mc.detail_ref || (decisionId != null ? String(decisionId) : null),
+        });
+        if (!wr.ok) { await recordEffectFailure({ wrote_milestone: false, error: wr.data });
+          return res.status(502).json({ error: 'milestone_write_failed', detail: wr.data }); }
+        // W7.2c: lcc_deal_record_milestone now returns { outcome, id }
+        // (inserted|rolled_up|new_round|noop). Tolerate the legacy boolean too.
+        const _res = Array.isArray(wr.data) ? wr.data[0] : wr.data;
+        const _outcome = (_res && typeof _res === 'object') ? _res.outcome : (_res === true ? 'inserted' : 'noop');
+        const inserted = _outcome === 'inserted' || _outcome === 'new_round';
+        await record(verdict, 'decided', payload, { wrote_milestone: true, inserted: !!inserted });
+        return res.status(200).json({ ok: true, verdict, milestone_key: mc.milestone_key, inserted: !!inserted });
+      }
+      return res.status(400).json({ error: 'unknown verdict for milestone_confirm: ' + verdict });
+    }
+
+    // ---- npi_dedup_review / npi_dedup_autoapprove (W5.2) --------------------
+    // A duplicate-NPI cluster. NEVER auto-collapses here (fill-blanks/never-guess
+    // for destructive dedup): a confirm/approve verdict spawns a reconcile/apply
+    // research_task and LEDGERS the signal consumed (the matview has no seam);
+    // a not_duplicate/reject records + ledgers only. Effect-first; a failed
+    // effect keeps the decision open.
+    if (decision.decision_type === 'npi_dedup_review' || decision.decision_type === 'npi_dedup_autoapprove') {
+      const nc = decision.context || {};
+      if (!nc.signal_hash) return res.status(400).json({ error: 'signal_hash missing from decision context' });
+      const ledger = async (reason, taskId) => {
+        const lr = await opsQuery('POST', 'lcc_npi_signal_consumed', {
+          signal_hash: nc.signal_hash, signal_type: nc.signal_type || 'duplicate_inventory_npi',
+          severity: nc.severity || null,
+          clinic_id: nc.clinic_id != null ? String(nc.clinic_id) : null, npi: nc.npi || null,
+          cluster_winner_medicare_id: nc.cluster_winner_medicare_id || null,
+          consumed_via: 'decision', consumed_reason: reason,
+          research_task_id: taskId || null, decision_id: decisionId,
+        });
+        // PK is signal_hash — a re-consume 409s, which is idempotent success.
+        return (lr.ok || lr.status === 409) ? { ok: true } : lr;
+      };
+      const clinicLabel = nc.facility_name || ('clinic ' + nc.clinic_id);
+      if (verdict === 'not_duplicate' || verdict === 'reject') {
+        const lg = await ledger(verdict, null);
+        if (!lg.ok) { await recordEffectFailure({ ledgered: false, error: lg.data });
+          return res.status(502).json({ error: 'ledger_failed', detail: lg.data }); }
+        await record(verdict, 'decided', payload, { ledgered: true });
+        return res.status(200).json({ ok: true, verdict, signal_hash: nc.signal_hash });
+      }
+      let taskSpec = null;
+      if (decision.decision_type === 'npi_dedup_review' && verdict === 'confirm_duplicate') {
+        taskSpec = { research_type: 'npi_dedup_reconcile',
+          title: 'NPI dedup — reconcile confirmed duplicate: ' + clinicLabel
+            + (nc.cluster_winner_medicare_id ? ' (keep ' + nc.cluster_winner_medicare_id + ')' : ''),
+          instructions: null };
+      } else if (decision.decision_type === 'npi_dedup_autoapprove' && verdict === 'approve') {
+        taskSpec = { research_type: 'npi_dedup_apply',
+          title: 'NPI dedup — apply approved survivor: ' + clinicLabel
+            + (nc.cluster_winner_medicare_id ? ' -> ' + nc.cluster_winner_medicare_id : ''),
+          instructions: null };
+      } else {
+        return res.status(400).json({ error: 'unknown verdict for ' + decision.decision_type + ': ' + verdict });
+      }
+      const rt = await createResearchTask(taskSpec);
+      if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data });
+        return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
+      const taskId = Array.isArray(rt.data) ? (rt.data[0] && rt.data[0].id) : (rt.data && rt.data.id);
+      const lg = await ledger(verdict, taskId || null);
+      if (!lg.ok) { await recordEffectFailure({ research_task: true, ledgered: false, error: lg.data });
+        return res.status(502).json({ error: 'ledger_failed', detail: lg.data }); }
+      await record(verdict, 'decided', payload, { research_task: true, ledgered: true });
+      return res.status(200).json({ ok: true, verdict, signal_hash: nc.signal_hash, research_task_id: taskId || true });
     }
 
     // ---- confirm_true_owner -------------------------------------------------
@@ -3094,6 +12294,100 @@ async function handleDecisionVerdict(req, res) {
             + ' (' + (c.address || '') + ') is a duplicate to be merged, or a distinct property.' });
         if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data }); return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
         const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        await record('research', 'decided', payload, { research_task: true, research_task_id: rid });
+        return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
+      }
+      return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
+    }
+
+    // ---- property_twin (federated) -----------------------------------------
+    // dia geospatial address twin. merge rides the REVERSIBLE wrapper
+    // dia_merge_property_reversible (snapshot-before-hard-delete); keep/drop are
+    // taken from the review row server-side (never trusted from the client). Merge
+    // marks the row status='merged' + stamps backup_id (reversible via
+    // dia_unmerge_property). not_twin/research are non-destructive.
+    if (decision.decision_type === 'property_twin') {
+      const reviewId = parseInt(c.review_id, 10);
+      if (!Number.isFinite(reviewId)) {
+        return res.status(400).json({ error: 'property_twin requires context.review_id' });
+      }
+      // Authoritative re-fetch: keep = anchor (CCN bearer), drop = shadow.
+      const rr = await domainQuery('dia', 'GET',
+        'dia_property_twin_review?select=id,shadow_property_id,anchor_property_id,status&id=eq.' + reviewId + '&limit=1');
+      const row = (rr.ok && Array.isArray(rr.data) && rr.data[0]) ? rr.data[0] : null;
+      if (!row) return res.status(404).json({ error: 'twin_review_row_not_found', review_id: reviewId });
+      if (row.status !== 'pending') {
+        // Already worked (e.g. auto-merged / rejected). Record + drop from lane.
+        await record(verdict, 'decided', null, { twin: 'already_' + row.status });
+        return res.status(200).json({ ok: true, verdict, note: 'already_' + row.status });
+      }
+      const dropId = parseInt(row.shadow_property_id, 10);
+      const keepId = parseInt(row.anchor_property_id, 10);
+
+      // Prompt 106: self-measure the assist. If a property_twin_assist annotation
+      // exists for this row, compare its verdict (merge/not) to the human verdict
+      // (merge/not_twin) and append a measurement. Best-effort, metadata-only —
+      // NEVER blocks or alters the verdict.
+      try {
+        const ar = await opsQuery('GET', 'lcc_clean_assist_proposals?select=verdict,confidence,proposed_link'
+          + '&decision_type=eq.' + PT.PT_ASSIST_DECISION_TYPE + '&source=eq.' + PT.PT_ASSIST_SOURCE
+          + '&subject_ref=eq.' + encodeURIComponent('twin:dia:' + reviewId) + '&order=proposal_id.desc&limit=1',
+          undefined, { countMode: 'none' });
+        const assist = (ar.ok && Array.isArray(ar.data)) ? ar.data[0] : null;
+        if (assist) {
+          const agr = PT.twinAssistAgreement(assist.verdict, verdict);
+          const layer = (assist.proposed_link && typeof assist.proposed_link === 'object') ? (assist.proposed_link.layer || null) : null;
+          await opsQuery('POST', 'rpc/lcc_record_property_twin_assist_agreement', {
+            p_subject_ref: 'twin:dia:' + reviewId, p_assist_verdict: assist.verdict,
+            p_assist_layer: layer, p_assist_conf: assist.confidence != null ? Number(assist.confidence) : null,
+            p_human_verdict: verdict, p_agreed: agr.measured ? agr.agreed : null,
+            p_decided_by: user.id || null,
+          });
+        }
+      } catch (_e) { /* measurement is best-effort */ }
+
+      if (verdict === 'not_twin') {
+        const pr = await domainQuery('dia', 'PATCH',
+          'dia_property_twin_review?id=eq.' + reviewId,
+          { status: 'rejected', resolved_at: new Date().toISOString(),
+            resolution_note: 'Decision Center: not a twin' });
+        if (!pr.ok) { await recordEffectFailure({ patch: false, error: pr.data }); return res.status(502).json({ error: 'twin_reject_failed', detail: pr.data }); }
+        await record('not_twin', 'decided', null, { twin: 'rejected' });
+        return res.status(200).json({ ok: true, verdict: 'not_twin' });
+      }
+
+      if (verdict === 'merge') {
+        if (!Number.isFinite(keepId) || !Number.isFinite(dropId) || keepId === dropId) {
+          return res.status(400).json({ error: 'twin row missing distinct anchor/shadow ids' });
+        }
+        const mr = await domainQuery('dia', 'POST', 'rpc/dia_merge_property_reversible',
+          { p_keep_id: keepId, p_drop_id: dropId, p_batch_tag: 'dc_twin_verdict' });
+        if (!mr.ok) { await recordEffectFailure({ merge: false, error: mr.data }); return res.status(502).json({ error: 'twin_merge_failed', detail: mr.data }); }
+        // Function returns the backup_id (scalar bigint); PostgREST may wrap it.
+        const backupId = (typeof mr.data === 'number') ? mr.data
+          : (Array.isArray(mr.data) ? Number(mr.data[0]) : Number(mr.data));
+        const pr = await domainQuery('dia', 'PATCH',
+          'dia_property_twin_review?id=eq.' + reviewId,
+          { status: 'merged', backup_id: Number.isFinite(backupId) ? backupId : null,
+            resolved_at: new Date().toISOString(),
+            resolution_note: 'merged via Decision Center (reversible; backup_id=' + backupId + ')' });
+        if (!pr.ok) { await recordEffectFailure({ patch: false, error: pr.data }); /* merge already done; still report ok */ }
+        await record('merge', 'decided', { keep_id: keepId, drop_id: dropId, backup_id: backupId }, { twin: 'merged' });
+        return res.status(200).json({ ok: true, verdict: 'merge', keep_id: keepId, drop_id: dropId, backup_id: backupId });
+      }
+
+      if (verdict === 'research') {
+        const rt = await createResearchTask({ research_type: 'property_twin',
+          title: 'Confirm address twin: ' + (c.shadow_address || c.shadow_property_id || ''),
+          instructions: 'Decision Center: is dia property ' + (c.shadow_property_id || '') + ' ('
+            + (c.shadow_address || '') + ', tenant ' + (c.shadow_tenant || '—') + ') the SAME building as CCN-anchored '
+            + (c.anchor_property_id || '') + ' (' + (c.anchor_address || '') + ', tenant ' + (c.anchor_tenant || '—')
+            + '), or a distinct co-located clinic? Distance ' + (c.distance_miles ?? '?') + ' mi.' });
+        if (!rt.ok) { await recordEffectFailure({ research_task: false, error: rt.data }); return res.status(502).json({ error: 'research_task_failed', detail: rt.data }); }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        await domainQuery('dia', 'PATCH', 'dia_property_twin_review?id=eq.' + reviewId,
+          { status: 'research', resolved_at: new Date().toISOString(),
+            resolution_note: 'Decision Center: sent to research (task ' + rid + ')' });
         await record('research', 'decided', payload, { research_task: true, research_task_id: rid });
         return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
       }
@@ -3612,6 +12906,20 @@ async function handleDecisionVerdict(req, res) {
     if (decision.decision_type === 'match_disambiguation') {
       const intakeId = c.intake_id
         || (decision.subject_ref ? String(decision.subject_ref).replace(/^match_disambig:/, '') : null);
+      // Prompt 80 self-measuring loop: record agree/disagree vs the Ollama
+      // assist's top pick (metadata.assist_agreed) so the U4 report can measure
+      // assist accuracy per month. Best-effort — NEVER blocks the human verdict.
+      const _assist = (decision.metadata && typeof decision.metadata === 'object')
+        ? decision.metadata.assist : null;
+      const recordAssistAgreement = async (humanPick) => {
+        if (!_assist) return;
+        const ag = assistAgreement(_assist, humanPick);
+        if (!ag.measured) return;
+        try {
+          await opsQuery('POST', 'rpc/lcc_record_match_assist_agreement',
+            { p_decision_id: decisionId, p_agreed: ag.agreed, p_detail: ag });
+        } catch (_e) { /* measurement is best-effort */ }
+      };
       if (verdict === 'pick') {
         const dom = payload.domain === 'dia' ? 'dialysis' : payload.domain === 'gov' ? 'government' : null;
         const propId = payload.property_id != null ? String(payload.property_id) : null;
@@ -3632,12 +12940,14 @@ async function handleDecisionVerdict(req, res) {
         if (!sp.ok) { await recordEffectFailure({ pick: 'match_written_status_patch_failed', error: sp.data }); return res.status(502).json({ error: 'pick_status_failed', detail: sp.data }); }
         await record('pick', 'decided', { domain: payload.domain, property_id: propId },
           { match: 'manual_disambiguation', domain: payload.domain, property_id: propId });
+        await recordAssistAgreement({ action: 'pick', domain: payload.domain, property_id: propId });
         await emitIntakeMatchFeedback({ intakeId, verdictLabel: 'pick', pickPropId: propId, pickDomain: payload.domain });
         return res.status(200).json({ ok: true, verdict: 'pick',
           next: { action: 'intake_promote', intake_id: intakeId, domain: payload.domain, property_id: propId } });
       }
       if (verdict === 'create_property') {
         await record('create_property', 'decided', payload, { handoff: 'intake_create_property' });
+        await recordAssistAgreement({ action: 'create_property' });
         await emitIntakeMatchFeedback({ intakeId, fbDecision: 'no_match', verdictLabel: 'create_property' });
         return res.status(200).json({ ok: true, verdict: 'create_property',
           next: { action: 'intake_create_property', intake_id: intakeId } });
@@ -3910,6 +13220,537 @@ async function handleDecisionVerdict(req, res) {
         return res.status(200).json({ ok: true, verdict: 'link', owner_entity_id: chosen, existed: !!lr.existed });
       }
       return res.status(400).json({ error: 'unknown_verdict_for_type', verdict });
+    }
+
+    // ---- tier0_owner_contact (Prompt 188) -----------------------------------
+    // The human verdict on a Tier 0 (owner, email domain) card.
+    //
+    //   attach   -> write owner_contact_pivot.active_contact_entity_id for the ONE
+    //               person the operator picked, plus a person->owner
+    //               entity_relationships edge. The person is RELATED to the org,
+    //               never stamped AS it (sf-account-link.js C1/C2).
+    //   reject   -> recorded, terminal for THAT (owner, domain). The lane is a
+    //               view + an lcc_decisions exclusion, so a rejected subject is
+    //               never re-proposed; another domain for the same owner stays open.
+    //   research -> a research_task, for a card the operator cannot settle.
+    //
+    // THE CARD IS RE-READ FROM THE VIEW, NOT TRUSTED FROM THE REQUEST. A federated
+    // decision is minted from client-supplied context, so `decision.context` is
+    // whatever the browser sent. The write path re-fetches the (owner, domain) row,
+    // rebuilds the card through the same pure planner, and refuses a person that is
+    // not on it -- so a stale card, a misclick or a crafted body cannot attach an
+    // arbitrary entity id, nor a broker, nor "Tenants In Common".
+    //
+    // FILL-BLANKS: an owner that has gained an active contact since the card was
+    // rendered is NOT overwritten. Every effect is ledgered in
+    // lcc_tier0_confirm_log BEFORE the write, carrying the prior pivot state, so
+    // one verdict or a whole batch reverses exactly.
+    if (decision.decision_type === 'tier0_owner_contact') {
+      const ctx = decision.context || {};
+      const ownerId = ctx.owner_entity_id || decision.subject_entity_id;
+      const domain = String(ctx.domain || '').trim().toLowerCase();
+      if (!ownerId || !domain) {
+        return res.status(400).json({ error: 'tier0_owner_contact: owner_entity_id and domain required' });
+      }
+
+      const laneR = await opsQuery('GET', 'v_lcc_tier0_owner_contact_lane?select=*'
+        + '&owner_id=eq.' + pgFilterVal(ownerId)
+        + '&domain=eq.' + pgFilterVal(domain) + '&limit=1');
+      const laneRow = (laneR.ok && Array.isArray(laneR.data)) ? laneR.data[0] : null;
+      // A vanished card must still be CLOSEABLE. Only `attach` needs the live row
+      // (it is the only verdict that writes, and the only one that must validate a
+      // chosen person against it). Refusing reject/research too would leave the
+      // decision minted-and-open with no way to resolve it — an orphan that shows
+      // up as a phantom seeded lane in the summary counts.
+      const card = buildTier0Card(laneRow || {
+        owner_id: ownerId, owner_name: ctx.owner_name, owner_rent: ctx.owner_rent,
+        domain, match_arms: ctx.match_arms, match_keys: ctx.match_keys, people: [],
+      });
+      const gate = validateTier0Verdict(card, verdict, payload);
+      if (!gate.ok) {
+        return res.status(laneRow ? 400 : 404).json({
+          error: 'tier0_owner_contact: ' + (laneRow ? gate.error : 'card no longer in the bench'),
+          owner_entity_id: ownerId, domain,
+        });
+      }
+      const action = gate.verdict;
+
+      const nowIso = new Date().toISOString();
+      const batchTag = tier0BatchTag(TIER0_SOURCE_CONFIRM, nowIso);
+      const band = tier0RentBand(card.owner_rent);
+      const ledgerBase = {
+        batch_tag: batchTag, subject_ref: decision.subject_ref, verdict: action,
+        owner_entity_id: ownerId, owner_name: card.owner_name, domain,
+        owner_rent: card.owner_rent, rent_band: band.band,
+        match_arms: card.match_arms, match_keys: card.match_keys,
+        actor: user.id || null,
+      };
+      const ledgerWrite = (row) => opsQuery('POST',
+        'lcc_tier0_confirm_log?on_conflict=subject_ref,verdict,batch_tag', row,
+        { headers: { Prefer: 'resolution=merge-duplicates,return=representation' } });
+
+      // ---- reject / research: no owner write, but always ledgered ------------
+      if (action === 'reject') {
+        await ledgerWrite(ledgerBase);
+        const rr = await record('reject', 'decided', { domain },
+          { tier0: 'rejected', owner_entity_id: ownerId, domain });
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict: 'reject', owner_entity_id: ownerId, domain });
+      }
+      if (action === 'research') {
+        const rt = await createResearchTask({
+          research_type: 'tier0_owner_contact',
+          title: 'Who at ' + domain + ' is the contact for ' + (card.owner_name || 'this owner') + '?',
+          instructions: 'Decision Center Tier 0: the email domain ' + domain + ' was matched to "'
+            + (card.owner_name || '') + '" on ' + (card.match_arms || 'a name match')
+            + ' (' + (card.match_keys || []).join(', ') + '). Candidates: '
+            + card.people.map((x) => (x.person_name || '') + ' <' + (x.email || '') + '>').join('; ')
+            + '. ' + card.evidence_headline,
+        });
+        if (!rt.ok) {
+          await recordEffectFailure({ research_task: false, error: rt.data });
+          return res.status(502).json({ error: 'research_task_failed', detail: rt.data });
+        }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        await ledgerWrite(ledgerBase);
+        const rr = await record('research', 'decided', { domain },
+          { research_task: true, research_task_id: rid });
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
+      }
+
+      // ---- attach -----------------------------------------------------------
+      // P194: the effect itself lives in _shared/tier0-attach-effect.js so the
+      // unattended sweep (tier0-auto-attach-tick) writes through EXACTLY this
+      // code rather than a second copy that drifts. What stays here is the part
+      // that is genuinely about a HUMAN verdict: the lcc_decisions record.
+      const person = gate.person;
+      const eff = await applyTier0Attach({
+        card, person, ownerId, domain,
+        subjectRef: decision.subject_ref,
+        source: TIER0_SOURCE_CONFIRM,
+        actor: user.id || null,
+        rentBandName: band.band,
+        workspaceIdFallback: decision.workspace_id || null,
+        batchTag,
+      });
+
+      if (eff.action === 'no_longer_actionable') {
+        const rr0 = await record('reject', 'superseded', { domain, reason: 'owner_already_reachable' },
+          { tier0: 'no_longer_actionable', existing_contact_entity_id: eff.existing_contact_entity_id });
+        if (!rr0.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr0.data });
+        return res.status(200).json({ ok: true, verdict: 'attach', action: 'no_longer_actionable',
+          existing_contact_entity_id: eff.existing_contact_entity_id });
+      }
+      if (!eff.ok) {
+        await recordEffectFailure(eff.action === 'ledger_failed'
+          ? { ledger_write: false, error: eff.detail }
+          : { pivot_write: false, error: eff.detail });
+        return res.status(502).json({ error: 'tier0_owner_contact: ' + eff.action, detail: eff.detail });
+      }
+      const logId = eff.log_id;
+      try { await opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved', {}); } catch (_e) { /* soft */ }
+
+      const rr = await record('attach', 'decided',
+        { domain, person_entity_id: person.person_id },
+        {
+          tier0: 'attached', owner_entity_id: ownerId, domain,
+          person_entity_id: person.person_id, person_name: person.person_name,
+          pivot_row_created: eff.pivot_row_created,
+          relationship: eff.relationship,
+          rent_band: band.band, link_evidence: person.link_evidence,
+        });
+      if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+      return res.status(200).json({
+        ok: true, verdict: 'attach', owner_entity_id: ownerId, domain,
+        person_entity_id: person.person_id, person_name: person.person_name,
+        relationship: eff.relationship,
+        log_id: logId, batch_tag: batchTag,
+      });
+    }
+
+    // ---- entity_type_review (C13g-min-lane, 2026-09-09) ---------------------
+    // The human verdict on a single person-typed entity. THE CARD IS RE-READ
+    // FROM v_lcc_entity_retype_candidates AT VERDICT TIME, never trusted from
+    // the request (P188); the write goes through rpc/lcc_retype_entity, the
+    // single writer -- this branch never PATCHes `entities` itself.
+    // ---- ambiguous_entity_resolution (PDR1 / P13#1, 2026-09-10) -------------
+    // THE CARD IS RE-READ FROM `entities` AT VERDICT TIME (P188) -- the raw
+    // candidate list stored on the placeholder is enriched fresh, never
+    // trusted from the request. Both verdicts route through rpc/reconcile_entity
+    // -- the SAME writer the auto-merge tick calls, so there is exactly one
+    // merge writer in the system regardless of which path decided. Placed at
+    // the END of this dispatcher (after every other decision_type's own block)
+    // so it cannot be swept into a block-slice test anchored on an earlier
+    // decision_type pair (a footgun this repo documents repeatedly).
+    if (decision.decision_type === 'ambiguous_entity_resolution') {
+      const placeholderId = decision.subject_entity_id
+        || (decision.context && decision.context.placeholder_id) || null;
+      if (!placeholderId) return res.status(400).json({ error: 'ambiguous_entity_resolution: placeholder_id required' });
+
+      const entR = await opsQuery('GET', 'entities?select=id,name,city,state,metadata'
+        + '&id=eq.' + pgFilterVal(placeholderId) + '&limit=1');
+      const entity = (entR.ok && Array.isArray(entR.data)) ? entR.data[0] : null;
+      if (!entity) return res.status(400).json({ error: 'ambiguous_entity_resolution: placeholder not found' });
+
+      const rawCandidates = entity?.metadata?.ambiguous_resolution || [];
+      let candidateById = new Map();
+      const ids = rawCandidates.map((c) => c && c.id).filter(Boolean);
+      if (ids.length) {
+        const inList = ids.map((id) => encodeURIComponent(id)).join(',');
+        const cr = await opsQuery('GET', 'entities?select=id,name,address,normalized_address'
+          + '&id=in.(' + inList + ')');
+        if (cr.ok && Array.isArray(cr.data)) candidateById = new Map(cr.data.map((c) => [c.id, c]));
+      }
+      const enriched = rawCandidates.map((c) => {
+        const found = candidateById.get(c.id) || {};
+        return {
+          id: c.id, name: c.name || found.name || null,
+          address: found.address ?? null, normalized_address: found.normalized_address ?? null,
+          entity_relationships_count: null, portfolio_facts_count: null, external_identities_count: null,
+        };
+      });
+      const plan = planAmbiguousEntityMerge(entity, enriched);
+      const card = buildAmbiguousEntityCard(entity, plan);
+
+      const gate = validateAmbiguousEntityVerdict(card, verdict, payload);
+      if (!gate.ok) return res.status(400).json({ error: 'ambiguous_entity_resolution: ' + gate.error, placeholder_id: placeholderId });
+      const action = gate.verdict;
+      const verdictCtx = {
+        placeholder_id: placeholderId, placeholder_name: entity.name,
+        city: entity.city, state: entity.state, ranked: card.ranked,
+      };
+
+      if (action === 'research') {
+        const rt = await createResearchTask({
+          research_type: 'ambiguous_entity_resolution',
+          title: 'Which asset does "' + (entity.name || placeholderId) + '" merge into?',
+          instructions: 'Decision Center: ambiguous Salesforce-sync placeholder ' + (entity.name || placeholderId)
+            + ' has ' + rawCandidates.length + ' candidate asset(s) and no clear planner winner. '
+            + 'Confirm the correct merge target, or that this is genuinely a new asset.',
+        });
+        if (!rt.ok) {
+          await recordEffectFailure({ research_task: false, error: rt.data });
+          return res.status(502).json({ error: 'research_task_failed', detail: rt.data });
+        }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        const rr = await record('research', 'decided', verdictCtx, { research_task: true, research_task_id: rid });
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
+      }
+
+      // ---- merge / keep_new: the one write, via rpc/reconcile_entity ---------
+      // No second merge writer -- this is the SAME database function
+      // api/_handlers/ambiguous-entity-automerge-tick.js and
+      // mcp/entity-reconcile.js's HTTP route both call.
+      const rpcArgs = action === 'keep_new'
+        ? { p_placeholder: placeholderId, p_canonical: null, p_keep_new: true }
+        : { p_placeholder: placeholderId, p_canonical: gate.candidate.id, p_keep_new: false };
+      const rc = await opsQuery('POST', 'rpc/reconcile_entity', rpcArgs);
+      const rcRow = (rc.ok && Array.isArray(rc.data)) ? rc.data[0] : rc.data;
+      if (!rc.ok || !rcRow || rcRow.ok !== true) {
+        await recordEffectFailure({ reconcile: false, error: (rcRow && rcRow.error) || rc.data });
+        return res.status(502).json({ error: 'ambiguous_entity_resolution: reconcile_failed', detail: (rcRow && rcRow.error) || rc.data });
+      }
+      const rr = await record(action, 'decided', verdictCtx, {
+        ambiguous_entity_resolution: action === 'keep_new' ? 'kept_as_new' : 'merged',
+        canonical_id: action === 'merge' ? gate.candidate.id : null,
+        reconcile_result: rcRow,
+      });
+      if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+      return res.status(200).json({
+        ok: true, verdict: action, placeholder_id: placeholderId,
+        canonical_id: action === 'merge' ? gate.candidate.id : null,
+        detail: rcRow,
+      });
+    }
+
+    if (decision.decision_type === 'entity_type_review') {
+      const entityId = decision.subject_entity_id || (decision.context && decision.context.entity_id) || null;
+      if (!entityId) return res.status(400).json({ error: 'entity_type_review: entity_id required' });
+      const rowR = await opsQuery('GET', ENTITY_RETYPE_SOURCE_VIEW + '?select=*&entity_id=eq.' + pgFilterVal(entityId) + '&limit=1');
+      const row = (rowR.ok && Array.isArray(rowR.data)) ? rowR.data[0] : null;
+      // A card that has left the candidate view (already retyped, or its facts
+      // dropped below 2) is still closeable for keep_person / research, but
+      // retype_organization needs the live row to build the card from.
+      const ctxFallback = decision.context || {};
+      const card = buildEntityRetypeCard(row || { entity_id: entityId, name: ctxFallback.name });
+
+      let live = { not_found: false, is_tombstone: false, recorded_type: null };
+      if (verdict === 'retype_organization') {
+        const entR = await opsQuery('GET', 'entities?select=id,merged_into_entity_id,entity_type&id=eq.' + pgFilterVal(entityId) + '&limit=1');
+        const ent = (entR.ok && Array.isArray(entR.data)) ? entR.data[0] : null;
+        live = {
+          not_found: !ent,
+          is_tombstone: !!(ent && ent.merged_into_entity_id != null),
+          recorded_type: ent ? (ent.entity_type || null) : null,
+        };
+      }
+      const gate = validateEntityRetypeVerdict(card, verdict, payload, live);
+      if (!gate.ok) return res.status(400).json({ error: 'entity_type_review: ' + gate.error, entity_id: entityId });
+      const action = gate.verdict;
+      const verdictCtx = {
+        entity_id: entityId, name: card.name, current_facts: card.current_facts, current_rent: card.current_rent,
+        blocks_own_t0e_sponsor_id: card.blocks_own_t0e_sponsor_id, blocks_own_t0e_token: card.blocks_own_t0e_token,
+      };
+
+      if (action === 'keep_person') {
+        const rr = await record('keep_person', 'decided', verdictCtx, { entity_type_review: 'kept_person' });
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict: 'keep_person', entity_id: entityId });
+      }
+      if (action === 'research') {
+        const rt = await createResearchTask({
+          research_type: 'entity_type_review',
+          title: 'Is "' + (card.name || entityId) + '" really an organization?',
+          instructions: 'Decision Center: person-typed entity ' + (card.name || entityId)
+            + ' holds ' + card.current_facts + ' current portfolio fact(s), $' + (card.current_rent || 0) + ' current rent'
+            + (card.blocks_own_t0e_token ? ('; it also blocks an OWN-T0e sponsor-family confirm on token "' + card.blocks_own_t0e_token + '"') : '')
+            + '. Confirm whether it should be retyped organization.',
+        });
+        if (!rt.ok) {
+          await recordEffectFailure({ research_task: false, error: rt.data });
+          return res.status(502).json({ error: 'research_task_failed', detail: rt.data });
+        }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        const rr = await record('research', 'decided', verdictCtx, { research_task: true, research_task_id: rid });
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
+      }
+
+      // ---- retype_organization: the one write -------------------------------
+      const rt2 = await opsQuery('POST', 'rpc/lcc_retype_entity', {
+        p_entity: entityId, p_to: 'organization', p_decision_id: decisionId,
+        p_reason: gate.reason, p_actor: String(user.email || user.id || 'decision-center'),
+      });
+      const rt2row = (rt2.ok && Array.isArray(rt2.data)) ? rt2.data[0] : null;
+      if (!rt2.ok || !rt2row || rt2row.ok !== true) {
+        await recordEffectFailure({ retype: false, error: (rt2row && rt2row.error) || rt2.data });
+        return res.status(502).json({ error: 'entity_type_review: retype_failed', detail: (rt2row && rt2row.error) || rt2.data });
+      }
+      const rr = await record('retype_organization', 'decided', verdictCtx, {
+        entity_type_review: 'retyped_organization', log_id: rt2row.log_id,
+        reverse: 'select lcc_unretype_entity(\'' + entityId + '\')',
+      });
+      if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+      return res.status(200).json({
+        ok: true, verdict: 'retype_organization', entity_id: entityId, log_id: rt2row.log_id,
+        next: card.blocks_own_t0e_sponsor_id
+          ? { action: 'sponsor_family_lane', sponsor_entity_id: card.blocks_own_t0e_sponsor_id, sponsor_token: card.blocks_own_t0e_token }
+          : undefined,
+      });
+    }
+
+
+    // ---- sponsor_family_confirm (OWN-T0e, 2026-09-09) ----------------------
+    // The human verdict on a (sponsor entity, brand token) card.
+    //
+    //   confirm_family -> ONE write: INSERT lcc_ownership_sponsor_family
+    //                     (sponsor_entity_id, sponsor_token, confirmed_by, notes).
+    //                     v_lcc_property_ownership_reconciled reads the registry
+    //                     through lcc_ownership_sponsor_family_token, so every
+    //                     covered pair flips unclassified_rival ->
+    //                     sponsor_family_confirmed on the next read. Nothing is
+    //                     end-dated, merged or repointed. Reverse = DELETE the
+    //                     row (the registry IS the ledger; the decision id rides
+    //                     in `notes`).
+    //   same_party     -> no write. Recorded, and the operator is forwarded to the
+    //                     merge_duplicate_entities lane (lcc_merge_entity, reversible).
+    //   not_family     -> record-only, terminal for this subject_ref.
+    //   research       -> a research_task.
+    //
+    // THE CARD IS RE-READ FROM THE CACHE, NOT TRUSTED FROM THE REQUEST (P188), and
+    // the two facts that can refuse the write — registry membership and the
+    // sponsor being a tombstone — are read LIVE, never from the snapshot.
+    if (decision.decision_type === 'sponsor_family_confirm') {
+      const ctx = decision.context || {};
+      const tok = String(ctx.sponsor_token || '').trim().toLowerCase();
+      const tied = ctx.sponsor_side === 'tied';
+      const keyId = tied ? (ctx.group_key_id || null) : (ctx.sponsor_id || decision.subject_entity_id || null);
+      if (!tok || !keyId) {
+        return res.status(400).json({ error: 'sponsor_family_confirm: sponsor_token and ' + (tied ? 'group_key_id' : 'sponsor_id') + ' required' });
+      }
+      const rowR = await opsQuery('GET', SPONSOR_FAMILY_CACHE_TABLE + '?select=*'
+        + '&' + (tied ? 'group_key_id' : 'sponsor_id') + '=eq.' + pgFilterVal(keyId)
+        + '&sponsor_token=eq.' + pgFilterVal(tok)
+        + '&sponsor_side=eq.' + (tied ? 'tied' : 'breadth') + '&limit=1');
+      const row = (rowR.ok && Array.isArray(rowR.data)) ? rowR.data[0] : null;
+      // A vanished card (cache refreshed it away) must still be CLOSEABLE for the
+      // record-only verdicts; only confirm_family needs the live row.
+      let card = buildSponsorFamilyCard(row || {
+        group_key_id: ctx.group_key_id, sponsor_id: ctx.sponsor_id, sponsor_name: ctx.sponsor_name,
+        sponsor_side: ctx.sponsor_side, sponsor_token: tok, member_ids: [], spe_names: ctx.spe_names,
+      });
+      if (verdict === 'confirm_family' && !row) {
+        return res.status(404).json({ error: 'sponsor_family_confirm: card no longer in the proposal set', sponsor_token: tok });
+      }
+
+      // OWN-T0e-c: merge_into_sponsor re-derives duplicate_of_sponsor_id LIVE
+      // from the cache (never from a value the client sent — P188). Same signal
+      // as annotateSponsorDuplicates: another breadth row, not this card's own
+      // sponsor, whose spe_ids CONTAINS this card's sponsor_id and whose
+      // spe_props_max already reads as a duplicate suspect (>= 2).
+      if (verdict === 'merge_into_sponsor' && !tied && card.sponsor_id) {
+        const dupR = await opsQuery('GET', SPONSOR_FAMILY_CACHE_TABLE
+          + '?select=sponsor_id,sponsor_token,sponsor_name,spe_props_max,spe_ids'
+          + '&sponsor_side=eq.breadth&spe_props_max=gte.2'
+          + '&sponsor_id=neq.' + pgFilterVal(card.sponsor_id)
+          + '&spe_ids=cs.{' + pgFilterVal(card.sponsor_id) + '}&limit=1');
+        const dupRow = (dupR.ok && Array.isArray(dupR.data)) ? dupR.data[0] : null;
+        card = Object.assign({}, card, dupRow ? {
+          duplicate_of_sponsor_id: String(dupRow.sponsor_id),
+          duplicate_of_sponsor_token: dupRow.sponsor_token || null,
+          duplicate_of_sponsor_name: dupRow.sponsor_name || null,
+        } : { duplicate_of_sponsor_id: null, duplicate_of_sponsor_token: null, duplicate_of_sponsor_name: null });
+      }
+
+      // Live guard inputs. The sponsor to test is the card's for a breadth group,
+      // the operator's pick for a tied one — resolved by the planner, so read
+      // both facts for whichever id the planner will name. For merge_into_sponsor
+      // the "sponsor" under test is the TARGET (the winner) and the "duplicate"
+      // is THIS card's own sponsor (the loser) — the reverse of same_party.
+      const mergeIntoSponsor = verdict === 'merge_into_sponsor';
+      const candidateSponsor = mergeIntoSponsor ? (card.duplicate_of_sponsor_id || null)
+        : tied ? (payload.sponsor_entity_id ? String(payload.sponsor_entity_id) : null)
+        : (card.sponsor_id ? String(card.sponsor_id) : null);
+      const mergeNow = verdict === 'same_party' && payload.merge_now === true;
+      const candidateDup = mergeIntoSponsor ? (card.sponsor_id ? String(card.sponsor_id) : null)
+        : (mergeNow && payload.duplicate_entity_id ? String(payload.duplicate_entity_id) : null);
+      let live = { registry_has: false, sponsor_is_tombstone: false };
+      if ((verdict === 'confirm_family' || mergeNow || mergeIntoSponsor) && candidateSponsor) {
+        const [regR, entR, dupR] = await Promise.all([
+          opsQuery('GET', SPONSOR_FAMILY_REGISTRY_TABLE + '?select=sponsor_entity_id'
+            + '&sponsor_entity_id=eq.' + pgFilterVal(candidateSponsor) + '&sponsor_token=eq.' + pgFilterVal(tok) + '&limit=1'),
+          opsQuery('GET', 'entities?select=id,merged_into_entity_id,entity_type&id=eq.' + pgFilterVal(candidateSponsor) + '&limit=1'),
+          candidateDup
+            ? opsQuery('GET', 'entities?select=id,merged_into_entity_id,entity_type&id=eq.' + pgFilterVal(candidateDup) + '&limit=1')
+            : Promise.resolve({ ok: true, data: [] }),
+        ]);
+        const ent = (entR.ok && Array.isArray(entR.data)) ? entR.data[0] : null;
+        const dupEnt = (dupR.ok && Array.isArray(dupR.data)) ? dupR.data[0] : null;
+        live = {
+          registry_has: !!(regR.ok && Array.isArray(regR.data) && regR.data[0]),
+          // an entity we cannot read is treated as a tombstone: fail CLOSED on a write
+          sponsor_is_tombstone: !ent || ent.merged_into_entity_id != null,
+          sponsor_type: ent ? (ent.entity_type || null) : null,
+          // OWN-T0e-b: the loser of a merge_now must be live and the same recorded type
+          duplicate_is_tombstone: candidateDup ? (!dupEnt || dupEnt.merged_into_entity_id != null) : false,
+          duplicate_type: dupEnt ? (dupEnt.entity_type || null) : null,
+        };
+      }
+      const gate = validateSponsorFamilyVerdict(card, verdict, payload, live);
+      if (!gate.ok) {
+        return res.status(400).json({ error: 'sponsor_family_confirm: ' + gate.error, sponsor_token: tok });
+      }
+      const action = gate.verdict;
+      const verdictCtx = {
+        sponsor_entity_id: gate.sponsor_entity_id, sponsor_token: tok, sponsor_side: card.sponsor_side,
+        properties: card.properties, token_is_generic_word: card.token_is_generic_word,
+        token_entities_fleetwide: card.token_entities_fleetwide,
+      };
+
+      if (action === 'not_family') {
+        const rr = await record('not_family', 'decided', verdictCtx, { sponsor_family: 'not_family' });
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict: 'not_family', sponsor_token: tok });
+      }
+      if (action === 'same_party' && !gate.merge_now) {
+        const rr = await record('same_party', 'decided',
+          Object.assign({}, verdictCtx, { duplicate_entity_id: gate.duplicate_entity_id || null }),
+          { sponsor_family: 'routed_to_merge', merge_lane: 'merge_duplicate_entities' });
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict: 'same_party', sponsor_token: tok,
+          next: { action: 'merge_lane', winner_id: gate.sponsor_entity_id, duplicate_entity_id: gate.duplicate_entity_id || null } });
+      }
+      if (action === 'same_party' && gate.merge_now) {
+        // OWN-T0e-b: ONE reversible merge — the operator-named duplicate INTO the
+        // sponsor — through the single merge writer (lcc_merge_entity, snapshot +
+        // lcc_entity_merge_log since P196; reverse with lcc_unmerge_entity(loser)).
+        // Same refresh set as the merge_duplicate_entities verdict. Never more than
+        // one loser per verdict; the rest of a group stays on the card.
+        const mr = await opsQuery('POST', 'rpc/lcc_merge_entity', { p_loser: gate.duplicate_entity_id, p_winner: gate.sponsor_entity_id });
+        if (!mr.ok) {
+          await recordEffectFailure({ merge: false, error: mr.data });
+          return res.status(502).json({ error: 'sponsor_family_confirm: merge_failed', detail: mr.data });
+        }
+        try { await opsQuery('POST', 'rpc/lcc_refresh_buyer_spe_resolved', {}); } catch (_e) { /* soft */ }
+        try { await opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved', {}); } catch (_e) { /* soft */ }
+        const rr = await record('same_party', 'decided',
+          Object.assign({}, verdictCtx, { duplicate_entity_id: gate.duplicate_entity_id, merge_now: true }),
+          { sponsor_family: 'merged', lcc_merge_entity: 'merged', winner_id: gate.sponsor_entity_id, loser_id: gate.duplicate_entity_id,
+            reverse: 'select lcc_unmerge_entity(<loser_id>)' });
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict: 'same_party', merged: 1, sponsor_token: tok,
+          winner_id: gate.sponsor_entity_id, loser_id: gate.duplicate_entity_id });
+      }
+      if (action === 'merge_into_sponsor') {
+        // OWN-T0e-c: the missing other direction of same_party/merge_now — THIS
+        // card's own sponsor (gate.duplicate_entity_id, the loser) merges INTO the
+        // already-canonical sponsor named on the card (gate.sponsor_entity_id, the
+        // winner), re-derived live above from the cache, never from the request.
+        // Same writer, same refresh set, same reversal as OWN-T0e-b.
+        const mr = await opsQuery('POST', 'rpc/lcc_merge_entity', { p_loser: gate.duplicate_entity_id, p_winner: gate.sponsor_entity_id });
+        if (!mr.ok) {
+          await recordEffectFailure({ merge: false, error: mr.data });
+          return res.status(502).json({ error: 'sponsor_family_confirm: merge_failed', detail: mr.data });
+        }
+        try { await opsQuery('POST', 'rpc/lcc_refresh_buyer_spe_resolved', {}); } catch (_e) { /* soft */ }
+        try { await opsQuery('POST', 'rpc/lcc_refresh_priority_queue_resolved', {}); } catch (_e) { /* soft */ }
+        const rr = await record('merge_into_sponsor', 'decided',
+          Object.assign({}, verdictCtx, { duplicate_entity_id: gate.duplicate_entity_id, merge_now: true }),
+          { sponsor_family: 'merged', lcc_merge_entity: 'merged', winner_id: gate.sponsor_entity_id, loser_id: gate.duplicate_entity_id,
+            reverse: 'select lcc_unmerge_entity(<loser_id>)' });
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict: 'merge_into_sponsor', merged: 1, sponsor_token: tok,
+          winner_id: gate.sponsor_entity_id, loser_id: gate.duplicate_entity_id });
+      }
+      if (action === 'research') {
+        const rt = await createResearchTask({
+          research_type: 'sponsor_family_confirm',
+          title: 'Is "' + tok + '" a sponsor family of ' + (card.sponsor_name || card.tied_pair || 'this owner') + '?',
+          instructions: 'Decision Center OWN-T0e: ' + (card.sponsor_name || card.tied_pair || '') + ' and '
+            + (card.spe_names || []).join('; ') + ' are both current owner candidates on ' + card.properties
+            + ' propert' + (card.properties === 1 ? 'y' : 'ies') + ', sharing the name token "' + tok + '"'
+            + (card.token_is_generic_word ? ' (a generic word — weak evidence)' : '')
+            + '. Confirm whether the SPE(s) are the sponsor\'s family, a duplicate entity, or unrelated.',
+        });
+        if (!rt.ok) {
+          await recordEffectFailure({ research_task: false, error: rt.data });
+          return res.status(502).json({ error: 'research_task_failed', detail: rt.data });
+        }
+        const rid = (Array.isArray(rt.data) && rt.data[0]) ? rt.data[0].id : null;
+        const rr = await record('research', 'decided', verdictCtx, { research_task: true, research_task_id: rid });
+        if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+        return res.status(200).json({ ok: true, verdict: 'research', research_task_id: rid });
+      }
+
+      // ---- confirm_family: the one write -----------------------------------
+      const confirmedBy = String(user.email || user.id || 'decision-center');
+      const notes = 'decision:' + decisionId + '; lane:sponsor_family_confirm; sponsor_side:' + card.sponsor_side
+        + '; properties:' + card.properties + '; token_is_generic_word:' + (card.token_is_generic_word ? 'true' : 'false')
+        + '; token_entities_fleetwide:' + card.token_entities_fleetwide;
+      const ins = await opsQuery('POST', SPONSOR_FAMILY_REGISTRY_TABLE, {
+        sponsor_entity_id: gate.sponsor_entity_id, sponsor_token: tok, confirmed_by: confirmedBy, notes,
+      });
+      if (!ins.ok) {
+        // A 409 here is a (sponsor, token) that landed between the live check and
+        // the insert — the family IS confirmed, so the decision closes as such.
+        const dup = ins.status === 409;
+        if (!dup) {
+          await recordEffectFailure({ registry_insert: false, error: ins.data });
+          return res.status(502).json({ error: 'sponsor_family_confirm: registry_insert_failed', detail: ins.data });
+        }
+      }
+      const rr = await record('confirm_family', 'decided', verdictCtx, {
+        sponsor_family: 'confirmed', registry_table: SPONSOR_FAMILY_REGISTRY_TABLE,
+        registry_row_created: ins.ok, confirmed_by: confirmedBy,
+        reverse: 'delete from ' + SPONSOR_FAMILY_REGISTRY_TABLE + ' where sponsor_entity_id = <id> and sponsor_token = <tok>',
+      });
+      if (!rr.ok) return res.status(502).json({ error: 'verdict_record_failed', detail: rr.data });
+      return res.status(200).json({
+        ok: true, verdict: 'confirm_family', sponsor_entity_id: gate.sponsor_entity_id, sponsor_token: tok,
+        registry_row_created: ins.ok, flips_unclassified_rival_pairs: card.flips_unclassified_rival_pairs,
+      });
     }
 
     return res.status(400).json({ error: 'unsupported_decision_type', decision_type: decision.decision_type });
@@ -4226,7 +14067,7 @@ async function handleAutoScrapeListings(req, res) {
       ? `is_active=eq.true`
       : `listing_status=in.(active,under_contract)`;
     const dateCol = dom === 'dialysis' ? 'listing_date' : 'listing_date';
-    const select = `listing_id,property_id,${dateCol},verification_due_at,consecutive_check_failures`;
+    const select = `listing_id,property_id,${dateCol},on_market_date,verification_due_at,consecutive_check_failures`;
 
     // gov.available_listings has an exclude_from_listing_metrics flag for
     // listings that shouldn't influence dashboard counts — e.g. test rows,
@@ -4305,13 +14146,23 @@ async function handleAutoScrapeListings(req, res) {
         let checkResult = 'inferred_active';
         let offMarketReason = null;
         let notes = 'auto-scrape: no sale evidence in 3y window, timer advanced';
+        let matchedSaleDate = null;
 
         if (l.property_id && l[dateCol]) {
           const listingMs = Date.parse(l[dateCol]);
-          if (Number.isFinite(listingMs)) {
+          // Floor the sale window at the listing's MARKET-ENTRY date
+          // (on_market_date, fallback listing_date) so a same-property sale
+          // that PREDATES the listing — a prior owner's deal — can never be
+          // mis-attributed as this listing's exit. This was the root cause of
+          // the June-2026 dia off_market backdating incident: the old lower
+          // bound (listing_date - 3y) matched pre-listing sales, and the RPC
+          // then stamped off_market_date = run date, collapsing years of
+          // exits into one month. Upper bound keeps the 3y recency headroom.
+          const entryMs = Date.parse(l.on_market_date || l[dateCol]);
+          if (Number.isFinite(listingMs) && Number.isFinite(entryMs)) {
             const windowDays = 3 * 365 + 1;
-            const lower = new Date(listingMs - windowDays * 86400000).toISOString().slice(0, 10);
-            const upper = new Date(listingMs + windowDays * 86400000).toISOString().slice(0, 10);
+            const lower = new Date(entryMs).toISOString().slice(0, 10);
+            const upper = new Date(entryMs + windowDays * 86400000).toISOString().slice(0, 10);
 
             // Pull all candidate sales in the window and pick the best in JS
             // — limit=10 is enough headroom for any realistic property
@@ -4344,6 +14195,7 @@ async function handleAutoScrapeListings(req, res) {
               if (best) {
                 checkResult = 'sold';
                 offMarketReason = 'sold';
+                matchedSaleDate = best.sale_date;
                 notes = `auto-scrape: matched sales_transactions sale_id=${best.sale_id} on ${best.sale_date}`;
               }
             }
@@ -4367,6 +14219,10 @@ async function handleAutoScrapeListings(req, res) {
           p_off_market_reason: offMarketReason,
           p_notes: notes,
           p_verified_by: user.id || null,
+          // Stamp off_market_date from the MATCHED sale's true date, not the
+          // RPC's "today" default — the June-2026 backdating fix. Only set on
+          // a sold match; the inferred_active timer advance leaves it null.
+          ...(matchedSaleDate ? { p_effective_at: matchedSaleDate } : {}),
         }, { label: 'autoScrapeListings:recordCheck' });
         if (!rpcRes.ok) {
           summary.errors.push({
@@ -5196,6 +15052,78 @@ async function handleConfig(req, res) {
   });
 }
 
+// ── P125a — SF Task maintenance probe ───────────────────────────────────────
+// Exercises the three compliance ops against a SINGLE named Task so each
+// Power-Automate case can be verified before anything is wired to the cadence
+// engine.
+//
+// It exists because SF_LOOKUP_WEBHOOK_URL is a SIGNED SECRET: the only ways to
+// reach the flow are to paste that URL into a chat (never) or to go through the
+// app, which already holds it server-side.
+//
+// WHY IT IS NOT ON /api/diag (my first attempt, corrected): handleDiag opens
+// with `if (req.method !== 'GET') return 405 'GET only'` -- diagnostics are
+// READS. This probe WRITES to Salesforce, so it never belonged there; the
+// GET-only gate was right and the placement was wrong.
+//
+//   POST /api/admin?_route=sf-task-probe
+//     { "op":"update_due", "sf_task_id":"00T...", "activity_date":"2026-09-30" }
+//     { "op":"close",      "sf_task_id":"00T...", "confirm": true }
+//     { "op":"open_tasks", "owner_ids":["005..."] }
+//
+// Guards: manager role; POST only; ONE task id per call (never a sweep); and
+// `close` demands an explicit confirm so a mis-click cannot close a live
+// pursuit. Writes nothing to LCC -- a pass-through to the flow.
+async function handleSfTaskProbe(req, res) {
+  const user = await authenticate(req, res);
+  if (!user) return;
+  const wsId = primaryWorkspace(user)?.workspace_id;
+  if (!requireRole(user, 'manager', wsId)) {
+    return res.status(403).json({ error: 'Manager role required' });
+  }
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'POST only - this op writes to Salesforce' });
+  }
+  res.setHeader('Cache-Control', 'no-store');
+  const b = req.body || {};
+  const op = String(b.op || '').trim();
+  try {
+    if (op === 'update_due') {
+      const r = await updateSalesforceTaskDue({
+        sfTaskId: b.sf_task_id, activityDate: b.activity_date,
+      });
+      return res.status(200).json({ probe: 'update_due', ...r });
+    }
+    if (op === 'close') {
+      // Closing a pursuit task is destructive to a live workflow. Require the
+      // caller to say so explicitly rather than inferring intent from `op`.
+      if (b.confirm !== true) {
+        return res.status(400).json({
+          error: 'close requires {"confirm": true} - this closes a live pursuit task',
+        });
+      }
+      const r = await closeSalesforceTask({ sfTaskId: b.sf_task_id, status: b.status });
+      return res.status(200).json({ probe: 'close', ...r });
+    }
+    if (op === 'open_tasks') {
+      const r = await getOpenTasksForCompliance({
+        ownerIds: Array.isArray(b.owner_ids) ? b.owner_ids : [],
+        nmType: (b.nm_type === null) ? null : b.nm_type,
+      });
+      return res.status(200).json({ probe: 'open_tasks', ...r });
+    }
+    return res.status(400).json({
+      error: `Unknown op: ${op || '(missing)'}`,
+      known: ['update_due', 'close', 'open_tasks'],
+    });
+  } catch (e) {
+    return res.status(200).json({
+      probe: op, ok: false, reason: 'probe_threw',
+      detail: String((e && e.message) || e).slice(0, 300),
+    });
+  }
+}
+
 async function handleDiag(req, res) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'GET only' });
 
@@ -5231,6 +15159,10 @@ async function handleDiag(req, res) {
       anthropic_key_set:  !!process.env.ANTHROPIC_API_KEY,
       teams_webhook_set:  !!process.env.TEAMS_INTAKE_WEBHOOK_URL,
       sf_webhook_set:     !!process.env.SF_LOOKUP_WEBHOOK_URL,
+      sharepoint_save_url_set:  !!process.env.SHAREPOINT_SAVE_URL,
+      sharepoint_fetch_url_set: !!process.env.SHAREPOINT_FETCH_URL,
+      sharepoint_link_url_set:  !!process.env.SHAREPOINT_LINK_URL,
+      storage_backend:          process.env.STORAGE_BACKEND || 'supabase',
       ms_graph_token_set: !!process.env.MS_GRAPH_TOKEN,
       vercel_env:         process.env.VERCEL_ENV || null,
       lcc_env:            process.env.LCC_ENV || null,
@@ -8820,6 +18752,77 @@ async function handleRecorderPortal(req, res) {
 }
 
 // ============================================================================
+// PUBLIC-RECORDS SCANNER SAVE — routes the sidepanel's "Scan This Page"
+// capture (extension/content/public-records.js) through real structured
+// writers instead of discarding it. Human-triggered only — the operator
+// clicks Save after reviewing the editable form; nothing here crawls or
+// polls. See api/_shared/public-records-writeback.js for the write logic.
+//
+// POST /api/admin?_route=public-records-capture
+//   Body: {
+//     site_type: 'assessor'|'recorder'|'sos',
+//     domain?: 'government'|'dialysis',   // required for assessor/recorder
+//     property_id?: <domain property id>, // required for assessor/recorder
+//     owner_entity_id?: <LCC entities.id>,// optional, sos only
+//     source_url?: string,
+//     capture: { ...scanner fields, operator-edited }
+//   }
+// ============================================================================
+async function handlePublicRecordsCapture(req, res) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const body = req.body || {};
+  const siteType = String(body.site_type || '').toLowerCase();
+  const capture = body.capture && typeof body.capture === 'object' ? body.capture : {};
+  const sourceUrl = body.source_url ? String(body.source_url).slice(0, 1000) : null;
+
+  try {
+    if (siteType === 'assessor') {
+      const domain = String(body.domain || '').toLowerCase();
+      if (!['government', 'dialysis'].includes(domain)) {
+        return res.status(400).json({ error: "domain must be 'government' or 'dialysis'" });
+      }
+      const propertyId = body.property_id;
+      if (propertyId == null || propertyId === '') {
+        return res.status(400).json({ error: 'property_id required for an assessor capture' });
+      }
+      const result = await applyAssessorCapture(domain, propertyId, capture,
+        { sourceUrl, entityState: body.state || capture.state || null });
+      return res.status(result.ok ? 200 : 422).json({ ok: result.ok, site_type: siteType, ...result });
+    }
+
+    if (siteType === 'recorder') {
+      const domain = String(body.domain || '').toLowerCase();
+      if (!['government', 'dialysis'].includes(domain)) {
+        return res.status(400).json({ error: "domain must be 'government' or 'dialysis'" });
+      }
+      const propertyId = body.property_id;
+      if (propertyId == null || propertyId === '') {
+        return res.status(400).json({ error: 'property_id required for a recorder capture' });
+      }
+      const result = await applyRecorderCapture(domain, propertyId, capture,
+        { sourceUrl, entityState: body.state || capture.state || null });
+      return res.status(result.ok ? 200 : 422).json({ ok: result.ok, site_type: siteType, ...result });
+    }
+
+    if (siteType === 'sos') {
+      const result = await applySosEntityCapture(capture, {
+        sourceUrl,
+        ownerEntityId: body.owner_entity_id || null,
+      });
+      return res.status(result.ok ? 200 : 422).json({ ok: result.ok, site_type: siteType, ...result });
+    }
+
+    return res.status(400).json({ error: "site_type must be 'assessor', 'recorder', or 'sos'" });
+  } catch (err) {
+    console.error('[public-records-capture]', err?.message || err);
+    return res.status(500).json({ error: 'public_records_capture_failed', message: err?.message });
+  }
+}
+
+// ============================================================================
 // CLIENT ERROR REPORT — Item #10 Phase B (2026-05-17)
 //
 // POST /api/admin?_route=client-error
@@ -9837,22 +19840,48 @@ async function handleResolveCmsChainDrift(req, res) {
 // Local stripNulls — admin.js doesn't import the sidebar-pipeline version
 // to avoid pulling its full dependency tree just for one helper.
 // ============================================================================
-// RESEARCH-TASK GENERATOR (O-9, 2026-05-21)
+// RESEARCH-TASK GENERATOR (O-9, 2026-05-21; A5a truncation fix 2026-08-27)
 // Materializes the gov/dia `v_next_best_research` NBA feed into LCC
 // `research_tasks`. Cross-DB: reads the gap feed via the data-query edge
 // function (?_source=gov|dia), upserts into research_tasks keyed on
 // (domain, research_type, source_record_id).
 //   POST /api/admin?_route=generate-research-tasks&domain=gov|dia|both&limit=N
-// Auto-close (filled gap -> completed/gap_resolved) only fires when the full
-// feed fit under `limit` — never on a capped slice.
+//        [&dry_run=1]
+//
+// ⚠️ TWO BUDGETS, NOT ONE — this is the whole shape of the A5a fix.
+//   * The AUTO-CLOSE needs COMPLETENESS. It asserts "this gap is resolved", so
+//     it runs only when the generator has ASKED the feed about every open
+//     subject and every answer came back untruncated (probeNbaFeedMembership).
+//     It used to infer the same thing from a single 1,000-row read, because its
+//     guard compared the REQUESTED limit against the RETURNED rows; that
+//     produced 5,763 closures, ~95% of them false on the largest lane.
+//   * The MINT needs PRIORITISATION, and is capped at `limit` — the ranked head
+//     only. The producer has no value gate yet (A5c), so open counts converge to
+//     min(limit, feed size) per domain instead of running to the feed's 71,448.
+// Everything about truncation, ordering and fail-closed lives in
+// `api/_shared/nba-feed-sweep.js`, which is the single owner of those rules.
 // ============================================================================
-async function fetchNbaFeed(source, limit, req) {
+async function fetchNbaFeed(source, limit, req, offset = 0) {
   const url = new URL(DATA_QUERY_EDGE_URL);
   url.searchParams.set('_source', source);
   url.searchParams.set('table', 'v_next_best_research');
-  url.searchParams.set('select', 'research_type,entity_kind,entity_id,label,priority,instructions,domain');
-  url.searchParams.set('order', 'priority.desc');
+  url.searchParams.set('select',
+    'research_type,entity_kind,entity_id,label,priority,instructions,domain,gate_reason,gate_value');
+  // A TOTAL order — `priority` alone ties across tens of thousands of rows
+  // because every gap arm hard-codes it, so an untied sort makes both the
+  // window and the paging non-deterministic (pages can drop or repeat rows).
+  url.searchParams.set('order', NBA_FEED_ORDER);
+  // ── A5c: the VALUE GATE, applied SERVER-SIDE and ONLY to this read.
+  // This is the mint budget, so the ranked head must be drawn from the
+  // ADMITTED population — a JS filter after the read would leave the head full
+  // of rows nobody can work. The membership probe below builds its own URL and
+  // never calls this function, so the close decision still sees the whole feed:
+  // deciding not to work a gap is not the gap resolving. See the block comment
+  // in nba-feed-sweep.js.
+  const gateFilter = nbaFeedGateFilter('mint');
+  if (gateFilter) url.searchParams.set('filter', gateFilter);
   url.searchParams.set('limit', String(limit));
+  if (offset > 0) url.searchParams.set('offset', String(offset));
   url.searchParams.set('count', 'false');
   const r = await fetch(url.toString(), {
     method: 'GET',
@@ -9862,6 +19891,93 @@ async function fetchNbaFeed(source, limit, req) {
   const body = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(`data-query ${source} ${r.status}: ${JSON.stringify(body).slice(0, 200)}`);
   return Array.isArray(body.data) ? body.data : [];
+}
+
+// The RANKED MINT HEAD: the top `mintLimit` VALUE-GATED feed rows, read at
+// exactly the server's page cap (a larger stride silently skips rows). Nothing
+// here decides the auto-close — that is settled by probeNbaFeedMembership
+// below, which reads the feed UNGATED on purpose.
+//
+// `exhausted` is the honest-count half: when the head came back short of what
+// was asked for, `rows.length` IS the whole admitted population for this
+// domain; when it filled, it is a FLOOR. Reporting one as the other is the
+// badge-that-lies failure this round exists to fix.
+async function fetchNbaMintHead(source, mintLimit, req) {
+  const rows = [];
+  const pages = mintHeadPageCount(mintLimit, FEED_PAGE_SIZE);
+  let exhausted = false;
+  for (let i = 0; i < pages; i += 1) {
+    const want = Math.min(FEED_PAGE_SIZE, mintLimit - rows.length);
+    if (want <= 0) break;
+    const page = await fetchNbaFeed(source, want, req, rows.length);
+    rows.push(...page);
+    if (page.length < want) { exhausted = true; break; }   // RETURNED count, never the requested one
+  }
+  return { rows, exhausted };
+}
+
+// Ask the feed, directly, which of these open-task subjects are STILL a gap.
+//
+// ⚠️ This is the completeness guarantee, and it is deliberately a probe rather
+// than a full download. Measured 2026-08-27: the gov feed view materialises and
+// external-sorts all 41,805 rows on EVERY ordered request (1,149 ms, 8 MB
+// spilled), so a 42-page offset sweep would burn ~48 s of gov DB time per run,
+// 48 runs a day, on the shared PostgREST pool the 2026-08-12 incident wedged.
+// The SAME query filtered to a list of ids pushes the predicate into every
+// UNION arm: 44 ms. So we ask about the ~2,000 open subjects instead of
+// downloading 71,448 rows to infer the same answer less directly.
+//
+// `complete` is true only if every subject was asked about AND every chunk came
+// back UNDER the response cap. Anything else fails closed.
+async function probeNbaFeedMembership(source, req, openTasks) {
+  const present = new Set();
+  const chunks = chunkProbeIds(openTasks, PROBE_CHUNK_SIZE);
+  let complete = true;
+  let reason = null;
+  let probed = 0;
+
+  for (const chunk of chunks) {
+    const safe = chunk.filter(probeIdIsSafe);
+    if (safe.length !== chunk.length) { complete = false; reason = 'unsafe_subject_id'; }
+    if (!safe.length) continue;
+    const url = new URL(DATA_QUERY_EDGE_URL);
+    url.searchParams.set('_source', source);
+    url.searchParams.set('table', 'v_next_best_research');
+    url.searchParams.set('select', 'research_type,entity_id');
+    url.searchParams.set('filter', `entity_id=in.(${safe.map(id => `"${id}"`).join(',')})`);
+    url.searchParams.set('limit', String(FEED_PAGE_SIZE));
+    url.searchParams.set('count', 'false');
+    let body;
+    try {
+      const r = await fetch(url.toString(), {
+        method: 'GET',
+        headers: buildEdgeProxyHeaders(req),
+        signal: AbortSignal.timeout(25000),
+      });
+      body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(`data-query ${source} ${r.status}: ${JSON.stringify(body).slice(0, 160)}`);
+    } catch (err) {
+      // A probe we could not run is not evidence of absence.
+      complete = false;
+      reason = reason || `probe_error: ${String(err?.message || err)}`;
+      continue;
+    }
+    const data = Array.isArray(body.data) ? body.data : [];
+    if (!probeChunkIsTrustworthy(data.length, FEED_PAGE_SIZE)) {
+      // At/over the cap the answer may be truncated, and a truncated membership
+      // answer under-reports presence — i.e. it closes live gaps. Refuse it.
+      complete = false;
+      reason = reason || 'probe_chunk_hit_response_cap';
+      continue;
+    }
+    probed += safe.length;
+    for (const row of data) {
+      const key = feedKeyOf(row);
+      if (key) present.add(key);
+    }
+  }
+
+  return { present, complete, reason, chunks: chunks.length, subjects_probed: probed };
 }
 
 async function handleGenerateResearchTasks(req, res) {
@@ -9877,17 +19993,41 @@ async function handleGenerateResearchTasks(req, res) {
   if (!['gov', 'dia', 'both'].includes(domainParam)) {
     return res.status(400).json({ error: "domain must be gov, dia, or both" });
   }
+  // `limit` is now the MINT budget only — never the feed window. The feed is
+  // always swept in full (see sweepNbaFeed); this caps how many of its
+  // priority-ranked head may become tasks in one run.
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 500, 1), 2000);
+  const dryRun = ['1', 'true', 'yes'].includes(String(req.query.dry_run || '').toLowerCase());
   const sources = domainParam === 'both' ? ['gov', 'dia'] : [domainParam];
 
-  const result = { ok: true, by_domain: {} };
+  const result = { ok: true, dry_run: dryRun, mint_limit: limit, by_domain: {} };
 
   for (const source of sources) {
     const domain = source === 'dia' ? 'dialysis' : 'government';
-    const summary = { feed: 0, inserted: 0, refreshed: 0, closed: 0, skipped_ignored: 0, deduped: 0, errors: [] };
+    const summary = {
+      feed: 0, mint_head: 0,
+      // A5c honest counts. `value_gated` says the head was drawn from the
+      // admitted population; `admitted_head_exhausted` says whether `feed` is
+      // the WHOLE admitted population (true) or only a floor (false, the head
+      // filled at `limit`). `gate_reasons_seen` should only ever contain
+      // 'admitted' — anything else means a gated row reached the mint set.
+      value_gated: false, admitted_head_exhausted: false, gate_reasons_seen: [],
+      inserted: 0, would_insert: 0, refreshed: 0, would_refresh: 0,
+      closed: 0, would_close: 0,
+      membership_complete: false, membership_chunks: 0, subjects_probed: 0,
+      auto_close_skipped_reason: null,
+      skipped_ignored: 0, deduped: 0, errors: [],
+    };
     try {
-      const feed = await fetchNbaFeed(source, limit, req);
+      // Read only the RANKED, VALUE-GATED HEAD — this is the mint budget, never
+      // the close set. The gate lives in the domain view (`gate_pass`), so this
+      // head is drawn from the admitted population rather than filtered after
+      // the fact; see nba-feed-sweep.js for why the probe must NOT share it.
+      const head = await fetchNbaMintHead(source, limit, req);
+      const feed = head.rows;
       summary.feed = feed.length;
+      summary.value_gated = true;
+      summary.admitted_head_exhausted = head.exhausted;
 
       const ignoreRes = await opsQuery('GET',
         `ignored_recommendation_contacts?select=entity_id&domain=eq.${encodeURIComponent(domain)}`);
@@ -9915,23 +20055,35 @@ async function handleGenerateResearchTasks(req, res) {
         if (page.length < 1000) break;
       }
       const openByKey = new Map(openTasks.map(t => [`${t.research_type}|${t.source_record_id}`, t]));
-      const feedKeys = new Set();
 
-      for (const row of feed) {
+      // ── MINT SET: the priority-ranked head only. Bounded on purpose; see the
+      // two-budgets note on the generator header.
+      const mintRows = planMintHead(feed, limit);
+      summary.mint_head = mintRows.length;
+      // A leak check, not decoration: the server applied the gate, so every row
+      // here must read 'admitted'. Anything else means the filter did not take
+      // (a renamed column, an unfiltered fallback) and the flood is back.
+      summary.gate_reasons_seen = [...new Set(mintRows.map(r => r.gate_reason || 'unknown'))];
+
+      for (const row of mintRows) {
         const entityId = row.entity_id == null ? null : String(row.entity_id);
         if (!entityId) continue;
         if (ignored.has(entityId)) { summary.skipped_ignored += 1; continue; }
         const key = `${row.research_type}|${entityId}`;
-        feedKeys.add(key);
         const existing = openByKey.get(key);
         const priority = row.priority != null ? Number(row.priority) : 0;
         if (existing) {
           if (Number(existing.priority) !== priority) {
-            await opsQuery('PATCH', `research_tasks?id=eq.${pgFilterVal(existing.id)}`,
-              { priority, updated_at: new Date().toISOString() });
-            summary.refreshed += 1;
+            summary.would_refresh += 1;
+            if (!dryRun) {
+              await opsQuery('PATCH', `research_tasks?id=eq.${pgFilterVal(existing.id)}`,
+                { priority, updated_at: new Date().toISOString() });
+              summary.refreshed += 1;
+            }
           }
         } else {
+          summary.would_insert += 1;
+          if (dryRun) continue;
           const title = (row.label && String(row.label).slice(0, 200)) || `${row.research_type} — ${entityId}`;
           const ins = await opsQuery('POST', 'research_tasks', {
             workspace_id:    workspaceId,
@@ -9954,18 +20106,36 @@ async function handleGenerateResearchTasks(req, res) {
         }
       }
 
-      if (feed.length < limit) {
-        for (const t of openTasks) {
-          const key = `${t.research_type}|${t.source_record_id}`;
-          if (!feedKeys.has(key)) {
-            await opsQuery('PATCH', `research_tasks?id=eq.${pgFilterVal(t.id)}`,
-              { status: 'completed', outcome: 'gap_resolved',
-                completed_at: new Date().toISOString(), updated_at: new Date().toISOString() });
-            summary.closed += 1;
-          }
+      // ── AUTO-CLOSE. Settled by ASKING the feed about every open subject, and
+      // gated on every one of those answers being complete and untruncated —
+      // never on a requested limit. planAutoClose fails closed: a probe error, an
+      // unsafe id or a chunk that hit the response cap closes NOTHING and says so.
+      //
+      // An entity the operator muted stays in the close-exempt set: muting is not
+      // resolution, so closing its task as `gap_resolved` would be a second false
+      // claim. This can only ever REDUCE closures.
+      const membership = await probeNbaFeedMembership(source, req, openTasks);
+      summary.membership_complete = membership.complete;
+      summary.membership_chunks = membership.chunks;
+      summary.subjects_probed = membership.subjects_probed;
+      if (membership.reason) summary.errors.push(`membership probe: ${membership.reason}`);
+      const presentKeys = membership.present;
+      for (const t of openTasks) {
+        const eid = t.source_record_id == null ? null : String(t.source_record_id);
+        if (eid && ignored.has(eid)) presentKeys.add(openTaskKeyOf(t));
+      }
+      const closePlan = planAutoClose({
+        membershipComplete: membership.complete, openTasks, presentKeys,
+      });
+      summary.would_close = closePlan.close.length;
+      summary.auto_close_skipped_reason = closePlan.reason;
+      if (!dryRun) {
+        for (const t of closePlan.close) {
+          await opsQuery('PATCH', `research_tasks?id=eq.${pgFilterVal(t.id)}`,
+            { status: 'completed', outcome: 'gap_resolved',
+              completed_at: new Date().toISOString(), updated_at: new Date().toISOString() });
+          summary.closed += 1;
         }
-      } else {
-        summary.note = 'feed capped at limit; auto-close skipped';
       }
     } catch (err) {
       summary.errors.push(String(err?.message || err));

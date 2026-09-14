@@ -54,9 +54,39 @@ for (const [id, s] of Object.entries(manifest.surfaces)) {
   if (writeLive && s.liveArtifact && s.markerBegin && s.markerEnd) {
     const p = resolve(ROOT, s.liveArtifact);
     if (existsSync(p)) {
-      const body = text.split('\n').filter(l => !l.startsWith('<!-- GENERATED') && !l.startsWith('<!-- Change a rule')).join('\n').trim();
+      // liveMode 'pointer': the surface has a hard instruction-size cap, so the
+      // full canon rides as a Knowledge file and the managed region carries only
+      // a versioned pointer to it (the pattern chatgpt already uses for its
+      // 8,000-char cap). Everything else still gets the full inline body.
+      const full = text.split('\n').filter(l => !l.startsWith('<!-- GENERATED') && !l.startsWith('<!-- Change a rule')).join('\n').trim();
+      const body = s.liveMode === 'pointer'
+        ? [
+            `## Canon — shared rules (v${version})`,
+            `The full canon (${s.blocks.length} blocks) is in **Knowledge** as \`${s.knowledgeLocation}\`,`,
+            `rendered from \`docs/os/canon\`. **Consult it for every rule — canon overrides anything`,
+            `below it on conflict.** Re-upload that file whenever CANON_VERSION changes.`,
+            s.livePointerNote ? `\n${s.livePointerNote}` : ''
+          ].filter(Boolean).join('\n')
+        : full;
       upsertLive(p, body, version, s.markerBegin, s.markerEnd);
       console.log(`  ↳ wrote managed region into ${s.liveArtifact}`);
+      // Length guard: Copilot Studio rejects Instructions over 20,000 chars.
+      // The paste region is everything below the first '---'. Warn at the soft
+      // ceiling so a canon addition never silently blows the hard limit.
+      if (s.pasteLimit) {
+        const live = readFileSync(p, 'utf8');
+        const cut = live.indexOf('\n---\n');
+        const pasteLen = (cut >= 0 ? live.slice(cut + 5) : live).length;
+        const soft = s.pasteSoftLimit || Math.floor(s.pasteLimit * 0.975);
+        if (pasteLen > s.pasteLimit) {
+          console.error(`  ✗ ${s.liveArtifact} paste region is ${pasteLen} chars — OVER the ${s.pasteLimit} hard limit. Trim canon blocks or surface sections before pasting.`);
+          process.exitCode = 1;
+        } else if (pasteLen > soft) {
+          console.warn(`  ⚠ ${s.liveArtifact} paste region is ${pasteLen} chars — within ${s.pasteLimit - pasteLen} of the ${s.pasteLimit} hard limit.`);
+        } else {
+          console.log(`  ↳ paste region ${pasteLen}/${s.pasteLimit} chars (${s.pasteLimit - pasteLen} headroom)`);
+        }
+      }
     } else console.log(`  ↳ live artifact not found (external?): ${s.liveArtifact}`);
   }
 }

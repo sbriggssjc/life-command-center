@@ -1,6 +1,7 @@
 # OM Intake Pipeline — Canonical Reference
 
-> Last updated: 2026-04-25 (post data-quality-foundation session).
+> Last updated: 2026-08-27 (Prompt 194 — sidebar host correction; see the ⚠️ box under The channels).
+> Previously: 2026-04-25 (post data-quality-foundation session).
 > Supersedes the older `outlook_intake_team_visibility_workflow.md` which described an earlier batch-mode design.
 
 ## What this document is
@@ -12,10 +13,52 @@ A single reference for how Offering Memorandum (OM) PDFs flow into the Life Comm
 | Channel | Trigger | Endpoint | Channel id (in code) |
 | --- | --- | --- | --- |
 | **Email** | Power Automate flagged-email V3 trigger on `Inbox/LCC Intake` | `POST /api/intake?_route=outlook-message` | `email` |
-| **Sidebar (CoStar / Chrome extension)** | Browser extension capture | Sidebar pipeline writes directly via `api/_handlers/sidebar-pipeline.js::propagateToDomainDbDirect` (does NOT go through stageOmIntake) | n/a — see note |
+| **Sidebar (CoStar / Chrome extension)** | Browser extension capture | **Two paths, see note.** *Page* capture → `api/_handlers/sidebar-pipeline.js::propagateToDomainDbDirect` (domain DBs, not stageOmIntake). *Document* capture → `POST /api/intake/stage-om` → `stageOmIntake` | `sidebar` (document path); n/a for the page path |
 | **Copilot Studio agent** | Copilot Studio invokes the connector action | `POST /api/intake/stage-om` (rewritten to `/api/intake?_route=copilot-action&_preset_action=intake.stage.om.v1`) | `copilot_chat`, `outlook`, or `teams` (caller declares) |
 
-> **Sidebar caveat.** The CoStar sidebar's "OM upload" path runs through `sidebar-pipeline.js::propagateToDomainDbDirect`, which writes directly to domain DBs (properties, leases, available_listings, contacts, ownership_history) bypassing `stageOmIntake`. That's why the V2 Hondo OM corruption on 2026-04-25 wasn't caught by the email-path noise filters. The CoStar sidebar has its own writers and its own `isJunkTenant` filter (extended on 2026-04-25 to catch NAICS sector names + OM TOC headers). Long-term, the sidebar OM upload should ideally route through `stageOmIntake` for consistency, but that's not the case today.
+> **Sidebar caveat — the sidebar is TWO paths, and the older wording here was wrong.**
+> A CoStar **page** capture runs through `sidebar-pipeline.js::propagateToDomainDbDirect`, which
+> writes directly to the domain DBs (properties, leases, available_listings, contacts,
+> ownership_history) bypassing `stageOmIntake`. That is why the V2 Hondo OM corruption on
+> 2026-04-25 wasn't caught by the email-path noise filters, and the sidebar keeps its own writers
+> and its own `isJunkTenant` filter (extended 2026-04-25 for NAICS sector names + OM TOC headers).
+> But a captured **document** (OM / flyer / for-sale brochure) is a different path: the extension
+> posts it to `/api/intake/stage-om` and it DOES go through `stageOmIntake` with
+> `channel='sidebar'`. That is the source of the `sidebar` rows in `staged_intake_items` —
+> **56% of `staged_intake_extractions` over 30 days, the single largest producer.** A statement
+> that "the sidebar does not go through stageOmIntake" is true of half of it and badly misleading
+> about the other half.
+
+> ### ⚠️ CONVERGING ON THE PIPELINE ONLY MEANS ANYTHING IF THE CHANNELS REACH THE SAME HOST
+>
+> All channels converge on `stageOmIntake`, which runs one prompt
+> (`_shared/intake-extraction-prompt.js::buildExtractionPrompt`) and stamps every persisted
+> snapshot via `ensureProviderStamp`. **That guarantee is scoped to one deployment.**
+>
+> Measured 2026-08-26/27 (`docs/audits/W53_INTAKE_CHANNEL_PROVENANCE_2026-08-26.md` §3): the
+> Chrome extension had **seven hardcoded fallbacks** to
+> `https://life-command-center-nine.vercel.app`. Vercel was retired **2026-07-20** and every
+> `/api/*` route moved to Railway (`server.js`) — but the Vercel deployment was never torn down.
+> It kept serving a **pre-Prompt-61 build that still holds the LCC Opps service key**, so the
+> posts succeeded and wrote into the same tables. Result: **0 of 350 sidebar rows in 30 days**
+> carried the Prompt-61 schema or a `_provider` stamp, while email/folder_feed rows written from
+> Railway *in the same hour* were 100% both — separated 25/25 by PostgREST writer IP.
+>
+> Fixed 2026-08-27 (Prompt 194): `extension/background.js` now resolves the host through a single
+> `pickIntakeHost()` (Railway first, `LCC_VERCEL_URL` as a deliberate staging override only);
+> guarded by `test/extension-intake-host.test.mjs`; and any channel whose new rows go 0%
+> `_provider`-stamped over 7 days now opens
+> `lcc_health_alerts(alert_kind='intake_extraction_foreign_writer')` via
+> `lcc_check_intake_extraction_provenance()` (cron `lcc-intake-extraction-provenance`, 06:58 UTC).
+> **The extension must be reloaded for the client fix to take effect.**
+>
+> **When adding a channel or a client, the host is part of the contract.** Write it once, in one
+> resolver, and never hardcode an origin at a call site.
+
+> **Note — there is a fourth channel now.** `api/_handlers/folder-feed.js` (Phase 2 folder-feed
+> crawl) also calls `stageOmIntake`, with `channel='folder_feed'` and `defer_extraction=true`
+> (the `/api/intake-extract-drain` worker extracts it). The "three channels" framing below
+> predates it.
 
 ## Channel 1: Email (Power Automate flagged-email)
 

@@ -68,7 +68,9 @@ describe('server: three-seeder wiring + entity_match_labels', () => {
 });
 
 describe('client: owner_reconcile lane registered', () => {
-  const ops = read('ops.js');
+  // W6.5 Stage 1 (P87): federated lane card/verdict code moved to dc-lanes.js
+  // (classic script loaded before ops.js, same global scope) — read both halves.
+  const ops = read('ops.js') + '\n' + read('dc-lanes.js');
   it('is in _DC_FEDERATED (partition-safe with the server set)', () => {
     assert.match(ops, /_DC_FEDERATED\s*=\s*new Set\(\[[\s\S]*'owner_reconcile'[\s\S]*\]\)/);
   });

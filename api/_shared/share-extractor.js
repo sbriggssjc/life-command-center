@@ -39,6 +39,9 @@ const SCHEMA = `{
   "tenant": {
     "name": string|null,
     "agency": string|null,
+    "agency_full_name": string|null,
+    "government_type": "federal" | "state" | "municipal" | ["federal" | "state" | "municipal"] | null,
+    "government_type_evidence": string|null,
     "credit_rating": string|null,
     "lease_commencement": "YYYY-MM-DD"|null,
     "lease_expiration": "YYYY-MM-DD"|null,
@@ -81,6 +84,7 @@ function buildPrompt({ url, text, notes, source, domain_hint }) {
     '- gov_lease: tenant is a federal/state/county/municipal agency, GSA, "State of *", "Department of *", US courthouse, or military.',
     '- dialysis: tenant is DaVita, Fresenius, USRC, American Renal, Satellite Healthcare, or facility is described as a dialysis/kidney/renal clinic.',
     '- general: any other property/deal worth tracking.',
+    '- Government type: return federal/state/municipal only when stated or clearly derivable from tenant agency text. If multiple government buckets are present, return an array. Do not default missing values to federal.',
     '',
     'Cap rate: express as a decimal (7.25% -> 0.0725).',
     'Dates: format as YYYY-MM-DD; if only month/year given, use the first of that month.',

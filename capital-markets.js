@@ -16,8 +16,12 @@
     brand: null,                  // brand tokens cache
     catalog: null,                // chart catalog cache
     subspecialties: { gov: [], dialysis: [] },
-    currentVertical: 'gov',
+    currentVertical: 'dialysis',
     currentSubspecialty: 'all',
+    currentAsOf: '',
+    currentPacket: null,
+    currentCharts: [],
+    currentImages: new Map(),
     chartInstances: new Map(),    // chart_template_id → Chart.js instance
   };
   window.__cmState = cmState;     // expose for debugging
@@ -176,10 +180,41 @@
   }
 
   async function loadQuarterly(vertical, subspecialty) {
+    const asOf = cmState.currentAsOf || latestCompletedQuarterEndClient();
     const r = await fetchJSON(
-      `/api/capital-markets?action=quarterly&vertical=${vertical}&subspecialty=${encodeURIComponent(subspecialty)}&phase=5`
+      `/api/capital-markets?action=packet&vertical=${vertical}&as_of=${encodeURIComponent(asOf)}&phase=5`
     );
-    return r.charts || [];
+    cmState.currentPacket = r.packet || null;
+    let charts = r.packet?.charts || [];
+    if (subspecialty && subspecialty !== 'all') {
+      charts = charts.map(c => ({ ...c, rows: (c.rows || []).filter(row => !row.subspecialty || row.subspecialty === subspecialty) }));
+    }
+    cmState.currentCharts = charts;
+    return charts;
+  }
+
+  async function loadPacketImage(vertical, chartTemplateId) {
+    const asOf = cmState.currentAsOf || latestCompletedQuarterEndClient();
+    if (!chartTemplateId) return null;
+    const r = await fetchJSON(
+      `/api/capital-markets?action=packet_images&vertical=${vertical}&as_of=${encodeURIComponent(asOf)}&chart_template_ids=${encodeURIComponent(chartTemplateId)}`
+    );
+    const img = (r.images || []).find(x => x.chart_template_id === chartTemplateId);
+    if (!img?.png_b64) return null;
+    const src = `data:${img.mime || 'image/png'};base64,${img.png_b64}`;
+    cmState.currentImages.set(chartTemplateId, src);
+    return src;
+  }
+
+  async function mapLimit(items, limit, worker) {
+    const queue = Array.from(items || []);
+    const workers = Array.from({ length: Math.max(1, Math.min(limit, queue.length || 1)) }, async () => {
+      while (queue.length) {
+        const item = queue.shift();
+        await worker(item);
+      }
+    });
+    await Promise.all(workers);
   }
 
   // ---- Chart builders --------------------------------------------------------
@@ -1524,24 +1559,63 @@
   }
 
   // ---- HTML skeleton ---------------------------------------------------------
+  // Historical as-of quarter picker (2026-08-07). Latest COMPLETED quarter end
+  // = first day of the current quarter minus one day (mirrors the server's
+  // cm_last_completed_quarter_end() / resolveAsOf default). Offers the latest
+  // plus the prior 11 quarters; the empty value lets the server default.
+  function latestCompletedQuarterEndClient(today = new Date()) {
+    const startMonth = Math.floor(today.getUTCMonth() / 3) * 3;
+    const firstOfQuarter = Date.UTC(today.getUTCFullYear(), startMonth, 1);
+    return new Date(firstOfQuarter - 86400000).toISOString().slice(0, 10);
+  }
+  function quarterEndBackClient(latest, k) {
+    const m = String(latest).match(/^(\d{4})-(\d{2})/);
+    if (!m) return latest;
+    const idx = (+m[1]) * 4 + (Math.ceil(+m[2] / 3) - 1) - k;
+    const ty = Math.floor(idx / 4);
+    const month = ((idx % 4) + 1) * 3; // 3,6,9,12
+    const day = (month === 6 || month === 9) ? 30 : 31;
+    return `${ty}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  }
+  function asOfOptions() {
+    const latest = latestCompletedQuarterEndClient();
+    const current = cmState.currentAsOf || latest;
+    const opts = [];
+    for (let k = 0; k < 12; k++) {
+      const qe = quarterEndBackClient(latest, k);
+      const ym = qe.match(/^(\d{4})-(\d{2})/);
+      const label = ym ? `${ym[1]} Q${Math.ceil(+ym[2] / 3)} (${qe})` : qe;
+      const sel = qe === current ? ' selected' : '';
+      const latestTag = k === 0 ? ' — latest' : '';
+      opts.push(`<option value="${qe}"${sel}>${label}${latestTag}</option>`);
+    }
+    return opts.join('');
+  }
+
   function renderSkeleton(vertical) {
     const navy = brandColor('nm_navy', '#003DA5');
     const subRows = (cmState.subspecialties[vertical] || []).map(s =>
       `<option value="${s.subspecialty_id.replace(/^[a-z]+_/, '')}">${s.label}</option>`
     ).join('');
-    const cards = PHASE_1_TEMPLATES.map(id => {
-      const meta = (cmState.catalog || []).find(t => t.chart_template_id === id);
+    const packetCharts = cmState.currentCharts && cmState.currentCharts.length
+      ? cmState.currentCharts
+      : PHASE_1_TEMPLATES.map(id => (cmState.catalog || []).find(t => t.chart_template_id === id)).filter(Boolean);
+    const cards = packetCharts.map(chartMeta => {
+      const id = chartMeta.chart_template_id;
+      const meta = (cmState.catalog || []).find(t => t.chart_template_id === id) || chartMeta;
       if (!meta) return '';
-      if (!meta.applies_to_verticals?.includes(vertical)) return '';
       // DataTable + kpi_block charts get an HTML container (no canvas); span 2 columns
       const isDataTable = meta.chart_type === 'DataTable';
       const isKpiBlock  = meta.chart_type === 'kpi_block';
-      const cardSpan = (isDataTable || isKpiBlock) ? 'grid-column: span 2;' : '';
+      const cardSpan = 'grid-column: 1 / -1;';
       const bodyContainer = isKpiBlock
         ? `<div class="cm-kpi-container" data-template="${id}"></div>`
         : isDataTable
           ? `<div class="cm-table-container" data-template="${id}" style="max-height:340px;overflow:auto;border:1px solid #E7E6E6;border-radius:4px"></div>`
-          : `<div style="position:relative;height:300px"><canvas data-template="${id}"></canvas></div>`;
+          : `<div class="cm-server-image-wrap" data-template="${id}" style="position:relative;min-height:480px;display:flex;align-items:center;justify-content:center;background:#fff;overflow:auto">
+               <img class="cm-server-image" data-template="${id}" alt="${meta.name || id}" style="width:900px;max-width:100%;height:auto;display:none" />
+               <div class="cm-server-image-loading" data-template="${id}" style="font-size:9pt;color:${brandColor('nm_axis','#6A748C')}">Loading export chart...</div>
+             </div>`;
       return `
         <div class="cm-card" id="cm-card-${id}" style="background:#fff;border:1px solid #E7E6E6;border-radius:8px;padding:16px;margin:12px 0;box-shadow:0 1px 2px rgba(0,0,0,0.04);${cardSpan}">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">
@@ -1550,11 +1624,26 @@
               <div style="font-size:9pt;color:${brandColor('nm_text_muted','#666')}">${meta.metric_focus} · ${meta.chart_type}</div>
             </div>
             <div style="display:flex;gap:6px">
-              <button class="btn btn-ghost cm-stat-btn" data-template="${id}" style="font-size:9pt" title="Copy a one-line headline stat for pasting into Outlook">Copy stat</button>
+              <button class="btn btn-ghost cm-png-btn" data-template="${id}" style="font-size:9pt" title="Copy this chart as a PNG when supported">PNG</button>
               <button class="btn btn-ghost cm-export-btn" data-template="${id}" style="font-size:9pt">Copy data</button>
             </div>
           </div>
           ${bodyContainer}
+          <div class="cm-commentary" data-template="${id}" style="margin-top:12px;border-top:1px solid #E7E6E6;padding-top:10px">
+            <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:6px">
+              <div style="font-size:9pt;font-weight:600;color:${navy}">Commentary</div>
+              <div style="display:flex;gap:6px;align-items:center">
+                <select class="cm-commentary-status" data-template="${id}" style="font-size:9pt;border:1px solid #E7E6E6;border-radius:4px;padding:4px">
+                  <option value="draft">draft</option>
+                  <option value="edited">edited</option>
+                  <option value="approved">approved</option>
+                </select>
+                <button class="btn btn-ghost cm-generate-commentary-btn" data-template="${id}" style="font-size:9pt">Generate</button>
+                <button class="btn btn-ghost cm-save-commentary-btn" data-template="${id}" style="font-size:9pt">Save</button>
+              </div>
+            </div>
+            <textarea class="cm-commentary-copy" data-template="${id}" rows="4" style="width:100%;box-sizing:border-box;border:1px solid #E7E6E6;border-radius:4px;padding:8px;font-family:'Open Sans',Calibri,sans-serif;font-size:9pt;resize:vertical"></textarea>
+          </div>
         </div>`;
     }).join('');
 
@@ -1574,6 +1663,13 @@
           </div>
           <div style="display:flex;gap:12px;align-items:center">
             <div>
+              <label style="font-size:9pt;color:${brandColor('nm_axis','#6A748C')};margin-right:8px">Vertical:</label>
+              <select id="cm-vertical-select" style="padding:6px 10px;border:1px solid #E7E6E6;border-radius:4px;font-family:Calibri,sans-serif">
+                <option value="dialysis"${vertical === 'dialysis' ? ' selected' : ''}>Dialysis</option>
+                <option value="gov"${vertical === 'gov' ? ' selected' : ''}>Government</option>
+              </select>
+            </div>
+            <div>
               <label style="font-size:9pt;color:${brandColor('nm_axis','#6A748C')};margin-right:8px">Subspecialty:</label>
               <select id="cm-subspecialty-select" style="padding:6px 10px;border:1px solid #E7E6E6;border-radius:4px;font-family:Calibri,sans-serif">
                 <option value="all">${vertical === 'gov' ? 'All Government-Leased' : vertical === 'dialysis' ? 'All Dialysis' : vertical === 'national_st' ? 'All Products (cross-product)' : 'All ' + vertical}</option>
@@ -1586,14 +1682,26 @@
                 ${subRows}
               </select>
             </div>
-            <button id="cm-export-workbook-btn" style="padding:8px 14px;background:${navy};color:#fff;border:none;border-radius:4px;font-family:Calibri,sans-serif;font-size:10pt;font-weight:600;cursor:pointer" title="Download brand-styled .xlsx with all chart data — V1 ships data tabs only; V2 will embed pre-built charts bound to these tabs">
-              ⬇ Export Workbook
+            <div>
+              <label style="font-size:9pt;color:${brandColor('nm_axis','#6A748C')};margin-right:8px" title="Regenerate the workbook as of a past quarter end. Charts and snapshots are reconstructed to that quarter.">As of:</label>
+              <select id="cm-asof-select" style="padding:6px 10px;border:1px solid #E7E6E6;border-radius:4px;font-family:Calibri,sans-serif">
+                ${asOfOptions()}
+              </select>
+            </div>
+            <button id="cm-export-workbook-btn" data-commentary="none" style="padding:8px 14px;background:${navy};color:#fff;border:none;border-radius:4px;font-family:Calibri,sans-serif;font-size:10pt;font-weight:600;cursor:pointer" title="Download brand-styled .xlsx with chart data">
+              Charts + Data
+            </button>
+            <button id="cm-export-commentary-btn" data-commentary="approved" style="padding:8px 14px;background:${brandColor('nm_sky','#62B5E5')};color:#fff;border:none;border-radius:4px;font-family:Calibri,sans-serif;font-size:10pt;font-weight:600;cursor:pointer" title="Download workbook with approved commentary sheet">
+              + Commentary
+            </button>
+            <button id="cm-markdown-btn" style="padding:8px 14px;background:#fff;color:${navy};border:1px solid ${navy};border-radius:4px;font-family:Calibri,sans-serif;font-size:10pt;font-weight:600;cursor:pointer" title="Copy approved commentary markdown">
+              Copy Markdown
             </button>
           </div>
         </div>
         <div id="cm-status" style="font-size:9pt;color:${brandColor('nm_axis','#6A748C')};margin-bottom:8px"></div>
         ${vertical === 'national_st' ? renderRcaUploadCard() : ''}
-        <div class="cm-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">${cards}</div>
+        <div class="cm-grid" style="display:grid;grid-template-columns:minmax(0, 1fr);gap:16px;max-width:960px">${cards}</div>
         <div style="margin-top:16px;padding:10px;background:${brandColor('nm_pale','#E0E8F4')};border-radius:4px;font-size:9pt;color:${brandColor('nm_text','#191919')}">
           ${vertical === 'national_st'
             ? '<strong>Source:</strong> public.cm_rca_quarterly. Includes property or portfolio sales $2.5 million or greater (RCA TrendTracker convention). Cross-product cap rate is volume-weighted; quartile metrics are simple averages across products that report them.'
@@ -1873,7 +1981,21 @@
         }
         case 'percent_basis_points': return (n * 100).toFixed(2) + '%';
         case 'percent_one_decimal':  return (n * 100).toFixed(1) + '%';
-        default: return n.toLocaleString('en-US');
+        // Prompt 119 item A — these tokens were unmapped here too, so the web
+        // KPI block rendered raw ratios (0.151) exactly like the Excel tiles.
+        case 'percent_zero_decimal': return (n * 100).toFixed(0) + '%';
+        case 'percent_signed':       return (n >= 0 ? '+' : '') + (n * 100).toFixed(1) + '%';
+        case 'basis_points':         return Math.round(n).toLocaleString('en-US') + ' bps';
+        case 'integer_count':        return Math.round(n).toLocaleString('en-US');
+        case 'number_one_decimal':   return n.toFixed(1);
+        case 'years_one_decimal':    return n.toFixed(1) + ' Years';
+        case 'currency_per_sf':      return '$' + n.toFixed(2);
+        default:
+          // Last-resort inference, mirroring resolveKpiTileFormat in
+          // cm-excel-export.js: an unknown percent-shaped token must never
+          // render as a bare decimal.
+          if (/^percent|_pct$|^pct_/i.test(String(format || ''))) return (n * 100).toFixed(1) + '%';
+          return n.toLocaleString('en-US');
       }
     }
 
@@ -1912,16 +2034,51 @@
   }
 
   // ---- Render orchestration --------------------------------------------------
+  function hydrateCommentary(charts) {
+    for (const chart of charts || []) {
+      const id = chart.chart_template_id;
+      const ta = document.querySelector(`.cm-commentary-copy[data-template="${id}"]`);
+      const sel = document.querySelector(`.cm-commentary-status[data-template="${id}"]`);
+      if (ta) ta.value = chart.commentary || '';
+      if (sel && chart.commentary_status) sel.value = chart.commentary_status;
+    }
+  }
+
+  async function saveCommentaryFor(templateId, statusOverride) {
+    const chart = (cmState.currentPacket?.charts || []).find(c => c.chart_template_id === templateId);
+    const ta = document.querySelector(`.cm-commentary-copy[data-template="${templateId}"]`);
+    const sel = document.querySelector(`.cm-commentary-status[data-template="${templateId}"]`);
+    const body = {
+      vertical: cmState.currentVertical,
+      as_of: cmState.currentAsOf || latestCompletedQuarterEndClient(),
+      page_id: templateId,
+      title: chart?.name || templateId,
+      copy: ta?.value || '',
+      status: statusOverride || sel?.value || 'edited',
+    };
+    const r = await fetch('/api/capital-markets?action=commentary', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', 'x-lcc-workspace': window.LCC?.workspaceId || '' },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  }
+
   async function renderCharts(vertical, subspecialty) {
     const status = document.getElementById('cm-status');
     if (status) status.textContent = 'Loading data…';
     try {
       const charts = await loadQuarterly(vertical, subspecialty);
+      const chartIds = new Set((charts || []).map(c => c.chart_template_id));
+      cmState.currentImages = new Map();
       cmState.chartInstances.forEach((c, id) => destroyChart(id));
       let total = 0, ok = 0;
-      for (const tplId of PHASE_1_TEMPLATES) {
+      const imageCharts = [];
+      for (const tplId of chartIds) {
         const chart = charts.find(c => c.chart_template_id === tplId);
-        if (!chart || !chart.ok) continue;
+        if (!chart || chart.ok === false) continue;
         total++;
         if (chart.chart_type === 'DataTable') {
           const container = document.querySelector(`.cm-table-container[data-template="${tplId}"]`);
@@ -1937,18 +2094,36 @@
           ok++;
           continue;
         }
-        const canvas = document.querySelector(`canvas[data-template="${tplId}"]`);
-        if (!canvas) continue;
-        const inst = buildChart(canvas, chart);
-        if (inst) {
-          cmState.chartInstances.set(tplId, inst);
-          ok++;
-        }
+        imageCharts.push(chart);
       }
+      await mapLimit(imageCharts, 4, async (chart) => {
+        const tplId = chart.chart_template_id;
+        const img = document.querySelector(`img.cm-server-image[data-template="${tplId}"]`);
+        const loading = document.querySelector(`.cm-server-image-loading[data-template="${tplId}"]`);
+        if (loading) loading.textContent = 'Loading export chart...';
+        let src = null;
+        try {
+          src = await loadPacketImage(vertical, tplId);
+        } catch (e) {
+          console.warn(`cm packet image load failed for ${tplId}`, e);
+        }
+        if (img && src) {
+          img.src = src;
+          img.style.display = 'block';
+          if (loading) loading.style.display = 'none';
+          ok++;
+        } else if (loading) {
+          loading.textContent = (chart.rows || []).length
+            ? 'Export chart image unavailable. Use Copy data or workbook export for this chart.'
+            : 'No data available.';
+        }
+      });
+      hydrateCommentary(charts);
       if (status) {
         const latestVol = (charts.find(c => c.chart_template_id === 'volume_ttm_by_quarter')?.rows || []).slice(-1)[0];
         const asOfTxt = latestVol ? ` · latest period: ${periodEndLabel(latestVol.period_end)}` : '';
-        status.textContent = `Rendered ${ok}/${total} charts · subspecialty=${subspecialty}${asOfTxt}`;
+        const snapTxt = cmState.currentPacket?.source === 'frozen-snapshot' ? ' · frozen packet' : '';
+        status.textContent = `Rendered ${ok}/${total} charts · subspecialty=${subspecialty}${asOfTxt}${snapTxt}`;
       }
     } catch (e) {
       if (status) status.textContent = `Error loading: ${e.message}`;
@@ -1968,6 +2143,8 @@
 
     try {
       await Promise.all([loadBrand(), loadCatalog(), loadSubspecialties(vertical)]);
+      cmState.currentAsOf = cmState.currentAsOf || latestCompletedQuarterEndClient();
+      await loadQuarterly(vertical, cmState.currentSubspecialty);
     } catch (e) {
       el.innerHTML = `<div style="padding:24px;color:#c00">Failed to load Capital Markets reference data: ${e.message}</div>`;
       return '';
@@ -1981,12 +2158,29 @@
     el.innerHTML = renderSkeleton(vertical);
 
     // Bind subspecialty selector
+    const vsel = document.getElementById('cm-vertical-select');
+    if (vsel) {
+      vsel.value = vertical;
+      vsel.addEventListener('change', (ev) => {
+        renderCapitalMarketsForVertical(ev.target.value);
+      });
+    }
+
     const sel = document.getElementById('cm-subspecialty-select');
     if (sel) {
       sel.value = cmState.currentSubspecialty;
       sel.addEventListener('change', (ev) => {
         cmState.currentSubspecialty = ev.target.value;
-        renderCharts(vertical, cmState.currentSubspecialty);
+        renderCapitalMarketsForVertical(vertical);
+      });
+    }
+
+    const asofSel = document.getElementById('cm-asof-select');
+    if (asofSel) {
+      cmState.currentAsOf = asofSel.value || latestCompletedQuarterEndClient();
+      asofSel.addEventListener('change', (ev) => {
+        cmState.currentAsOf = ev.target.value;
+        renderCapitalMarketsForVertical(vertical);
       });
     }
 
@@ -2013,49 +2207,106 @@
       });
     });
 
-    // Bind copy-stat buttons — one-line headline stat for Outlook drafts
-    document.querySelectorAll('.cm-stat-btn').forEach(btn => {
+    document.querySelectorAll('.cm-png-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
         const tpl = btn.dataset.template;
         const orig = btn.textContent;
-        btn.textContent = '⏳';
+        btn.textContent = 'Copying';
         try {
-          const url = `/api/capital-markets?action=copilot_stat&vertical=${encodeURIComponent(vertical)}&chart_template_id=${encodeURIComponent(tpl)}&subspecialty=${encodeURIComponent(cmState.currentSubspecialty)}`;
-          const r = await fetchJSON(url);
-          if (!r.ok) {
-            btn.textContent = r.error === 'recipe_not_implemented' ? 'No stat for this chart' : 'No data';
-            setTimeout(() => { btn.textContent = orig; }, 2000);
-            return;
-          }
-          await navigator.clipboard.writeText(r.stat_text);
-          btn.textContent = '✓ Stat copied';
+          const img = document.querySelector(`img.cm-server-image[data-template="${tpl}"]`);
+          if (!img?.src || !navigator.clipboard?.write) throw new Error('PNG copy unavailable for this chart');
+          const blob = await fetch(img.src).then(r => r.blob());
+          await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+          btn.textContent = 'Copied';
           setTimeout(() => { btn.textContent = orig; }, 1800);
         } catch (e) {
-          console.error('cm-stat-btn error:', e);
+          console.error('cm-png-btn error:', e);
           btn.textContent = 'Copy failed';
           setTimeout(() => { btn.textContent = orig; }, 2000);
         }
       });
     });
 
+    document.querySelectorAll('.cm-save-commentary-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const orig = btn.textContent;
+        btn.textContent = 'Saving';
+        try {
+          await saveCommentaryFor(btn.dataset.template);
+          btn.textContent = 'Saved';
+          setTimeout(() => { btn.textContent = orig; }, 1500);
+        } catch (e) {
+          btn.textContent = 'Failed';
+          setTimeout(() => { btn.textContent = orig; }, 2000);
+        }
+      });
+    });
+
+    document.querySelectorAll('.cm-generate-commentary-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const tpl = btn.dataset.template;
+        const orig = btn.textContent;
+        btn.textContent = 'Generating';
+        try {
+          const r = await fetch('/api/capital-markets?action=generate_commentary', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json', 'x-lcc-workspace': window.LCC?.workspaceId || '' },
+            body: JSON.stringify({ vertical, as_of: cmState.currentAsOf || latestCompletedQuarterEndClient(), page_id: tpl }),
+          });
+          if (!r.ok) throw new Error(await r.text());
+          const data = await r.json();
+          const ta = document.querySelector(`.cm-commentary-copy[data-template="${tpl}"]`);
+          const sel = document.querySelector(`.cm-commentary-status[data-template="${tpl}"]`);
+          if (ta) ta.value = data.commentary?.copy || '';
+          if (sel) sel.value = data.commentary?.status || 'draft';
+          btn.textContent = 'Generated';
+          setTimeout(() => { btn.textContent = orig; }, 1500);
+        } catch (e) {
+          console.error('cm-generate-commentary error:', e);
+          btn.textContent = 'Failed';
+          setTimeout(() => { btn.textContent = orig; }, 2200);
+        }
+      });
+    });
+
     // Bind workbook export
-    const exportBtn = document.getElementById('cm-export-workbook-btn');
-    if (exportBtn) {
+    const bindWorkbookExport = (exportBtn) => {
+      if (!exportBtn) return;
       exportBtn.addEventListener('click', async () => {
         const orig = exportBtn.textContent;
         exportBtn.disabled = true;
-        exportBtn.textContent = '⏳ Generating…';
+        exportBtn.textContent = 'Generating';
         try {
-          const charts = await loadQuarterly(vertical, cmState.currentSubspecialty);
-          const latestVol = (charts.find(c => c.chart_template_id === 'volume_ttm_by_quarter')?.rows || []).slice(-1)[0];
-          const asOf = latestVol?.period_end || '';
+          // Historical as-of: use the quarter picker. Empty → server defaults
+          // to the latest completed quarter. Falls back to the latest volume
+          // period only if the picker isn't present.
+          const asofSel = document.getElementById('cm-asof-select');
+          let asOf = asofSel ? asofSel.value : '';
+          if (!asOf) {
+            const charts = await loadQuarterly(vertical, cmState.currentSubspecialty);
+            const latestVol = (charts.find(c => c.chart_template_id === 'volume_ttm_by_quarter')?.rows || []).slice(-1)[0];
+            asOf = latestVol?.period_end || '';
+          }
 
           // R66b — cache-bust. The export URL was deterministic, so the browser
           // (and any edge cache) could replay a stale prior workbook even after
           // the user deleted the downloaded file — the source of the "my export
           // never changes" reports. A unique _t param makes every request a new
           // URL, and cache:'no-store' forces a live render each click.
-          const url = `/api/capital-markets?action=export&vertical=${vertical}&subspecialty=${encodeURIComponent(cmState.currentSubspecialty)}&as_of=${encodeURIComponent(asOf)}&format=xlsx&_t=${Date.now()}`;
+          const commentary = exportBtn.dataset.commentary || 'none';
+          // CM close-out item 1 — BOTH buttons now download the canonical STANDARD
+          // export (source=live), not the watermarked PREVIEW packet. The packet
+          // path is not at parity (missing MasterPasteReady + registered feeds) and
+          // was watermarked as a preview, yet both buttons had been hardcoded to
+          // `source='packet'` — so Scott kept receiving the preview artifact. The
+          // standard export path now also carries approved commentary, so the
+          // "+ Commentary" button uses the same canonical builder. The in-tab packet
+          // PREVIEW (action=packet cards) is unchanged; only the DOWNLOAD is restored
+          // to the standard exporter until packet parity lands.
+          const source = 'live';
+          const commParam = commentary === 'none' ? '' : `&commentary=${encodeURIComponent(commentary)}`;
+          const url = `/api/capital-markets?action=export&source=${source}&vertical=${vertical}&subspecialty=${encodeURIComponent(cmState.currentSubspecialty)}&as_of=${encodeURIComponent(asOf)}&format=xlsx${commParam}&_t=${Date.now()}`;
           const r = await fetch(url, {
             credentials: 'include',
             cache: 'no-store',
@@ -2087,6 +2338,26 @@
           setTimeout(() => { exportBtn.textContent = orig; }, 2500);
         } finally {
           exportBtn.disabled = false;
+        }
+      });
+    };
+    bindWorkbookExport(document.getElementById('cm-export-workbook-btn'));
+    bindWorkbookExport(document.getElementById('cm-export-commentary-btn'));
+
+    const markdownBtn = document.getElementById('cm-markdown-btn');
+    if (markdownBtn) {
+      markdownBtn.addEventListener('click', async () => {
+        const orig = markdownBtn.textContent;
+        markdownBtn.textContent = 'Copying';
+        try {
+          const asOf = cmState.currentAsOf || latestCompletedQuarterEndClient();
+          const r = await fetchJSON(`/api/capital-markets?action=marketing_markdown&vertical=${vertical}&as_of=${encodeURIComponent(asOf)}`);
+          await navigator.clipboard.writeText(r.markdown || '');
+          markdownBtn.textContent = 'Copied';
+          setTimeout(() => { markdownBtn.textContent = orig; }, 1500);
+        } catch (e) {
+          markdownBtn.textContent = 'Failed';
+          setTimeout(() => { markdownBtn.textContent = orig; }, 2000);
         }
       });
     }

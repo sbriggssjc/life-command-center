@@ -1,0 +1,12 @@
+{
+  "acceptance_version": "1.0",
+  "status": "pass",
+  "checks": {
+    "reproducible_bytes": true,
+    "aggregate_only": true,
+    "secondary_location_contract": true,
+    "bounded_candidate_state": true
+  },
+  "receipt_sha256": "a8428d0da794f1b4a9559c8617fd2ad9be135dccae2279263ad4a6222cd6965f",
+  "violation_classes": []
+}

@@ -1,5 +1,11 @@
 # LCC Assistant — Declarative Agent for Microsoft 365 Copilot
 
+> 🚨 **STALE (DOCMAP3, 2026-09-08): this doc references Vercel as a live deployment target.**
+> Vercel was retired 2026-07-20 (root `CLAUDE.md`: *"PRODUCTION RUNS ON RAILWAY (Vercel retired
+> 2026-07-20)"*). `server.js` on Railway is now the single source of `/api/*` routing;
+> `vercel.json` is deleted. Treat any Vercel-dashboard step or vercel.app URL below as historical
+> / needing translation to the Railway equivalent before acting on it.
+
 ## Prerequisites
 
 1. **Microsoft 365 Copilot license** on your account

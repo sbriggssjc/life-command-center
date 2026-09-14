@@ -49,15 +49,31 @@ Configure these capability toggles:
 ## Step 4: Actions — Add the LCC API
 
 1. Click **Actions** → **Add action**
-2. Choose one of these import methods:
+2. Click **Import from URL** and enter the **curated ChatGPT spec URL**:
 
-### Option A: Import from URL
-- Click **Import from URL**
-- Enter: `RAILWAY_URL/api/copilot-spec`
-- ChatGPT will auto-discover the OpenAPI schema
+   ```
+   RAILWAY_URL/api/gpt-spec
+   ```
 
-### Option B: Upload JSON
-- Click **Import from file** or paste the contents of `gpt-actions-openapi.json`
+   (equivalently `RAILWAY_URL/api/copilot-spec?surface=chatgpt`)
+
+   ChatGPT auto-discovers the OpenAPI schema and lists the curated operations
+   (`getDailyBriefing`, `searchEntities`, `getPropertyContext`, `getContactContext`,
+   `getQueueSummary`, `getPipelineHealth`, `recallMemory`, `queryComps`,
+   `synthesizeComps`, `generateComps`, `getDealDossier`, `listDealCheckpoints`,
+   and the three Salesforce write tools).
+
+> ⚠️ **Do NOT import `RAILWAY_URL/api/copilot-spec`** (the full Copilot/Microsoft
+> spec). ChatGPT caps a GPT Action at **30 operations**, and that endpoint emits
+> the full action registry (46 ops) — the import fails with
+> *"OpenAPI spec can have a maximum of 30 operations."* `/api/gpt-spec` is the
+> **intentional user-facing subset** (15 ops today, ≤ 30 by design) — the internal
+> pipeline / ingest / merge / cron actions stay off the ChatGPT surface.
+>
+> **Import the live URL — do not paste a static file.** The curated spec is
+> generated from the live routes, so the GPT's tool set can never drift. The
+> snapshot at `docs/comps-rollout/lcc-openapi.yaml` is stamped
+> *"generated — do not hand-edit"* and exists only as a convenience copy.
 
 ### Authentication
 
@@ -68,6 +84,9 @@ After importing the schema, configure authentication:
 | **Authentication type** | API Key |
 | **Auth Type** | Bearer |
 | **API Key** | *(paste your `LCC_API_KEY` value)* |
+
+The curated spec declares a single `bearerAuth` security scheme, so ChatGPT sends
+`Authorization: Bearer <LCC_API_KEY>` on every call.
 
 ### Privacy Policy
 
@@ -126,10 +145,14 @@ You can also find it under **Explore GPTs** → **My GPTs** in the ChatGPT sideb
 - Ensure `LCC_API_KEY` is set in your Railway environment variables
 - Check that the Railway deployment is running
 
+### "OpenAPI spec can have a maximum of 30 operations"
+- You imported `/api/copilot-spec` (the full 46-op Copilot spec). Import
+  `RAILWAY_URL/api/gpt-spec` instead — the curated ≤30-op ChatGPT subset.
+
 ### "Could not connect" or timeout errors
 - Verify the Railway URL is correct and the service is deployed
 - Check Railway logs for any startup errors
-- Ensure the `/api/copilot-spec` endpoint returns the OpenAPI spec
+- Ensure the `/api/gpt-spec` endpoint returns the OpenAPI spec (no auth needed on the GET)
 
 ### GPT doesn't call the API
 - Verify the instructions contain the line: "always call the LCC API first"
@@ -144,10 +167,17 @@ You can also find it under **Explore GPTs** → **My GPTs** in the ChatGPT sideb
 
 ## Updating the GPT
 
-When the LCC API adds new actions:
+The curated spec is generated from the live routes, so most changes require **no
+re-import** — the GPT keeps hitting the same operations. Re-import only when the
+curated **tool set** itself changes (a new user-facing tool is added to
+`CHATGPT_CURATED_OPERATIONS` in `api/_shared/action-schemas.js`):
 
 1. Open the GPT editor (My GPTs → LCC Assistant → Edit)
 2. Go to Actions → click the existing action
-3. Re-import from `RAILWAY_URL/api/copilot-spec` or upload the updated `gpt-actions-openapi.json`
+3. **Re-import from URL:** `RAILWAY_URL/api/gpt-spec` (never a pasted static file)
 4. Update the Instructions if new actions need prompt guidance
 5. Save
+
+Keep the curated list ≤ 30 operations — the guardrail test
+`test/chatgpt-curated-spec.test.mjs` enforces both the cap and that every curated
+op maps to a mounted, Bearer-authed route.

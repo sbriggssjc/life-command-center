@@ -1,8 +1,10 @@
 # Northmarq Claude — Project Stand-Up (mechanical steps)
 
 **The instructions themselves are NOT here.** The single source of truth is the canonical Project prompt:
-`Team Briggs - Documents/_WORKFLOW/NORTHMARQ_PROJECT_PROMPT.md` (v1.9+). This file is only the mechanical
+`Team Briggs - Documents/_WORKFLOW/NORTHMARQ_PROJECT_PROMPT.md` (v1.12+). This file is only the mechanical
 "how to stand up the shared Project" checklist — always edit the doctrine in the canonical prompt, never here.
+Deliverable naming/save doctrine lives there and must stay byte-identical across surfaces:
+`{Property}_{DocType}_{Client}_{YYYYMM}`.
 
 Why a Project (not a connector): managed Northmarq Claude can't add the live MCP connector without an admin.
 The canonical prompt is already written for that reality — it composes payloads and hands off to the LCC
@@ -11,7 +13,7 @@ zero IT approval; live database pulls come from the Copilot Deal Agent (see `cop
 
 ## Steps
 1. **Create the Project.** Northmarq Claude → Projects → New → e.g. "Team Briggs — Deal Desk". Share it with the team.
-2. **Paste the instructions.** Copy the full text of `NORTHMARQ_PROJECT_PROMPT.md` (v1.9+) into the Project's
+2. **Paste the instructions.** Copy the full text of `NORTHMARQ_PROJECT_PROMPT.md` (v1.12+) into the Project's
    custom-instructions field. (Per that file's maintenance header: edit the master `.md` first, bump the version,
    then re-paste — never edit the Project directly.)
 3. **Upload the Project knowledge** the Context Router (`CONTEXT_ROUTER.md`) lists, from these two folders:
@@ -29,6 +31,8 @@ zero IT approval; live database pulls come from the Copilot Deal Agent (see `cop
 
 ## Boundary (what this gives)
 - ✅ Full Team Briggs methodology on the team's Claude, shared, zero approval — via compose-and-hand-off.
+- ✅ Save target stated by doctrine: finished deal artifacts land in `Team Briggs - Documents/Deals/{Client}/{Property}/`
+  when a surface can save to disk, or `outputs/deals/{Client}_{Property}/` as the repo-local fallback.
 - ❌ Native live DB tools — those need the connector (admin) or come through the Copilot Deal Agent.
 - Clean upgrade later: an admin adds the connector at `{MCP_BASE_URL}/mcp` (Bearer `LCC_API_KEY`) and this same
   Project gains native live tools on top of the knowledge.

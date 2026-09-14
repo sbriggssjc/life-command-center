@@ -51,6 +51,11 @@ as $$
       'noi', s.noi, 'sale_date', s.sale_date, 'sale_conditions', s.sale_conditions,
       'rent_per_sf', s.gross_rent_psf, 'expense_type', s.expenses,
       'lease_term_years', s.total_term_years, 'lease_expiration', s.lease_expiration,
+      -- Prompt 54 — join the REAL market-entry date (never synthetic) onto the sold comp so the
+      -- Sold tab shows ON MARKET + DOM where a genuine list date exists; blank otherwise. Prefer
+      -- the listing that closed into THIS sale (sale_transaction_id), else the property's latest
+      -- list on/before the sale.
+      'on_market_date', lm.on_market_date,
       'validation_status', null, 'confidence', 0.85,
       'source_sf_id', s.source_sf_id, 'data_source', s.data_source,
       'as_of_date', s.updated_at::date,
@@ -61,6 +66,15 @@ as $$
     s.sale_date as sort_date
     from sales_transactions s
     left join properties p on p.property_id = s.property_id
+    left join lateral (
+      select al.on_market_date
+      from available_listings al
+      where al.on_market_date is not null
+        and al.on_market_date <= s.sale_date
+        and (al.sale_transaction_id = s.sale_id or al.property_id = s.property_id)
+      order by (al.sale_transaction_id = s.sale_id) desc nulls last, al.on_market_date desc
+      limit 1
+    ) lm on true
     where s.transaction_state = 'live' and s.sold_price > 0
       and s.exclude_from_market_metrics is not true
       and p_comp_type in ('sale','both','lease')

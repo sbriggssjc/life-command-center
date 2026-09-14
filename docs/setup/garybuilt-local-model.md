@@ -229,8 +229,20 @@ interactive chat seat. Every new use ships with its own consumer + gate.
 - Draft generation grounded in `BRIGGS-WRITING-VOICE.md` (playbook phase 3):
   outreach/follow-up drafts, BOV exhibit narrative FIRST DRAFTS for human edit.
   Respect the offer-submission doctrine — strategy stays verbal, drafts only.
-- `match_disambiguation` card assist annotations (1,120 open, zero decided — an
-  LLM first-pass ranking might be what finally makes that lane workable).
+- ~~`match_disambiguation` card assist annotations (1,120 open, zero decided — an
+  LLM first-pass ranking might be what finally makes that lane workable).~~
+  **✅ SHIPPED (Prompt 80, 2026-08-08).** Nightly Ollama pre-rank (`/api/match-disambig-assist-tick`,
+  flag `MATCH_DISAMBIG_ASSIST` OFF, ~20/night, resumable via the `metadata->>assist IS NULL`
+  cursor) ranks each card's candidates best-first into `lcc_decisions.metadata.assist` — an
+  ANNOTATION, never a verdict (the SQL writer `lcc_annotate_match_disambig_assist` is metadata-only
+  and structurally cannot touch verdict/status). The lane sorts by the assist's top confidence,
+  shows each candidate's rank/reason inline, and adds a one-click "assist agrees" confirm on the
+  existing verdict path. Every human verdict records agree/disagree vs the assist's top pick
+  (`metadata.assist_agreed`) → `v_lcc_w8_u4_match_assist_accuracy` feeds the U4 report a per-month
+  accuracy metric (the future gate for auto-resolving the top-confidence band — NOT yet; no LLM in
+  auditable gates until measured). **Grounded live (LCC Opps 2026-08-08):** the open lane is now
+  **32** cards (the "1,120" was a historical high-water mark), all unannotated — the mechanism is
+  the durable fix; realizing value needs `OLLAMA_URL` live + the flag flipped.
 - LoRA fine-tune on the 10-yr sent corpus if few-shot voice isn't tight enough.
 
 **Measured note (2026-07-31 live test):** GLiNER channel A on real dia notes —

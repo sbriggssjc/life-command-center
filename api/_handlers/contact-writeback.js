@@ -32,6 +32,10 @@ import { ensureEntityLink, normalizeEmail, isGenericInboxEmail, isJunkEntityName
 import { upsertSalesforceContact, upsertSalesforceAccount, isSalesforceConfigured } from '../_shared/salesforce.js';
 import { toSf18 } from '../_shared/sf-id.js';
 import { planContactFieldPromotion } from '../_shared/contact-fields.js';
+import {
+  filterByFieldPriority,
+  provenanceTargetDatabase,
+} from '../_shared/field-priority-guard.js';
 
 const WRITEBACK_BATCH_TAG = 'r52_contact_writeback';
 // R52c: the SF Account-identity mirror tag (the compounding owner→account
@@ -39,10 +43,100 @@ const WRITEBACK_BATCH_TAG = 'r52_contact_writeback';
 // on its own).
 const ACCOUNT_BATCH_TAG = 'r52c_account_establish';
 
+// ---------------------------------------------------------------------------
+// PR5c-entities (2026-09-02) — the ladder governs entities.email/phone and
+// nothing consulted it.
+//
+// `entities` carries 13 field_source_priority rungs and `field_provenance` held
+// ZERO rows for that table (positive control: dia.properties, 49,571). This
+// writer's promoteFields is one of the two highest-traffic writers of the two
+// columns the ladder was registered FOR (migration 20260903120000: manual_edit@1
+// / manual_resolution@1 > salesforce@20 > domain_owner_contact@55 >
+// costar_sidebar@60). It writes as `salesforce`.
+//
+// ⚠️ SCOPE IS THE FOUR OTHER COLUMNS' ABSENCE, NOT AN OVERSIGHT.
+//    planContactFieldPromotion also patches address / city / state / zip /
+//    metadata. NONE of those has an `entities` rung, so sending them through
+//    lcc_merge_field would mint provenance for unregistered (table, field,
+//    source) triples and push them onto v_field_provenance_unranked. Whether a
+//    ladder should govern them is a REGISTRATION decision (backlog PR5a), not
+//    this change. Only the two governed columns are gated; the rest pass
+//    through byte-identically.
+//
+// ⚠️ THIS RECORDS PROVENANCE; IT DOES NOT SWITCH ON PROTECTION. Every rung here
+//    is enforce_mode='record_only', so lcc_merge_field's 'skip' does not block a
+//    write (see the behaviour matrix in field-priority-guard.js). The protection
+//    live today is this module's OWN metadata.field_sources rank ladder in
+//    planContactFieldPromotion, which is unchanged. Two ladders now observe
+//    these columns and only one of them enforces — that is the documented
+//    PR10 "one source, two ladders" shape, stated rather than silently merged.
+// ---------------------------------------------------------------------------
+const PROVENANCE_TARGET_DB = provenanceTargetDatabase('lcc_opps');
+const PROVENANCE_TARGET_TABLE = 'entities';
+const PROVENANCE_SOURCE = 'salesforce';
+/** The only entities columns this writer touches that carry a rung. */
+export const LADDER_GOVERNED_FIELDS = Object.freeze(['email', 'phone']);
+
 /** Is the deliberate writeback gate on? (env SF_CONTACT_WRITEBACK = on|1|true) */
 export function isWritebackEnabled() {
   const v = String(process.env.SF_CONTACT_WRITEBACK || '').trim().toLowerCase();
   return v === 'on' || v === '1' || v === 'true' || v === 'yes';
+}
+
+/**
+ * Route the ladder-governed columns of a promotion patch through
+ * lcc_merge_field, leave every other column untouched, and keep the module's
+ * own metadata.field_sources ledger honest about what actually survived.
+ *
+ * Fails OPEN (house style, sidebar-pipeline.js): a registry RPC outage must
+ * never cost a curated promotion. field-priority-guard.js counts the dropped
+ * provenance row and opens a health alert (PR12), so the loss is not silent.
+ *
+ * @returns {Promise<object>} the patch to send, or `{}` when nothing survives.
+ */
+export async function gateLadderFields(entityId, plan, sourceRunId, deps = {}) {
+  const filterFn = deps.filterByFieldPriority || filterByFieldPriority;
+  const governed = {};
+  const passthrough = {};
+  for (const [k, v] of Object.entries(plan.patch)) {
+    if (LADDER_GOVERNED_FIELDS.includes(k)) governed[k] = v; else passthrough[k] = v;
+  }
+  if (!Object.keys(governed).length) return plan.patch;
+
+  const allowed = await filterFn({
+    targetDb:    PROVENANCE_TARGET_DB,
+    targetTable: PROVENANCE_TARGET_TABLE,
+    recordPk:    entityId,
+    source:      PROVENANCE_SOURCE,
+    sourceRunId: sourceRunId || WRITEBACK_BATCH_TAG,
+    confidence:  0.9,
+    fields:      governed,
+  }).catch((err) => {
+    console.warn('[contact-writeback] field-priority filter failed (proceeding with full patch):', err?.message);
+    return governed;
+  });
+
+  const dropped = Object.keys(governed).filter(f => !(allowed && f in allowed));
+  const out = { ...passthrough, ...(allowed || {}) };
+
+  // A dropped field must also lose its metadata.field_sources stamp, or the
+  // in-metadata ledger claims salesforce wrote a value it was blocked from
+  // writing — and that stamp is what planContactFieldPromotion reads next time
+  // to decide whether a later source may correct the field.
+  if (dropped.length && out.metadata && typeof out.metadata === 'object'
+      && out.metadata.field_sources && typeof out.metadata.field_sources === 'object') {
+    const fs = { ...out.metadata.field_sources };
+    for (const f of dropped) delete fs[f];
+    out.metadata = { ...out.metadata, field_sources: fs };
+  }
+  // Nothing left but a metadata object whose only reason to exist was the
+  // stamps we just removed ⇒ send nothing rather than an empty-effect PATCH.
+  // NOTE `metadata` is not ladder-governed, so it is in `passthrough`; testing
+  // passthrough for emptiness would make this branch unreachable.
+  const nonMetaKeys = Object.keys(out).filter(k => k !== 'metadata');
+  const companyChanged = !!(plan.fieldSources && plan.fieldSources.company);
+  if (!nonMetaKeys.length && dropped.length && !companyChanged) return {};
+  return out;
 }
 
 /**
@@ -401,8 +495,16 @@ export async function handleContactWritebackTick(req, res) {
         if (!e) return { ok: false };
         const plan = planContactFieldPromotion(e, incoming, 'salesforce');
         if (!plan.changed) return { ok: true, changed: false, fields: [] };
-        const upd = await opsQuery('PATCH', 'entities?id=eq.' + pgFilterVal(entityId), plan.patch);
-        return { ok: !!upd.ok, changed: !!upd.ok, fields: upd.ok ? Object.keys(plan.fieldSources) : [] };
+        const patch = await gateLadderFields(entityId, plan, WRITEBACK_BATCH_TAG);
+        if (!patch || !Object.keys(patch).length) return { ok: true, changed: false, fields: [] };
+        const upd = await opsQuery('PATCH', 'entities?id=eq.' + pgFilterVal(entityId), patch);
+        return {
+          ok: !!upd.ok,
+          changed: !!upd.ok,
+          // Report what was WRITTEN. A field the ladder dropped must not read as
+          // promoted, or `promoted_fields` becomes a plan counter.
+          fields: upd.ok ? Object.keys(plan.fieldSources).filter(f => f in patch || f === 'company') : [],
+        };
       },
     };
     let out;

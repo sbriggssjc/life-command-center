@@ -1,6 +1,6 @@
 # Closing the Loop — mailbox-mechanics layer (build overview)
 
-Last updated: 2026-07-20
+Last updated: 2026-08-20 (P120 — the move executor)
 Owner: LCC architecture/audit track (Scott Briggs)
 Scope: Power Automate cloud flows in the `Default-fccf69d3-58a4-4c10-a59d-14937a5f5d3f`
 (NorthMarq Capital, LLC) tenant that make flagged/ingested email **move, file, and
@@ -16,6 +16,24 @@ delete itself** with no manual step after classification.
 > sheets + the `FLOW_CHANGES_LOG.md` entry are the build spec Scott (or a session
 > with browser access) follows in the designer. Nothing here is a live flow until
 > it is built + turned on in PA.
+
+## ⚠️ P120 (2026-08-20) — Flow 1 was never wired, so NOTHING moved for a month
+
+Measured live: `processing_log` held **325 `staged` + 15 `duplicate` moves still
+`move_status='pending'`**, oldest 2026-07-21, and **all 16** rows that read
+`move_status='moved'` were Flow 6 bookkeeping (`outcome='filed'` with
+`target_folder = final_target_folder`) rather than moves. `intake.js` never emits
+`outcome='filed'`. **The move executor had stamped zero rows, ever.**
+
+Root cause: Flow 1's LCC relay is a **push** endpoint with **no caller** — nothing
+in `api/` invokes `POST /api/webhooks/processing-complete`, and the relay never
+wrote `move_status` on any path. The sheet below said as much in its own words
+("The CALLER … does not exist yet") and it stayed true.
+
+**Fix:** Flow 7 — **`move-queue-executor.md`** — a PULL drainer over the queue
+that already existed, plus the stamp-back that never did. `processing_log` was
+always the right queue; it just had no consumer. Build Flow 7, not a new caller
+for Flow 1.
 
 ## ⚠️ Prompt-2 prerequisites that do NOT exist yet (verified 2026-07-20)
 
@@ -51,10 +69,16 @@ feature-flagged-rollout posture the rest of the portfolio uses.
 | 4 | Weekly Retention Sweep | `weekly-retention-sweep.md` | Scheduled, weekly | No — hygiene; the only flow that ever **deletes** (and only from `Processed/Duplicates` after 30d). **Never touches the staging folder.** |
 | 5 | Daily Briefing — Processing Summary Line | `daily-briefing-processing-summary.md` | Modify the existing daily-briefing flow | No — cosmetic; reads `processing_log`. |
 | 6 | LCC To Do Completion Poll (staged → Processed) | `todo-completion-poll.md` | Scheduled, every ~30 min | No — files a `staged` email once its To Do task completes. **Reuses Flow 1's Move + Flag mechanics** (different trigger + source). |
+| 7 | **LCC Move Queue Executor** (drains `processing_log`) | **`move-queue-executor.md`** | Scheduled, every ~15 min | **YES — this is the load-bearing mover.** Supersedes Flow 1 as the thing that actually moves an intake email. Flow 1's push relay stays for ad-hoc single moves but is NOT the mechanism. |
 
 ## Build sequencing (per the plan)
 
-1. **Processing Complete → Move Message** first — the load-bearing piece.
+0. **Move Queue Executor (Flow 7) first** — it is the load-bearing mover and the
+   only one that drains the month-old backlog. Everything below assumes messages
+   actually leave the Inbox.
+1. ~~**Processing Complete → Move Message** first — the load-bearing piece.~~
+   (Superseded by Flow 7: the relay is real but has no caller. Keep it for
+   ad-hoc single moves; do not build a caller for it.)
 2. The two intake trigger flows (Vercel/GitHub direct, Google Alerts sub-folder).
 3. Weekly Retention Sweep and the Daily-Briefing summary line last (hygiene /
    cosmetic).

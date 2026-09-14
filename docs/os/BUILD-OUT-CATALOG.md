@@ -1,5 +1,13 @@
 # LCC OS — Build-Out Catalog (the finish line)
 
+> **⚠️ Dated 2026-07-28. The consolidated, current backlog is
+> [`PLANNED-BACKLOG.md`](PLANNED-BACKLOG.md); live system state is
+> [`CURRENT-STATE.md`](CURRENT-STATE.md).** Every unbuilt row in this file was swept into that
+> backlog on 2026-08-26 (Prompt 141) — see the manifest in
+> `docs/history/DOCS_CONSOLIDATION_2026-08-26.md` §5. This file is kept for its **reasoning,
+> dependency ordering and design pointers**, which the backlog deliberately does not duplicate.
+> **Re-measure any row here before acting on it.**
+
 _Created 2026-07-28. A single master checklist of everything left to finish the Life Command Center OS, so
 nothing is lost. Legend: ✅ done · ⏳ built, pending a manual apply · 📐 designed/specced, not built · 🔨 build
 work remaining · 🚫 excluded by decision · 🔮 roadmap. **Owner:** 🤖 = I can drive it from here (engine/DB/docs);

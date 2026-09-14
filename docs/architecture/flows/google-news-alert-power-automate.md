@@ -25,11 +25,17 @@ Import: `flow-google-news-alert.json` (repo root, mirrors `flow-loopnet-backfill
    `X-PA-Webhook-Secret` header. `source_ref` = the Outlook message `id` (mutable);
    `internet_message_id` = `triggerOutputs()?['body/internetMessageId']` (the STABLE
    id the auto-archive move queue uses).
-4. **The move is deferred to the auto-archive pull-queue — this flow no longer
+4. **Mark the message as read after a successful POST.** Add Office 365 Outlook
+   **Mark as read or unread (V3)** immediately after `POST_to_news_alert_ingest`
+   with run-after = `Succeeded`, message id =
+   `triggerOutputs()?['body/id']`, and `isRead = true`. This is mailbox hygiene
+   only; it must not run before the POST, and it must not be the signal that a
+   lead was created.
+5. **The move is deferred to the auto-archive pull-queue — this flow no longer
    moves the email inline.** The `news_alert` handler records a `processing_complete`
    decision in `public.processing_log` (a high-confidence tracked-tenant hit →
    `filed`/`Processed/Leads`; a low-confidence hit → `needs_review`, left in the
-   Inbox). The separate **processing-complete** Power Automate flow
+   Inbox but already read). The separate **processing-complete** Power Automate flow
    (`GET /api/webhooks/processing-complete`) reads the pending decisions and performs
    the Outlook move by `internetMessageId`, so a filed lead lands in
    **Processed/Leads** and the daily briefing counts it. A low-confidence hit is
@@ -94,6 +100,12 @@ returns `ops_configured: true` when the LCC-Opps env is set.
   `https://url.us.m.mimecastprotect.com/s/...?domain=google.com`). That is
   harmless for classification (confidence is driven by the tenant match, not the
   URL) but the stored `article_url` will be the wrapper, not the original story.
+- **Trigger on the visible From address or Google Alerts list id, not the Gmail
+  forwarding return path.** Forwarded samples can arrive with
+  `Return-Path: sbriggssjc+caf_=...@gmail.com` while still showing
+  `From: Google Alerts <googlealerts-noreply@google.com>`. If the trigger checks
+  the wrong sender field, LCC never receives the email even though the message is
+  a valid Google Alert.
 
 ## Placeholders to fill in (in `flow-google-news-alert.json`)
 
@@ -145,7 +157,9 @@ found (both capped by the ceiling).
    `target_folder:"Processed/Leads"`, a new row in `news_alert_leads` (status
    `developer_unknown`) + a `processing_log` row (`outcome:"filed"`,
    `move_status:"pending"`). The processing-complete pull-queue then moves the email
-   to **Processed/Leads**, and the daily briefing counts it (`filed`).
+   to **Processed/Leads**, and the daily briefing counts it (`filed`). The email
+   should also be marked read by the Google Alert flow after the ingest POST
+   succeeds.
 4. A vague "new dialysis center" alert (no tracked tenant named) → `route:"review"`,
-   status `needs_review`, `target_folder:null`, email left in the Inbox, row visible in
-   `v_news_alert_review_queue`.
+   status `needs_review`, `target_folder:null`, email left in the Inbox but marked
+   read, row visible in `v_news_alert_review_queue`.

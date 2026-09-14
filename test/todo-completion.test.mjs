@@ -5,9 +5,17 @@
 // fallback, only when NOT subject_ambiguous). PA owns the To-Do/Graph calls;
 // LCC only does DB reads/writes. Pure helpers + the two deps-injected
 // orchestrators, no DB / no Graph.
+//
+// P121 — Flow 6 owns NO folder transition. The worklist publishes move:false /
+// clear_flag:false (the W7.6 mirror owns staging → Processed and unflags), and the
+// flip goes through rpc/lcc_todo_completion_mark_filed, which records a DISPOSITION
+// and never stamps move_status/moved_at. These tests pin that contract.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 
 import {
   buildStagedWorklistItem,
@@ -16,8 +24,10 @@ import {
   applyCompletionReports,
 } from '../api/_shared/todo-completion.js';
 
+const root = dirname(fileURLToPath(import.meta.url));
+
 describe('buildStagedWorklistItem', () => {
-  it('builds the PA worklist item (message key + subject/staged_at + destination + clear_flag)', () => {
+  it('builds the PA worklist item — and instructs NO move / NO unflag (P121)', () => {
     const row = {
       internet_message_id: '<a>',
       final_target_folder: 'Processed/Deals',
@@ -29,7 +39,9 @@ describe('buildStagedWorklistItem', () => {
       subject: 'OM — 123 Main St',
       staged_at: '2026-07-21T10:00:00Z',
       target_folder: 'Processed/Deals',
-      clear_flag: true,
+      move: false,
+      move_owner: 'mailbox_mirror',
+      clear_flag: false,
     });
   });
 
@@ -40,7 +52,9 @@ describe('buildStagedWorklistItem', () => {
       subject: null,
       staged_at: null,
       target_folder: 'Processed/Deals',
-      clear_flag: true,
+      move: false,
+      move_owner: 'mailbox_mirror',
+      clear_flag: false,
     });
   });
 
@@ -84,7 +98,8 @@ describe('buildStagedWorklist — the GET worklist assembler', () => {
     assert.equal(r.count, 1);
     assert.deepEqual(r.items, [{
       internet_message_id: '<a>', subject: 'Alpha', staged_at: 't1',
-      target_folder: 'Processed/Deals', clear_flag: true, subject_ambiguous: false,
+      target_folder: 'Processed/Deals', move: false, move_owner: 'mailbox_mirror',
+      clear_flag: false, subject_ambiguous: false,
     }]);
     assert.equal(r.no_destination, 1);
     assert.ok(!('unmapped' in r)); // the mapping concept is retired
@@ -114,7 +129,13 @@ describe('buildStagedWorklist — the GET worklist assembler', () => {
 
   it('empty staged set → clean zero', async () => {
     const r = await buildStagedWorklist(100, { fetchStagedRows: async () => [] });
-    assert.deepEqual(r, { count: 0, items: [], no_destination: 0 });
+    assert.equal(r.count, 0);
+    assert.deepEqual(r.items, []);
+    assert.equal(r.no_destination, 0);
+    // the contract note rides even on an empty tick, so a PA flow still doing its
+    // own Move is visible in the run history rather than silently double-moving.
+    assert.equal(r.contract.move, false);
+    assert.equal(r.contract.move_owner, 'mailbox_mirror');
   });
 });
 
@@ -164,7 +185,78 @@ describe('applyCompletionReports — the POST report-back flipper', () => {
       fetchStagedByKeys: async () => { calls++; return []; },
       markFiled: async () => true,
     });
-    assert.deepEqual(r, { requested: 0, filed: 0, not_staged: 0, filed_keys: [] });
+    assert.deepEqual(r, { requested: 0, filed: 0, not_staged: 0, filed_keys: [], dispositions: {} });
     assert.equal(calls, 0);
+  });
+});
+
+describe('applyCompletionReports — P121 dispositions', () => {
+  const staged = [
+    { id: 1, internet_message_id: '<a>', final_target_folder: 'Processed/Deals' },
+    { id: 2, internet_message_id: '<b>', final_target_folder: 'Processed/Infra' },
+  ];
+
+  it('tallies the RPC disposition per flip (what it did, not just how many)', async () => {
+    const r = await applyCompletionReports(['<a>', '<b>'], {
+      fetchStagedByKeys: async () => staged,
+      markFiled: async (row) => ({
+        filed: true,
+        disposition: row.id === 1 ? 'mirror_owns_move' : 'retargeted_to_final',
+      }),
+    });
+    assert.equal(r.filed, 2);
+    assert.deepEqual(r.dispositions, { mirror_owns_move: 1, retargeted_to_final: 1 });
+  });
+
+  it('a non-filing disposition is still tallied and never counted as filed', async () => {
+    const r = await applyCompletionReports(['<a>'], {
+      fetchStagedByKeys: async () => [staged[0]],
+      markFiled: async () => ({ filed: false, disposition: 'already_resolved' }),
+    });
+    assert.equal(r.filed, 0);
+    assert.deepEqual(r.filed_keys, []);
+    assert.deepEqual(r.dispositions, { already_resolved: 1 });
+  });
+
+  it('still accepts the legacy boolean markFiled shape', async () => {
+    const r = await applyCompletionReports(['<a>'], {
+      fetchStagedByKeys: async () => [staged[0]],
+      markFiled: async () => true,
+    });
+    assert.equal(r.filed, 1);
+    assert.deepEqual(r.dispositions, {});
+  });
+});
+
+describe('P121 — Flow 6 must not claim a mailbox action', () => {
+  const sync = readFileSync(join(root, '..', 'api', 'sync.js'), 'utf8');
+  const markFiled = sync.slice(sync.indexOf('markFiled: async (row)'), sync.indexOf('markFiled: async (row)') + 900);
+
+  it('markFiled routes to the RPC, not a raw processing_log PATCH', () => {
+    assert.match(markFiled, /rpc\/lcc_todo_completion_mark_filed/);
+    assert.ok(!/PATCH'?,\s*\n?\s*`processing_log/.test(markFiled),
+      'Flow 6 must not PATCH processing_log directly — the RPC is the single owner of the flip');
+  });
+
+  it('markFiled never stamps move_status / moved_at / move_outcome', () => {
+    for (const field of ['move_status', 'moved_at', 'move_outcome']) {
+      assert.ok(!markFiled.includes(`${field}:`),
+        `Flow 6 performs no Graph move, so it must never write ${field} — that stamp is what ` +
+        'stranded messages in staging while the DB read filed/moved (P121)');
+    }
+  });
+});
+
+describe('P121 — one spelling of the staging folder', () => {
+  it('the SQL lcc_staging_folder_name() matches the JS STAGING_FOLDER constant', () => {
+    const js = readFileSync(join(root, '..', 'api', '_shared', 'processing-complete.js'), 'utf8');
+    const jsName = js.match(/STAGING_FOLDER\s*=\s*'([^']+)'/)?.[1];
+    const sql = readFileSync(
+      join(root, '..', 'supabase', 'migrations',
+           '20260820160000_lcc_p121_staging_processed_single_owner.sql'), 'utf8');
+    const sqlName = sql.match(/lcc_staging_folder_name\(\)[\s\S]{0,200}?SELECT '([^']+)'::text/)?.[1];
+    assert.ok(jsName, 'STAGING_FOLDER not found in processing-complete.js');
+    assert.equal(sqlName, jsName,
+      'two hand-typed copies of the staging-folder name is the normaliser drift this repo keeps hitting');
   });
 });

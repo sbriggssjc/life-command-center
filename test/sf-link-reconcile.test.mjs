@@ -5,7 +5,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { planSfLinkReconcile } from '../api/_handlers/sf-link-reconcile.js';
+import { planSfLinkReconcile, planSfWriteback } from '../api/_handlers/sf-link-reconcile.js';
 import { toSf18 } from '../api/_shared/sf-id.js';
 
 // Two real-shaped 15-char Account ids and their canonical 18-char forms.
@@ -112,5 +112,73 @@ describe('planSfLinkReconcile', () => {
     });
     assert.equal(plan.attaches.length, 0);
     assert.equal(plan.unbridged, 1);
+  });
+});
+
+// C1d — Unit 4, the LCC->dia writeback direction.
+describe('planSfWriteback', () => {
+  it('fills a candidate with exactly one resolved Account, no tombstone, not an operator', () => {
+    const plan = planSfWriteback({
+      candidates: [{ true_owner_id: 't1', entity_id: 'e1', sf18: SF_A_18, tombstoned: false,
+        isOperator: false, existingDomainSfId: null, sfAccountCount: 1 }],
+    });
+    assert.equal(plan.fills.length, 1);
+    assert.equal(plan.fills[0].sf18, SF_A_18);
+    assert.deepEqual(plan.skipped, { no_entity: 0, tombstoned: 0, operator: 0, already_set: 0, ambiguous_or_none: 0 });
+  });
+
+  it('skips no_entity when the true_owner never bridged to an entity', () => {
+    const plan = planSfWriteback({
+      candidates: [{ true_owner_id: 't1', entity_id: null, sf18: null, tombstoned: true,
+        isOperator: false, existingDomainSfId: null, sfAccountCount: 0 }],
+    });
+    assert.equal(plan.fills.length, 0);
+    assert.equal(plan.skipped.no_entity, 1);
+  });
+
+  it('skips a P113 operator, never fills even with one clean Account', () => {
+    const plan = planSfWriteback({
+      candidates: [{ true_owner_id: 't1', entity_id: 'e1', sf18: SF_A_18, tombstoned: false,
+        isOperator: true, existingDomainSfId: null, sfAccountCount: 1 }],
+    });
+    assert.equal(plan.fills.length, 0);
+    assert.equal(plan.skipped.operator, 1);
+  });
+
+  it('skips already_set — fill-blanks only, never overwrite', () => {
+    const plan = planSfWriteback({
+      candidates: [{ true_owner_id: 't1', entity_id: 'e1', sf18: SF_A_18, tombstoned: false,
+        isOperator: false, existingDomainSfId: SF_B_18, sfAccountCount: 1 }],
+    });
+    assert.equal(plan.fills.length, 0);
+    assert.equal(plan.skipped.already_set, 1);
+  });
+
+  it('skips ambiguous_or_none when the entity holds zero or more than one Account', () => {
+    const zero = planSfWriteback({
+      candidates: [{ true_owner_id: 't1', entity_id: 'e1', sf18: null, tombstoned: false,
+        isOperator: false, existingDomainSfId: null, sfAccountCount: 0 }],
+    });
+    assert.equal(zero.fills.length, 0);
+    assert.equal(zero.skipped.ambiguous_or_none, 1);
+
+    const multi = planSfWriteback({
+      candidates: [{ true_owner_id: 't1', entity_id: 'e1', sf18: SF_A_18, tombstoned: false,
+        isOperator: false, existingDomainSfId: null, sfAccountCount: 2 }],
+    });
+    assert.equal(multi.fills.length, 0);
+    assert.equal(multi.skipped.ambiguous_or_none, 1);
+  });
+
+  it('never guesses: an ambiguous candidate is never silently promoted to a fill', () => {
+    const plan = planSfWriteback({
+      candidates: [
+        { true_owner_id: 't1', entity_id: 'e1', sf18: SF_A_18, tombstoned: false, isOperator: false, existingDomainSfId: null, sfAccountCount: 1 },
+        { true_owner_id: 't2', entity_id: 'e2', sf18: SF_B_18, tombstoned: false, isOperator: false, existingDomainSfId: null, sfAccountCount: 3 },
+      ],
+    });
+    assert.equal(plan.fills.length, 1);
+    assert.equal(plan.fills[0].true_owner_id, 't1');
+    assert.equal(plan.skipped.ambiguous_or_none, 1);
   });
 });

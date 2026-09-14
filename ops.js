@@ -91,8 +91,20 @@ let opsInboxSourceFilter = null;   // null | 'listing_bd_trigger' (W3.5 grouped 
 let opsEntityFilter = 'all';      // all | person | organization | asset (server-side filter)
 let opsEntitySearch = '';         // backend name search term (B6, 2026-06-06)
 let opsResearchFilter = 'active'; // active | completed | all
+let opsResearchTypeFilter = '';   // '' | news_alert_development_followup
+// A1: which of the four ownership-lane actions is selected ('' = all four).
+let opsResearchLaneAction = '';  // '' | mismatch | all_guarded | agrees | no_records | awaiting_draft | unrecognised_payload
+let opsResearchLaneActionCounts = [];
 let opsEntitiesPage = 1;
 let opsResearchPage = 1;
+
+// UX-T1b — the research workbench tab picker (2026-09-08).
+// 'flow' = the flow dashboard (default landing); 'ownership_history' /
+// 'owner_contact' / 'npi' / 'followups' = the four genuine-human-queue tabs
+// (each its own action per UX32); 'all' = the pre-existing full research
+// list + raw ~18-entry lane-chip picker, kept reachable for anything not yet
+// disposed into a tab (see docs/architecture/research-workbench.md).
+let opsWorkbenchTab = 'flow';
 let opsInboxSelected = new Set();
 // Render-side windowing: cap the DOM render to N rows; "Load more" grows it.
 // opsInboxData stays the full in-memory backlog so counts and selection work
@@ -691,6 +703,13 @@ async function renderTeamQueue() {
   }
 
   el.innerHTML = html;
+  if (_newsAlertPendingRenderer) {
+    var nextRenderer = _newsAlertPendingRenderer;
+    _newsAlertPendingRenderer = null;
+    setTimeout(function () {
+      try { nextRenderer(); } catch (e) { console.warn('[news-alert] pending renderer failed:', e?.message || e); }
+    }, 0);
+  }
   perf.end();
 }
 
@@ -728,6 +747,10 @@ async function renderInboxTriage() {
   }
 
   opsInboxData = res.data?.items || res.data || [];
+  // HP1-P2a: the true (exact, uncapped) count of the captured-contact hygiene
+  // rows the Inbox no longer shows (v_inbox_triage excludes them). Rendered
+  // as a persistent pointer row below, never silently dropped.
+  window._inboxHygienePointer = res.data?.hygiene_pointer || null;
 
   // Fallback: if canonical inbox is empty, load flagged emails from inbox_items DB
   if (opsInboxData.length === 0 && opsInboxFilter !== 'triaged') {
@@ -797,6 +820,18 @@ async function renderInboxTriage() {
   html += filterPill('triaged', 'Triaged', opsInboxFilter, 'opsInboxFilter', 'opsInboxSetFilter');
   html += filterPill('all', 'All', opsInboxFilter, 'opsInboxFilter', 'opsInboxSetFilter');
   html += '</div>';
+
+  // HP1-P2a: a persistent pointer to the data-hygiene lane this page no
+  // longer shows — never a silent absence. `count` is the TRUE population
+  // (an exact query against inbox_items, not a capped page), so it cannot
+  // read stale/lower than what is actually waiting.
+  const hp = window._inboxHygienePointer;
+  if (hp && hp.count > 0) {
+    html += `<div class="ops-hygiene-pointer" style="padding:10px 12px;margin:8px 0;background:var(--s2);border-radius:8px;font-size:12px;color:var(--text2);display:flex;justify-content:space-between;align-items:center;gap:10px">
+      <span>🧹 ${esc(hp.label)} — <b>${hp.count.toLocaleString()} item${hp.count === 1 ? '' : 's'}</b> (not broker judgment; not shown here)</span>
+      <button class="q-action" style="font-size:11px;padding:4px 10px" onclick="renderContactQualifyWorklist()">Review →</button>
+    </div>`;
+  }
 
   // W3.5 — Listing-BD source filter. When active, the Inbox switches to a
   // grouped-by-listing consumer view (one card per listing with its N matched
@@ -1691,16 +1726,31 @@ async function renderOpsHealthPage() {
   }
   const d = res.data || {};
   const s = d.summary || {};
+  const lccHealth = d.lcc_health || {};
+  const healthDigest = d.health_digest || {};
   const sevClass = (sev) => {
     const v = String(sev || '').toLowerCase();
     return v === 'critical' || v === 'error' ? 'red' : v === 'warning' || v === 'warn' ? 'yellow' : '';
   };
+  const healthTone = (status) => {
+    const v = String(status || '').toLowerCase();
+    return v === 'red' ? 'red' : v === 'amber' ? 'yellow' : v === 'green' ? 'green' : '';
+  };
+  const healthBadge = (status) => {
+    const v = String(status || 'unknown').toUpperCase();
+    const cls = healthTone(status) === 'red' ? 'pri-high' : '';
+    const style = healthTone(status) === 'green' ? ' style="background:var(--okbg);color:var(--green)"' : '';
+    return '<span class="q-badge ' + cls + '"' + style + '>' + esc(v) + '</span>';
+  };
 
-  let html = '<div class="ops-header"><h2>Ops Health</h2></div>';
-  html += '<div class="oh-intro">System self-monitoring: failing jobs, stalled workers, open alerts. If this page is all-clear, the pipelines are healthy.</div>';
+  let html = '<div class="ops-header"><h2>LCC Health</h2></div>';
+  html += '<div class="oh-intro">Connector, flow, DB-check, deploy, and worker health in one place. Red means same-day triage, amber means degraded or incomplete observability.</div>';
 
   // Summary KPI row.
   html += '<div class="metrics-grid">';
+  html += metricCardHTML('Overall', (lccHealth.overall_status || 'unknown').toUpperCase(), 'LCC Health', healthTone(lccHealth.overall_status));
+  html += metricCardHTML('Red Checks', lccHealth.counts ? lccHealth.counts.red : (s.lcc_health_red || 0), 'same-day triage', (s.lcc_health_red > 0 || lccHealth?.counts?.red > 0) ? 'red' : 'green');
+  html += metricCardHTML('Amber Checks', lccHealth.counts ? lccHealth.counts.amber : (s.lcc_health_amber || 0), 'degraded', (s.lcc_health_amber > 0 || lccHealth?.counts?.amber > 0) ? 'yellow' : 'green');
   html += metricCardHTML('Open Alerts', s.open_alerts == null ? '—' : s.open_alerts, 'health alerts', (s.open_alerts > 0) ? 'red' : 'green');
   html += metricCardHTML('Workers Stuck', s.workers_stuck == null ? '—' : s.workers_stuck, 'queues degrading', (s.workers_stuck > 0) ? 'red' : 'green');
   html += metricCardHTML('Flow Failures', s.open_flow_failures == null ? '—' : s.open_flow_failures, 'Power Automate', (s.open_flow_failures > 0) ? 'yellow' : 'green');
@@ -1708,6 +1758,47 @@ async function renderOpsHealthPage() {
   const wf24 = s.write_failures_24h;
   const wfSub = (s.write_failures_7d != null) ? ('last 24h · ' + Number(s.write_failures_7d).toLocaleString() + ' in 7d') : 'last 24h';
   html += metricCardHTML('Write Failures', wf24 == null ? '—' : Number(wf24).toLocaleString(), wfSub, (wf24 > 0) ? 'yellow' : 'green');
+  html += '</div>';
+
+  if (healthDigest.text) {
+    html += '<div class="widget"><div class="widget-title">Daily Health Digest'
+      + (healthDigest.summarizer ? ' <span class="q-badge">' + esc(healthDigest.summarizer) + '</span>' : '')
+      + '</div><pre style="white-space:pre-wrap;margin:0;color:var(--text2);font:12px/1.5 var(--font-mono,monospace)">'
+      + esc(healthDigest.text) + '</pre></div>';
+  }
+
+  html += '<div class="widget"><div class="widget-title">Subsystems</div>';
+  if (!(lccHealth.by_subsystem || []).length) {
+    html += '<div class="ops-empty">No LCC Health rows collected yet. Apply the migration and wire probes to lcc_record_health_event.</div>';
+  } else {
+    (lccHealth.by_subsystem || []).forEach(function (sub) {
+      const counts = sub.counts || {};
+      html += '<div class="q-item oh-' + healthTone(sub.status) + '"><div class="q-item-header"><span class="q-item-title">'
+        + esc(sub.subsystem || 'subsystem') + '</span><div class="q-item-badges">' + healthBadge(sub.status) + '</div></div>'
+        + '<div class="q-item-meta">red: ' + (counts.red || 0) + ' · amber: ' + (counts.amber || 0)
+        + ' · green: ' + (counts.green || 0) + ' · unknown: ' + (counts.unknown || 0) + '</div>';
+      (sub.checks || []).slice(0, 4).forEach(function (chk) {
+        html += '<div class="q-item-meta" style="margin-top:4px"><strong>' + esc(chk.check_name || 'check') + '</strong> '
+          + healthBadge(chk.status)
+          + ' <span>' + (chk.count == null ? '' : esc(String(chk.count)) + ' event(s)') + '</span>'
+          + (chk.first_seen ? ' · since ' + freshnessHTML(chk.first_seen) : '')
+          + (chk.last_error ? '<br><span style="color:var(--red)">' + esc(String(chk.last_error).slice(0, 220)) + '</span>' : '')
+          + (chk.external_url ? ' · <a href="' + esc(chk.external_url) + '" target="_blank" rel="noopener">run</a>' : '')
+          + '</div>';
+      });
+      html += '</div>';
+    });
+  }
+  html += '</div>';
+
+  html += '<div class="widget"><div class="widget-title">2026-08-01 Replay Verification</div>';
+  (lccHealth.replay_2026_08_01 || []).forEach(function (r) {
+    html += '<div class="q-item ' + (r.would_flag_same_day ? '' : 'overdue') + '"><div class="q-item-header"><span class="q-item-title">'
+      + esc(r.incident || 'incident') + '</span><div class="q-item-badges">'
+      + (r.would_flag_same_day ? '<span class="q-badge" style="background:var(--okbg);color:var(--green)">same-day</span>' : '<span class="q-badge pri-high">missing</span>')
+      + '</div></div><div class="q-item-meta">' + esc(r.evidence || '') + '</div></div>';
+  });
+  if (!(lccHealth.replay_2026_08_01 || []).length) html += '<div class="ops-empty">Replay checks unavailable.</div>';
   html += '</div>';
 
   // Top write-failure offender (24h) — names the single worst path so a storm
@@ -1779,7 +1870,18 @@ window.renderOpsHealthPage = renderOpsHealthPage;
 // VERDICT lane whose count drives the nav badge. Keep in sync with
 // FEDERATED_DECISION_TYPES in api/admin.js — the two define the same partition.
 var _DC_FEDERATED = new Set([
+  // PDR1 / P13#1 (2026-09-10): the needs_human half of the ambiguous-entity
+  // automerge lane. Source = `entities` rows carrying metadata.ambiguous_
+  // resolution whose planner score misses the auto-merge threshold; verdicts
+  // merge (rpc/reconcile_entity) / keep_new (rpc/reconcile_entity p_keep_new)
+  // / research. Keep in sync with admin.js FEDERATED_DECISION_TYPES
+  // (test/decision-center-partition.test.mjs).
+  'ambiguous_entity_resolution',
   'intake_disposition', 'property_merge', 'provenance_conflict', 'pending_update',
+  // dia geospatial address-twin review (2026-08-14). Source = the pending slice of
+  // dia_property_twin_review; merge rides the REVERSIBLE dia_merge_property_reversible.
+  // Keep in sync with admin.js FEDERATED_DECISION_TYPES (decision-center-partition test).
+  'property_twin',
   'cms_link_suspect', 'implausible_value', 'merge_duplicate_entities',
   'caprate_review', 'bad_rent_lease', 'resolve_owner_parent',
   // Ownership-resolution consolidation (2026-06-30): ONE property-keyed lane
@@ -1795,6 +1897,68 @@ var _DC_FEDERATED = new Set([
   // gov + dia). Rendered via renderFederatedLane; count read live from
   // /api/review-counts. Keep in sync with admin.js FEDERATED_DECISION_TYPES.
   'sf_link_candidate',
+  // W5.2 (signal -> task automation): two DECISION lanes for orphaned signal
+  // streams. Keep in sync with admin.js FEDERATED_DECISION_TYPES
+  // (test/decision-center-partition.test.mjs). agency_risk_action = gov agency
+  // risk composite with tracked exposure; npi_dedup_review / npi_dedup_autoapprove
+  // = dia duplicate-NPI clusters (review the data_error / approve the
+  // auto_resolvable survivor — never a silent auto-collapse).
+  'agency_risk_action', 'npi_dedup_review', 'npi_dedup_autoapprove',
+  // W8 U1 (Prompt 62): Ollama junk-entity pre-screen proposals. Source =
+  // v_junk_entity_review_open; verdict soft-retires (reversible) or routes an
+  // FK-referenced row to a conflict. Keep in sync with admin.js
+  // FEDERATED_DECISION_TYPES (test/decision-center-partition.test.mjs).
+  'junk_entity_review',
+  // W8 U3 (Prompt 69): Ollama connection-propagation link proposals. Source =
+  // v_w8_u3_link_review_open; verdict confirm runs the deterministic edge writer
+  // (entity_relationships + provenance, reversible) / person-email routes to the
+  // resolver. Keep in sync with admin.js FEDERATED_DECISION_TYPES
+  // (test/decision-center-partition.test.mjs).
+  'w8_u3_link_review',
+  // W8 U5 (Prompt 79): naming-hygiene proposals. Source =
+  // v_naming_hygiene_review_open; confirm+rename writes the expanded display name
+  // (reversible + provenance); confirm+link attaches the entity to its property.
+  // Deterministic dictionary renames are bulk-confirmable. Keep in sync with
+  // admin.js FEDERATED_DECISION_TYPES (test/decision-center-partition.test.mjs).
+  'naming_hygiene_review',
+  // W9.2 (Prompt 88): contact-reachability internal-harvest proposals. Source =
+  // v_reachability_harvest_review_open; confirm runs the fill-blanks writer (domain
+  // contacts email/phone + provenance, reversible reachability_harvest_apply_log).
+  'reachability_harvest_review',
+  // W9.1 (Prompt 98): contact-acquisition engine (Stage 1) proposals. Source =
+  // v_contact_acquisition_review_open; confirm attaches/mints in the ops entity
+  // graph (reversible contact_acquisition_apply_log).
+  'contact_acquisition_review',
+  // W9.6 (Prompt 102): correspondence → owner-LLC attribution proposals. Source =
+  // v_comms_owner_attribution_review_open; confirm appends the owner ops entity to
+  // the correspondence rows' metadata.linked_entity_ids (reversible
+  // comms_owner_attribution_apply_log). Keep in sync with admin.js
+  // FEDERATED_DECISION_TYPES (test/decision-center-partition.test.mjs).
+  'comms_owner_attribution_review',
+  // Prompt 114 (BREAK-1 Unit 3): the owner-contact review lane Prompt 111 filled
+  // and left with no consumer surface. Source = v_lcc_owner_contact_attach_review_open;
+  // three shape-aware verdicts (attach_person / same_party / reject), reversible
+  // via lcc_owner_contact_attach_log. Keep in sync with admin.js
+  // FEDERATED_DECISION_TYPES (test/decision-center-partition.test.mjs).
+  'owner_contact_attach_review',
+  // Prompt 188: the Tier 0 owner-contact confirm lane. Source =
+  // v_lcc_tier0_owner_contact_lane_open, ONE card per (owner, email domain);
+  // verdicts attach / reject / research, reversible via lcc_tier0_confirm_log.
+  // Keep in sync with admin.js FEDERATED_DECISION_TYPES
+  // (test/decision-center-partition.test.mjs).
+  'tier0_owner_contact',
+  // C13g-min-lane (2026-09-09): the human verdict over C13g-min's retype write.
+  // Source = v_lcc_entity_retype_candidates; verdicts retype_organization
+  // (rpc/lcc_retype_entity, reversible via rpc/lcc_unretype_entity) /
+  // keep_person (record-only) / research. Keep in sync with admin.js
+  // FEDERATED_DECISION_TYPES (test/decision-center-partition.test.mjs).
+  'entity_type_review',
+  // OWN-T0e (2026-09-09): sponsor-family confirm over the OWN-T0 unclassified_rival
+  // conflict store. Source = lcc_ownt0e_sponsor_family_proposals_cache; verdicts
+  // confirm_family (INSERT lcc_ownership_sponsor_family, reversible by DELETE) /
+  // same_party (-> merge lane) / not_family / research. Keep in sync with
+  // admin.js FEDERATED_DECISION_TYPES (test/decision-center-partition.test.mjs).
+  'sponsor_family_confirm',
 ]);
 function _dcIsVerdictLane(dt) { return !_DC_FEDERATED.has(dt); }
 
@@ -1817,10 +1981,11 @@ async function renderReviewConsolePage() {
   // R7 Phase 2: every lane is now a real decision lane (no more "More review
   // work" deep-links). Decision-lane counts (seeded + federated, each labeled
   // with its mode) + the SOS owner-contact count, in parallel.
-  const [decR, res, compR] = await Promise.all([
+  const [decR, res, compR, newsR] = await Promise.all([
     opsApi('/api/decisions?summary=1'),
     opsApi('/api/review-counts'),
     opsApi('/api/comp-reviews?status=open&limit=1'),
+    opsApi('/api/news-alerts?status=open&limit=1'),
   ]);
 
   let html = '<div class="ops-header"><h2>Decision Center</h2></div>';
@@ -1854,6 +2019,36 @@ async function renderReviewConsolePage() {
     if (s && typeof s.count === 'number') sfLinkN = s.count;
   }
   dc['sf_link_candidate'] = sfLinkN;
+  // W8 (Prompt 75): the two W8-touched federated badges read their LIVE
+  // /api/review-counts depth, not the heavy /api/decisions?summary=1 federated
+  // total (which fans out 8+ cross-DB owner_reconcile sub-queries and can time
+  // out to a 0 badge). owner_reconcile now INCLUDES the folded W8 U2 dup-pair
+  // count; w8_u3_link_review reads v_w8_u3_link_review_open. Honest-counts
+  // doctrine — a lane holding cards must never show a 0 badge. Fall back to the
+  // summary value when the live lane is unavailable (null), never override to 0.
+  if (res.ok && res.data && Array.isArray(res.data.lanes)) {
+    const orLane = res.data.lanes.find(function (l) { return l.key === 'owner_reconcile'; });
+    if (orLane && typeof orLane.count === 'number') dc['owner_reconcile'] = orLane.count;
+    const u3Lane = res.data.lanes.find(function (l) { return l.key === 'w8_u3_link_review'; });
+    if (u3Lane && typeof u3Lane.count === 'number') dc['w8_u3_link_review'] = u3Lane.count;
+    const u5Lane = res.data.lanes.find(function (l) { return l.key === 'naming_hygiene_review'; });
+    if (u5Lane && typeof u5Lane.count === 'number') dc['naming_hygiene_review'] = u5Lane.count;
+    const w92Lane = res.data.lanes.find(function (l) { return l.key === 'reachability_harvest_review'; });
+    if (w92Lane && typeof w92Lane.count === 'number') dc['reachability_harvest_review'] = w92Lane.count;
+    const w91Lane = res.data.lanes.find(function (l) { return l.key === 'contact_acquisition_review'; });
+    if (w91Lane && typeof w91Lane.count === 'number') dc['contact_acquisition_review'] = w91Lane.count;
+    const w96Lane = res.data.lanes.find(function (l) { return l.key === 'comms_owner_attribution_review'; });
+    if (w96Lane && typeof w96Lane.count === 'number') dc['comms_owner_attribution_review'] = w96Lane.count;
+    // Prompt 114: read the ACTIONABLE depth from /api/review-counts (the view
+    // already drops owners that became reachable), not the raw proposal table.
+    const ocpLane = res.data.lanes.find(function (l) { return l.key === 'owner_contact_attach_review'; });
+    if (ocpLane && typeof ocpLane.count === 'number') dc['owner_contact_attach_review'] = ocpLane.count;
+    // Prompt 188: the Tier 0 badge. /api/review-counts computes it through the
+    // SAME fetchFederatedSource the list renders from, so badge and list cannot
+    // drift onto different sources (the P132 defect).
+    const t0Lane = res.data.lanes.find(function (l) { return l.key === 'tier0_owner_contact'; });
+    if (t0Lane && typeof t0Lane.count === 'number') dc['tier0_owner_contact'] = t0Lane.count;
+  }
   // W3.4: comp reconciliation reviews (flagged sold comps) keep their own
   // status-shaped worklist (dia_comp_review_queue + gov_comp_review_queue).
   let compN = 0;
@@ -1861,6 +2056,9 @@ async function renderReviewConsolePage() {
     compN = Object.values(compR.data.counts).reduce(function (a, b) { return a + (Number(b) || 0); }, 0);
   }
   dc['comp_review'] = compN;
+  const newsCounts = (newsR && newsR.ok && newsR.data && newsR.data.counts) ? newsR.data.counts : {};
+  dc['news_alert_review'] = Number(newsCounts.open) || 0;
+  dc['news_alert_followup'] = Number(newsCounts.converted) || 0;
 
   // Every sub-lane (decision_type) with its existing renderer — NOTHING lost.
   // Grouped into the 8 logical lanes via the Tier 3 lane map (review-shared.js).
@@ -1871,13 +2069,29 @@ async function renderReviewConsolePage() {
     { dt: 'resolve_ownership', label: 'Resolve ownership & control', open: "renderFederatedLane('resolve_ownership')" },
     { dt: 'loan_maturity', label: 'Loan maturities → refi or sell', open: "renderFederatedLane('loan_maturity')" },
     { dt: 'listing_event_action', label: 'New sales → act', open: "renderFederatedLane('listing_event_action')" },
+    { dt: 'agency_risk_action', label: 'Agency risk → disposition', open: "renderFederatedLane('agency_risk_action')" },
+    { dt: 'npi_dedup_review', label: 'NPI duplicates → review', open: "renderFederatedLane('npi_dedup_review')" },
+    { dt: 'npi_dedup_autoapprove', label: 'NPI duplicates → approve', open: "renderFederatedLane('npi_dedup_autoapprove')" },
     { dt: 'sf_link_conflict', label: 'Salesforce link conflicts', open: "renderDecisionLane('sf_link_conflict')" },
     { dt: 'sf_link_collision', label: 'Salesforce link — merge candidates', open: "renderDecisionLane('sf_link_collision')" },
     { dt: 'sf_link_candidate', label: 'Salesforce link — confirm candidate', open: "renderFederatedLane('sf_link_candidate')" },
     { dt: 'merge_duplicate_entities', label: 'Duplicate entities — merge', open: "renderFederatedLane('merge_duplicate_entities')" },
     { dt: 'owner_reconcile', label: 'Owner reconcile — same party?', open: "renderFederatedLane('owner_reconcile')" },
+    { dt: 'contact_company_link', label: 'Contact → company owner', open: "renderFederatedLane('contact_company_link')" },
     { dt: 'junk_entity_name', label: 'Junk entity names', open: "renderDecisionLane('junk_entity_name')" },
+    { dt: 'junk_entity_review', label: 'Junk entities — Ollama pre-screen', open: "renderFederatedLane('junk_entity_review')" },
+    { dt: 'w8_u3_link_review', label: 'Ownership links — Ollama proposals', open: "renderFederatedLane('w8_u3_link_review')" },
+    { dt: 'naming_hygiene_review', label: 'Naming hygiene — rename / link', open: "renderFederatedLane('naming_hygiene_review')" },
+    { dt: 'reachability_harvest_review', label: 'Contact reachability — internal harvest', open: "renderFederatedLane('reachability_harvest_review')" },
+    { dt: 'contact_acquisition_review', label: 'Contact acquisition — owner outreach', open: "renderFederatedLane('contact_acquisition_review')" },
+    { dt: 'comms_owner_attribution_review', label: 'Correspondence → owner attribution', open: "renderFederatedLane('comms_owner_attribution_review')" },
+    { dt: 'owner_contact_attach_review', label: 'Owner contacts — attach or reject', open: "renderFederatedLane('owner_contact_attach_review')" },
+    { dt: 'tier0_owner_contact', label: 'Tier 0 — confirm the owner’s firm domain', open: "renderFederatedLane('tier0_owner_contact')" },
+    { dt: 'sponsor_family_confirm', label: 'Sponsor ↔ SPE families — confirm', open: "renderFederatedLane('sponsor_family_confirm')" },
+    { dt: 'entity_type_review', label: 'Entity type — person or organization?', open: "renderFederatedLane('entity_type_review')" },
+    { dt: 'ambiguous_entity_resolution', label: 'Ambiguous entities — pick the merge target', open: "renderFederatedLane('ambiguous_entity_resolution')" },
     { dt: 'property_merge', label: 'Property merges & duplicates', open: "renderFederatedLane('property_merge')" },
+    { dt: 'property_twin', label: 'Property address twins (dia)', open: "renderFederatedLane('property_twin')" },
     { dt: 'provenance_conflict', label: 'Data conflicts & provenance', open: "renderFederatedLane('provenance_conflict')" },
     { dt: 'pending_update', label: 'Pending updates (Gov)', open: "renderFederatedLane('pending_update')" },
     { dt: 'caprate_review', label: 'Cap-rate review — suspect movers', open: "renderFederatedLane('caprate_review')" },
@@ -1888,6 +2102,8 @@ async function renderReviewConsolePage() {
     { dt: 'sf_contact_account_mismatch', label: 'Salesforce contact ↔ account mismatch', open: "renderDecisionLane('sf_contact_account_mismatch')" },
     { dt: 'sos_owner_links', label: 'Owner-contact links to confirm', open: 'renderSosLinkWorklist()' },
     { dt: 'comp_review', label: 'Comp reconciliation reviews (dia+gov)', open: 'renderCompReviewLane()' },
+    { dt: 'news_alert_review', label: 'News alerts — review & promote', open: 'renderNewsAlertLane()' },
+    { dt: 'news_alert_followup', label: 'News alerts — follow-up queue', open: 'renderNewsAlertFollowupQueue()' },
     { dt: 'implausible_value', label: 'Implausible values', open: "renderFederatedLane('implausible_value')" },
     { dt: 'llc_research_dead', label: 'LLC research dead-letters', open: "renderDecisionLane('llc_research_dead')" },
     { dt: 'availability_checker_botblock', label: 'Availability bot-blocks', open: "renderDecisionLane('availability_checker_botblock')" },
@@ -1984,7 +2200,11 @@ window.setReviewNavBadge = setReviewNavBadge;
 // operator sees how much review work is waiting without opening the page.
 async function refreshReviewNavBadge() {
   try {
-    const [r, rc] = await Promise.all([opsApi('/api/decisions?summary=1'), opsApi('/api/review-counts')]);
+    const [r, rc, nr] = await Promise.all([
+      opsApi('/api/decisions?summary=1'),
+      opsApi('/api/review-counts'),
+      opsApi('/api/news-alerts?status=open&limit=1'),
+    ]);
     // R64: the badge is ACTIONABLE verdicts only — sum the seeded (non-federated)
     // lanes + the SOS owner-contact worklist. The large federated DQ universe is
     // worked on demand and must never inflate the badge (the 999+ trap).
@@ -1996,6 +2216,7 @@ async function refreshReviewNavBadge() {
       const s = rc.data.lanes.find(function (l) { return l.key === 'sos_owner_links'; });
       if (s && typeof s.count === 'number') total += s.count;
     }
+    if (nr.ok && nr.data && nr.data.counts) total += Number(nr.data.counts.open) || 0;
     setReviewNavBadge(total);
   } catch (_e) { /* best-effort */ }
 }
@@ -2058,7 +2279,7 @@ async function resolveOwnerLink(linkId, decision, propId) {
   const row = document.getElementById('soslink-' + linkId);
   if (res.ok && res.data && res.data.ok) {
     // Carry-forward: after a confirm, the owner is now CRM-linked — offer a
-    // one-click hop to that property's Ownership & CRM tab to act on it
+    // one-click hop to that property's Ownership tab to act on it
     // (create lead / cadence) instead of stranding the user in the worklist.
     const pid = (res.data && res.data.source_property_id != null) ? res.data.source_property_id : propId;
     if (row) {
@@ -2102,6 +2323,19 @@ window.resolveOwnerLink = resolveOwnerLink;
 // self-propelling model). Verdicts ride existing machinery via
 // /api/decision-verdict; the surface is a router + recorder.
 let _dcItems = {};
+
+function _cleanAssistHTML(it) {
+  var a = it && it.clean_assist;
+  if (!a) return '';
+  var conf = a.confidence == null ? '' : ' · conf ' + Math.round(Number(a.confidence || 0) * 100) + '%';
+  var model = a.model_name ? ' · ' + a.model_name : '';
+  var verdict = a.verdict ? String(a.verdict).replace(/_/g, ' ') : 'proposal';
+  var detail = a.conflict_summary || a.reason || '';
+  return '<div class="q-item-meta clean-assist">'
+    + '<span class="q-badge type">Ollama assist: ' + esc(verdict) + conf + model + '</span> '
+    + esc(detail)
+    + '</div>';
+}
 
 function _dcCardHTML(it, isNext) {
   const c = it.context || {};
@@ -2155,17 +2389,47 @@ function _dcCardHTML(it, isNext) {
       + '<button class="q-action" onclick="dcVerdict(' + id + ',\'research\')">Research</button>';
   } else if (it.decision_type === 'match_disambiguation') {
     const cands = Array.isArray(c.candidates) ? c.candidates : [];
+    // Prompt 80: the Ollama pre-rank assist (metadata.assist) annotates — never
+    // decides. Show each candidate's assist rank/confidence/reason inline and
+    // offer a one-click "assist agrees" confirm that rides the SAME pick path.
+    const assist = (it.metadata && typeof it.metadata === 'object') ? it.metadata.assist : null;
+    const assistByKey = {};
+    if (assist && Array.isArray(assist.ranking)) {
+      assist.ranking.forEach(function (r) {
+        assistByKey[String(r.domain || '') + ':' + String(r.property_id == null ? '' : r.property_id)] = r;
+      });
+    }
     body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.address || ('Intake ' + (c.intake_id || ''))) + '</span>'
       + (c.tenant ? '<div class="q-item-badges"><span class="q-badge">' + esc(c.tenant) + '</span></div>' : '') + '</div>'
       + '<div class="q-item-meta">The matcher found ' + cands.length + ' candidate propert' + (cands.length === 1 ? 'y' : 'ies')
       + ' above threshold. Pick the right one, or create a new property.</div>';
+    if (assist) {
+      const ra = String(assist.recommended_action || '').replace(/_/g, ' ');
+      const tc = assist.top_confidence == null ? '' : ' · top ' + Math.round(Number(assist.top_confidence || 0) * 100) + '%';
+      body += '<div class="q-item-meta clean-assist"><span class="q-badge type">Ollama assist: ' + esc(ra || 'ranked') + tc
+        + (assist.model ? ' · ' + esc(assist.model) : '') + '</span> ' + esc(assist.overall_reason || '') + '</div>';
+    }
     cands.forEach(function (cand) {
       const pid = String(cand.property_id == null ? '' : cand.property_id);
+      const ar = assistByKey[String(cand.domain || '') + ':' + pid];
+      const arTag = ar ? ' <span class="q-badge">assist #' + (Number(ar.rank) || '?') + ' · '
+        + Math.round(Number(ar.confidence || 0) * 100) + '%</span>' : '';
       body += '<div class="q-item-meta">• <b>' + esc(cand.domain || '') + '</b> #' + esc(pid)
-        + ' — ' + esc(cand.address || '') + (cand.tenant ? ' (' + esc(cand.tenant) + ')' : '')
-        + ' <button class="q-action" onclick="dcPickCandidate(' + id + ',\'' + esc(cand.domain || '') + '\',\'' + esc(pid) + '\')">Pick this →</button></div>';
+        + ' — ' + esc(cand.address || '') + (cand.tenant ? ' (' + esc(cand.tenant) + ')' : '') + arTag
+        + ' <button class="q-action" onclick="dcPickCandidate(' + id + ',\'' + esc(cand.domain || '') + '\',\'' + esc(pid) + '\')">Pick this →</button>'
+        + (ar && ar.reason ? '<div class="q-item-meta" style="margin-left:1em;opacity:.8">' + esc(ar.reason) + '</div>' : '')
+        + '</div>';
     });
-    actions = '<button class="q-action" onclick="dcVerdict(' + id + ',\'create_property\')">None — create property</button>'
+    // "Assist agrees" one-click — the SAME human verdict path (pick / create_property).
+    let assistAction = '';
+    if (assist && assist.recommended_action === 'pick' && assist.top_pick && assist.top_pick.property_id != null) {
+      assistAction = '<button class="q-action primary" onclick="dcPickCandidate(' + id + ',\''
+        + esc(assist.top_pick.domain || '') + '\',\'' + esc(String(assist.top_pick.property_id)) + '\')">Assist agrees — pick #1 ✓</button>';
+    } else if (assist && assist.recommended_action === 'create_property') {
+      assistAction = '<button class="q-action primary" onclick="dcVerdict(' + id + ',\'create_property\')">Assist: none match — create ✓</button>';
+    }
+    actions = assistAction
+      + '<button class="q-action" onclick="dcVerdict(' + id + ',\'create_property\')">None — create property</button>'
       + '<button class="q-action" onclick="dcVerdict(' + id + ',\'research\')">Research</button>';
   } else if (it.decision_type === 'llc_research_dead') {
     body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.search_name || c.recorded_owner_id || 'Owner LLC') + '</span>'
@@ -2216,6 +2480,7 @@ function _dcCardHTML(it, isNext) {
       + '<button class="q-action" onclick="dcVerdict(' + id + ',\'dismiss\')">Dismiss</button>';
   }
   return '<div class="q-item' + (isNext ? ' pq-next' : '') + '" id="dc-' + id + '">' + body
+    + _cleanAssistHTML(it)
     + '<div class="q-actions">' + actions + '</div></div>';
 }
 // A3 (2026-06-06): styled, validating modal (lccPrompt) instead of native
@@ -2448,734 +2713,12 @@ async function renderBuyerParentLane() {
 }
 window.renderBuyerParentLane = renderBuyerParentLane;
 
-// ── Federated decision lanes (R7 Phase 2) ─────────────────────────────────
-// List-federated lanes read top-N straight from a source view; a decision row
-// is minted at verdict time. Same card anatomy + self-propelling advance as the
-// seeded lanes; verdicts post {type, subject, verdict} to /api/decision-verdict.
-let _dcFedArr = [];
-let _dcFedType = null;
-const _DC_FED_META = {
-  intake_disposition: { title: 'Staged intake — needs review',
-    intro: 'Genuine new-listing candidates (unmatched OM / flyer / brochure with extracted data), value-ranked by asking price. Create the property, re-extract (OCR), dismiss, or research. Use “Show all” to also see already-matched rows (open / promote) and market-blast noise; empty extractions are auto-retired.' },
-  property_merge: { title: 'Property merges & duplicates',
-    intro: 'Properties sharing a normalized address. Are they the same property? Compare & merge via the consolidate flow, mark “Not a duplicate”, or send to research.' },
-  provenance_conflict: { title: 'Data conflicts & provenance',
-    intro: 'Cross-table field-write conflicts (price/rent/cap fields first) + sales-price xref conflicts. Keep the current value, accept the attempted value (queued to the manual-edit path), or research.' },
-  pending_update: { title: 'Pending updates (Gov)',
-    intro: 'Proposed gov field updates awaiting a decision. Apply (→ approved, the gov pipeline applies it) or reject (→ rejected), or send to research.' },
-  cms_link_suspect: { title: 'CMS ↔ property link suspects',
-    intro: 'Clinic↔property links the un-truncation pass flagged (state mismatch worst-first). Confirm the link is correct, break it (via the cms-match unlink), or research.' },
-  implausible_value: { title: 'Implausible values',
-    intro: 'Sales over the per-domain magnitude soft-ceiling, retained for review. Confirm the price as real, correct it, void it (queued), or research.' },
-  merge_duplicate_entities: { title: 'Duplicate entities — merge',
-    intro: 'High-confidence duplicate-entity groups (same normalized name). Merge collapses the duplicates into the surviving entity (carries portfolio + identities + relationships); keep separate if they are genuinely distinct, or research.' },
-  caprate_review: { title: 'Cap-rate review — suspect movers',
-    intro: 'Parked cap-rate recomputes (low-confidence or out-of-band), ranked by $ impact = price × |old − recomputed cap|. Apply the recompute (bounded, reversible), keep the original, route to the bad-rent lane (the cap is wrong because the rent is), or research.' },
-  bad_rent_lease: { title: 'Bad-rent leases — fix at source',
-    intro: 'Cap-review rows flagged as bad RENT (implausible gross yield), ranked by $ value, with the plausible rent band + the offending lease. Fix the rent AT SOURCE (never auto-corrected) — the recompute then refreshes the caps. Mark fixed, confirm the rent is genuinely right, or research.' },
-  resolve_owner_parent: { title: 'Owner → ultimate parent',
-    intro: 'Sponsor clusters mined from UNRESOLVED current-owner LLC/LP shells (gov + dia), ranked by $ rent. “high” = a fund numeral varies across the shells (SPUS6/7/8…). Confirm the controlling parent (registers it + rolls the shells up to it), name the parent yourself, or mark the owner a genuine independent. Never auto-merged — you confirm.' },
-  listing_event_action: { title: 'New sales → act',
-    intro: 'A closed sale is the next BD action, value-ranked by sale price. Nurture the seller (past/known owner — seed a relationship cadence, never auto-send), open the new-owner relationship (the buyer is a future seller; if a registered buyer parent, use the P-BUYER path), pursue the cohort fan-out (same-owner / recent-buyer / geographic neighbors), flag a sale-leaseback advisory angle, or dismiss. Each verdict marks the event processed.' },
-  resolve_ownership: { title: 'Resolve ownership & control',
-    intro: 'One card per gov property, reconciling every ownership signal we hold — the recorded deed grantee, a GSA/state lessor-name change, and pending owner discrepancies — into a single decision, value-ranked by rent (fresh signals first). Each card shows the current recorded owner → the best proposed owner + the evidence that fired. Update the owner (a guard-passing deed grantee applies through the priority gate; a lessor/discrepancy proposal writes the true owner when the gov write-back is enabled), confirm a sale (you supply the price — writes a real sales row), keep the current owner (stops asking), or research. spe_vs_parent is excluded (recorded owner already equals the parent). This ONE lane replaces the old owner-vs-deed / suspected-sale / pending-ownership-discrepancy lanes.' },
-  owner_source_conflict: { title: 'Owner vs deed — who took title',
-    intro: 'The recorded deed grantee (legal title) disagrees with the recorded owner (gov + dia), value-ranked by rent. Accept the deed (it wins through the priority gate; true owner re-resolves), clear a broker-as-owner, keep the current owner (a legit parent-vs-SPE), or research. spe_vs_parent is excluded (default keep).' },
-  suspected_sale: { title: 'Suspected unrecorded sales',
-    intro: 'An ownership CHANGE we never recorded as a sale (gov), value-ranked by rent — a NEW GSA lessor with no recorded sale, or a deed grantee that disagrees with the prior owner with no recorded sale. Each is a LEAD, not a fact: confirm the sale (you supply the price — it writes a real sales row, cap rate computes), mark “not a sale” (refinance / name correction — stops asking), or send to research to find the price/date/buyer. We never fabricate a price.' },
-  loan_maturity: { title: 'Loan maturities → refi or sell',
-    intro: 'A property whose CURRENT debt matures within 24 months — or is already matured — (gov + dia), value-ranked by rent; a DISTRESSED loan (watchlist / special servicing / delinquent / DSCR<1) ranks first. A maturity wall forces the owner to refinance or sell — that is the BD opening. Pursue refi (advisory/refi outreach on the owner), pursue disposition (the owner may sell), mark not relevant (stops asking), or research. No domain write — this is a BD signal.' },
-  contact_company_link: { title: 'Contact → company owner',
-    intro: 'A person contact whose company name resolves to owner org(s) by NAME — the tiers the exact-core auto-apply worker leaves for a human (LLC names are where false positives live). exact_ambiguous = the exact name maps to >1 owner org (pick which); fuzzy = a distinctive shared name-core (e.g. Starwood Capital Group ↔ Starwood REIT). Value-ranked by the candidate owner’s rent. Link the person to the chosen owner (attaches a real contact edge), mark “not a match” (stops asking), or research.' },
-  owner_reconcile: { title: 'Owner reconcile — same party?',
-    intro: 'Candidate SAME-PARTY owner pairs from three sources folded into one drain: the ORE multi-signal engine (LCC — verdicts only, auto-merge is OFF), the gov owner-unification queue, and gov+dia entity-match candidates. Each card shows the two owner records plus the evidence that linked them. Approve (LCC pairs merge via lcc_merge_entity; gov/dia rows are dispositioned — the domain merge is the resolver job), reject (records them distinct), or research. Every verdict is recorded so it is not re-asked AND writes a labeled pair into entity_match_labels — the training corpus for the Wave 4 resolver.' },
-  sf_link_candidate: { title: 'Salesforce link — confirm candidate',
-    intro: 'The W4.3 splink batch’s best Salesforce-account match per owner (gov + dia), value-ranked by owner impact. Link attaches the SF id via the existing owner-sync semantics (never overwrites a different existing id — that renders a three-way conflict card instead); Not a match records the pair distinct. Every verdict writes a labeled pair into entity_match_labels — the hard-negative training data the W4.4 retrain needs. Work them fast; the population is homogeneous (~0.85 probability), so trust your eyes per row.' },
-};
-
-function _fedMoney(n) { n = Number(n); return (isFinite(n) && n > 0) ? '$' + Math.round(n).toLocaleString() : ''; }
-
-function _fedCardHTML(it, i, isNext) {
-  const c = it.context || {};
-  let body = '', actions = '';
-  if (_dcFedType === 'intake_disposition') {
-    const ask = _fedMoney(c.asking_price);
-    const suspect = !!c.asking_price_suspect;   // implausible price (multi-property mash-up)
-    const klass = c.klass || 'other';
-    const loc = [c.city, c.state].filter(Boolean).join(', ');
-    // openable iff the row matched a dia/gov property with a numeric id.
-    const odom = (c.match_domain === 'dia' || c.match_domain === 'dialysis') ? 'dia'
-      : (c.match_domain === 'gov' || c.match_domain === 'government') ? 'gov' : null;
-    const opid = (c.match_property_id != null && /^\d+$/.test(String(c.match_property_id)))
-      ? String(c.match_property_id) : null;
-    const matchTxt = (klass === 'matched')
-      ? ('matched' + (c.match_domain ? ' · ' + c.match_domain : '') + (c.match_property_id ? ' #' + esc(String(c.match_property_id)) : ''))
-      : (c.match_status || 'unmatched');
-    const title = c.address || c.tenant || ('Intake ' + String(c.intake_id || '').slice(0, 8));
-    // Suspect price → a warning badge (needs re-extract), not a clean $750T deal.
-    const priceBadge = suspect
-      ? '<span class="q-badge pri-high">⚠ price looks wrong' + (ask ? ' (' + ask + ')' : '') + '</span>'
-      : (ask ? '<span class="q-badge">' + ask + '</span>' : '');
-    body = '<div class="q-item-header"><span class="q-item-title">' + esc(title) + '</span>'
-      + '<div class="q-item-badges">'
-      + priceBadge
-      + '<span class="q-badge">' + esc(c.doctype || 'unknown doctype') + '</span>'
-      + (c.multi_property ? '<span class="q-badge pri-high">multi-property OM — needs split</span>' : '')
-      + '<span class="q-badge' + (klass === 'matched' ? ' type' : '') + '">' + esc(matchTxt) + '</span>'
-      + '</div></div>'
-      + ((c.tenant && c.tenant !== title) ? '<div class="q-item-meta">Tenant: <b>' + esc(c.tenant) + '</b></div>' : '')
-      + '<div class="q-item-meta">' + (loc ? esc(loc) + ' · ' : '')
-      + (c.cap_rate_display ? 'cap ' + esc(c.cap_rate_display) + ' · ' : '')
-      + 'source ' + esc(c.source_type || '') + '</div>';
-    if (klass === 'matched') {
-      // Already tied to a property — open / promote, NEVER create.
-      const openBtn = (odom && opid)
-        ? '<button class="q-action primary" onclick="dcFed(' + i + ',\'open_property\')">Open property →</button>' : '';
-      actions = openBtn
-        + '<button class="q-action' + (openBtn ? '' : ' primary') + '" onclick="dcFed(' + i + ',\'dismiss\')">Dismiss</button>'
-        + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
-    } else if (klass === 'noise') {
-      // Broker blast / comp — market intel, not a property to create.
-      actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'dismiss\')">Dismiss</button>'
-        + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
-    } else {  // create_candidate / other
-      actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'create_property\')">Create property →</button>'
-        + '<button class="q-action" onclick="dcFed(' + i + ',\'reextract\')">Re-extract (OCR)</button>'
-        + '<button class="q-action" onclick="dcFed(' + i + ',\'dismiss\')">Dismiss</button>'
-        + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
-    }
-  } else if (_dcFedType === 'property_merge') {
-    const dom = c.domain, pid = c.property_id;
-    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.address || ('Property ' + pid)) + '</span>'
-      + '<div class="q-item-badges"><span class="q-badge">' + esc(dom || '') + '</span>'
-      + (c.cluster_size ? '<span class="q-badge">' + c.cluster_size + ' share this address</span>' : '') + '</div></div>'
-      + '<div class="q-item-meta">' + esc(c.state || '') + (c.label ? ' · ' + esc(c.label) : '')
-      + ' · property ' + esc(String(pid)) + ' — same property as its address-mates, or distinct?</div>';
-    // Merge is destructive (keep/drop is a BD judgment) → route to the existing
-    // consolidate surface; the inline verdicts are the safe ones.
-    const openDetail = (dom && pid != null && typeof openUnifiedDetail === 'function')
-      ? '<button class="q-action primary" onclick="openUnifiedDetail(\'' + esc(dom) + '\', {property_id: ' + esc(String(pid)) + '}, {}, \'Overview\')">Compare &amp; merge →</button>' : '';
-    actions = openDetail
-      + '<button class="q-action" onclick="dcFed(' + i + ',\'not_duplicate\')">Not a duplicate</button>'
-      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
-  } else if (_dcFedType === 'resolve_ownership') {
-    const pid = c.property_id;
-    const rent = _fedMoney(c.annual_rent);
-    const rec = c.recommended_action || 'confirm';
-    // Human-readable signal chips from the evidence array.
-    const ev = Array.isArray(c.evidence) ? c.evidence : [];
-    const sigLabel = { deed_grantee: 'Deed grantee', gsa_lessor_change: 'GSA lessor changed',
-      state_lessor_change: 'State lessor changed', discrepancy: 'Owner discrepancy' };
-    const chips = ev.map(function (e) {
-      var s = (e && e.signal) || '';
-      return '<span class="q-badge">' + esc(sigLabel[s] || s) + '</span>';
-    }).join('');
-    const recBadge = rec === 'auto_update' ? '<span class="q-badge type">high-confidence deed</span>'
-      : rec === 'enrich' ? '<span class="q-badge pri-high">no recorded owner</span>' : '';
-    const recency = (c.recency_band && c.recency_band !== 'fresh')
-      ? '<span class="q-badge">' + esc(c.recency_band) + '</span>' : '';
-    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.address || ('Property ' + pid)) + '</span>'
-      + '<div class="q-item-badges"><span class="q-badge">gov</span>' + chips + recBadge + recency
-      + (rent ? '<span class="q-badge">' + rent + '</span>' : '') + '</div></div>'
-      + '<div class="q-item-meta">' + esc((c.city || '') + (c.state ? ', ' + c.state : ''))
-        + (c.agency ? ' · ' + esc(c.agency) : '') + ' · property ' + esc(String(pid)) + '</div>'
-      + '<div class="q-item-meta">Recorded owner: <b>' + esc(c.recorded_owner_name || '?') + '</b>'
-        + ' &rarr; proposed: <b>' + esc(c.proposed_owner_name || '?') + '</b></div>'
-      + (c.true_owner_name ? '<div class="q-item-meta">True owner: ' + esc(c.true_owner_name) + '</div>' : '')
-      + (c.most_recent_signal_date ? '<div class="q-item-meta">Latest signal: ' + esc(String(c.most_recent_signal_date)) + '</div>' : '');
-    // Update owner is the primary action; a sale-shaped change also offers "confirm sale".
-    const canSale = !!(c.has_lessor_signal || c.has_deed_signal);
-    actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'update_owner\')">Update owner &rarr;</button>'
-      + (canSale ? '<button class="q-action" onclick="dcResolveConfirmSale(' + i + ')">Confirm sale (enter price) →</button>' : '')
-      + '<button class="q-action" onclick="dcFed(' + i + ',\'keep\')">Keep current</button>'
-      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
-  } else if (_dcFedType === 'owner_source_conflict') {
-    const dom = c.domain, pid = c.property_id;
-    const kind = c.conflict_kind || '';
-    const rent = _fedMoney(c.annual_rent);
-    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.address || ('Property ' + pid)) + '</span>'
-      + '<div class="q-item-badges"><span class="q-badge">' + esc(dom || '') + '</span>'
-      + '<span class="q-badge' + (kind === 'broker_as_owner' ? ' pri-high' : '') + '">' + esc(kind) + '</span>'
-      + (rent ? '<span class="q-badge">' + rent + '</span>' : '') + '</div></div>'
-      + '<div class="q-item-meta">' + esc((c.city || '') + (c.state ? ', ' + c.state : '')) + ' · property ' + esc(String(pid)) + '</div>'
-      + '<div class="q-item-meta">Recorded owner: <b>' + esc(c.recorded_owner_name || '?') + '</b></div>'
-      + '<div class="q-item-meta">Deed grantee (title): <b>' + esc(c.latest_deed_grantee || '?') + '</b>'
-        + (c.latest_deed_date ? ' · ' + esc(String(c.latest_deed_date)) : '') + '</div>'
-      + (c.true_owner_name ? '<div class="q-item-meta">True owner: ' + esc(c.true_owner_name) + '</div>' : '');
-    const acceptLabel = (kind === 'broker_as_owner')
-      ? '<button class="q-action primary" onclick="dcFed(' + i + ',\'broker_not_owner\')">Clear broker → set deed owner</button>'
-      : '<button class="q-action primary" onclick="dcFed(' + i + ',\'accept_deed\')">Accept deed owner →</button>';
-    actions = acceptLabel
-      + '<button class="q-action" onclick="dcFed(' + i + ',\'keep_current\')">Keep current</button>'
-      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
-  } else if (_dcFedType === 'provenance_conflict') {
-    if (c.kind === 'sales_price_xref') {
-      body = '<div class="q-item-header"><span class="q-item-title">Sales-price xref conflict</span>'
-        + '<div class="q-item-badges"><span class="q-badge">dia</span></div></div>'
-        + '<div class="q-item-meta">' + esc(c.detail_1 || '') + (c.detail_2 ? ' vs ' + esc(c.detail_2) : '')
-        + (c.detail_3 ? ' · ' + esc(c.detail_3) : '') + '</div>';
-      actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'keep_current\')">Keep current</button>'
-        + '<button class="q-action" onclick="dcFed(' + i + ',\'accept_attempted\')">Accept attempted</button>'
-        + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
-    } else {
-      body = '<div class="q-item-header"><span class="q-item-title">' + esc((c.target_table || '') + '.' + (c.field_name || '')) + '</span>'
-        + '<div class="q-item-badges"><span class="q-badge">' + esc(c.target_database || '') + '</span>'
-        + '<span class="q-badge">' + esc(c.enforce_mode || '') + '</span></div></div>'
-        + '<div class="q-item-meta">record ' + esc(String(c.record_pk_value || '')) + '</div>'
-        + '<div class="q-item-meta">Current (<b>' + esc(c.current_source || '?') + '</b>): ' + esc(JSON.stringify(c.current_value)) + '</div>'
-        + '<div class="q-item-meta">Attempted (<b>' + esc(c.attempted_source || '?') + '</b>): ' + esc(JSON.stringify(c.attempted_value)) + '</div>';
-      actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'keep_current\')">Keep current</button>'
-        + '<button class="q-action" onclick="dcFed(' + i + ',\'accept_attempted\')">Accept attempted</button>'
-        + '<button class="q-action" onclick="dcFed(' + i + ',\'skip\')">Skip</button>';
-    }
-  } else if (_dcFedType === 'pending_update') {
-    body = '<div class="q-item-header"><span class="q-item-title">' + esc((c.table_name || '') + '.' + (c.field_name || '')) + '</span>'
-      + '<div class="q-item-badges"><span class="q-badge">gov</span>'
-      + (c.confidence != null ? '<span class="q-badge">conf ' + esc(String(c.confidence)) + '</span>' : '') + '</div></div>'
-      + '<div class="q-item-meta">property ' + esc(String(c.property_id || '')) + (c.reason ? ' · ' + esc(c.reason) : '') + '</div>'
-      + '<div class="q-item-meta">' + esc(JSON.stringify(c.old_value)) + ' → <b>' + esc(JSON.stringify(c.new_value)) + '</b></div>';
-    actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'apply\')">Apply</button>'
-      + '<button class="q-action" onclick="dcFed(' + i + ',\'reject\')">Reject</button>'
-      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
-  } else if (_dcFedType === 'cms_link_suspect') {
-    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.cms_facility_name || ('Clinic ' + c.medicare_id)) + '</span>'
-      + '<div class="q-item-badges"><span class="q-badge">' + esc(c.suspect_kind || '') + '</span>'
-      + (c.street_looks_unrelated ? '<span class="q-badge pri-high">street differs</span>' : '')
-      + (c.zip5_matches ? '<span class="q-badge">zip matches</span>' : '') + '</div></div>'
-      + '<div class="q-item-meta">CMS: ' + esc(c.cms_address || '') + ', ' + esc(c.cms_city || '') + ' ' + esc(c.cms_state || '') + '</div>'
-      + '<div class="q-item-meta">Property ' + esc(String(c.property_id)) + ': ' + esc(c.property_address || '') + ', ' + esc(c.property_city || '') + ' ' + esc(c.property_state || '') + '</div>';
-    actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'link_correct\')">Link is correct</button>'
-      + '<button class="q-action" onclick="dcFed(' + i + ',\'break_link\')">Break link</button>'
-      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
-  } else if (_dcFedType === 'implausible_value') {
-    body = '<div class="q-item-header"><span class="q-item-title">' + _fedMoney(c.sold_price) + '</span>'
-      + '<div class="q-item-badges"><span class="q-badge">' + esc(c.domain || '') + '</span>'
-      + '<span class="q-badge">ceiling ' + _fedMoney(c.ceiling) + '</span></div></div>'
-      + '<div class="q-item-meta">' + esc(c.address || '') + (c.city ? ', ' + esc(c.city) : '') + (c.state ? ' ' + esc(c.state) : '')
-      + (c.label ? ' · ' + esc(c.label) : '') + ' · ' + esc(String(c.sale_date || '')) + '</div>';
-    actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'confirm_as_is\')">Confirm as-is</button>'
-      + '<button class="q-action" onclick="dcImplausibleCorrect(' + i + ')">Correct value…</button>'
-      + '<button class="q-action" onclick="dcFed(' + i + ',\'void\')">Void</button>'
-      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
-  } else if (_dcFedType === 'merge_duplicate_entities') {
-    const loserIds = c.loser_ids || [];
-    const loserNames = c.loser_names || [];
-    const n = c.member_count || (loserIds.length + 1);
-    const winLabel = c.winner_name || c.norm_name || 'Duplicate group';
-    // Tier-4 Unit 3: flag the SF-link-inheritance bonus so the operator can
-    // prioritize duplicates of an already-SF-linked entity (merge dedups AND
-    // inherits the Salesforce account onto the survivor).
-    const sfBadge = c.sf_inheritance
-      ? '<span class="q-badge type" title="One duplicate already carries a Salesforce account — merging inherits the SF link onto the survivor.">↪ inherits SF link</span>'
-      : '';
-    const sfMeta = c.sf_inheritance
-      ? ' One of these is already linked to a Salesforce account, so the merge also inherits that SF link.'
-      : '';
-    // Unit 2 — surface AND let the operator choose which member survives. The
-    // view's winner is the default; any member can be picked before merging.
-    let survOpts = '<option value="' + esc(String(c.winner_id || '')) + '" selected>' + esc(winLabel) + ' (default survivor)</option>';
-    for (let k = 0; k < loserIds.length; k++) {
-      survOpts += '<option value="' + esc(String(loserIds[k])) + '">' + esc(loserNames[k] || ('member ' + (k + 2))) + '</option>';
-    }
-    const survivorPick = loserIds.length
-      ? '<div class="q-item-meta">Merge into: <select id="dc-mw-' + i + '" class="dc-merge-winner">' + survOpts + '</select></div>'
-      : '';
-    const losersList = loserNames.length
-      ? '<div class="q-item-meta">Collapses: ' + loserNames.map(function (nm) { return esc(nm || '—'); }).join(', ') + '</div>'
-      : '';
-    body = '<div class="q-item-header"><span class="q-item-title">' + esc(winLabel) + '</span>'
-      + '<div class="q-item-badges">' + sfBadge + '<span class="q-badge">' + n + ' duplicates</span></div></div>'
-      + survivorPick + losersList
-      + '<div class="q-item-meta">' + loserIds.length + ' duplicate(s) collapse into the survivor (portfolio + identities + relationships carry over).' + sfMeta + '</div>';
-    actions = '<button class="q-action primary" onclick="dcMergeGroup(' + i + ')">Merge duplicates →</button>'
-      + '<button class="q-action" onclick="dcFed(' + i + ',\'keep_separate\')">Keep separate</button>'
-      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
-  } else if (_dcFedType === 'caprate_review') {
-    const pct = (v) => (v != null && isFinite(Number(v))) ? (Number(v) * 100).toFixed(2) + '%' : '?';
-    const openDetail = (c.domain && c.property_id != null && typeof openUnifiedDetail === 'function')
-      ? '<button class="q-action" onclick="openUnifiedDetail(\'' + esc(c.domain) + '\', {property_id: ' + esc(String(c.property_id)) + '}, {}, \'Overview\')">Open property →</button>' : '';
-    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.address || c.label || ('Property ' + c.property_id)) + '</span>'
-      + '<div class="q-item-badges"><span class="q-badge">' + esc(c.domain || '') + '</span>'
-      + '<span class="q-badge pri-high">' + _fedMoney(c.dollar_impact) + ' impact</span>'
-      + '<span class="q-badge">' + esc(c.reason || '') + '</span></div></div>'
-      + '<div class="q-item-meta">' + esc(c.label || '') + (c.city ? ' · ' + esc(c.city) : '') + (c.state ? ' ' + esc(c.state) : '')
-      + ' · ' + esc(c.event_type || '') + ' ' + _fedMoney(c.price) + ' · ' + esc(c.income_confidence || '') + ' conf</div>'
-      + '<div class="q-item-meta">Cap <b>' + pct(c.old_cap) + '</b> → <b>' + pct(c.recomputed_cap) + '</b></div>';
-    actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'apply\')">Apply recompute →</button>'
-      + '<button class="q-action" onclick="dcFed(' + i + ',\'keep_old\')">Keep old</button>'
-      + '<button class="q-action" onclick="dcFed(' + i + ',\'needs_rent_fix\')">Bad rent →</button>'
-      + openDetail
-      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
-  } else if (_dcFedType === 'bad_rent_lease') {
-    const yld = (c.implied_gross_yield != null && isFinite(Number(c.implied_gross_yield)))
-      ? (Number(c.implied_gross_yield) * 100).toFixed(1) + '%' : '?';
-    const openDetail = (c.domain && c.property_id != null && typeof openUnifiedDetail === 'function')
-      ? '<button class="q-action primary" onclick="openUnifiedDetail(\'' + esc(c.domain) + '\', {property_id: ' + esc(String(c.property_id)) + '}, {}, \'Overview\')">Open property / lease →</button>' : '';
-    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.address || c.label || ('Property ' + c.property_id)) + '</span>'
-      + '<div class="q-item-badges"><span class="q-badge">' + esc(c.domain || '') + '</span>'
-      + '<span class="q-badge pri-high">' + yld + ' yield</span></div></div>'
-      + '<div class="q-item-meta">' + esc(c.label || '') + (c.city ? ' · ' + esc(c.city) : '') + (c.state ? ' ' + esc(c.state) : '') + '</div>'
-      + '<div class="q-item-meta">Rent <b>' + _fedMoney(c.rent_used) + '</b> on ' + esc(c.event_type || '') + ' ' + _fedMoney(c.price)
-      + ' · plausible rent <b>' + _fedMoney(c.plausible_rent_low) + '–' + _fedMoney(c.plausible_rent_high) + '</b></div>';
-    actions = openDetail
-      + '<button class="q-action" onclick="dcFed(' + i + ',\'mark_fixed\')">Mark rent fixed</button>'
-      + '<button class="q-action" onclick="dcFed(' + i + ',\'confirm_rent\')">Rent is correct</button>'
-      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
-  } else if (_dcFedType === 'resolve_owner_parent') {
-    const samples = (c.sample_owner_names || []).slice(0, 4).join(' · ');
-    const confBadge = c.confidence === 'high'
-      ? '<span class="q-badge type" title="A fund numeral varies across these shells — almost certainly one sponsor.">↪ numeral family</span>'
-      : '<span class="q-badge">review</span>';
-    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.suggested_parent_name || c.cluster_token) + '</span>'
-      + '<div class="q-item-badges"><span class="q-badge">' + esc(c.domain || '') + '</span>' + confBadge
-      + '<span class="q-badge">' + (c.shells || 0) + ' shells</span>'
-      + '<span class="q-badge pri-high">' + _fedMoney(c.annual_rent) + ' rent</span></div></div>'
-      + '<div class="q-item-meta">token <b>' + esc(c.cluster_token || '') + '</b> · ' + (c.props || 0) + ' properties</div>'
-      + (samples ? '<div class="q-item-meta">' + esc(samples) + '</div>' : '');
-    actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'confirm_parent\')">Confirm parent: ' + esc(c.suggested_parent_name || c.cluster_token) + ' →</button>'
-      + '<button class="q-action" onclick="dcOwnerParentSet(' + i + ')">Name parent…</button>'
-      + '<button class="q-action" onclick="dcFed(' + i + ',\'mark_independent\')">Independent</button>'
-      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
-  } else if (_dcFedType === 'listing_event_action') {
-    const slb = c.is_sale_leaseback;
-    const loc = (c.city ? esc(c.city) : '') + (c.state ? ' ' + esc(c.state) : '');
-    const buyer = c.buyer_entity_name || c.buyer_name;
-    const seller = c.seller_entity_name || c.seller_name;
-    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.address || ('Property ' + c.property_id)) + '</span>'
-      + '<div class="q-item-badges"><span class="q-badge">' + esc(c.domain || '') + '</span>'
-      + '<span class="q-badge pri-high">' + _fedMoney(c.sale_price) + '</span>'
-      + (slb ? '<span class="q-badge type" title="Heuristic: seller &amp; buyer names share a leading core — likely an affiliate sale / sale-leaseback. Confirm.">↪ sale-leaseback?</span>' : '')
-      + '</div></div>'
-      + '<div class="q-item-meta">' + (loc ? loc + ' · ' : '') + 'sold ' + esc(String(c.event_date || '')) + '</div>'
-      + '<div class="q-item-meta">Seller: <b>' + esc(seller || 'unresolved') + '</b>' + (c.seller_entity_id ? '' : ' <span class="q-badge">no entity</span>')
-      + ' → Buyer: <b>' + esc(buyer || 'unresolved') + '</b>' + (c.buyer_entity_id ? '' : ' <span class="q-badge">no entity</span>') + '</div>';
-    actions = (seller ? '<button class="q-action primary" onclick="dcFed(' + i + ',\'nurture_seller\')">Nurture seller →</button>' : '')
-      + (buyer ? '<button class="q-action" onclick="dcFed(' + i + ',\'new_buyer_relationship\')">New owner relationship →</button>' : '')
-      + '<button class="q-action" onclick="dcFed(' + i + ',\'pursue_cohort\')">Pursue cohort →</button>'
-      + (slb ? '<button class="q-action" onclick="dcFed(' + i + ',\'flag_sale_leaseback\')">Flag sale-leaseback</button>' : '')
-      + '<button class="q-action" onclick="dcFed(' + i + ',\'dismiss\')">Dismiss</button>';
-  } else if (_dcFedType === 'suspected_sale') {
-    const rent = _fedMoney(c.annual_rent);
-    const sig = c.signal_source === 'gsa_lessor_change' ? 'GSA lessor changed'
-      : c.signal_source === 'deed_conflict' ? 'deed ≠ prior owner' : (c.signal_source || '');
-    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.address || ('Property ' + c.property_id)) + '</span>'
-      + '<div class="q-item-badges"><span class="q-badge">gov</span>'
-      + '<span class="q-badge type">' + esc(sig) + '</span>'
-      + (rent ? '<span class="q-badge pri-high">' + rent + ' rent</span>' : '') + '</div></div>'
-      + '<div class="q-item-meta">' + esc((c.city || '') + (c.state ? ', ' + c.state : '')) + ' · property ' + esc(String(c.property_id)) + '</div>'
-      + '<div class="q-item-meta">Was: <b>' + esc(c.suspected_grantor || '?') + '</b></div>'
-      + '<div class="q-item-meta">Now: <b>' + esc(c.suspected_grantee || '?') + '</b>'
-        + (c.suspected_sale_date ? ' · seen ' + esc(String(c.suspected_sale_date)) : '') + '</div>'
-      + '<div class="q-item-meta" style="opacity:.7">Suspected unrecorded sale — confirm only with a real price.</div>';
-    actions = '<button class="q-action primary" onclick="dcConfirmSuspectedSale(' + i + ')">Confirm sale (enter price) →</button>'
-      + '<button class="q-action" onclick="dcFed(' + i + ',\'not_a_sale\')">Not a sale</button>'
-      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
-  } else if (_dcFedType === 'loan_maturity') {
-    const rent = _fedMoney(c.annual_rent);
-    const bal = _fedMoney(c.loan_balance);
-    const matured = (typeof c.months_to_maturity === 'number' && c.months_to_maturity < 0);
-    const matLbl = c.maturity_band === 'matured' ? 'MATURED'
-      : (typeof c.months_to_maturity === 'number' ? 'matures in ' + c.months_to_maturity + 'mo' : (c.maturity_band || 'maturing'));
-    const who = c.owner_name || c.true_owner_name || c.recorded_owner_name || '?';
-    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.address || ('Property ' + c.property_id)) + '</span>'
-      + '<div class="q-item-badges"><span class="q-badge">' + esc(c.domain || '') + '</span>'
-      + '<span class="q-badge ' + (matured ? 'pri-high' : 'type') + '">' + esc(matLbl) + '</span>'
-      + (c.is_distressed ? '<span class="q-badge pri-high">⚠ ' + esc(c.distress_reason || 'distressed') + '</span>' : '')
-      + (rent ? '<span class="q-badge pri-high">' + rent + ' rent</span>' : '') + '</div></div>'
-      + '<div class="q-item-meta">' + esc((c.city || '') + (c.state ? ', ' + c.state : '')) + ' · property ' + esc(String(c.property_id))
-      + (c.agency ? ' · ' + esc(c.agency) : '') + (c.tenant ? ' · ' + esc(c.tenant) : '') + '</div>'
-      + '<div class="q-item-meta">Owner: <b>' + esc(who) + '</b></div>'
-      + '<div class="q-item-meta">Debt ' + (bal ? '<b>' + bal + '</b> · ' : '') + esc(c.maturity_date ? String(c.maturity_date).slice(0, 10) : '')
-        + (c.servicer ? ' · ' + esc(c.servicer) : '') + '</div>'
-      + '<div class="q-item-meta" style="opacity:.7">Loan maturity = refi or sell. Reach the owner.</div>';
-    actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'pursue_refi\')">Pursue refi →</button>'
-      + '<button class="q-action" onclick="dcFed(' + i + ',\'pursue_disposition\')">Pursue disposition</button>'
-      + '<button class="q-action" onclick="dcFed(' + i + ',\'not_relevant\')">Not relevant</button>'
-      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
-  } else if (_dcFedType === 'contact_company_link') {
-    const cands = Array.isArray(c.candidates) ? c.candidates : [];
-    const isFuzzy = c.match_class === 'fuzzy';
-    const kindLbl = isFuzzy ? 'fuzzy name match'
-      : (Number(c.n_candidate_orgs) > 1 ? (c.n_candidate_orgs + ' owner orgs share this name') : 'exact name match');
-    const rent = _fedMoney(c.rank_value);
-    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.person_name || 'Contact') + '</span>'
-      + '<div class="q-item-badges"><span class="q-badge' + (isFuzzy ? '' : ' type') + '">' + esc(kindLbl) + '</span>'
-      + (rent ? '<span class="q-badge">' + rent + ' rent</span>' : '') + '</div></div>'
-      + '<div class="q-item-meta">Company: <b>' + esc(c.company_name || '') + '</b></div>';
-    // Single candidate → show it; multi → a picker (default = highest-value owner).
-    if (cands.length > 1) {
-      const opts = cands.map(function (x) {
-        const v = _fedMoney(x.rank_value);
-        return '<option value="' + esc(String(x.owner_org_id)) + '"'
-          + (String(x.owner_org_id) === String(c.owner_org_id) ? ' selected' : '') + '>'
-          + esc(x.owner_org_name || String(x.owner_org_id)) + (v ? ' — ' + v : '') + '</option>';
-      }).join('');
-      body += '<div class="q-item-meta">Link to owner: <select id="ccl-owner-' + i + '" class="dc-merge-winner">' + opts + '</select></div>';
-    } else {
-      body += '<div class="q-item-meta">Link to owner: <b>' + esc(c.owner_org_name || '?') + '</b></div>';
-    }
-    actions = '<button class="q-action primary" onclick="cclLink(' + i + ')">Link →</button>'
-      + '<button class="q-action" onclick="dcFed(' + i + ',\'not_a_match\')">Not a match</button>'
-      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
-  } else if (_dcFedType === 'owner_reconcile') {
-    const kind = c.kind;
-    const nameA = c.owner_name || c.source_name || '?';
-    const nameB = c.candidate_display || c.candidate_name || c.target_name
-      || (c.candidate_unified_id ? ('contact ' + String(c.candidate_unified_id).slice(0, 8)) : '?');
-    const kindLbl = kind === 'ore' ? 'ORE multi-signal'
-      : kind === 'owner_unification' ? 'Owner unification (gov)'
-      : 'Entity match (' + (c.domain || '') + ')';
-    const score = (c.weighted_score != null) ? ('score ' + Math.round(Number(c.weighted_score)))
-      : (c.match_score != null) ? ('score ' + Number(c.match_score).toFixed(2))
-      : (c.similarity != null) ? ('sim ' + Number(c.similarity).toFixed(2)) : '';
-    let evChips = '';
-    if (kind === 'ore' && Array.isArray(c.agreeing_signals)) {
-      evChips = c.agreeing_signals.map(function (s) {
-        var lbl = String((s && s.signal) || '').replace(/_/g, ' ');
-        var w = (s && s.weight != null) ? (' ' + s.weight) : '';
-        return '<span class="q-badge">' + esc(lbl + w) + '</span>';
-      }).join('');
-    } else if (kind === 'owner_unification') {
-      // W3.6 — real comparison facts, not the bare "tier0_ambiguous" token.
-      evChips = (c.match_reason_label ? '<span class="q-badge">' + esc(String(c.match_reason_label)) + '</span>'
-          : (c.reason ? '<span class="q-badge">' + esc(String(c.reason)) + '</span>' : ''))
-        + (c.match_tier != null ? '<span class="q-badge">tier ' + esc(String(c.match_tier)) + '</span>' : '')
-        + (c.shared_state ? '<span class="q-badge type">same state ' + esc(String(c.candidate_state)) + '</span>' : '');
-    } else if (kind === 'entity_match_candidate') {
-      evChips = (c.match_method ? '<span class="q-badge">' + esc(String(c.match_method)) + '</span>' : '')
-        + (c.source_table ? '<span class="q-badge">' + esc(String(c.source_table)) + ' &rarr; ' + esc(String(c.target_table || '')) + '</span>' : '');
-    }
-    const conflictBadge = c.high_authority_conflict ? '<span class="q-badge pri-high">high-authority conflict</span>' : '';
-    const mergeVerb = kind === 'ore' ? 'Merge (same party) &rarr;' : 'Confirm match &rarr;';
-    let cmpMeta = '';
-    if (kind === 'owner_unification') {
-      const contactBits = [c.candidate_company, c.candidate_email,
-        [c.candidate_city, c.candidate_state].filter(Boolean).join(', ')].filter(Boolean).join(' \u00b7 ');
-      const ownerLoc = [c.owner_property_address, c.owner_property_city, c.owner_property_state].filter(Boolean).join(', ');
-      cmpMeta = '<div class="q-item-meta">Owner (recorded): <b>' + esc(c.owner_name || '?') + '</b>'
-          + (ownerLoc ? ' \u00b7 ' + esc(ownerLoc) : '') + '</div>'
-        + '<div class="q-item-meta">Contact: <b>' + esc(c.candidate_name || c.candidate_company || 'unresolved') + '</b>'
-          + (contactBits ? ' \u00b7 ' + esc(contactBits) : '') + '</div>';
-    }
-    body = '<div class="q-item-header"><span class="q-item-title">' + esc(nameA)
-      + ' <span style="opacity:.6">&harr;</span> ' + esc(nameB) + '</span>'
-      + '<div class="q-item-badges"><span class="q-badge type">' + esc(kindLbl) + '</span>'
-      + (score ? '<span class="q-badge">' + esc(score) + '</span>' : '') + conflictBadge + '</div></div>'
-      + (evChips ? '<div class="q-item-meta">Evidence: ' + evChips + '</div>' : '')
-      + cmpMeta
-      + '<div class="q-item-meta">Are these the SAME owner / party?</div>';
-    actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'approve\')">' + mergeVerb + '</button>'
-      + '<button class="q-action" onclick="dcFed(' + i + ',\'reject\')">Reject (distinct)</button>'
-      + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
-  } else if (_dcFedType === 'sf_link_candidate') {
-    const owner = c.owner_name || c.canonical_name || 'Owner';
-    const cand = c.sf_account_name_resolved || '(unnamed account)';
-    const prob = (c.score_resolved != null && isFinite(Number(c.score_resolved))) ? Number(c.score_resolved) : null;
-    const existing = c.conflict_existing_id ? String(c.conflict_existing_id) : '';
-    const isConflict = !!existing;
-    const pc = (c.property_count != null) ? Number(c.property_count) : null;
-    const badges = '<span class="q-badge">' + esc(c.domain || '') + '</span>'
-      + '<span class="q-badge">' + esc(c.source_table || '') + '</span>'
-      + (pc != null ? '<span class="q-badge">' + pc + ' propert' + (pc === 1 ? 'y' : 'ies') + '</span>' : '')
-      + (prob != null ? '<span class="q-badge">p=' + prob.toFixed(2) + '</span>' : '')
-      + (isConflict ? '<span class="q-badge pri-high">conflict — existing link</span>' : '');
-    body = '<div class="q-item-header"><span class="q-item-title">' + esc(owner)
-        + ' <span style="opacity:.6">&harr;</span> ' + esc(cand) + '</span>'
-        + '<div class="q-item-badges">' + badges + '</div></div>'
-        + '<div class="q-item-meta">' + (c.state ? esc(c.state) + ' · ' : '')
-          + 'Salesforce account: <b>' + esc(cand) + '</b>'
-          + (c.sf_account_id_resolved ? ' <span style="opacity:.6">(' + esc(String(c.sf_account_id_resolved)) + ')</span>' : '') + '</div>';
-    if (isConflict) {
-      body += '<div class="q-item-meta">⚠ This owner is already linked to a DIFFERENT Salesforce account: <b>' + esc(existing) + '</b></div>'
-        + '<div class="q-item-meta">Keep the existing link, switch to the candidate above, or research.</div>';
-      actions = '<button class="q-action" onclick="dcFed(' + i + ',\'keep_existing\')">Keep existing</button>'
-        + '<button class="q-action primary" onclick="dcFed(' + i + ',\'switch\')">Switch to candidate →</button>'
-        + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
-    } else {
-      body += '<div class="q-item-meta">Is this owner the SAME party as the Salesforce account?</div>';
-      actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'approve\')">Link →</button>'
-        + '<button class="q-action" onclick="dcFed(' + i + ',\'reject\')">Not a match</button>'
-        + '<button class="q-action" onclick="dcFed(' + i + ',\'research\')">Research</button>';
-    }
-  }
-  return '<div class="q-item' + (isNext ? ' pq-next' : '') + '" id="dc-f' + i + '">' + body
-    + '<div class="q-actions">' + actions + '</div></div>';
-}
-
-async function renderFederatedLane(type, view) {
-  const el = document.getElementById('reviewConsoleContent');
-  if (!el) return;
-  el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
-  const meta = _DC_FED_META[type] || { title: type, intro: '' };
-  // intake_disposition: 'create' (default, the workable candidates) ↔ 'all'.
-  const intakeView = (type === 'intake_disposition' && view === 'all') ? 'all' : null;
-  const res = await opsApi('/api/decisions?type=' + encodeURIComponent(type) + '&limit=50'
-    + (intakeView ? '&intake_view=all' : ''));
-  if (!res.ok) { el.innerHTML = opsErrorState(res, "renderFederatedLane('" + type + "')", 'Could not load this lane'); return; }
-  const items = (res.data && Array.isArray(res.data.items)) ? res.data.items : [];
-  const total = res.data ? res.data.total : null;
-  _dcCurrentOpenExpr = "renderFederatedLane('" + type + "'" + (intakeView ? ", 'all'" : "") + ")";
-  let html = '<div class="ops-header"><h2>' + esc(meta.title) + '</h2>'
-    + '<button class="q-action" onclick="renderReviewConsolePage()">← Back to Decision Center</button></div>';
-  html += '<div class="rc-intro">' + esc(meta.intro) + '</div>';
-  if (type === 'intake_disposition') {
-    html += '<div class="triage-bar" style="margin:6px 0"><div class="triage-actions">'
-      + (intakeView
-          ? '<button class="q-action" onclick="renderFederatedLane(\'intake_disposition\')">← Create-candidates only</button>'
-          : '<button class="q-action" onclick="renderFederatedLane(\'intake_disposition\', \'all\')">Show all (matched · noise) →</button>')
-      + '</div></div>';
-  }
-  if (!items.length) { html += '<div class="ops-empty">Nothing to decide here. ✓' + _dcNextLaneCTA(_dcCurrentOpenExpr) + '</div>'; el.innerHTML = html; return; }
-  html += '<div class="rc-progress"><span id="dcRemaining">' + items.length + '</span> shown'
-    + (total != null ? ' · ' + total.toLocaleString() + ' workable in this lane' : '') + '</div>';
-  // R59 Unit 3 — bulk-handle the SAFE (record-only / non-destructive) verdict
-  // across all shown items, so an oversized lane is workable, not 999 clicks.
-  // Destructive verdicts (merge/apply/break-link/correct/confirm_sale) are NEVER
-  // bulked — they keep their per-card gate.
-  var bulk = _DC_BULK_SAFE[type];
-  if (bulk) {
-    html += '<div class="triage-bar" style="margin:6px 0"><span class="q-item-meta">Bulk action (safe only)</span>'
-      + '<div class="triage-actions"><button class="q-action" onclick="dcFedBulkSafe()">' + esc(bulk.label) + '</button></div></div>';
-  }
-  _dcFedType = type;
-  _dcFedArr = items.slice();
-  items.forEach(function (it, ix) { html += _fedCardHTML(it, ix, ix === 0); });
-  el.innerHTML = html;
-}
-window.renderFederatedLane = renderFederatedLane;
-
-// R59 Unit 3 — per-lane SAFE bulk verdict (record-only / non-destructive only).
-var _DC_BULK_SAFE = {
-  // intake_disposition intentionally omitted — the default lane is create-
-  // candidates (real listings), so a "dismiss all" bulk would be a footgun.
-  property_merge: { verdict: 'not_duplicate', label: 'Mark all "not a duplicate"' },
-  resolve_ownership: { verdict: 'keep', label: 'Keep current owner on all' },
-  owner_source_conflict: { verdict: 'keep_current', label: 'Keep current owner on all' },
-  provenance_conflict: { verdict: 'keep_current', label: 'Keep current on all' },
-  cms_link_suspect: { verdict: 'link_correct', label: 'Confirm all links correct' },
-  implausible_value: { verdict: 'confirm_as_is', label: 'Confirm all as-is' },
-  merge_duplicate_entities: { verdict: 'keep_separate', label: 'Keep all separate' },
-};
-
-async function dcFedBulkSafe() {
-  var bulk = _DC_BULK_SAFE[_dcFedType];
-  if (!bulk) return;
-  var pending = (_dcFedArr || []).map(function (it, ix) { return { it: it, ix: ix }; })
-    .filter(function (p) { var r = document.getElementById('dc-f' + p.ix); return r && !r.classList.contains('resolved'); });
-  if (!pending.length) { showToast('Nothing to bulk-handle', 'info'); return; }
-  var ok = (typeof lccConfirm === 'function')
-    ? await lccConfirm('Apply "' + bulk.label + '" to ' + pending.length + ' shown item' + (pending.length === 1 ? '' : 's') + '?\n\nThis is a safe, record-only verdict (no merges / no domain writes).')
-    : (typeof confirm === 'function' ? confirm(bulk.label + ' — ' + pending.length + ' items?') : true);
-  if (!ok) return;
-  var done = 0, failed = 0;
-  for (var k = 0; k < pending.length; k++) {
-    var p = pending[k];
-    var res = await opsApi('/api/decision-verdict', {
-      method: 'POST', body: JSON.stringify({ type: _dcFedType, subject: p.it, verdict: bulk.verdict, payload: {} }),
-    });
-    var row = document.getElementById('dc-f' + p.ix);
-    if (res.ok && res.data && res.data.ok) {
-      done++;
-      if (row) { row.classList.add('resolved'); row.style.opacity = '0'; }
-    } else { failed++; }
-  }
-  document.querySelectorAll('#reviewConsoleContent .q-item.resolved[id^="dc-f"]').forEach(function (n) { if (n.parentNode) n.remove(); });
-  _dcAdvanceFed();
-  showToast('Bulk: ' + done + ' handled' + (failed ? ' · ' + failed + ' failed' : ''), failed ? 'error' : 'success');
-}
-window.dcFedBulkSafe = dcFedBulkSafe;
-
-async function dcImplausibleCorrect(i) {
-  const it = _dcFedArr[i]; if (!it) return;
-  const c = it.context || {};
-  const curStr = (isFinite(Number(c.sold_price)) && Number(c.sold_price) > 0)
-    ? '$' + Math.round(Number(c.sold_price)).toLocaleString() : '(none)';
-  const ceil = (isFinite(Number(c.ceiling)) && Number(c.ceiling) > 0)
-    ? '$' + Math.round(Number(c.ceiling)).toLocaleString() : '';
-  const ctx = (c.address ? c.address + (c.state ? ' ' + c.state : '') + ' — ' : '')
-    + 'recorded ' + curStr + (ceil ? ' (over the ' + ceil + ' ceiling)' : '');
-  const v = typeof lccPrompt === 'function'
-    ? await lccPrompt('Correct this sale price.\n\n' + ctx + '\n\nEnter the corrected price (numbers only):', '')
-    : (typeof prompt === 'function' ? prompt('Corrected sale price (number):') : '');
-  if (v == null) return;
-  const n = Number(String(v).replace(/[^0-9.]/g, ''));
-  if (!isFinite(n) || n <= 0) { if (typeof showToast === 'function') showToast('Enter a valid price', 'error'); return; }
-  dcFed(i, 'correct', { corrected_price: n });
-}
-window.dcImplausibleCorrect = dcImplausibleCorrect;
-
-// R47: name the controlling parent for an owner cluster, then register it.
-async function dcOwnerParentSet(i) {
-  const it = _dcFedArr[i]; if (!it) return;
-  const c = it.context || {};
-  const samples = (c.sample_owner_names || []).slice(0, 4).join('\n  ');
-  const def = c.suggested_parent_name || '';
-  const msg = 'Name the controlling parent for these shells (token "' + (c.cluster_token || '') + '"):'
-    + (samples ? '\n\n  ' + samples : '') + '\n\nParent account name:';
-  const v = typeof lccPrompt === 'function' ? await lccPrompt(msg, def)
-    : (typeof prompt === 'function' ? prompt(msg, def) : '');
-  if (v == null) return;
-  const name = String(v).trim();
-  if (!name) { if (typeof showToast === 'function') showToast('Enter a parent name', 'error'); return; }
-  dcFed(i, 'set_parent', { parent_name: name });
-}
-window.dcOwnerParentSet = dcOwnerParentSet;
-
-// R53: confirm a suspected sale → a REAL sales row. The operator MUST supply a
-// price (we never fabricate); the date defaults to when the change was seen.
-async function dcConfirmSuspectedSale(i) {
-  const it = _dcFedArr[i]; if (!it) return;
-  const c = it.context || {};
-  const ctx = (c.address ? c.address + (c.state ? ' ' + c.state : '') + ' — ' : '')
-    + '"' + (c.suspected_grantor || '?') + '" → "' + (c.suspected_grantee || '?') + '"';
-  const pv = typeof lccPrompt === 'function'
-    ? await lccPrompt('Confirm this sale.\n\n' + ctx + '\n\nEnter the SALE PRICE (numbers only — we never guess):', '')
-    : (typeof prompt === 'function' ? prompt('Sale price (number):') : '');
-  if (pv == null) return;
-  const price = Number(String(pv).replace(/[^0-9.]/g, ''));
-  if (!isFinite(price) || price < 50000) { if (typeof showToast === 'function') showToast('Enter a real price (≥ $50k)', 'error'); return; }
-  const defDate = c.suspected_sale_date ? String(c.suspected_sale_date).slice(0, 10) : '';
-  const dv = typeof lccPrompt === 'function'
-    ? await lccPrompt('Sale date (YYYY-MM-DD):', defDate)
-    : (typeof prompt === 'function' ? prompt('Sale date (YYYY-MM-DD):', defDate) : defDate);
-  if (dv == null) return;
-  const saleDate = String(dv).trim() || defDate;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(saleDate)) { if (typeof showToast === 'function') showToast('Enter a valid date (YYYY-MM-DD)', 'error'); return; }
-  dcFed(i, 'confirm_sale', {
-    sold_price: price, sale_date: saleDate,
-    buyer: c.suspected_grantee || null, seller: c.suspected_grantor || null,
-  });
-}
-window.dcConfirmSuspectedSale = dcConfirmSuspectedSale;
-
-// Ownership consolidation: confirm a resolve_ownership card AS a sale (the change
-// was an unrecorded transfer). Reuses the R53 price/date prompt; the operator MUST
-// supply a price (never fabricated). Dispatches the resolve_ownership confirm_sale
-// verdict (dcFed posts _dcFedType, which is resolve_ownership on this lane).
-async function dcResolveConfirmSale(i) {
-  const it = _dcFedArr[i]; if (!it) return;
-  const c = it.context || {};
-  const ctx = (c.address ? c.address + (c.state ? ' ' + c.state : '') + ' — ' : '')
-    + '"' + (c.recorded_owner_name || '?') + '" → "' + (c.proposed_owner_name || '?') + '"';
-  const pv = typeof lccPrompt === 'function'
-    ? await lccPrompt('Confirm this ownership change as a SALE.\n\n' + ctx + '\n\nEnter the SALE PRICE (numbers only — we never guess):', '')
-    : (typeof prompt === 'function' ? prompt('Sale price (number):') : '');
-  if (pv == null) return;
-  const price = Number(String(pv).replace(/[^0-9.]/g, ''));
-  if (!isFinite(price) || price < 50000) { if (typeof showToast === 'function') showToast('Enter a real price (≥ $50k)', 'error'); return; }
-  const defDate = (c.suspected_sale_date || c.latest_deed_date || c.most_recent_signal_date)
-    ? String(c.suspected_sale_date || c.latest_deed_date || c.most_recent_signal_date).slice(0, 10) : '';
-  const dv = typeof lccPrompt === 'function'
-    ? await lccPrompt('Sale date (YYYY-MM-DD):', defDate)
-    : (typeof prompt === 'function' ? prompt('Sale date (YYYY-MM-DD):', defDate) : defDate);
-  if (dv == null) return;
-  const saleDate = String(dv).trim() || defDate;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(saleDate)) { if (typeof showToast === 'function') showToast('Enter a valid date (YYYY-MM-DD)', 'error'); return; }
-  dcFed(i, 'confirm_sale', {
-    sold_price: price, sale_date: saleDate,
-    buyer: c.proposed_owner_name || null, seller: c.recorded_owner_name || null,
-  });
-}
-window.dcResolveConfirmSale = dcResolveConfirmSale;
-
-async function dcFed(i, verdict, payload) {
-  const it = _dcFedArr[i]; if (!it) return;
-  const res = await opsApi('/api/decision-verdict', {
-    method: 'POST', body: JSON.stringify({ type: _dcFedType, subject: it, verdict: verdict, payload: payload || {} }),
-  });
-  const row = document.getElementById('dc-f' + i);
-  if (res.ok && res.data && res.data.ok) {
-    let fwd = '';
-    const nx = res.data.next;
-    if (nx && nx.action === 'cms_unlink') {
-      fwd = ' <button class="q-action primary" onclick="dcCmsUnlink(' + esc(String(nx.property_id)) + ')">Break link in cms-match →</button>';
-    } else if (nx && (nx.action === 'intake_create_property' || nx.action === 'intake_reextract')) {
-      fwd = ' <button class="q-action primary" onclick="navTo(\'pageInbox\')">Finish in Inbox →</button>';
-    } else if (nx && nx.action === 'intake_open_property' && nx.domain && nx.property_id != null && typeof openUnifiedDetail === 'function') {
-      fwd = ' <button class="q-action primary" onclick="openUnifiedDetail(\'' + esc(nx.domain) + '\', {property_id: ' + esc(String(nx.property_id)) + '}, {}, \'Overview\')">Open property →</button>';
-    } else if (nx && nx.action === 'bad_rent_lane') {
-      fwd = ' <button class="q-action primary" onclick="renderFederatedLane(\'bad_rent_lease\')">Open bad-rent lane →</button>';
-    }
-    if (typeof showToast === 'function') showToast('Recorded', 'success');
-    if (row) {
-      row.classList.add('resolved');
-      row.innerHTML = '<div class="dc-collapsed">✓ ' + esc(res.data.verdict || verdict) + fwd + '</div>';
-      if (fwd) {
-        _dcAdvanceFed();                    // keep the collapsed row (has a CTA)
-      } else {
-        row.style.transition = 'opacity .4s ease';
-        row.style.opacity = '0';
-        setTimeout(function () { if (row.parentNode) row.remove(); _dcAdvanceFed(); }, 420);
-      }
-    } else {
-      _dcAdvanceFed();
-    }
-  } else if (_dcFedType === 'sf_link_candidate' && res.data && res.data.conflict) {
-    // A DIFFERENT Salesforce id landed since W4.3 — the Link button never
-    // overwrites; re-render THIS card as the three-way conflict variant so the
-    // operator can keep the existing link, switch, or research.
-    it.context = it.context || {};
-    it.context.conflict_existing_id = res.data.existing_sf_id || it.context.conflict_existing_id;
-    const wasNext = row && row.classList.contains('pq-next');
-    if (row) row.outerHTML = _fedCardHTML(it, i, wasNext);
-    if (typeof showToast === 'function') showToast('A different Salesforce link now exists — confirm which to keep', 'info');
-  } else {
-    const err = (res.data && (res.data.error || res.data.message)) || res.error || 'unknown';
-    if (typeof showToast === 'function') showToast('Action failed: ' + err, 'error');
-  }
-}
-window.dcFed = dcFed;
-
-// Unit 2 — merge with an operator-chosen survivor. Reads the survivor dropdown
-// (default = the view winner) and only sends winner_id on a real override, so
-// admin.js's override flag + the chosen survivor are accurate.
-function dcMergeGroup(i) {
-  const it = _dcFedArr[i]; if (!it) return;
-  const c = it.context || {};
-  const sel = document.getElementById('dc-mw-' + i);
-  const def = String(c.winner_id || '');
-  const w = sel ? String(sel.value || '') : def;
-  dcFed(i, 'merge', (w && w !== def) ? { winner_id: w } : {});
-}
-window.dcMergeGroup = dcMergeGroup;
-
-// Phase 1b — link a contact to the chosen owner org. Reads the picker (default =
-// the highest-value candidate) and only sends owner_entity_id on a real override
-// (single-candidate cards send nothing → admin.js uses the best candidate).
-function cclLink(i) {
-  const it = _dcFedArr[i]; if (!it) return;
-  const c = it.context || {};
-  const sel = document.getElementById('ccl-owner-' + i);
-  const def = String(c.owner_org_id || '');
-  const w = sel ? String(sel.value || '') : def;
-  dcFed(i, 'link', (w && w !== def) ? { owner_entity_id: w } : undefined);
-}
-window.cclLink = cclLink;
-
-// cms break-link hands off to the existing cms-match DELETE route (Scott's call).
-async function dcCmsUnlink(propertyId) {
-  const res = await opsApi('/api/cms-match?action=link&property_id=' + encodeURIComponent(propertyId), { method: 'DELETE' });
-  if (res.ok) { if (typeof showToast === 'function') showToast('CMS link broken', 'success'); }
-  else { if (typeof showToast === 'function') showToast('Unlink failed: ' + (res.error || 'unknown'), 'error'); }
-}
-window.dcCmsUnlink = dcCmsUnlink;
-
-function _dcAdvanceFed() {
-  const scope = document.getElementById('reviewConsoleContent');
-  if (!scope) return;
-  const pending = scope.querySelectorAll('.q-item[id^="dc-f"]:not(.resolved)');
-  const rem = document.getElementById('dcRemaining');
-  if (rem) rem.textContent = pending.length;
-  scope.querySelectorAll('.q-item.pq-next').forEach(function (n) { n.classList.remove('pq-next'); });
-  if (pending.length) {
-    pending[0].classList.add('pq-next');
-    pending[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
-  } else {
-    const prog = scope.querySelector('.rc-progress');
-    if (prog) prog.innerHTML = 'All decided in this lane ✓' + _dcNextLaneCTA(_dcCurrentOpenExpr);
-    if (typeof showToast === 'function') showToast('Lane cleared ✓', 'success');
-  }
-}
+// ── Federated decision lanes (R7 Phase 2) — EXTRACTED to dc-lanes.js ───────
+// The federated lane meta (_DC_FED_META), card renderer (_fedCardHTML),
+// renderFederatedLane, the dcFed* verdict handlers, _DC_BULK_SAFE and
+// _dcAdvanceFed now live in dc-lanes.js (a classic <script> loaded BEFORE
+// ops.js — same global scope, byte-identical behavior). W6.5 Stage 1 (P87).
+// NOTE: _DC_FEDERATED + the seeded-lane renderers remain in ops.js above.
 
 async function dcStale(id) {
   const it = _dcItems[id]; const stale = (it && it.context && it.context.true_owner_name) || '';
@@ -3242,6 +2785,8 @@ window.dcSfPick = dcSfPick;
 async function dcSfManual(id) {
   const input = document.getElementById('dcsfid-' + id);
   const slot = document.getElementById('dcsfr-' + id);
+  const it = _dcItems[id] || {};
+  const fallbackName = (it.context && it.context.parent_name) || '';
   const sfId = _sfIdFromInput(input ? input.value : '');
   if (!sfId) { if (slot) slot.innerHTML = '<div class="dcsf-empty">That doesn’t look like a Salesforce Account ID (15 or 18 characters). Paste the ID or the record URL.</div>'; return; }
   if (slot) slot.innerHTML = '<span class="spinner"></span> validating ' + esc(sfId) + '…';
@@ -3255,9 +2800,11 @@ async function dcSfManual(id) {
   } else {
     // Flow can't confirm by-id (or doesn't implement it) — allow an explicit
     // unverified map so the user with Salesforce open in another tab isn't stuck.
-    _dcSfCand[id] = [{ Id: sfId, Name: null }];
+    _dcSfCand[id] = [{ Id: sfId, Name: fallbackName || null }];
+    const detail = (res.data && (res.data.detail || res.data.message)) || '';
     slot.innerHTML = '<div class="dcsf-empty">Couldn’t confirm the name for <b>' + esc(sfId) + '</b>'
-      + ((res.data && res.data.reason) ? ' (' + esc(res.data.reason) + ')' : '') + '. '
+      + ((res.data && res.data.reason) ? ' (' + esc(res.data.reason) + ')' : '')
+      + (detail ? ': ' + esc(String(detail).slice(0, 220)) : '') + '. '
       + '<button class="q-action" onclick="dcSfPick(' + id + ',0)">Map by ID anyway</button></div>';
   }
 }
@@ -4307,7 +3854,7 @@ function bdOpenWorklistItem(ix) {
   var pid = it.property_id == null ? '' : String(it.property_id);
   if (!dom || !pid) return;
   var hint = { type: it.signal_type, context: Object.assign({}, it.detail || {}, { owner_name: it.who || null }) };
-  openUnifiedDetail(dom, { property_id: pid }, { _bdSignal: hint }, 'Ownership & CRM');
+  openUnifiedDetail(dom, { property_id: pid }, { _bdSignal: hint }, 'Ownership');
 }
 window.bdOpenWorklistItem = bdOpenWorklistItem;
 
@@ -5622,6 +5169,264 @@ async function resolveCompReview(domain, id, disposition) {
 }
 window.resolveCompReview = resolveCompReview;
 
+var _newsAlertStatus = 'open';
+var _newsAlertPendingRenderer = null;
+
+function newsAlertCardHtml(it, isNext) {
+  var rowid = 'newsAlert_' + String(it.news_lead_id || '').replace(/[^a-zA-Z0-9_-]/g, '');
+  var title = it.article_title || it.raw_subject || it.tenant || 'News alert';
+  var place = [it.city, it.state].filter(Boolean).join(', ');
+  var conf = it.confidence != null ? Math.round(Number(it.confidence) * 100) + '% confidence' : 'unscored';
+  var meta = (it.metadata && typeof it.metadata === 'object') ? it.metadata : {};
+  var extraction = meta.news_alert_extraction || null;
+  var task = meta.news_alert_tracking_task || null;
+  var badges = '<span class="q-badge">' + esc(it.status || '') + '</span>'
+    + (it.domain ? '<span class="q-badge">' + esc(it.domain) + '</span>' : '')
+    + (it.tenant ? '<span class="q-badge">' + esc(it.tenant) + '</span>' : '')
+    + '<span class="q-badge">' + esc(conf) + '</span>'
+    + (extraction ? '<span class="q-badge">assist</span>' : '')
+    + (task ? '<span class="q-badge">task</span>' : '');
+  var url = it.article_url ? '<a class="q-action" href="' + esc(it.article_url) + '" target="_blank" rel="noopener">Open article</a>' : '';
+  var actions = '';
+  if (it.status === 'dismissed' || it.status === 'converted') {
+    actions = '<button class="q-action" onclick="resolveNewsAlert(' + jsStringArg(it.news_lead_id) + ', \'reopen\')">Reopen</button>';
+    if (task) actions += '<button class="q-action primary" onclick="openNewsAlertResearchQueue()">Open Research</button>';
+  } else {
+    actions = '<button class="q-action primary" onclick="resolveNewsAlert(' + jsStringArg(it.news_lead_id) + ', \'send_to_developer\')">Keep for developer research</button>'
+      + '<button class="q-action" onclick="resolveNewsAlert(' + jsStringArg(it.news_lead_id) + ', \'extract_details\')">Extract details</button>'
+      + '<button class="q-action" onclick="resolveNewsAlert(' + jsStringArg(it.news_lead_id) + ', \'create_tracking_task\')">Create tracking task</button>'
+      + '<button class="q-action" onclick="resolveNewsAlert(' + jsStringArg(it.news_lead_id) + ', \'dismiss\')">Dismiss</button>';
+  }
+  var assistHtml = '';
+  if (extraction) {
+    var project = extraction.project || {};
+    var parties = Array.isArray(extraction.parties) ? extraction.parties : [];
+    var timeline = Array.isArray(extraction.timeline) ? extraction.timeline : [];
+    var debt = Array.isArray(extraction.debt_or_deed_signals) ? extraction.debt_or_deed_signals : [];
+    var permits = Array.isArray(extraction.permits) ? extraction.permits : [];
+    var partyText = parties.slice(0, 4).map(function (p) { return (p.role ? p.role + ': ' : '') + p.name; }).join(' · ');
+    var timelineText = timeline.slice(0, 3).map(function (t) { return [t.event, t.date_or_period].filter(Boolean).join(' - '); }).join(' · ');
+    var signalText = debt.concat(permits).slice(0, 3).map(function (s) {
+      return [s.signal_type || s.permit_type || s.permit_number, s.party || s.applicant || s.jurisdiction || s.date_or_period].filter(Boolean).join(' - ');
+    }).join(' · ');
+    assistHtml = '<div class="q-item-detail clean-assist">'
+      + '<div><span class="q-badge type">Ollama assist: ' + esc(extraction.recommended_next_step || 'uncertain') + '</span> '
+      + esc(extraction.reason || '') + '</div>'
+      + (project.description || project.address ? '<div>' + esc([project.description, project.address].filter(Boolean).join(' · ')) + '</div>' : '')
+      + (partyText ? '<div>Parties: ' + esc(partyText) + '</div>' : '')
+      + (signalText ? '<div>Signals: ' + esc(signalText) + '</div>' : '')
+      + (timelineText ? '<div>Timeline: ' + esc(timelineText) + '</div>' : '')
+      + '</div>';
+  }
+  return '<div class="q-item' + (isNext ? ' pq-next' : '') + '" id="' + rowid + '">'
+    + '<div class="q-item-header"><span class="q-item-title">' + esc(title) + '</span>'
+    + '<div class="q-item-badges">' + badges + '</div></div>'
+    + '<div class="q-item-meta">' + esc([place, it.match_kind, it.created_at ? String(it.created_at).slice(0, 10) : ''].filter(Boolean).join(' · ') || '-')
+    + '</div>'
+    + (it.summary ? '<div class="q-item-detail">' + esc(it.summary) + '</div>' : '')
+    + assistHtml
+    + '<div class="q-actions">' + url + actions + '</div></div>';
+}
+
+async function renderNewsAlertLane(status) {
+  _newsAlertStatus = status || _newsAlertStatus || 'open';
+  var el = document.getElementById('reviewConsoleContent');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  var res = await opsApi('/api/news-alerts?status=' + encodeURIComponent(_newsAlertStatus) + '&limit=200');
+  if (!res.ok) { el.innerHTML = opsErrorState(res, 'renderNewsAlertLane()', 'Could not load news alerts'); return; }
+  var items = (res.data && Array.isArray(res.data.items)) ? res.data.items : [];
+  var counts = (res.data && res.data.counts) || {};
+  var chips = [
+    ['open', 'Open', Number(counts.open) || 0],
+    ['needs_review', 'Review', Number(counts.needs_review) || 0],
+    ['developer_unknown', 'Developer', Number(counts.developer_unknown) || 0],
+    ['dismissed', 'Dismissed', Number(counts.dismissed) || 0],
+    ['converted', 'Converted', Number(counts.converted) || 0],
+  ].map(function (c) {
+    return '<button class="q-action' + (_newsAlertStatus === c[0] ? ' primary' : '') + '" onclick="renderNewsAlertLane(\'' + c[0] + '\')">'
+      + esc(c[1]) + ' ' + c[2].toLocaleString() + '</button>';
+  }).join('');
+  var html = '<div class="ops-header"><h2>News Alert Review</h2>'
+    + '<div class="ops-controls">' + chips
+    + '<button class="q-action" onclick="renderReviewConsolePage()">\u2190 Back to Decision Center</button></div></div>';
+  html += '<div class="rc-intro">Google Alert and shared-news leads from the canonical OPS news_alert_leads queue. Keep worthy items in developer research; dismiss noise. Property and pursuit promotion is the next bridge after this triage lane.</div>';
+  if (!items.length) { html += '<div class="ops-empty">No news alerts in this view. \u2713</div>'; el.innerHTML = html; return; }
+  html += '<div class="rc-progress"><span id="newsAlertRemaining">' + items.length + '</span> shown'
+    + ' <span class="q-badge">' + (Number(counts.needs_review) || 0) + ' review</span>'
+    + ' <span class="q-badge">' + (Number(counts.developer_unknown) || 0) + ' developer</span></div>';
+  items.forEach(function (it, ix) { html += newsAlertCardHtml(it, ix === 0); });
+  el.innerHTML = html;
+}
+window.renderNewsAlertLane = renderNewsAlertLane;
+
+async function resolveNewsAlert(id, action) {
+  var res = await opsApi('/api/news-alerts', { method: 'POST', body: JSON.stringify({ news_lead_id: id, action: action }) });
+  if (res.ok && res.data && res.data.ok) {
+    if (typeof showToast === 'function') {
+      showToast(action === 'dismiss' ? 'Dismissed'
+        : action === 'reopen' ? 'Reopened'
+          : action === 'extract_details' ? 'Extracted details'
+            : action === 'create_tracking_task' ? 'Tracking task ready'
+              : 'Sent to developer research', 'success');
+    }
+    if (action === 'create_tracking_task') {
+      renderNewsAlertPursuit(res.data.item || null, res.data.research_task || null);
+      refreshReviewNavBadge();
+      return;
+    }
+    renderNewsAlertLane(_newsAlertStatus);
+    refreshReviewNavBadge();
+  } else if (typeof showToast === 'function') {
+    showToast('Action failed: ' + ((res.data && res.data.error) || res.error || 'unknown'), 'error');
+  }
+}
+window.resolveNewsAlert = resolveNewsAlert;
+
+function openNewsAlertResearchQueue() {
+  _newsAlertPendingRenderer = renderNewsAlertFollowupQueue;
+  if (typeof navTo === 'function') navTo('pageReviewConsole');
+  setTimeout(function () {
+    if (_newsAlertPendingRenderer) {
+      _newsAlertPendingRenderer = null;
+      renderNewsAlertFollowupQueue();
+    }
+  }, 500);
+}
+window.openNewsAlertResearchQueue = openNewsAlertResearchQueue;
+
+function openGenericNewsAlertResearchLedger() {
+  opsResearchTypeFilter = 'news_alert_development_followup';
+  opsResearchFilter = 'active';
+  opsResearchPage = 1;
+  if (typeof navTo === 'function') navTo('pageResearch');
+  setTimeout(function () { renderResearchPage(1); }, 150);
+}
+window.openGenericNewsAlertResearchLedger = openGenericNewsAlertResearchLedger;
+
+async function renderNewsAlertFollowupQueue() {
+  var el = document.getElementById('reviewConsoleContent');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  var res = await opsApi('/api/news-alerts?status=converted&limit=200');
+  if (!res.ok) { el.innerHTML = opsErrorState(res, 'renderNewsAlertFollowupQueue()', 'Could not load news-alert follow-up queue'); return; }
+  var all = (res.data && Array.isArray(res.data.items)) ? res.data.items : [];
+  var items = all.filter(function (it) {
+    var meta = (it.metadata && typeof it.metadata === 'object') ? it.metadata : {};
+    return !!(meta.news_alert_tracking_task || meta.news_alert_extraction);
+  });
+  var html = '<div class="ops-header"><h2>News Alert Follow-up Queue</h2>'
+    + '<div class="ops-controls">'
+    + '<button class="q-action" onclick="renderNewsAlertLane(\'open\')">\u2190 Back to News Alert Review</button>'
+    + '<button class="q-action" onclick="renderNewsAlertLane(\'converted\')">Converted Alerts</button>'
+    + '<button class="q-action" onclick="openGenericNewsAlertResearchLedger()">Research Ledger</button>'
+    + '</div></div>';
+  html += '<div class="rc-intro">Converted news-alert pursuits that need property, party, permit/deed/debt, contact, and outreach resolution.</div>';
+  if (!items.length) {
+    html += '<div class="ops-empty">No converted news-alert pursuits are queued yet.</div>'
+      + '<div class="q-actions"><button class="q-action primary" onclick="renderNewsAlertLane(\'open\')">Back to News Alert Review</button>'
+      + '<button class="q-action" onclick="renderNewsAlertLane(\'converted\')">View Converted Alerts</button></div>';
+    el.innerHTML = html;
+    return;
+  }
+  html += '<div class="rc-progress"><span>' + items.length + '</span> to work</div>';
+  items.forEach(function (it, ix) {
+    var meta = (it.metadata && typeof it.metadata === 'object') ? it.metadata : {};
+    var ex = meta.news_alert_extraction || {};
+    var task = meta.news_alert_tracking_task || null;
+    var project = ex.project || {};
+    var parties = Array.isArray(ex.parties) ? ex.parties : [];
+    var partyText = parties.slice(0, 3).map(function (p) { return (p.role ? p.role + ': ' : '') + p.name; }).join(' · ');
+    html += '<div class="q-item' + (ix === 0 ? ' pq-next' : '') + '">'
+      + '<div class="q-item-header"><span class="q-item-title">' + esc(it.article_title || it.raw_subject || it.tenant || 'News alert') + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">converted</span>'
+      + (it.domain ? '<span class="q-badge">' + esc(it.domain) + '</span>' : '')
+      + (task ? '<span class="q-badge">task</span>' : '') + '</div></div>'
+      + '<div class="q-item-meta">' + esc([it.tenant, [it.city, it.state].filter(Boolean).join(', ')].filter(Boolean).join(' · ')) + '</div>'
+      + (project.description ? '<div class="q-item-detail">' + esc(project.description) + '</div>' : (it.summary ? '<div class="q-item-detail">' + esc(it.summary) + '</div>' : ''))
+      + (partyText ? '<div class="q-item-meta">Parties: ' + esc(partyText) + '</div>' : '')
+      + '<div class="q-actions">'
+      + (it.article_url ? '<a class="q-action" href="' + esc(it.article_url) + '" target="_blank" rel="noopener">Open article</a>' : '')
+      + '<button class="q-action primary" onclick="renderNewsAlertPursuitById(' + jsStringArg(it.news_lead_id) + ')">Open pursuit</button>'
+      + '<button class="q-action" onclick="openGenericNewsAlertResearchLedger()">Research Ledger</button>'
+      + '</div></div>';
+  });
+  el.innerHTML = html;
+}
+window.renderNewsAlertFollowupQueue = renderNewsAlertFollowupQueue;
+
+async function renderNewsAlertPursuitById(id) {
+  var res = await opsApi('/api/news-alerts?status=all&limit=200');
+  if (!res.ok || !res.data || !Array.isArray(res.data.items)) {
+    if (typeof showToast === 'function') showToast('Could not load alert pursuit', 'error');
+    return;
+  }
+  var item = res.data.items.find(function (it) { return String(it.news_lead_id) === String(id); });
+  if (!item) {
+    if (typeof showToast === 'function') showToast('Alert pursuit not found', 'error');
+    return;
+  }
+  var meta = (item.metadata && typeof item.metadata === 'object') ? item.metadata : {};
+  renderNewsAlertPursuit(item, meta.news_alert_tracking_task || null);
+}
+window.renderNewsAlertPursuitById = renderNewsAlertPursuitById;
+
+function renderNewsAlertPursuit(item, researchTask) {
+  var el = document.getElementById('reviewConsoleContent');
+  if (!el) return;
+  item = item || {};
+  var meta = (item.metadata && typeof item.metadata === 'object') ? item.metadata : {};
+  var ex = meta.news_alert_extraction || {};
+  var project = ex.project || {};
+  var parties = Array.isArray(ex.parties) ? ex.parties : [];
+  var timeline = Array.isArray(ex.timeline) ? ex.timeline : [];
+  var signals = (Array.isArray(ex.debt_or_deed_signals) ? ex.debt_or_deed_signals : [])
+    .concat(Array.isArray(ex.permits) ? ex.permits : []);
+  var triggers = Array.isArray(ex.follow_up_triggers) ? ex.follow_up_triggers : [];
+  var title = item.article_title || item.raw_subject || item.tenant || 'News alert pursuit';
+  var taskId = researchTask && researchTask.id ? researchTask.id : (meta.news_alert_tracking_task && meta.news_alert_tracking_task.id) || null;
+  var partyHtml = parties.length ? parties.map(function (p) {
+    return '<div class="q-item-meta"><b>' + esc(p.role || 'party') + ':</b> ' + esc(p.name || '')
+      + (p.evidence ? ' · ' + esc(p.evidence) : '') + '</div>';
+  }).join('') : '<div class="q-item-meta">No named owner/applicant/developer extracted yet.</div>';
+  var signalHtml = signals.length ? signals.map(function (s) {
+    return '<div class="q-item-meta"><b>' + esc(s.signal_type || s.permit_type || s.permit_number || 'signal') + ':</b> '
+      + esc(s.party || s.applicant || s.jurisdiction || s.date_or_period || '')
+      + (s.evidence ? ' · ' + esc(s.evidence) : '') + '</div>';
+  }).join('') : '<div class="q-item-meta">No permit/deed/debt signal extracted yet.</div>';
+  var timelineHtml = timeline.length ? timeline.map(function (t) {
+    return '<div class="q-item-meta"><b>' + esc(t.event || 'event') + '</b>'
+      + (t.date_or_period ? ' · ' + esc(t.date_or_period) : '')
+      + (t.evidence ? ' · ' + esc(t.evidence) : '') + '</div>';
+  }).join('') : '<div class="q-item-meta">No project timeline extracted yet.</div>';
+  var triggerHtml = triggers.length ? triggers.map(function (t) { return '<span class="q-badge">' + esc(t) + '</span>'; }).join(' ') : '<span class="q-badge">track owner/applicant</span> <span class="q-badge">watch permits/deeds</span>';
+  el.innerHTML = '<div class="ops-header"><h2>News Alert Pursuit</h2>'
+    + '<div class="ops-controls">'
+    + '<button class="q-action" onclick="renderNewsAlertLane(\'open\')">\u2190 Back to News Alert Review</button>'
+    + '<button class="q-action primary" onclick="openNewsAlertResearchQueue()">Open News Alert Follow-up Queue</button>'
+    + '</div></div>'
+    + '<div class="rc-intro">Work this alert into a real prospecting path: identify the property, owner/applicant/developer, evidence, and the right contact before drafting outreach.</div>'
+    + '<div class="q-item pq-next">'
+    + '<div class="q-item-header"><span class="q-item-title">' + esc(title) + '</span><div class="q-item-badges">'
+    + '<span class="q-badge">converted</span>' + (taskId ? '<span class="q-badge">task ' + esc(taskId) + '</span>' : '<span class="q-badge">task</span>')
+    + '</div></div>'
+    + '<div class="q-item-meta">' + esc([item.tenant, item.domain, [item.city, item.state].filter(Boolean).join(', ')].filter(Boolean).join(' · ')) + '</div>'
+    + (item.article_url ? '<div class="q-actions"><a class="q-action primary" href="' + esc(item.article_url) + '" target="_blank" rel="noopener">Open article</a></div>' : '')
+    + '</div>'
+    + '<div class="rc-lanes-grouped">'
+    + '<div class="rc-glane"><div class="rc-glane-head"><div class="rc-glane-title">1. Property and project</div></div>'
+    + '<div class="q-item-detail">' + esc(project.description || item.summary || 'Confirm the property/project behind this alert.') + '</div>'
+    + '<div class="q-item-meta">' + esc([project.address, project.city || item.city, project.state || item.state].filter(Boolean).join(', ')) + '</div></div>'
+    + '<div class="rc-glane"><div class="rc-glane-head"><div class="rc-glane-title">2. Parties to resolve</div></div>' + partyHtml + '</div>'
+    + '<div class="rc-glane"><div class="rc-glane-head"><div class="rc-glane-title">3. Signals to track</div></div>' + signalHtml + timelineHtml + '<div style="margin-top:8px">' + triggerHtml + '</div></div>'
+    + '<div class="rc-glane"><div class="rc-glane-head"><div class="rc-glane-title">4. Next build step</div></div>'
+    + '<div class="q-item-meta">Resolve/create the property and prospect contact, then generate an outreach draft through the BD template path.</div>'
+    + '<div class="q-actions"><button class="q-action primary" onclick="openNewsAlertResearchQueue()">Continue in Follow-up Queue</button>'
+    + '<button class="q-action" onclick="renderNewsAlertLane(\'converted\')">View Converted Alerts</button></div></div>'
+    + '</div>';
+}
+window.renderNewsAlertPursuit = renderNewsAlertPursuit;
+
 // ── Unit 2: property metadata-backfill worklist (surfaced under Research) ──
 // A compact widget on the Research page + a full prioritized worklist page. The
 // worklist (v_property_metadata_backfill_queue) carries a suggested CoStar URL
@@ -5694,7 +5499,235 @@ async function renderMetadataBackfillPage() {
 }
 window.renderMetadataBackfillPage = renderMetadataBackfillPage;
 
+// ─── P180 — the research LANE PICKER ────────────────────────────────────────
+// 14 lanes with very different cadences share ONE priority-ordered list, so a
+// lane's reachability depended on the operator already knowing to filter for it.
+// P179 demonstrated the cost: a correctly ranked, newly-answerable lane holding
+// $1.08B still read as "page 62" of the unfiltered list. This is navigation, not
+// ranking — and ranking was the wrong lever, because the lanes sitting above it
+// are the healthiest work in the system (4,772 and 595 lifetime completions).
+//
+// ⚠️ THREE HONEST-COUNT RULES, each of which would mislead triage if broken:
+//  1. VALUE IS PER OWNER, never per task. A lane emitting one task per property
+//     double-counts (2x here, 4.65x on the contact lane). The view sums over
+//     DISTINCT owners; the task count is reported separately.
+//  2. NULL rent renders "—", NEVER "$0". Six lanes carry no entity_id at all, so
+//     they cannot be sized — and two of them are the highest-throughput lanes we
+//     have. Showing "$0" would invite exactly the wrong triage.
+//  3. `answerable` is shown, because a lane with no capture path should not be
+//     presented as workable however much value it carries (Class 3).
+function researchLanePickerHTML(lanes) {
+  if (!Array.isArray(lanes) || !lanes.length) return '';
+  const money = (v) => {
+    if (v === null || v === undefined) return '<span title="no owner link on these tasks — cannot be sized">&mdash;</span>';
+    const n = Number(v);
+    if (!Number.isFinite(n)) return '<span>&mdash;</span>';
+    if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
+    if (n >= 1e6) return '$' + (n / 1e6).toFixed(1) + 'M';
+    if (n >= 1e3) return '$' + Math.round(n / 1e3) + 'K';
+    return '$' + n;
+  };
+  const sorted = lanes.slice().sort((a, b) => {
+    // Sized-and-answerable first, then by value, then by open count.
+    const av = a.total_annual_rent == null ? -1 : Number(a.total_annual_rent);
+    const bv = b.total_annual_rent == null ? -1 : Number(b.total_annual_rent);
+    if (a.answerable !== b.answerable) return a.answerable ? -1 : 1;
+    if (av !== bv) return bv - av;
+    return (Number(b.open_tasks) || 0) - (Number(a.open_tasks) || 0);
+  });
+  const chip = (l) => {
+    const t = String(l.research_type || '');
+    const active = opsResearchTypeFilter === t;
+    const label = t.replace(/_/g, ' ');
+    // A1: where a lane has been SPLIT, the badge counts the questions a human
+    // must answer — not the raw open count. NULL means "not split", and the
+    // open count is then the only number we have; it is never treated as 0,
+    // and never as "all of them are actionable".
+    const actionable = (l.human_actionable_tasks == null) ? null : Number(l.human_actionable_tasks);
+    return `<button class="q-action${active ? ' primary' : ''}"
+      onclick="setResearchLane(decodeURIComponent('${encodeURIComponent(t)}'))"
+      title="${esc(label)} — ${actionable == null ? '' : esc(String(actionable)) + ' need a human of '}${esc(String(l.open_tasks))} open, ${esc(String(l.ever_completed))} completed, ${esc(String(l.ever_skipped))} auto-retired${l.answerable ? '' : ' — NO capture path yet'}"
+      style="margin:0 6px 6px 0">
+      ${esc(label)}
+      <span style="opacity:.75">&nbsp;${esc(String(actionable == null ? l.open_tasks : actionable))}</span>
+      ${actionable == null ? '' : `<span style="opacity:.5;font-size:11px">&nbsp;of ${esc(String(l.open_tasks))}</span>`}
+      <span style="opacity:.75">&nbsp;&middot;&nbsp;${money(l.total_annual_rent)}</span>
+      ${l.answerable ? '' : '<span title="no way to record an answer yet" style="opacity:.6">&nbsp;&#9888;</span>'}
+    </button>`;
+  };
+  return `<div class="lcc-research-lanes" style="margin-bottom:10px">
+    <div style="font-size:11px;color:var(--text2);margin-bottom:4px">
+      Lanes &mdash; value is per OWNER (deduped), &mdash; means the lane carries no owner link
+    </div>
+    <button class="q-action${opsResearchTypeFilter ? '' : ' primary'}"
+      onclick="setResearchLane('')" style="margin:0 6px 6px 0">All lanes</button>
+    ${sorted.map(chip).join('')}
+  </div>`;
+}
+
+// ─── A1 — the ownership lane is FOUR jobs, so it gets four chips ─────────────
+// `establish_ownership_history` sat at 545 open / 0 completions for 68 days.
+// Not for want of answers — 545 of 545 carry a finished, record-cited draft —
+// but because one undifferentiated list mixed *confirm what you already
+// believe* (380) with *your ownership record is contradicted* (73) with *this
+// cannot be answered* (74) with *we distrust every record on file* (18). An
+// operator facing that mixture learns to skip all of it.
+//
+// Same chip shape as the owner_reconcile / P139 provenance seeder chips. The
+// difference that matters: this filter is SERVER-side, so a chip reading 73
+// pages through all 73 — a client-side filter over the visible page would
+// report a reach it does not have (the P139 "6 of 65" fix).
+const RESEARCH_ACTION_META = {
+  mismatch:    { label: 'Contradicted', hint: 'Last recorded grantee is not the owner on file — a data-integrity call.' },
+  all_guarded: { label: 'All records rejected', hint: 'Transfers exist, but every one failed a guard. Needs adjudication.' },
+  agrees:      { label: 'Confirms owner on file', hint: 'The chain ends at the owner we already hold — a confirmation, not a question.' },
+  no_records:  { label: 'Nothing on file', hint: 'No recorded transfers at all — unanswerable from what we hold.' },
+  // A3: the deed records an SPE of a sponsor a human has confirmed we hold. A representation
+  // difference, not a data error — and NOT `agrees`, which would hand it to A2's write path.
+  sponsor_spe: { label: 'Sponsor SPE (confirmed)', hint: 'The deed names an SPE of a sponsor family a human confirmed — a representation difference, not a data error.' },
+  // PR-scanner-3: a reclassification of mismatch/all_guarded — the property carries
+  // NO trustworthy public record on file at all, so the next step is Scott's manual
+  // scan (netronline -> assessor -> recorder -> SOS), not a records dispute.
+  county_records_needed: { label: 'County records needed', hint: 'No trustworthy public record on file for this property — scan the county assessor/recorder/SOS, not a records dispute.' },
+  awaiting_draft:       { label: 'Not yet drafted', hint: 'Seeded but the drafter has not run — NOT the same as "nothing on file".' },
+  unrecognised_payload: { label: 'Unrecognised draft', hint: 'The drafter emitted a reason this split does not know. Surfaced, never bucketed.' },
+};
+const RESEARCH_HUMAN_ACTIONS = ['mismatch', 'all_guarded', 'county_records_needed'];
+
+function researchActionChipsHTML(rows) {
+  if (!Array.isArray(rows) || !rows.length) return '';
+  const order = ['mismatch', 'all_guarded', 'county_records_needed', 'sponsor_spe', 'agrees', 'no_records', 'awaiting_draft', 'unrecognised_payload'];
+  const by = {};
+  rows.forEach(function (r) { if (r && r.bucket) by[String(r.bucket)] = r; });
+  const known = order.filter(function (k) { return by[k]; });
+  // A bucket the split emits that this list does not know about must still be
+  // visible — silently dropping it is how a new state becomes invisible.
+  Object.keys(by).forEach(function (k) { if (known.indexOf(k) === -1) known.push(k); });
+  if (!known.length) return '';
+
+  const humanTotal = known.reduce(function (n, k) {
+    return n + (RESEARCH_HUMAN_ACTIONS.indexOf(k) >= 0 ? (Number(by[k].open_tasks) || 0) : 0);
+  }, 0);
+  const grandTotal = known.reduce(function (n, k) { return n + (Number(by[k].open_tasks) || 0); }, 0);
+
+  let html = '<div class="pq-chips" id="researchActionChips" style="margin:6px 0">';
+  html += '<div style="font-size:11px;color:var(--text2);margin-bottom:4px">'
+    + 'This lane is four different jobs. <b>' + esc(String(humanTotal)) + '</b> of '
+    + esc(String(grandTotal)) + ' need a human; the rest are a confirmation or unanswerable.'
+    + '</div>';
+  html += '<button class="pq-chip' + (opsResearchLaneAction ? '' : ' active')
+    + '" onclick="setResearchLaneAction(\'\')">All four <b>' + esc(String(grandTotal)) + '</b></button>';
+  known.forEach(function (k) {
+    const r = by[k];
+    const meta = RESEARCH_ACTION_META[k] || { label: k.replace(/_/g, ' '), hint: '' };
+    const isHuman = RESEARCH_HUMAN_ACTIONS.indexOf(k) >= 0;
+    const owners = Number(r.distinct_owners) || 0;
+    html += '<button class="pq-chip' + (opsResearchLaneAction === k ? ' active' : '')
+      + '" data-lane-action="' + esc(k) + '"'
+      + ' title="' + esc(meta.hint) + ' \u2014 ' + esc(String(owners)) + ' owner' + (owners === 1 ? '' : 's')
+      + (isHuman ? '' : ' \u2014 no human decision needed here') + '"'
+      + ' onclick="setResearchLaneAction(\'' + esc(k) + '\')">'
+      + (isHuman ? '' : '<span style="opacity:.55">\u25CB </span>')
+      + esc(meta.label) + ' <b>' + esc(String(Number(r.open_tasks) || 0)) + '</b></button>';
+  });
+  html += '</div>';
+  return html;
+}
+
+// Server-side filter, so this pages through the whole action.
+function setResearchLaneAction(action) {
+  opsResearchLaneAction = String(action || '');
+  opsResearchPage = 1;
+  renderResearchPage(1);
+}
+window.setResearchLaneAction = setResearchLaneAction;
+window.researchActionChipsHTML = researchActionChipsHTML;
+
+// Selecting a lane resets to page 1 — staying on page N of a different lane is
+// how an operator lands on an empty list and concludes the queue is empty.
+function setResearchLane(type) {
+  const next = String(type || '');
+  // Switching lanes drops the action filter: an action only means something
+  // inside the ownership lane, and carrying it across would silently return
+  // nothing on a lane that has no such bucket.
+  if (next !== opsResearchTypeFilter) opsResearchLaneAction = '';
+  opsResearchTypeFilter = next;
+  opsResearchPage = 1;
+  renderResearchPage(1);
+}
+window.setResearchLane = setResearchLane;
+
+// UX-T1b tab bar. Always rendered at the top of #researchContent, whichever
+// tab is active — the flow dashboard, one of the four workbench lanes, or
+// the legacy full list.
+function researchWorkbenchTabsHTML() {
+  const tabs = [
+    ['flow', 'Flow Dashboard'],
+    ['ownership_history', 'Ownership History'],
+    ['owner_contact', 'Owner Contact'],
+    ['npi', 'NPI Intel'],
+    ['followups', 'Follow-ups'],
+    ['all', 'All (legacy)'],
+  ];
+  return '<div class="ops-workbench-tabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">'
+    + tabs.map(([key, label]) => `<button class="q-action${opsWorkbenchTab === key ? ' primary' : ''}" onclick="setWorkbenchTab('${key}')">${esc(label)}</button>`).join('')
+    + '</div>';
+}
+
+// Switching tabs resets page/action state — staying on page N of a
+// different tab is how an operator lands on an empty list (the same reason
+// setResearchLane resets to page 1).
+function setWorkbenchTab(tab) {
+  opsWorkbenchTab = tab;
+  opsResearchPage = 1;
+  opsResearchLaneAction = '';
+  opsResearchTypeFilter = (tab === 'ownership_history') ? 'establish_ownership_history' : '';
+  renderResearchPage(1);
+}
+window.setWorkbenchTab = setWorkbenchTab;
+
+// The flow dashboard: one row per genuine-human-queue lane, reading
+// v_lcc_research_workbench_flow (raw pre-split queue size next to the
+// human_needed count, so a lane displays the drop the split actually bought
+// instead of a raw badge). This is the workbench's default landing page.
+async function renderResearchFlowDashboard() {
+  const el = document.getElementById('researchContent');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  const perf = opsPerf('render:research-flow');
+  const res = await opsApi('/api/queue?view=research_workbench_lanes');
+  if (!res.ok) {
+    el.innerHTML = researchWorkbenchTabsHTML() + opsErrorState(res, 'renderResearchFlowDashboard()', 'Could not load the workbench flow dashboard');
+    perf.end();
+    return;
+  }
+  const rows = res.data?.items || [];
+  let html = researchWorkbenchTabsHTML();
+  html += `<div class="ops-header"><h2>Research Workbench</h2></div>`;
+  html += `<div style="font-size:12px;color:var(--text2);margin-bottom:10px">Per lane: how many cards exist vs how many actually need a human today. Click a tile to open that lane.</div>`;
+  html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">';
+  rows.forEach((r) => {
+    const raw = Number(r.raw_open_tasks) || 0;
+    const human = Number(r.human_needed_tasks) || 0;
+    const pct = raw ? Math.round((100 * human) / raw) : 0;
+    html += `<div class="q-item" style="cursor:pointer" onclick="setWorkbenchTab('${esc(r.lane_key)}')">
+      <div class="q-item-title">${esc(r.lane_label)}</div>
+      <div style="font-size:26px;font-weight:700;margin:4px 0">${human}<span style="font-size:13px;font-weight:400;color:var(--text2)"> of ${raw}</span></div>
+      <div style="font-size:11px;color:var(--text2)">need a human today${raw ? ` (${pct}%)` : ''}</div>
+      <div style="font-size:11px;color:var(--text2);margin-top:4px">${Number(r.real_completions) || 0} completed ever${r.oldest_open_age_days != null ? ` &middot; oldest open ${esc(String(r.oldest_open_age_days))}d` : ''}</div>
+    </div>`;
+  });
+  html += '</div>';
+  el.innerHTML = html;
+  perf.end();
+}
+window.renderResearchFlowDashboard = renderResearchFlowDashboard;
+
 async function renderResearchPage(page = opsResearchPage) {
+  // UX-T1b: the flow dashboard is a completely different render (it reads a
+  // rollup view, not the task list), so it short-circuits before any of the
+  // list-fetching logic below runs.
+  if (opsWorkbenchTab === 'flow') return renderResearchFlowDashboard();
   const el = document.getElementById('researchContent');
   if (!el) return;
   opsResearchPage = Math.max(parseInt(page, 10) || 1, 1);
@@ -5714,7 +5747,31 @@ async function renderResearchPage(page = opsResearchPage) {
   const statusParam = opsResearchFilter === 'active' ? 'active'
     : opsResearchFilter === 'completed' ? 'completed'
     : '';
-  const res = await opsApi(`/api/queue?view=research&page=${opsResearchPage}&per_page=25${statusParam ? `&status=${statusParam}` : ''}`);
+  // UX-T1b: owner_contact/npi/followups filter server-side via `workbench=`
+  // (owner_contact through the decidability view, the other two by a fixed
+  // research_type list) instead of the raw `research_type=` param — the two
+  // are mutually exclusive, never both sent.
+  const usesWorkbenchParam = ['owner_contact', 'npi', 'followups'].includes(opsWorkbenchTab);
+  const typeParam = (!usesWorkbenchParam && opsResearchTypeFilter) ? `&research_type=${encodeURIComponent(opsResearchTypeFilter)}` : '';
+  const wbParam = usesWorkbenchParam ? `&workbench=${encodeURIComponent(opsWorkbenchTab)}` : '';
+  // A1: the action filter only applies inside the ownership lane.
+  const inOwnershipLane = opsResearchTypeFilter === 'establish_ownership_history';
+  const actionParam = (inOwnershipLane && opsResearchLaneAction)
+    ? `&lane_action=${encodeURIComponent(opsResearchLaneAction)}` : '';
+  // P180: fetch the lane summary ALONGSIDE the tasks. allSettled, not all — a
+  // failed picker must never strand the queue itself (the Overview-tile lesson).
+  // A1 adds the per-action rollup on the same terms. Skipped for the three
+  // workbench-param tabs — they don't render the raw ~18-chip lane picker.
+  const [resS, lanesS, actionsS] = await Promise.allSettled([
+    opsApi(`/api/queue?view=research&page=${opsResearchPage}&per_page=25${statusParam ? `&status=${statusParam}` : ''}${typeParam}${wbParam}${actionParam}`),
+    usesWorkbenchParam ? Promise.resolve(null) : opsApi('/api/queue?view=research_lanes'),
+    inOwnershipLane ? opsApi('/api/queue?view=ownership_lane_actions') : Promise.resolve(null)
+  ]);
+  const res = resS.status === 'fulfilled' ? resS.value : { ok: false, status: 0, data: null };
+  const lanes = (lanesS.status === 'fulfilled' && lanesS.value && lanesS.value.ok)
+    ? (lanesS.value.data?.items || []) : [];
+  opsResearchLaneActionCounts = (actionsS.status === 'fulfilled' && actionsS.value && actionsS.value.ok)
+    ? (actionsS.value.data?.items || []) : [];
   if (!res.ok) {
     el.innerHTML = opsErrorState(res, 'renderResearchPage()', 'Could not load research tasks');
     perf.end();
@@ -5724,14 +5781,21 @@ async function renderResearchPage(page = opsResearchPage) {
   opsResearchData = res.data?.items || res.data || [];
 
   let html = '';
+  html += researchWorkbenchTabsHTML();
+  if (!usesWorkbenchParam) html += researchLanePickerHTML(lanes);
+  if (inOwnershipLane) html += researchActionChipsHTML(opsResearchLaneActionCounts);
   html += `<div class="ops-header">
-    <h2>Research <span style="font-size:13px;color:var(--text2);font-weight:400">${opsResearchData.length} tasks</span></h2>
+    <h2>Research <span style="font-size:13px;color:var(--text2);font-weight:400">${opsResearchData.length}${res.data?.count != null ? ` of ${Number(res.data.count).toLocaleString()}` : ''} tasks${opsResearchLaneAction ? ` &middot; ${esc((RESEARCH_ACTION_META[opsResearchLaneAction] || {}).label || opsResearchLaneAction)}` : ''}</span></h2>
+    ${opsResearchTypeFilter === 'news_alert_development_followup' ? `<div class="ops-controls"><button class="q-action" onclick="openNewsAlertResearchQueue()">\u2190 Back to News Alert Follow-up</button><button class="q-action" onclick="renderNewsAlertLane('open');navTo('pageReviewConsole')">News Alert Review</button></div>` : ''}
   </div>`;
 
   html += '<div class="ops-filters">';
   html += `<button class="ops-filter ${opsResearchFilter === 'active' ? 'active' : ''}" onclick="opsResearchFilter='active';opsResearchPage=1;renderResearchPage()">Active</button>`;
   html += `<button class="ops-filter ${opsResearchFilter === 'completed' ? 'active' : ''}" onclick="opsResearchFilter='completed';opsResearchPage=1;renderResearchPage()">Completed</button>`;
   html += `<button class="ops-filter ${opsResearchFilter === 'all' ? 'active' : ''}" onclick="opsResearchFilter='all';opsResearchPage=1;renderResearchPage()">All</button>`;
+  html += `<button class="ops-filter ${opsResearchTypeFilter === 'news_alert_development_followup' ? 'active' : ''}" onclick="opsResearchTypeFilter=opsResearchTypeFilter==='news_alert_development_followup'?'':'news_alert_development_followup';opsResearchPage=1;renderResearchPage()">News Alert Follow-up</button>`;
+  if (opsResearchTypeFilter) html += `<button class="ops-filter" onclick="setResearchLane('')">Clear type</button>`;
+  if (opsResearchLaneAction) html += `<button class="ops-filter" onclick="setResearchLaneAction('')">Clear action</button>`;
   html += '</div>';
 
   const filtered = opsResearchFilter === 'all' ? opsResearchData
@@ -5742,7 +5806,10 @@ async function renderResearchPage(page = opsResearchPage) {
     html += `<div class="rc-progress"><span>${filtered.length}</span> ${opsResearchFilter === 'completed' ? 'completed' : 'to work'}</div>`;
   }
   if (!filtered.length) {
-    html += '<div class="ops-empty">No research tasks match this filter</div>';
+    html += opsResearchTypeFilter === 'news_alert_development_followup'
+      ? '<div class="ops-empty">No active research-ledger tasks match this filter. Use the News Alert Follow-up queue in Decision Center for converted alert pursuits.</div>'
+        + '<div class="q-actions"><button class="q-action primary" onclick="openNewsAlertResearchQueue()">Back to News Alert Follow-up</button><button class="q-action" onclick="renderNewsAlertLane(\'converted\');navTo(\'pageReviewConsole\')">Converted Alerts</button></div>'
+      : '<div class="ops-empty">No research tasks match this filter</div>';
   } else {
     filtered.forEach((item, _ix) => {
       // Self-propelling contract: elevate the first actionable task. On
@@ -5763,6 +5830,9 @@ async function renderResearchPage(page = opsResearchPage) {
           ${freshnessHTML(item.updated_at || item.created_at)}
         </div>
         <div class="q-actions">
+          ${item.status !== 'completed' && item.research_type === 'owner_contact_manual' && item.entity_id ? `<button class="q-action primary" onclick="researchFindContact(decodeURIComponent('${encodeURIComponent(item.entity_id)}'))">Find the contact &rarr;</button>` : ''}
+          ${item.status !== 'completed' && item.research_type === 'establish_ownership_history' && item.domain && item.source_record_id ? `<button class="q-action primary" onclick="researchOpenOwnership(decodeURIComponent('${encodeURIComponent(item.domain)}'), decodeURIComponent('${encodeURIComponent(item.source_record_id)}'))">Open ownership &rarr;</button>` : ''}
+          ${item.status !== 'completed' && item.lane_action === 'county_records_needed' && item.domain && item.source_record_id ? `<button class="q-action" onclick="researchOpenCountyPortal(decodeURIComponent('${encodeURIComponent(item.domain)}'), decodeURIComponent('${encodeURIComponent(item.source_record_id)}'))">County portal &rarr;</button>` : ''}
           ${item.status !== 'completed' ? `<button class="q-action primary" onclick="_opsBtnGuard(this, completeResearch, decodeURIComponent('${encodeURIComponent(item.id)}'))">Complete</button>` : ''}
           ${item.status !== 'completed' ? `<button class="q-action" onclick="_opsBtnGuard(this, createFollowup, decodeURIComponent('${encodeURIComponent(item.id)}'))">Follow-up</button>` : ''}
           ${item.status !== 'completed' ? `<button class="q-action" onclick="_opsBtnGuard(this, dismissResearch, decodeURIComponent('${encodeURIComponent(item.id)}'))">Dismiss</button>` : ''}
@@ -5770,6 +5840,7 @@ async function renderResearchPage(page = opsResearchPage) {
           <button class="q-action" onclick="_opsBtnGuard(this, exportResearchTaskBrief, decodeURIComponent('${encodeURIComponent(item.id)}'),'chatgpt')">ChatGPT</button>
           <button class="q-action" onclick="_opsBtnGuard(this, exportResearchTaskBrief, decodeURIComponent('${encodeURIComponent(item.id)}'),'claude')">Claude</button>
         </div>
+        ${chainDraftHTML(item)}
         ${researchAssistantPanelHTML(item.id)}
       </div>`;
     });
@@ -5789,6 +5860,7 @@ async function renderResearchPage(page = opsResearchPage) {
   // Agency Drift below).
   const widgetsEl = el.querySelector('.lcc-research-widgets');
   if (widgetsEl) {
+    if (opsResearchTypeFilter) { widgetsEl.style.display = 'none'; perf.end(); return; }
     try {
       if (typeof renderLlcResearchQueueWidget === 'function') {
         await renderLlcResearchQueueWidget(widgetsEl);
@@ -5807,6 +5879,142 @@ async function renderResearchPage(page = opsResearchPage) {
   }
   perf.end();
 }
+
+// ─── P131 — render the ownership-chain DRAFT on the card ─────────────────────
+// P179 gave `establish_ownership_history` a capture path; P131 gives the card
+// something to confirm. The draft is assembled DETERMINISTICALLY from
+// gov.ownership_history (see api/_shared/ownership-chain-draft-planner.js), so
+// each line is a recorded transfer, not a model guess. A break in the chain is
+// shown as an explicit gap — never bridged — and a last grantee that disagrees
+// with the owner LCC shows is called out for reconciliation rather than resolved.
+//
+// Renders NOTHING when there is no draft, so with the drafter flag off (the
+// default) the card is byte-identical to today's.
+function chainDraftHTML(item) {
+  const d = item && item.chain_draft;
+  // A1: the action badge is rendered from the action the SERVER supplied
+  // (v_lcc_ownership_history_lane_split.action). RESEARCH_ACTION_META is a
+  // display map — a label for a decision already made — never a second
+  // classifier. Deriving the action here from draftable/terminates_at would be
+  // the JS-copy-of-a-SQL-rule drift this repo keeps paying for.
+  const laneAction = item && item.lane_action;
+  const meta = laneAction ? (RESEARCH_ACTION_META[laneAction] || null) : null;
+  const actionBadge = meta
+    ? '<div class="chain-action-badge" title="' + esc(meta.hint) + '">'
+      + (item.lane_human_actionable ? '\u25CF ' : '\u25CB ') + esc(meta.label) + '</div>'
+    : '';
+  if (!d) return actionBadge;
+  if (!d.draftable) {
+    // Honest, and deliberately not silent: "we looked and there is nothing on
+    // file" is a different fact from "nobody has looked yet", and conflating them
+    // is what let this lane sit at 0 completions.
+    return actionBadge + '<div class="chain-draft chain-draft-none">'
+      + '<div class="chain-draft-head">No chain on file</div>'
+      + '<div class="chain-draft-why">' + esc(d.reason || '') + '</div></div>';
+  }
+  const conf = d.confidence == null ? '' : Math.round(Number(d.confidence) * 100) + '%';
+  let rows = '';
+  (d.links || []).forEach(function (l) {
+    if (l.gap_before) {
+      rows += '<div class="chain-gap">\u22ee gap \u2014 intermediate owner Not on file</div>';
+    }
+    const price = l.price ? ' <span class="chain-price">$' + Number(l.price).toLocaleString('en-US') + '</span>' : '';
+    const role = l.role_label ? ' <span class="chain-role">' + esc(String(l.role_label).replace(/_/g, ' ')) + '</span>' : '';
+    rows += '<div class="chain-link"><span class="chain-date">' + esc(l.date || '') + '</span>'
+      + '<span class="chain-party">' + esc(l.from || '') + '</span>'
+      + '<span class="chain-arrow">\u2192</span>'
+      + '<span class="chain-party">' + esc(l.to || '') + '</span>' + price + role + '</div>';
+  });
+  const mismatch = d.terminates_at_current_owner === false && d.current_owner_name
+    ? '<div class="chain-warn">Last recorded grantee is not the owner on file ('
+      + esc(d.current_owner_name) + ') \u2014 confirm which is right.</div>'
+    : '';
+  return actionBadge + '<div class="chain-draft">'
+    + '<div class="chain-draft-head">Drafted chain of title'
+    + (conf ? ' <span class="chain-conf">' + esc(conf) + ' confidence</span>' : '') + '</div>'
+    + rows + mismatch
+    + '<div class="chain-draft-src">Source: government ownership records. Confirm or edit on the Ownership tab \u2014 nothing is written until you do.</div>'
+    + '</div>';
+}
+window.chainDraftHTML = chainDraftHTML;
+
+// ─── P173 — make the research lane ANSWERABLE ────────────────────────────────
+// The research page had SIX buttons and ZERO input fields: Complete posts only
+// { research_task_id }, so working a card destroyed the task and captured
+// nothing. That is why owner_contact_manual sat at 316 open / 0 completed ever
+// — not operator neglect, a surface that could notify but not capture.
+//
+// This does NOT build a new form. The Decision Center already solves the same
+// problem (binary verdicts as buttons, lccPrompt where an open answer is
+// needed), and the owner panel already has the working capture path:
+//   Contacts tab -> 'Select contact' -> picker -> select_prospecting_contact,
+//   with '+ Add new' for someone not yet in the graph.
+// So the card just OPENS that path on the right owner. No new write surface, no
+// second way for a contact to be recorded, nothing to drift.
+async function researchFindContact(entityId) {
+  if (!entityId) { showToast('This task has no linked owner', 'error'); return; }
+  if (typeof openEntityDetail !== 'function') { showToast('Owner panel unavailable', 'error'); return; }
+  await openEntityDetail(entityId);
+  // The picker needs the Contacts tab mounted; _entityAcquireContact switches to
+  // it itself, but only once the panel has rendered.
+  if (typeof _entityAcquireContact === 'function') setTimeout(_entityAcquireContact, 250);
+}
+window.researchFindContact = researchFindContact;
+
+// ─── P179 — make the OWNERSHIP-HISTORY lane answerable too ───────────────────
+// P173 gave `owner_contact_manual` a capture path and gated the button to that
+// ONE type. `establish_ownership_history` — 545 open, above the value floor,
+// premise unresolved — was left with Complete / Follow-up / Dismiss, and
+// completeResearch() posts only { research_task_id }. Same Class-3 defect, same
+// remedy: open the surface where the answer is ALREADY recorded (the property
+// panel's Ownership tab) rather than build a second write path.
+//
+// ⚠️ The task's subject is a PROPERTY, not an owner — `source_record_id` is the
+// domain property_id and `domain` is dia|gov (source_table =
+// v_lcc_ownership_chain_completeness). Do NOT route this to the entity panel:
+// entity_id is the *current* owner, and the task is precisely that the ownership
+// CHAIN is incomplete, so the linked owner is the thing in question.
+async function researchOpenOwnership(domain, propertyId) {
+  const dom = String(domain || '').trim();
+  const pid = Number(propertyId);
+  if (!dom || !Number.isFinite(pid)) { showToast('This task has no linked property', 'error'); return; }
+  if (typeof openUnifiedDetail !== 'function') { showToast('Property panel unavailable', 'error'); return; }
+  // property_id is passed as a NUMBER: every other call site in this file does
+  // the same, and the domain lookup keys on an integer id.
+  await openUnifiedDetail(dom, { property_id: pid }, {}, 'Ownership');
+}
+window.researchOpenOwnership = researchOpenOwnership;
+
+// ─── PR-scanner-3 — "go here next" for county_records_needed cards ───────────
+// PR-scanner-5 built /api/recorder-portal (gov-only, county_authority_cache)
+// but never wired a sidepanel button to it. This is that button, scoped to
+// exactly the cards this reclassification exists to route: a property with no
+// trustworthy public record on file. Read-only — resolves a portal URL and
+// opens it; never guesses a URL when none is on file (the endpoint's own
+// contract).
+async function researchOpenCountyPortal(domain, propertyId) {
+  const dom = String(domain || '').trim();
+  if (dom !== 'gov' && dom !== 'government') {
+    showToast('County portal lookup is gov-only', 'error');
+    return;
+  }
+  if (propertyId == null || propertyId === '') {
+    showToast('This task has no linked property', 'error');
+    return;
+  }
+  const res = await opsApi(`/api/recorder-portal?domain=gov&property_id=${encodeURIComponent(propertyId)}`);
+  if (!res.ok || !res.data) {
+    showToast('Could not resolve a county portal for this property', 'error');
+    return;
+  }
+  const portalUrl = res.data.portal_url;
+  if (!portalUrl) {
+    showToast('No county portal on file for this property — scan it manually via the sidepanel', 'error');
+    return;
+  }
+  window.open(portalUrl, '_blank', 'noopener');
+}
+window.researchOpenCountyPortal = researchOpenCountyPortal;
 
 async function completeResearch(id) {
   const res = await opsPost('/api/workflows?action=research_followup', {
@@ -6270,117 +6478,12 @@ async function createQualityFollowup(title) {
   }
 }
 
-// ============================================================================
-// METRICS — work counts, team performance
-// ============================================================================
-async function renderMetricsPage() {
-  const el = document.getElementById('metricsContent');
-  if (!el) return;
-  el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
-  const perf = opsPerf('render:metrics');
-
-  const [countsRes, oversightRes, syncHealthRes] = await Promise.all([
-    opsApi('/api/queue?view=work_counts'),
-    opsApi('/api/workflows?action=oversight'),
-    opsApi('/api/sync?action=health')
-  ]);
-
-  let html = '';
-  html += workspaceContextHTML();
-  html += '<div class="ops-header"><h2>Metrics</h2></div>';
-
-  // Work counts - SYNC FIX: Use canonicalCounts as fallback when available
-  // This ensures consistency between Dashboard stats and Metrics page
-  let countsData = countsRes.ok ? (countsRes.data || {}) : {};
-  if (!countsRes.ok && typeof canonicalCounts !== 'undefined' && canonicalCounts) {
-    countsData = canonicalCounts;
-  }
-
-  if (countsRes.ok || (typeof canonicalCounts !== 'undefined' && canonicalCounts)) {
-    const c = countsData;
-    html += '<div class="metrics-grid">';
-    html += metricCardHTML('My Actions', c.my_actions || c.my_open || 0, 'assigned to me');
-    html += metricCardHTML('Team Actions', c.team_actions || c.team_open || 0, 'shared queue');
-    html += metricCardHTML('Inbox', c.inbox_new || 0, 'needs triage', c.inbox_new > 10 ? 'yellow' : '');
-    html += metricCardHTML('Overdue', c.overdue || 0, 'past due date', c.overdue > 0 ? 'red' : 'green');
-    html += metricCardHTML('In Progress', c.in_progress || 0, 'active work');
-    html += metricCardHTML('Completed (7d)', c.completed_week || 0, 'this week', 'green');
-    html += metricCardHTML('Research', c.research_active || 0, 'active tasks');
-    // QA-10 (2026-05-18): prefer the live connector-status error count
-    // (summary.error from /api/sync?action=health) over the stale-prone
-    // work_counts.sync_errors row count. Reason: a connector can be in
-    // status='error' (failing right now) without any rows in the
-    // sync_errors log table, and vice-versa. The connector-status count
-    // is what the Pipeline banner uses, so this makes Metrics agree with
-    // it. Falls back to c.sync_errors if sync-health endpoint failed.
-    const liveSyncErrors = (syncHealthRes.ok && syncHealthRes.data?.summary)
-      ? (syncHealthRes.data.summary.error || 0)
-      : (c.sync_errors || 0);
-    html += metricCardHTML('Sync Errors', liveSyncErrors, 'connectors in error state', liveSyncErrors > 0 ? 'red' : 'green');
-    html += '</div>';
-    if (c.refreshed_at) {
-      html += `<div class="widget" style="margin-top:12px"><div class="q-item-meta">Counts refreshed ${freshnessHTML(c.refreshed_at)}</div></div>`;
-    }
-  }
-
-  if (syncHealthRes.ok && syncHealthRes.data) {
-    const summary = syncHealthRes.data.summary || {};
-    const drift = syncHealthRes.data.queue_drift || {};
-    html += '<div class="widget"><div class="widget-title">Operational Signals</div>';
-    html += '<div class="metrics-grid">';
-    html += metricCardHTML(
-      'Outbound Success',
-      summary.outbound_success_rate_24h != null ? Math.round(summary.outbound_success_rate_24h * 100) + '%' : '--',
-      'last 24h',
-      summary.outbound_success_rate_24h != null && summary.outbound_success_rate_24h < 0.9 ? 'red' : 'green'
-    );
-    html += metricCardHTML('Degraded Connectors', summary.degraded || 0, 'need attention', (summary.degraded || 0) > 0 ? 'yellow' : 'green');
-    html += metricCardHTML('Queue Drift Gap', drift.estimated_gap || 0, 'Salesforce open-task delta', drift.drift_flag ? 'red' : 'green');
-    html += metricCardHTML('Drift Status', drift.drift_flag ? 'Review' : 'Stable', drift.source || 'sync health', drift.drift_flag ? 'red' : 'green');
-    html += '</div></div>';
-  }
-
-  // Team overview (manager only)
-  if (oversightRes.ok && oversightRes.data?.team?.length) {
-    html += '<div class="widget"><div class="widget-title">Team Overview</div>';
-    oversightRes.data.team.forEach(member => {
-      const initials = (member.display_name || '??').split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
-      html += `<div class="team-row">
-        <div class="team-avatar">${esc(initials)}</div>
-        <div class="team-info">
-          <div class="team-name">${esc(member.display_name)}</div>
-          <div class="team-role">${esc(member.role || 'viewer')}</div>
-        </div>
-        <div class="team-stats">
-          <div class="stat"><span class="stat-n">${member.active_actions || 0}</span>Active</div>
-          <div class="stat"><span class="stat-n" style="${member.overdue_actions > 0 ? 'color:var(--red)' : ''}">${member.overdue_actions || 0}</span>Overdue</div>
-          <div class="stat"><span class="stat-n" style="color:var(--green)">${member.completed_this_week || 0}</span>Done/wk</div>
-          <div class="stat"><span class="stat-n">${member.untriaged_inbox || 0}</span>Inbox</div>
-        </div>
-      </div>`;
-    });
-    html += '</div>';
-  }
-
-  // Open escalations
-  if (oversightRes.ok && oversightRes.data?.open_escalations?.length) {
-    html += '<div class="widget" style="border-color:var(--orange)"><div class="widget-title">Open Escalations</div>';
-    oversightRes.data.open_escalations.forEach(escalation => {
-      html += `<div class="q-item high-pri">
-        <div class="q-item-title">${esc(escalation.action_items?.title || 'Unknown action')}</div>
-        <div class="q-item-meta">
-          <span>From: ${esc(escalation.users?.display_name || 'unknown')}</span>
-          <span>Reason: ${esc(escalation.reason || '')}</span>
-          ${freshnessHTML(escalation.created_at)}
-        </div>
-      </div>`;
-    });
-    html += '</div>';
-  }
-
-  el.innerHTML = html;
-  perf.end();
-}
+// ─── metrics ─────────────────────────────────────────────────────────────────
+// MOVED to ops-metrics.js (W6.5 Stage 4, Unit 4 — 2026-08-20): renderMetricsPage.
+// ⚠️ metricCardHTML (just below) stayed: 12 of its 28 call sites were in the
+// moved region, 16 are elsewhere in this file. app.js:1133 still dispatches
+// pageMetrics.
+// ─────────────────────────────────────────────────────────────────────────────
 
 function metricCardHTML(label, value, sub, colorClass) {
   return `<div class="metric-card-ops">
@@ -6430,360 +6533,20 @@ function _opsSparkline(series, opts = {}) {
   </svg>`;
 }
 
-// Pull last-30-day series for a single metric out of v_data_health_trend
-// rows. trendRows have shape [{day, view_name, payload, ...}]. Selects
-// matching view_name + extracts payload[metricKey] over time (asc).
-function _opsTrendSeries(trendRows, viewName, metricKey) {
-  if (!Array.isArray(trendRows)) return [];
-  return trendRows
-    .filter(r => r && r.view_name === viewName)
-    .sort((a, b) => String(a.day).localeCompare(String(b.day)))
-    .map(r => {
-      const v = r.payload && r.payload[metricKey];
-      const n = v == null ? null : Number(v);
-      return Number.isFinite(n) ? n : null;
-    });
-}
+// MOVED to ops-domain-health.js (W6.5 Stage 4, Unit 3 — 2026-08-20):
+// _opsTrendSeries + renderDomainHealthSummary.
+// ⚠️ _opsSparkline (just above) and metricCardHTML deliberately did NOT go with
+// them — both are shared. detail.js draws the dialysis census chart with
+// _opsSparkline (7 refs); metricCardHTML has 28 call sites here. The B8 banner
+// above therefore now heads a shared helper, not a feature block.
 
-async function renderDomainHealthSummary() {
-  const host = document.getElementById('domainHealthSummary');
-  if (!host) return;
-  if (typeof diaQuery !== 'function' || typeof govQuery !== 'function') {
-    host.innerHTML = '<div class="widget"><div class="widget-title">Domain Health Summary</div><div class="ops-empty">diaQuery / govQuery helper not loaded</div></div>';
-    return;
-  }
-
-  // Parallel pulls. Each helper has slightly different return shape:
-  //   diaQuery returns the array directly
-  //   govQuery returns {data: [...]}
-  const unwrap = (r) => Array.isArray(r) ? r : (r && Array.isArray(r.data) ? r.data : []);
-  const [
-    diaSales, diaOwn, diaEnt, diaComp, diaSf, diaTrend,
-    govSales, govOwn, govEnt, govComp, govSf, govTrend,
-  ] = await Promise.all([
-    diaQuery('v_data_health_sales', '*', { limit: 1 }),
-    diaQuery('v_data_health_ownership', '*', { limit: 1 }),
-    diaQuery('v_data_health_entities', '*', { limit: 1 }),
-    diaQuery('v_sales_completeness_summary', '*', { limit: 1 }),
-    diaQuery('v_sf_link_queue_summary', 'status,n', { limit: 20 }),
-    diaQuery('v_data_health_trend', 'day,view_name,payload',
-      { order: 'day.asc', limit: 200 }),
-    govQuery('v_data_health_sales', '*', { limit: 1 }),
-    govQuery('v_data_health_ownership', '*', { limit: 1 }),
-    govQuery('v_data_health_entities', '*', { limit: 1 }),
-    govQuery('v_sales_completeness_summary', '*', { limit: 1 }),
-    govQuery('v_sf_link_queue_summary', 'status,n', { limit: 20 }),
-    govQuery('v_data_health_trend', 'day,view_name,payload',
-      { order: 'day.asc', limit: 200 }),
-  ]);
-
-  const ds  = unwrap(diaSales)[0]  || {};
-  const doh = unwrap(diaOwn)[0]    || {};
-  const de  = unwrap(diaEnt)[0]    || {};
-  const dc  = unwrap(diaComp)[0]   || {};
-  const dt  = unwrap(diaTrend);
-  const gs  = unwrap(govSales)[0]  || {};
-  const goh = unwrap(govOwn)[0]    || {};
-  const ge  = unwrap(govEnt)[0]    || {};
-  const gc  = unwrap(govComp)[0]   || {};
-  const gt  = unwrap(govTrend);
-
-  // SF-link queue rollup. v_sf_link_queue_summary returns one row per
-  // status with column `n` (server-side aggregated to avoid pulling all
-  // 30K queue rows on every page-load).
-  const sfCount = (rows) => {
-    const c = { queued: 0, in_progress: 0, linked: 0, needs_review: 0, no_match: 0, failed: 0, unsupported: 0 };
-    for (const r of unwrap(rows)) {
-      if (r && r.status && c.hasOwnProperty(r.status)) c[r.status] = Number(r.n) || 0;
-    }
-    return c;
-  };
-  const dsf = sfCount(diaSf);
-  const gsf = sfCount(govSf);
-  const sfTotal = (c) => c.queued + c.in_progress + c.linked + c.needs_review + c.no_match + c.failed;
-
-  // Pick out 30d series for the key metrics from v_data_health_trend.
-  // Available payload keys (from migration): sales_live, duplicate_groups_live,
-  // sales_needs_review, redundant_owner_rows, pct_property_to_recorded_owner.
-  const trendOf = (rows, view, key) => _opsTrendSeries(rows, view, key);
-
-  // Render — three rows of cards (Sales, Ownership, Entities + SF link),
-  // each with side-by-side dia/gov values + a 30d sparkline below the value.
-  const num = (v) => v == null || v === '' ? '—' : Number(v).toLocaleString();
-  const pct = (v) => v == null || v === '' ? '—' : (Number(v).toFixed(1) + '%');
-  const pctOf = (n, d) => (d > 0 ? (100 * n / d).toFixed(1) + '%' : '—');
-
-  // Mini card builder: a single domain's value + sparkline for one metric.
-  const cellHTML = (value, sparkSeries, sub) => `
-    <div style="display:flex;flex-direction:column;gap:2px">
-      <div style="font-size:18px;font-weight:600;line-height:1.1">${value}</div>
-      <div>${_opsSparkline(sparkSeries)}</div>
-      <div style="font-size:11px;color:var(--text2)">${sub || ''}</div>
-    </div>`;
-
-  const rowHTML = (label, diaCell, govCell) => `
-    <div style="display:grid;grid-template-columns:170px 1fr 1fr;gap:12px;padding:10px 12px;border-bottom:1px solid var(--border)">
-      <div style="font-weight:500;color:var(--text2);align-self:center">${label}</div>
-      <div>${diaCell}</div>
-      <div>${govCell}</div>
-    </div>`;
-
-  let html = '<div class="widget"><div class="widget-title">Domain Health Summary <span style="font-weight:400;color:var(--text2);font-size:12px">— values today, sparkline = last 30d</span></div>';
-  html += `<div style="display:grid;grid-template-columns:170px 1fr 1fr;gap:12px;padding:10px 12px;border-bottom:2px solid var(--border);font-size:12px;color:var(--text2);font-weight:600;text-transform:uppercase;letter-spacing:0.5px">
-    <div>Metric</div><div>Dialysis</div><div>Government</div>
-  </div>`;
-
-  // ── Sales
-  html += rowHTML('Live sales',
-    cellHTML(num(ds.sales_live), trendOf(dt, 'v_data_health_sales', 'sales_live'), 'curated sales rows'),
-    cellHTML(num(gs.sales_live), trendOf(gt, 'v_data_health_sales', 'sales_live'), 'curated sales rows'));
-  html += rowHTML('Sales completeness',
-    cellHTML((dc.avg_score == null ? '—' : Number(dc.avg_score).toFixed(1)) + ' avg',
-             trendOf(dt, 'v_sales_completeness_summary', 'avg_score'),
-             `median ${dc.p50_score ?? '—'} · ${dc.perfect ?? 0} perfect · ${dc.critical_lt_40 ?? 0} critical`),
-    cellHTML((gc.avg_score == null ? '—' : Number(gc.avg_score).toFixed(1)) + ' avg',
-             trendOf(gt, 'v_sales_completeness_summary', 'avg_score'),
-             `median ${gc.p50_score ?? '—'} · ${gc.perfect ?? 0} perfect · ${gc.critical_lt_40 ?? 0} critical`));
-  html += rowHTML('Needs-review sales',
-    cellHTML(num(ds.sales_needs_review), trendOf(dt, 'v_data_health_sales', 'sales_needs_review'), 'awaiting triage'),
-    cellHTML(num(gs.sales_needs_review), trendOf(gt, 'v_data_health_sales', 'sales_needs_review'), 'awaiting triage'));
-  html += rowHTML('Live dupe groups',
-    cellHTML(num(ds.duplicate_groups_live), trendOf(dt, 'v_data_health_sales', 'duplicate_groups_live'), 'should be 0 (C1+C4)'),
-    cellHTML(num(gs.duplicate_groups_live), trendOf(gt, 'v_data_health_sales', 'duplicate_groups_live'), 'should be 0 (C1+C4)'));
-
-  // ── Ownership
-  html += rowHTML('Property → recorded_owner',
-    cellHTML(pct(doh.pct_property_to_recorded_owner),
-             trendOf(dt, 'v_data_health_ownership', 'pct_property_to_recorded_owner'),
-             `${num(doh.prop_with_recorded_owner)} of ${num(doh.prop_total)}`),
-    cellHTML(pct(goh.pct_property_to_recorded_owner),
-             trendOf(gt, 'v_data_health_ownership', 'pct_property_to_recorded_owner'),
-             `${num(goh.prop_with_recorded_owner)} of ${num(goh.prop_total)}`));
-  html += rowHTML('Ownership history (active)',
-    cellHTML(num(doh.oh_active), trendOf(dt, 'v_data_health_ownership', 'oh_active'),
-             `${num(doh.oh_superseded)} superseded · ${num(doh.oh_orphan)} orphans`),
-    cellHTML(num(goh.oh_active), trendOf(gt, 'v_data_health_ownership', 'oh_active'),
-             `${num(goh.oh_superseded)} superseded · ${num(goh.oh_orphan)} orphans`));
-
-  // ── Entities
-  html += rowHTML('Recorded owners',
-    cellHTML(num(de.total_recorded_owners), [],
-             `${num(de.redundant_owner_groups)} redundant groups (${num(de.redundant_owner_rows)} rows)`),
-    cellHTML(num(ge.total_recorded_owners), [],
-             `${num(ge.redundant_owner_groups)} redundant groups (${num(ge.redundant_owner_rows)} rows)`));
-  html += rowHTML('True owners',
-    cellHTML(num(de.total_true_owners), [], 'canonical owners'),
-    cellHTML(num(ge.total_true_owners), [], 'canonical owners'));
-
-  // ── SF link (A7)
-  const sfCellHTML = (c) => {
-    const total = sfTotal(c);
-    const linkedPct = total > 0 ? Math.round(100 * c.linked / total) : 0;
-    const tone = c.queued > 100 ? 'red' : c.queued > 10 ? 'yellow' : 'green';
-    return `<div style="display:flex;flex-direction:column;gap:2px">
-      <div style="font-size:18px;font-weight:600;line-height:1.1" class="${tone}">${num(c.linked)}<span style="font-size:13px;font-weight:400;color:var(--text2)"> / ${num(total)} (${linkedPct}%)</span></div>
-      <div style="font-size:11px;color:var(--text2)">queued ${c.queued} · review ${c.needs_review} · no_match ${c.no_match} · failed ${c.failed}</div>
-    </div>`;
-  };
-  html += rowHTML('SF-link backfill (A7)', sfCellHTML(dsf), sfCellHTML(gsf));
-
-  html += '</div>';
-  host.innerHTML = html;
-}
-
-// ============================================================================
-// SYNC HEALTH — connector status and sync job monitoring
-// ============================================================================
-async function renderSyncHealthPage() {
-  const el = document.getElementById('syncHealthContent');
-  if (!el) return;
-  el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
-  const perf = opsPerf('render:sync_health');
-
-  const [connRes, healthRes] = await Promise.all([
-    opsApi('/api/connectors?action=list'),
-    opsApi('/api/sync?action=health')
-  ]);
-
-  let html = '<div class="ops-header"><h2>Sync Health</h2></div>';
-
-  // Connector status cards
-  const connectors = connRes.ok ? (connRes.data?.connectors || connRes.data || []) : [];
-
-  if (connectors.length === 0) {
-    html += emptyStateHTML(
-      '<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>',
-      'No connectors configured',
-      'Connect Outlook, Salesforce, or calendar to start syncing data into your workspace.',
-      null, null
-    );
-  } else {
-    // A5 (2026-06-06): a disconnected/errored connector can't be fixed by
-    // "Sync Now" (it'll just fail). Give it the real next action \u2014 Reconnect
-    // (honest guidance, since auth is provisioned outside the app) \u2014 and let a
-    // stale duplicate be removed. Field names match the connector_accounts list
-    // payload (display_name / last_sync_at / last_error).
-    const _healthyStatuses = ['active', 'healthy', 'degraded'];
-    connectors.forEach(conn => {
-      const status = conn.status || 'unknown';
-      const isUsable = _healthyStatuses.indexOf(status) !== -1;
-      const statusCls = (status === 'active' || status === 'healthy') ? 'healthy'
-        : status === 'degraded' ? 'degraded'
-        : 'error';
-      const icon = conn.connector_type === 'email' ? 'E'
-        : conn.connector_type === 'calendar' ? 'C'
-        : conn.connector_type === 'salesforce' ? 'SF'
-        : conn.connector_type?.substring(0, 2).toUpperCase() || '?';
-      const label = conn.display_name || conn.label || '';
-      const lastSync = conn.last_sync_at || conn.last_synced_at || null;
-      const errMsg = conn.last_error || conn.error_message || '';
-      const cidEnc = encodeURIComponent(conn.id || '');
-      const typeEnc = encodeURIComponent(conn.connector_type || '');
-      const nameEnc = encodeURIComponent((conn.connector_type || 'connector') + (label ? ' (' + label + ')' : ''));
-
-      const actions = isUsable
-        ? `<button class="q-action" onclick="_opsBtnGuard(this, triggerSync, decodeURIComponent('${typeEnc}'))">Sync Now</button>`
-        : `<button class="q-action primary" onclick="reconnectConnector(decodeURIComponent('${typeEnc}'))">Reconnect \u2192</button>`
-          + (conn.id ? `<button class="q-action" onclick="removeConnector(decodeURIComponent('${cidEnc}'),decodeURIComponent('${nameEnc}'))">Remove</button>` : '');
-
-      html += `<div class="sync-card ${statusCls}">
-        <div class="sync-card-icon">${icon}</div>
-        <div class="sync-card-info">
-          <div class="sync-card-name">${esc(conn.connector_type || 'Unknown')} ${label ? '(' + esc(label) + ')' : ''}</div>
-          <div class="sync-card-status">
-            Status: ${esc(status)}
-            ${lastSync ? ' \u00b7 Last sync: ' + freshnessHTML(lastSync) : ''}
-            ${errMsg ? ' \u00b7 <span style="color:var(--red)">' + esc(errMsg) + '</span>' : ''}
-            ${!isUsable ? ' \u00b7 <span style="color:var(--red)">needs reconnect</span>' : ''}
-          </div>
-        </div>
-        <div class="sync-card-actions">${actions}</div>
-      </div>`;
-    });
-  }
-
-  const health = healthRes.ok ? (healthRes.data || {}) : {};
-  const summary = health.summary || {};
-  const unresolvedErrors = health.unresolved_errors || [];
-  const queueDrift = health.queue_drift || null;
-
-  // Sync health summary
-  if (healthRes.ok && healthRes.data) {
-    html += '<div class="widget" style="margin-top:16px"><div class="widget-title">Sync Summary</div>';
-    html += '<div class="metrics-grid">';
-    html += metricCardHTML('Healthy', summary.healthy || 0, 'connectors');
-    html += metricCardHTML('Degraded', summary.degraded || 0, 'connectors', (summary.degraded || 0) > 0 ? 'yellow' : 'green');
-    // QA-10 (2026-05-18): show connector-status errors here (matches Pipeline
-    // banner). Sync-log row count (unresolvedErrors.length) lives in the
-    // "Recent Errors" widget below — keeping both as a single tile conflated
-    // two different concepts and made every surface disagree with itself.
-    html += metricCardHTML('Errors', summary.error || 0, 'connectors in error state', (summary.error || 0) > 0 ? 'red' : 'green');
-    html += metricCardHTML(
-      'Outbound Success',
-      summary.outbound_success_rate_24h != null ? Math.round(summary.outbound_success_rate_24h * 100) + '%' : '--',
-      'completed outbound jobs, 24h',
-      summary.outbound_success_rate_24h != null && summary.outbound_success_rate_24h < 0.9 ? 'red' : 'green'
-    );
-    html += '</div></div>';
-  }
-
-  if (queueDrift) {
-    html += '<div class="widget" style="margin-top:16px"><div class="widget-title">Queue Drift</div>';
-    html += '<div class="metrics-grid">';
-    html += metricCardHTML('Open SF Tasks', queueDrift.salesforce_open_task_count || 0, 'inbox items');
-    html += metricCardHTML('Last SF Pull', queueDrift.last_sf_records_processed || 0, 'records processed');
-    html += metricCardHTML('Estimated Gap', queueDrift.estimated_gap || 0, 'open tasks vs last pull', queueDrift.drift_flag ? 'red' : 'green');
-    html += metricCardHTML('Drift Flag', queueDrift.drift_flag ? 'Review' : 'Stable', queueDrift.last_inbound_completed_at ? `last inbound ${freshnessHTML(queueDrift.last_inbound_completed_at)}` : 'no inbound timestamp', queueDrift.drift_flag ? 'red' : 'green');
-    html += '</div>';
-    html += `<div class="q-item" style="margin-top:12px">
-      <div class="q-item-meta">
-        <span>Source: ${esc(queueDrift.source || 'unknown')}</span>
-        ${queueDrift.last_inbound_job_id ? `<span>Job: ${esc(queueDrift.last_inbound_job_id)}</span>` : ''}
-      </div>
-    </div>`;
-    html += '</div>';
-  }
-
-  // Unresolved sync errors
-  if (unresolvedErrors.length) {
-    html += '<div class="widget" style="border-color:var(--red)"><div class="widget-title">Recent Errors</div>';
-    unresolvedErrors.forEach(err => {
-      html += `<div class="q-item overdue">
-        <div class="q-item-header">
-          <span class="q-item-title">${esc(err.error_code || 'Sync Error')}</span>
-          ${freshnessHTML(err.created_at)}
-        </div>
-        <div class="q-item-meta"><span style="color:var(--red)">${esc(err.error_message || '')}</span></div>
-        <div class="q-actions">
-          <button class="q-action" onclick="_opsBtnGuard(this, retrySync, decodeURIComponent('${encodeURIComponent(err.id)}'))">Retry</button>
-        </div>
-      </div>`;
-    });
-    html += '</div>';
-  }
-
-  el.innerHTML = html;
-  perf.end();
-
-  // Append perf dashboard for managers
-  setTimeout(appendPerfToSyncHealth, 100);
-
-  // Phase C (2026-05-18): mount the silent-write-failures widget at the
-  // bottom of the Sync Health page. Surfaces ingest_write_failures
-  // rollup so silent failures are visible in-app instead of only in Studio.
-  try {
-    if (typeof renderWriteFailuresWidget === 'function') {
-      await renderWriteFailuresWidget(el);
-    }
-  } catch (e) { console.warn('[SyncHealth] write-failures widget render failed:', e?.message); }
-}
-
-async function triggerSync(connectorType) {
-  const actionMap = { email: 'ingest_emails', outlook: 'ingest_emails', calendar: 'ingest_calendar', salesforce: 'ingest_sf_activities' };
-  const action = actionMap[connectorType] || 'ingest_' + connectorType;
-  const res = await opsPost(`/api/sync?action=${action}`, {});
-  if (res.ok) showToast(`Sync triggered for ${connectorType}`, 'success');
-  else showToast(res.error || 'Sync trigger failed', 'error');
-}
-
-async function retrySync(errorId) {
-  const res = await opsPost(`/api/sync?action=retry&error_id=${errorId}`, {});
-  if (res.ok) showToast('Retry triggered', 'success');
-  else showToast(res.error || 'Retry failed', 'error');
-}
-
-// A5 (2026-06-06): reconnect path for a disconnected/errored connector. Auth is
-// provisioned outside the app (Outlook/SF via Power Automate + admin setup),
-// so there is no in-app OAuth handshake to launch — give the user honest,
-// specific guidance instead of a button that silently does nothing.
-function reconnectConnector(connectorType) {
-  const t = (connectorType || 'this connector');
-  const how = t === 'salesforce'
-    ? 'Salesforce reconnects through the Power Automate flow + the SF connected app — re-authorize there, then the next sync will turn this green.'
-    : (t === 'email' || t === 'outlook')
-      ? 'Outlook reconnects through the Power Automate flow that owns the mailbox connection — re-authorize the flow, then run Sync Now.'
-      : 'Re-authorize this connector at its source (the Power Automate flow / admin setup that provisioned it), then run Sync Now.';
-  if (typeof showToast === 'function') showToast('Reconnect ' + t + ': ' + how, 'warn');
-}
-window.reconnectConnector = reconnectConnector;
-
-// Remove a connector account (used for stale/duplicate disconnected rows). The
-// API DELETE is owner-gated server-side; confirm first since it drops the row.
-async function removeConnector(connectorId, displayName) {
-  if (!connectorId) return;
-  const ok = typeof lccConfirm === 'function'
-    ? await lccConfirm('Remove the connector "' + (displayName || connectorId) + '"?\n\nThis deletes the connector account row. Use this for a stale duplicate — an active connector should be reconnected, not removed.', 'Remove')
-    : (typeof confirm === 'function' ? confirm('Remove connector "' + (displayName || connectorId) + '"?') : false);
-  if (!ok) return;
-  const res = await opsApi('/api/connectors?id=' + encodeURIComponent(connectorId), { method: 'DELETE' });
-  if (res.ok) {
-    if (typeof showToast === 'function') showToast('Connector removed.', 'success');
-    if (typeof renderSyncHealthPage === 'function') renderSyncHealthPage();
-  } else {
-    if (typeof showToast === 'function') showToast('Could not remove connector: ' + (res.error || 'unknown'), 'error');
-  }
-}
-window.removeConnector = removeConnector;
+// ─── sync health ─────────────────────────────────────────────────────────────
+// MOVED to ops-sync-health.js (W6.5 Stage 4, Unit 2 — 2026-08-20):
+// renderSyncHealthPage + triggerSync / retrySync / reconnectConnector /
+// removeConnector. app.js:1135 still dispatches to renderSyncHealthPage, and the
+// page still grafts on ops-perf-dashboard.js's appendPerfToSyncHealth — both at
+// call time. _opsBtnGuard stays here; the onclicks reference it off window.
+// ─────────────────────────────────────────────────────────────────────────────
 
 // ============================================================================
 // QUICK ACTIONS on queue items
@@ -7011,385 +6774,12 @@ function jsStringArg(s) {
   return `'${String(s || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
 }
 
-// ============================================================================
-// PERFORMANCE DASHBOARD — manager-only operational perf view
-// Accessible from Sync Health page or via navTo('pagePerfDashboard')
-// ============================================================================
-
-async function renderPerfDashboard(container) {
-  // Render inside sync health page as a collapsible section, or standalone
-  const el = container || document.getElementById('perfDashboardContent');
-  if (!el) return;
-  el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
-
-  const [summaryRes, slowRes, aiRes] = await Promise.all([
-    opsApi('/api/queue-v2?view=_perf&section=summary'),
-    opsApi('/api/queue-v2?view=_perf&section=slow'),
-    opsApi('/api/queue-v2?view=_perf&section=ai')
-  ]);
-
-  if (!summaryRes.ok) {
-    el.innerHTML = `<div class="ops-empty">${esc(summaryRes.data?.error || summaryRes.error || 'Could not load performance data')}</div>`;
-    return;
-  }
-
-  const data = summaryRes.data;
-  const slowData = slowRes.ok ? slowRes.data : {};
-  const aiData = aiRes.ok ? aiRes.data : {};
-  let html = '';
-
-  html += '<div class="ops-header"><h2>Performance Dashboard</h2></div>';
-
-  // MV freshness check
-  if (data.mv_freshness) {
-    const mv = data.mv_freshness;
-    const staleClass = mv.freshness_status === 'fresh' ? 'green'
-      : mv.freshness_status === 'acceptable' ? ''
-      : mv.freshness_status === 'stale' ? 'yellow' : 'red';
-    html += `<div class="degraded-banner" style="margin-bottom:12px">
-      <span class="degraded-icon">~</span>
-      <div class="degraded-body">
-        <div class="degraded-title">Materialized Views: <span class="${staleClass}">${mv.freshness_status}</span></div>
-        <div>Last refreshed ${Math.round(mv.minutes_stale)}m ago</div>
-      </div>
-    </div>`;
-  }
-
-  // Target compliance grid
-  if (data.compliance?.length) {
-    html += '<div class="widget"><div class="widget-title">Performance Target Compliance</div>';
-    html += '<table style="width:100%;font-size:12px;border-collapse:collapse">';
-    html += '<thead><tr style="color:var(--text2);text-align:left;border-bottom:1px solid var(--border)">'
-      + '<th style="padding:6px">Endpoint</th>'
-      + '<th style="padding:6px;text-align:right">Requests</th>'
-      + '<th style="padding:6px;text-align:right">p50</th>'
-      + '<th style="padding:6px;text-align:right">p95</th>'
-      + '<th style="padding:6px;text-align:right">Target p95</th>'
-      + '<th style="padding:6px;text-align:center">Status</th>'
-      + '</tr></thead><tbody>';
-    data.compliance.forEach(c => {
-      const statusColor = c.compliance_status === 'passing' ? 'var(--green)'
-        : c.compliance_status === 'warning' ? 'var(--yellow)'
-        : c.compliance_status === 'failing' ? 'var(--red)' : 'var(--text3)';
-      const statusLabel = c.compliance_status === 'no_data' ? '--' : c.compliance_status;
-      html += `<tr style="border-bottom:1px solid var(--border)">
-        <td style="padding:6px;max-width:200px;overflow:hidden;text-overflow:ellipsis" title="${esc(c.description || '')}">${esc(c.endpoint_pattern || '')}</td>
-        <td style="padding:6px;text-align:right">${c.request_count != null ? c.request_count : '--'}</td>
-        <td style="padding:6px;text-align:right">${c.actual_p50_ms != null ? Math.round(c.actual_p50_ms) + 'ms' : '--'}</td>
-        <td style="padding:6px;text-align:right">${c.actual_p95_ms != null ? Math.round(c.actual_p95_ms) + 'ms' : '--'}</td>
-        <td style="padding:6px;text-align:right">${c.target_p95_ms != null ? c.target_p95_ms + 'ms' : '--'}</td>
-        <td style="padding:6px;text-align:center;color:${statusColor};font-weight:600">${statusLabel}</td>
-      </tr>`;
-    });
-    html += '</tbody></table></div>';
-  }
-
-  // Endpoint summary
-  if (data.endpoints?.length) {
-    html += '<div class="widget"><div class="widget-title">Endpoint Latency (24h)</div>';
-    html += '<table style="width:100%;font-size:12px;border-collapse:collapse">';
-    html += '<thead><tr style="color:var(--text2);text-align:left;border-bottom:1px solid var(--border)">'
-      + '<th style="padding:6px">Endpoint</th>'
-      + '<th style="padding:6px;text-align:right">Count</th>'
-      + '<th style="padding:6px;text-align:right">Avg</th>'
-      + '<th style="padding:6px;text-align:right">p95</th>'
-      + '<th style="padding:6px;text-align:right">Max</th>'
-      + '<th style="padding:6px;text-align:right">Slow%</th>'
-      + '</tr></thead><tbody>';
-    data.endpoints.forEach(ep => {
-      const slowColor = ep.slow_pct > 10 ? 'color:var(--red)' : ep.slow_pct > 5 ? 'color:var(--yellow)' : '';
-      html += `<tr style="border-bottom:1px solid var(--border)">
-        <td style="padding:6px;max-width:240px;overflow:hidden;text-overflow:ellipsis">${esc(ep.endpoint || '')}</td>
-        <td style="padding:6px;text-align:right">${ep.request_count != null ? ep.request_count : '--'}</td>
-        <td style="padding:6px;text-align:right">${ep.avg_ms != null ? Math.round(ep.avg_ms) + 'ms' : '--'}</td>
-        <td style="padding:6px;text-align:right">${ep.p95_ms != null ? Math.round(ep.p95_ms) + 'ms' : '--'}</td>
-        <td style="padding:6px;text-align:right">${ep.max_ms != null ? Math.round(ep.max_ms) + 'ms' : '--'}</td>
-        <td style="padding:6px;text-align:right;${slowColor}">${ep.slow_pct != null ? ep.slow_pct + '%' : '--'}</td>
-      </tr>`;
-    });
-    html += '</tbody></table></div>';
-  }
-
-  // Slow requests
-  if (slowData.slow_requests?.length) {
-    html += `<div class="widget" style="border-color:var(--orange)"><div class="widget-title">Slow Requests (24h) — ${slowData.slow_requests.length} found</div>`;
-    slowData.slow_requests.slice(0, 20).forEach(sr => {
-      html += `<div class="q-item">
-        <div class="q-item-header">
-          <span class="q-item-title">${esc(sr.endpoint)}</span>
-          <div class="q-item-badges">
-            <span class="q-badge pri-high">${sr.duration_ms != null ? sr.duration_ms : '?'}ms</span>
-            <span class="q-badge type">${esc(sr.metric_type || '')}</span>
-          </div>
-        </div>
-        <div class="q-item-meta">
-          <span>Threshold: ${sr.threshold_ms != null ? sr.threshold_ms : '?'}ms</span>
-          ${freshnessHTML(sr.recorded_at)}
-        </div>
-      </div>`;
-    });
-    html += '</div>';
-  } else {
-    html += '<div class="widget"><div class="widget-title">Slow Requests (24h)</div><div class="ops-empty">No slow requests detected</div></div>';
-  }
-
-  if (aiData.summary) {
-    const aiSummary = aiData.summary || {};
-    const routeConfig = aiData.route_config || {};
-    const rollout = aiData.rollout || {};
-    const missingModel = Math.max(0, (aiSummary.total_calls || 0) - (aiSummary.calls_with_model || 0));
-    const missingUsage = Math.max(0, (aiSummary.total_calls || 0) - (aiSummary.calls_with_usage || 0));
-    const missingCache = Math.max(0, (aiSummary.total_calls || 0) - (aiSummary.calls_with_cache_data || 0));
-    html += '<div class="widget"><div class="widget-title">AI Usage (Recent 200 Calls)</div>';
-    const rolloutBadge = rollout.status === 'active' ? 'pri-low' : 'pri-high';
-    const rolloutText = rollout.status === 'active'
-      ? `Routing active · ${fmtN(rollout.override_count || 0)} override entries`
-      : 'Routing still manual/default-only';
-    html += `<div class="q-item" style="margin-bottom:12px">
-      <div class="q-item-header">
-        <span class="q-item-title">Rollout Readiness</span>
-        <div class="q-item-badges">
-          <span class="q-badge ${rolloutBadge}">${esc(rolloutText)}</span>
-        </div>
-      </div>
-      <div class="q-item-meta">
-        <span>${rollout.status === 'active' ? 'Feature routing config is present and should be observable below.' : 'Set AI_CHAT_POLICY or feature overrides to start a staged routing rollout.'}</span>
-      </div>
-    </div>`;
-    if (rollout.suggestion) {
-      html += `<div class="q-item" style="margin-bottom:12px;border-color:var(--accent)">
-        <div class="q-item-header">
-          <span class="q-item-title">Suggested Next Step</span>
-        </div>
-        <div class="q-item-meta">
-          <span>${esc(rollout.suggestion)}</span>
-        </div>
-      </div>`;
-    }
-    if (aiData.presets?.length) {
-      html += '<table style="width:100%;font-size:12px;border-collapse:collapse;margin-bottom:12px">';
-      html += '<thead><tr style="color:var(--text2);text-align:left;border-bottom:1px solid var(--border)">'
-        + '<th style="padding:6px">Preset</th>'
-        + '<th style="padding:6px">Artifact</th>'
-        + '<th style="padding:6px">Use Case</th>'
-        + '</tr></thead><tbody>';
-      aiData.presets.forEach((preset) => {
-        html += `<tr style="border-bottom:1px solid var(--border)">
-          <td style="padding:6px">${esc(preset.name || '')}</td>
-          <td style="padding:6px">${esc(preset.file || '')}</td>
-          <td style="padding:6px">${esc(preset.recommended_for || preset.description || '')}</td>
-        </tr>`;
-      });
-      html += '</tbody></table>';
-    }
-    html += `<div class="q-item" style="margin-bottom:12px">
-      <div class="q-item-header">
-        <span class="q-item-title">Routing Policy</span>
-        <div class="q-item-badges">
-          <span class="q-badge type">${esc(routeConfig.policy || 'manual')}</span>
-          <span class="q-badge type">${esc(routeConfig.default_provider || 'edge')}</span>
-          <span class="q-badge type">${esc(routeConfig.default_model || 'gpt-5-mini')}</span>
-        </div>
-      </div>
-      <div class="q-item-meta">
-        <span>Default route for features without overrides</span>
-      </div>
-    </div>`;
-    const featureProviderEntries = Object.entries(routeConfig.feature_providers || {});
-    const featureModelEntries = Object.entries(routeConfig.feature_models || {});
-    if (featureProviderEntries.length || featureModelEntries.length) {
-      const featureKeys = [...new Set([...featureProviderEntries.map(([key]) => key), ...featureModelEntries.map(([key]) => key)])];
-      html += '<table style="width:100%;font-size:12px;border-collapse:collapse;margin-bottom:12px">';
-      html += '<thead><tr style="color:var(--text2);text-align:left;border-bottom:1px solid var(--border)">'
-        + '<th style="padding:6px">Feature</th>'
-        + '<th style="padding:6px">Provider</th>'
-        + '<th style="padding:6px">Model</th>'
-        + '</tr></thead><tbody>';
-      featureKeys.sort().forEach((feature) => {
-        html += `<tr style="border-bottom:1px solid var(--border)">
-          <td style="padding:6px">${esc(feature)}</td>
-          <td style="padding:6px">${esc(routeConfig.feature_providers?.[feature] || routeConfig.default_provider || 'edge')}</td>
-          <td style="padding:6px">${esc(routeConfig.feature_models?.[feature] || routeConfig.default_model || 'gpt-5-mini')}</td>
-        </tr>`;
-      });
-      html += '</tbody></table>';
-    }
-    if (aiData.mismatches?.length) {
-      html += '<div class="q-item" style="margin-bottom:12px;border-color:var(--orange)">';
-      html += '<div class="q-item-header"><span class="q-item-title">Routing Mismatches Detected</span>';
-      html += `<div class="q-item-badges"><span class="q-badge pri-high">${fmtN(aiData.mismatches.length)}</span></div></div>`;
-      html += '<div class="q-item-meta"><span>Configured routes differ from recent observed telemetry for these features.</span></div>';
-      html += '</div>';
-      html += '<table style="width:100%;font-size:12px;border-collapse:collapse;margin-bottom:12px">';
-      html += '<thead><tr style="color:var(--text2);text-align:left;border-bottom:1px solid var(--border)">'
-        + '<th style="padding:6px">Feature</th>'
-        + '<th style="padding:6px">Expected</th>'
-        + '<th style="padding:6px">Observed</th>'
-        + '<th style="padding:6px;text-align:right">Calls</th>'
-        + '</tr></thead><tbody>';
-      aiData.mismatches.forEach((row) => {
-        const observed = `${(row.seen_providers || []).join(', ') || 'unknown'} / ${(row.seen_models || []).join(', ') || 'unknown'}`;
-        const expected = `${row.expected_provider || 'edge'} / ${row.expected_model || 'gpt-5-mini'}`;
-        html += `<tr style="border-bottom:1px solid var(--border)">
-          <td style="padding:6px">${esc(row.feature)}</td>
-          <td style="padding:6px">${esc(expected)}</td>
-          <td style="padding:6px">${esc(observed)}</td>
-          <td style="padding:6px;text-align:right">${fmtN(row.calls || 0)}</td>
-        </tr>`;
-      });
-      html += '</tbody></table>';
-    }
-    html += `<div class="q-item" style="margin-bottom:12px">
-      <div class="q-item-header">
-        <span class="q-item-title">Telemetry Quality</span>
-        <div class="q-item-badges">
-          <span class="q-badge type">Model ${fmtN(aiSummary.model_coverage_pct || 0)}%</span>
-          <span class="q-badge type">Usage ${fmtN(aiSummary.usage_coverage_pct || 0)}%</span>
-          <span class="q-badge type">Cache ${fmtN(aiSummary.cache_coverage_pct || 0)}%</span>
-        </div>
-      </div>
-      <div class="q-item-meta">
-        <span>Missing model: ${fmtN(missingModel)}</span>
-        <span>Missing usage: ${fmtN(missingUsage)}</span>
-        <span>Missing cache data: ${fmtN(missingCache)}</span>
-      </div>
-    </div>`;
-    html += '<div class="metrics-grid">';
-    html += `<div class="metric-card"><div class="metric-label">Calls</div><div class="metric-val">${fmtN(aiSummary.total_calls || 0)}</div></div>`;
-    html += `<div class="metric-card"><div class="metric-label">Avg Latency</div><div class="metric-val">${fmtN(aiSummary.avg_duration_ms || 0)}ms</div></div>`;
-    html += `<div class="metric-card"><div class="metric-label">Input Tokens</div><div class="metric-val">${fmtN(aiSummary.total_input_tokens || 0)}</div></div>`;
-    html += `<div class="metric-card"><div class="metric-label">Output Tokens</div><div class="metric-val">${fmtN(aiSummary.total_output_tokens || 0)}</div></div>`;
-    html += `<div class="metric-card"><div class="metric-label">Total Tokens</div><div class="metric-val">${fmtN(aiSummary.total_tokens || 0)}</div></div>`;
-    html += `<div class="metric-card"><div class="metric-label">Attachments</div><div class="metric-val">${fmtN(aiSummary.total_attachments || 0)}</div></div>`;
-    html += `<div class="metric-card"><div class="metric-label">Cache Hits</div><div class="metric-val">${fmtN(aiSummary.cache_hits || 0)}</div></div>`;
-    html += '</div>';
-
-    if (aiData.features?.length) {
-      html += '<table style="width:100%;font-size:12px;border-collapse:collapse;margin-top:12px">';
-      html += '<thead><tr style="color:var(--text2);text-align:left;border-bottom:1px solid var(--border)">'
-        + '<th style="padding:6px">Feature</th>'
-        + '<th style="padding:6px;text-align:right">Calls</th>'
-        + '<th style="padding:6px;text-align:right">Avg</th>'
-        + '<th style="padding:6px;text-align:right">Tokens</th>'
-        + '<th style="padding:6px;text-align:right">Attachments</th>'
-        + '<th style="padding:6px;text-align:right">Cache Hits</th>'
-        + '<th style="padding:6px;text-align:right">Last Call</th>'
-        + '</tr></thead><tbody>';
-      aiData.features.slice(0, 12).forEach((row) => {
-        html += `<tr style="border-bottom:1px solid var(--border)">
-          <td style="padding:6px">${esc(row.feature)}</td>
-          <td style="padding:6px;text-align:right">${fmtN(row.calls || 0)}</td>
-          <td style="padding:6px;text-align:right">${fmtN(row.avg_duration_ms || 0)}ms</td>
-          <td style="padding:6px;text-align:right">${fmtN(row.total_tokens || 0)}</td>
-          <td style="padding:6px;text-align:right">${fmtN(row.attachments || 0)}</td>
-          <td style="padding:6px;text-align:right">${fmtN(row.cache_hits || 0)}</td>
-          <td style="padding:6px;text-align:right">${row.last_called_at ? freshnessHTML(row.last_called_at) : '--'}</td>
-        </tr>`;
-      });
-      html += '</tbody></table>';
-    }
-    html += '</div>';
-
-    html += '<div class="widget"><div class="widget-title">AI Providers And Recent Calls</div>';
-    if (aiData.providers?.length) {
-      html += '<table style="width:100%;font-size:12px;border-collapse:collapse">';
-      html += '<thead><tr style="color:var(--text2);text-align:left;border-bottom:1px solid var(--border)">'
-        + '<th style="padding:6px">Provider</th>'
-        + '<th style="padding:6px">Model</th>'
-        + '<th style="padding:6px;text-align:right">Calls</th>'
-        + '<th style="padding:6px;text-align:right">Avg</th>'
-        + '<th style="padding:6px;text-align:right">Tokens</th>'
-        + '<th style="padding:6px;text-align:right">Cache Hits</th>'
-        + '</tr></thead><tbody>';
-      aiData.providers.forEach((row) => {
-        html += `<tr style="border-bottom:1px solid var(--border)">
-          <td style="padding:6px">${esc(row.provider)}</td>
-          <td style="padding:6px">${esc(row.model || 'unknown')}</td>
-          <td style="padding:6px;text-align:right">${fmtN(row.calls || 0)}</td>
-          <td style="padding:6px;text-align:right">${fmtN(row.avg_duration_ms || 0)}ms</td>
-          <td style="padding:6px;text-align:right">${fmtN(row.total_tokens || 0)}</td>
-          <td style="padding:6px;text-align:right">${fmtN(row.cache_hits || 0)}</td>
-        </tr>`;
-      });
-      html += '</tbody></table>';
-    } else {
-      html += '<div class="ops-empty">No provider data available</div>';
-    }
-
-    if (aiData.statuses?.length) {
-      html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:12px 0">';
-      aiData.statuses.forEach((row) => {
-        html += `<span class="q-badge type">${esc(row.status)}: ${fmtN(row.calls || 0)}</span>`;
-      });
-      html += '</div>';
-    }
-
-    if (aiData.recent?.length) {
-      aiData.recent.slice(0, 10).forEach((row) => {
-        const usage = row.usage || {};
-        const totalTokens = usage.total_tokens || ((usage.input_tokens || usage.prompt_tokens || 0) + (usage.output_tokens || usage.completion_tokens || 0));
-        html += `<div class="q-item">
-          <div class="q-item-header">
-            <span class="q-item-title">${esc(row.feature || 'unknown')}</span>
-            <div class="q-item-badges">
-              <span class="q-badge type">${esc(row.provider || 'unknown')}</span>
-              <span class="q-badge type">${esc(row.model || 'unknown')}</span>
-              <span class="q-badge">${fmtN(row.duration_ms || 0)}ms</span>
-              <span class="q-badge">${fmtN(totalTokens || 0)} tok</span>
-              ${row.cache_hit ? '<span class="q-badge pri-low">cache</span>' : ''}
-            </div>
-          </div>
-          <div class="q-item-meta">
-            <span>${esc(row.endpoint || 'chat')}</span>
-            <span>${esc(String(row.status || 'unknown'))}</span>
-            ${row.attachment_count ? `<span>${fmtN(row.attachment_count)} attachment${row.attachment_count === 1 ? '' : 's'}</span>` : ''}
-            <span>${row.created_at ? freshnessHTML(row.created_at) : '--'}</span>
-          </div>
-        </div>`;
-      });
-    } else {
-      html += '<div class="ops-empty">No recent AI calls found</div>';
-    }
-    html += '</div>';
-  }
-
-  // Client-side perf log
-  if (opsPerfLog.length > 0) {
-    html += '<div class="widget"><div class="widget-title">Client-Side Timing (this session)</div>';
-    html += '<table style="width:100%;font-size:12px;border-collapse:collapse">';
-    html += '<thead><tr style="color:var(--text2);text-align:left;border-bottom:1px solid var(--border)">'
-      + '<th style="padding:6px">Label</th>'
-      + '<th style="padding:6px;text-align:right">Duration</th>'
-      + '<th style="padding:6px;text-align:right">When</th>'
-      + '</tr></thead><tbody>';
-    [...opsPerfLog].reverse().slice(0, 30).forEach(entry => {
-      const color = entry.dur > 500 ? 'color:var(--red)' : entry.dur > 200 ? 'color:var(--yellow)' : '';
-      html += `<tr style="border-bottom:1px solid var(--border)">
-        <td style="padding:6px">${esc(entry.label)}</td>
-        <td style="padding:6px;text-align:right;${color}">${entry.dur}ms</td>
-        <td style="padding:6px;text-align:right">${freshnessHTML(new Date(entry.ts).toISOString())}</td>
-      </tr>`;
-    });
-    html += '</tbody></table></div>';
-  }
-
-  el.innerHTML = html;
-}
-
-// Wire perf dashboard into sync health page (append as collapsible section)
-function appendPerfToSyncHealth() {
-  const syncEl = document.getElementById('syncHealthContent');
-  if (!syncEl) return;
-  // Only show for manager+ roles
-  const role = LCC_USER?.role || 'viewer';
-  if (!['owner', 'manager'].includes(role)) return;
-
-  const perfSection = document.createElement('div');
-  perfSection.id = 'perfDashboardContent';
-  perfSection.style.marginTop = '24px';
-  syncEl.appendChild(perfSection);
-  renderPerfDashboard(perfSection);
-}
+// ─── performance dashboard ───────────────────────────────────────────────────
+// MOVED to ops-perf-dashboard.js (W6.5 Stage 4, Unit 1 — 2026-08-20):
+// renderPerfDashboard + appendPerfToSyncHealth. Sync Health above still calls
+// appendPerfToSyncHealth via setTimeout; that resolves at call time. The shared
+// ops state header (45-126) stays here — siblings read it, never own it.
+// ─────────────────────────────────────────────────────────────────────────────
 
 // ============================================================================
 // HOME PAGE INTEGRATION — update stat cards with canonical model data

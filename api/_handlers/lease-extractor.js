@@ -26,6 +26,7 @@ import { isReportedField } from '../_shared/extraction-field-policy.js';
 import { invokeExtractionAI } from '../_shared/ai.js';
 import { fetchSharepointBytes } from '../_shared/storage-adapter.js';
 import { ocrPdfToTextTiered, meaningfulTextLen, DOC_TEXT_MIN_CHARS } from '../_shared/document-text.js';
+import { sniffOfficeKind, extractOfficeText } from '../_shared/office-text.js';
 import { opsQuery, pgFilterVal, fetchWithTimeout, insertEntityRelationship } from '../_shared/ops-db.js';
 import { domainQuery } from '../_shared/domain-db.js';
 import { matchAgainstDomain, matchByPathAnchor, emitMatchDisambiguation } from './intake-matcher.js';
@@ -60,6 +61,11 @@ export const LEASE_FIELD_MAP = {
       lease_structure: 'expense_structure', expense_structure: 'expense_structure',
       commencement_date: 'lease_start', expiration_date: 'lease_expiration',
       renewal_options: 'renewal_options',
+      guaranty_scope: 'guaranty_scope',
+      roof_responsibility: 'roof_responsibility',
+      structure_responsibility: 'structure_responsibility',
+      parking_responsibility: 'parking_responsibility',
+      hvac_responsibility: 'hvac_responsibility',
     },
   },
 };
@@ -79,6 +85,15 @@ function iso(v) {
 function str(v) {
   const s = (v === null || v === undefined) ? '' : String(v).trim();
   return s || null;
+}
+function responsibilityValue(v) {
+  const s = str(v);
+  if (!s) return null;
+  const n = s.toLowerCase().replace(/[^a-z]+/g, ' ').trim();
+  if (/\b(?:tenant|lessee)\b/.test(n) && !/\b(?:landlord|lessor)\b/.test(n)) return 'tenant';
+  if (/\b(?:landlord|lessor)\b/.test(n) && !/\b(?:tenant|lessee)\b/.test(n)) return 'landlord';
+  if (/\b(?:shared|both|split|joint|landlord tenant|tenant landlord)\b/.test(n)) return 'shared';
+  return null;
 }
 
 // True when two field values are the SAME for fill-blanks purposes. Numeric
@@ -252,7 +267,12 @@ export function buildLeaseExtractionPrompt() {
     '    "lease_structure": "NNN"|"NN"|"gross"|"modified_gross"|"full_service"|null,',
     '    "expense_structure": str|null, "firm_term_years": number|null,',
     '    "total_term_years": number|null, "commencement_date": "YYYY-MM-DD"|null,',
-    '    "expiration_date": "YYYY-MM-DD"|null, "renewal_options": str|null',
+    '    "expiration_date": "YYYY-MM-DD"|null, "renewal_options": str|null,',
+    '    "guaranty_scope": str|null,',
+    '    "roof_responsibility": "tenant"|"landlord"|"shared"|null,',
+    '    "structure_responsibility": "tenant"|"landlord"|"shared"|null,',
+    '    "parking_responsibility": "tenant"|"landlord"|"shared"|null,',
+    '    "hvac_responsibility": "tenant"|"landlord"|"shared"|null',
     '  },',
     '  "ti_schedule": [ { "schedule_year": int|null, "period_start": "YYYY-MM-DD"|null,',
     '    "period_end": "YYYY-MM-DD"|null, "ti_excess_amount": number|null,',
@@ -264,6 +284,8 @@ export function buildLeaseExtractionPrompt() {
     '  }',
     '}',
     'The "guarantor" is the credit parent (e.g. "Total Renal Care, Inc." guarantees a DaVita lease).',
+    'The "guaranty_scope" is the lease/guaranty text describing whether the guaranty covers the Initial Term only, option periods, or another stated scope. If the guaranty is limited to the Initial Term or excludes renewal/extension options, say that explicitly. If silent, use null.',
+    'Responsibility fields are the party responsible for repair, maintenance, and replacement of roof, structure, parking, and HVAC. Use only "tenant", "landlord", or "shared" when the lease states the split. If the lease splits repair/maintenance/replacement differently, use "shared" and put the detailed split in expense_structure. Use null when silent.',
     'The "notices" block is the lease\'s NOTICE / boilerplate contact info ("Notices to <party> ' +
       'shall be sent to … at <address>", or a signature/contact block): the GUARANTOR\'s and the ' +
       'TENANT\'s own mailing/notice address + phone + email. The notice address is the PARTY\'s ' +
@@ -297,7 +319,11 @@ export function normalizeLeaseExtraction(raw) {
     tenant: str, guarantor: str, annual_rent: num, rent_psf: num, leased_sf: num,
     lease_structure: str, expense_structure: str, firm_term_years: num,
     total_term_years: num, commencement_date: iso, expiration_date: iso,
-    renewal_options: str,
+    renewal_options: str, guaranty_scope: str,
+    roof_responsibility: responsibilityValue,
+    structure_responsibility: responsibilityValue,
+    parking_responsibility: responsibilityValue,
+    hvac_responsibility: responsibilityValue,
   };
   for (const [k, coerce] of Object.entries(factualSpec)) {
     const v = coerce(f[k]);
@@ -945,6 +971,30 @@ export async function runLeaseExtraction({ storageRef, mediaType = 'application/
   if (!storageRef) throw new Error('runLeaseExtraction: storage_ref required (or raw)');
   const sp = await fetchSharepointBytes({ storageRef, fetchImpl: fetchImpl || ((u, o) => fetchWithTimeout(u, o, 30000)) });
   if (!sp.ok) throw new Error(`SharePoint fetch failed: ${sp.status || ''} ${sp.detail || ''}`);
+
+  // Office branch (2026-08-12) — docx/xlsx "Lease Abstract" files. Detected from
+  // BYTES (the PA flow's contentType is unreliable — xlsx bytes used to be
+  // treated as PDF, fail pdf-parse, and get POSTed to Document AI → docai_400 +
+  // a wasted gpt-4o fallback). A readable office doc feeds the SAME lease prompt
+  // as PDF text; an unreadable one (legacy .doc / corrupt zip / empty) is a
+  // TERMINAL office_unreadable — OCR can never fix an office file, so it must
+  // never enter the OCR tier or the needs_ocr queue again.
+  const officeKind = sniffOfficeKind(sp.buffer, storageRef);
+  if (officeKind) {
+    const office = extractOfficeText({ buffer: sp.buffer, fileName: storageRef });
+    if (office.ok && meaningfulTextLen(office.text) >= 40) {
+      const t = office.text.slice(0, 120000);
+      return {
+        normalized: await extractLeaseFromText(t),
+        source: 'office_text', text_len: t.length, office_kind: officeKind,
+      };
+    }
+    return {
+      normalized: null, office_unreadable: true, office_kind: officeKind,
+      reason: office.reason || 'office_no_text', source: 'office_unreadable',
+    };
+  }
+
   let text = await textFromBytes(sp.buffer, sp.contentType || mediaType);
   // UW#5: most scanned executed leases are NOT zero-text — they carry a thin junk
   // text layer (a recording stamp, a page number, OCR bleed) that is well under the
@@ -1559,6 +1609,16 @@ export async function attachLeaseDoc(a, injected = {}) {
     if (ext.needs_ocr) {
       return { ok: true, attached: false, needs_ocr: true, reason: 'needs_ocr', match_status: 'needs_ocr' };
     }
+    // Office file with no recoverable text (legacy .doc / corrupt zip / empty
+    // workbook) — DETERMINISTIC, OCR can never fix it. `enrich_unprocessable`
+    // makes the backfill mark it terminal (out of the needs_ocr/OCR lane);
+    // `parked` makes the folder-feed record it skipped with the reason.
+    if (ext.office_unreadable) {
+      return {
+        ok: true, attached: false, enrich_unprocessable: true, parked: true,
+        reason: `office_no_text:${ext.office_kind || 'office'}`, match_status: 'office_unreadable',
+      };
+    }
     ({ normalized } = ext);
     extTextLen = ext.text_len ?? null;   // drives the scanned-thin-text re-route below
     ocrTier = ext.ocr_tier ?? null;      // UW#4 — recorded on the enriched receipt for review
@@ -1757,11 +1817,11 @@ export async function attachLeaseDoc(a, injected = {}) {
   if (resolved.status === 'review_required') {
     let emitted = false;
     try {
-      await emitDisambig(null, subjectHint?.tenant_brand || null, subjectHint?.tenant_brand || null,
+      const r = await emitDisambig(null, subjectHint?.tenant_brand || null, subjectHint?.tenant_brand || null,
         Array.isArray(resolved.candidates) ? resolved.candidates : [],
         { subjectRef: 'folder_feed_lease:' + pathRef, workspaceId,
           context: { source_path: pathRef, subject_hint: subjectHint || null, doc_type: 'lease' } });
-      emitted = true;
+      emitted = !(r && r.emitted === false);  // Prompt 91: empty-candidate cards are not minted
     } catch (err) { console.warn('[attachLeaseDoc] disambiguation emit failed (non-fatal):', err?.message); }
     return { ok: false, attached: false, emitted_disambiguation: emitted, reason: 'ambiguous', match_status: 'review_required' };
   }

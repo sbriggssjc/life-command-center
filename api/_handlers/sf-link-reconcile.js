@@ -26,8 +26,30 @@
 //            links; they are reported as a data-quality class (count only) and
 //            deferred — never forced into the Account store.
 //
+//   Unit 4 — C1d (2026-09-08, executing docs/audits/
+//            C1_SALESFORCE_LANES_CONSUMER_OR_RETIRE_2026-08-27.md §"automate
+//            27"): the MISSING LCC→domain direction. Units 1–3 above only ever
+//            run domain→LCC (mirror a domain-side link onto the LCC entity).
+//            Unit 4 fills a NULL `dia.true_owners.salesforce_id` from an
+//            already-resolved, UNAMBIGUOUS LCC-side external_identities
+//            (salesforce, Account) link on the bridged owner entity — the
+//            "27 owners, exactly one Account each, 0 tombstones, 0 operators"
+//            population C1 measured. dia-ONLY (C1e registers a provenance rung
+//            for dia.true_owners.salesforce_id only; gov's sf_account_id
+//            already carries splink_v1/sf_link_review_human rungs for a
+//            different write DIRECTION, and writing this new source there
+//            would be an unranked writer — see C1e). Fill-blanks only (never
+//            overwrites an existing salesforce_id), resolves every owner
+//            through lcc_entity_survivor() before writing (never a
+//            merged-away tombstone), and skips a dia operator
+//            (is_operator_not_owner / owner_type / owner_role — the P113
+//            guard, same three facts A5c reads). Reversible by batch tag via
+//            the provenance_event_log row each fill writes
+//            (source='sf_link_reconcile_writeback', metadata.batch_tag).
+//
 //   GET  → dry-run: classify + plan, report counts, write NOTHING.
-//   POST → drain: capped (limit) attaches + emitted decisions; reversible.
+//   POST → drain: capped (limit) attaches + emitted decisions + Unit 4 fills;
+//          reversible.
 //
 // Reuses (never forks): ensureEntityLink (SF-identity writer + guards), the
 // 15↔18 helper (sf-id.js, one place), lcc_open_decision (Decision Center mint),
@@ -192,6 +214,212 @@ export function planSfLinkReconcile({ domain, owners, entityFacts, sfByEntity, s
   return out;
 }
 
+// ── Unit 4 (C1d) — LCC → dia writeback ───────────────────────────────────────
+// dia-only. gov is deliberately out of scope (see the header note + C1e).
+const WRITEBACK_SOURCE = 'sf_link_reconcile_writeback';
+const WRITEBACK_DOMAINS = new Set(['dia']);
+
+/**
+ * PURE decision core for Unit 4 — no IO, unit-testable in isolation like
+ * planSfLinkReconcile above.
+ *
+ * Input: candidates = [{
+ *   true_owner_id, entity_id, sf18, tombstoned, isOperator, existingDomainSfId,
+ *   sfAccountCount   // how many DISTINCT external_identities(salesforce,Account)
+ *                     // rows the (survivor) entity holds — must be exactly 1
+ * }]
+ *
+ * Returns { fills, skipped } where skipped tallies WHY a candidate did not
+ * fill, named (never lumped) so a caller can report an honest count per
+ * reason rather than one opaque "skipped" number.
+ */
+export function planSfWriteback({ candidates = [] } = {}) {
+  const out = {
+    fills: [],
+    skipped: { no_entity: 0, tombstoned: 0, operator: 0, already_set: 0, ambiguous_or_none: 0 },
+  };
+  for (const c of candidates || []) {
+    if (!c || !c.entity_id) { out.skipped.no_entity++; continue; }
+    if (c.tombstoned) { out.skipped.tombstoned++; continue; }
+    if (c.isOperator) { out.skipped.operator++; continue; }
+    if (c.existingDomainSfId) { out.skipped.already_set++; continue; }
+    // Ambiguous (more than one candidate Account on the entity) or none at
+    // all — never guess which one is right (the fill-blanks / never-guess
+    // doctrine). A single resolved Account is the whole point of "27
+    // deterministic fills"; anything else routes to a human via Units 1–3 or
+    // the sf_link_candidate lane instead.
+    if (!c.sf18 || Number(c.sfAccountCount) !== 1) { out.skipped.ambiguous_or_none++; continue; }
+    out.fills.push({ true_owner_id: c.true_owner_id, entity_id: c.entity_id, sf18: c.sf18 });
+  }
+  return out;
+}
+
+/**
+ * Load the dia writeback candidate set: true_owners with a NULL
+ * salesforce_id, not merged away, resolved to a bridged + terminal-survivor
+ * LCC entity, tagged with the P113 operator guard and the entity's SF
+ * Account identity count (0 / 1 / >1).
+ */
+async function loadDiaWritebackCandidates() {
+  const dr = await domainQuery('dia', 'GET',
+    'true_owners?merged_into_true_owner_id=is.null&salesforce_id=is.null'
+    + '&select=true_owner_id,name,is_operator_not_owner,owner_type,owner_role&limit=2000');
+  if (!dr.ok) return { ok: false, status: dr.status, detail: dr.data };
+  const rows = Array.isArray(dr.data) ? dr.data : [];
+
+  const isOperator = (r) => !!r.is_operator_not_owner
+    || String(r.owner_type || '').toLowerCase() === 'operator'
+    || String(r.owner_role || '').toLowerCase() === 'operator';
+
+  const owners = rows.map((r) => ({
+    true_owner_id: String(r.true_owner_id), name: r.name || null, isOperator: isOperator(r),
+  }));
+
+  // Bridge: external_identities(dia, true_owner, external_id=true_owner_id) -> entity_id.
+  const idMap = new Map();
+  const tids = owners.map((o) => o.true_owner_id);
+  for (let i = 0; i < tids.length; i += 100) {
+    const inList = tids.slice(i, i + 100).map(pgFilterVal).join(',');
+    if (!inList) continue;
+    const br = await opsQuery('GET', 'external_identities?source_system=eq.dia'
+      + '&source_type=eq.true_owner&external_id=in.(' + inList + ')&select=external_id,entity_id');
+    if (br.ok && Array.isArray(br.data)) {
+      for (const row of br.data) if (row.external_id && row.entity_id && !idMap.has(row.external_id)) idMap.set(row.external_id, row.entity_id);
+    }
+  }
+  for (const o of owners) o.bridgedEntityId = idMap.get(o.true_owner_id) || null;
+
+  // Resolve every bridged entity to its TERMINAL survivor (never write to a
+  // merged-away tombstone). entities.merged_into_entity_id chases the same
+  // chain lcc_entity_survivor() walks server-side; resolving it here in bulk
+  // avoids one RPC round-trip per candidate for what is a small (~dozens) set.
+  const bridgedIds = Array.from(new Set(owners.map((o) => o.bridgedEntityId).filter(Boolean)));
+  const survivorOf = new Map();   // entity_id -> terminal survivor id (self if not merged)
+  {
+    const pending = new Set(bridgedIds);
+    const known = new Map();      // entity_id -> merged_into_entity_id (or null)
+    let hops = 0;
+    while (pending.size && hops < 20) {
+      const batch = Array.from(pending); pending.clear();
+      for (let i = 0; i < batch.length; i += 100) {
+        const inList = batch.slice(i, i + 100).map(pgFilterVal).join(',');
+        if (!inList) continue;
+        const er = await opsQuery('GET', 'entities?id=in.(' + inList + ')&select=id,merged_into_entity_id');
+        if (er.ok && Array.isArray(er.data)) {
+          for (const row of er.data) {
+            known.set(row.id, row.merged_into_entity_id || null);
+            if (row.merged_into_entity_id && !known.has(row.merged_into_entity_id)) pending.add(row.merged_into_entity_id);
+          }
+        }
+      }
+      hops++;
+    }
+    for (const id of bridgedIds) {
+      let cur = id, guard = 0;
+      while (known.has(cur) && known.get(cur) && guard < 20) { cur = known.get(cur); guard++; }
+      survivorOf.set(id, cur);
+    }
+  }
+  for (const o of owners) {
+    o.entity_id = o.bridgedEntityId ? (survivorOf.get(o.bridgedEntityId) || o.bridgedEntityId) : null;
+  }
+
+  // Existing domain-side salesforce_id + SF Account identity count on the
+  // resolved entity.
+  const entityIds = Array.from(new Set(owners.map((o) => o.entity_id).filter(Boolean)));
+  const sfAccountCounts = new Map();   // entity_id -> distinct sf18 count
+  for (let i = 0; i < entityIds.length; i += 100) {
+    const inList = entityIds.slice(i, i + 100).map(pgFilterVal).join(',');
+    if (!inList) continue;
+    const sr = await opsQuery('GET', 'external_identities?source_system=eq.salesforce&source_type=eq.Account'
+      + '&entity_id=in.(' + inList + ')&select=entity_id,external_id');
+    if (sr.ok && Array.isArray(sr.data)) {
+      const byEntity = new Map();
+      for (const row of sr.data) {
+        if (!row.entity_id || !row.external_id) continue;
+        if (!byEntity.has(row.entity_id)) byEntity.set(row.entity_id, new Set());
+        byEntity.get(row.entity_id).add(row.external_id);
+      }
+      for (const [eid, set] of byEntity) sfAccountCounts.set(eid, set);
+    }
+  }
+
+  const candidates = owners.map((o) => {
+    const sfSet = o.entity_id ? sfAccountCounts.get(o.entity_id) : null;
+    const sf18 = sfSet && sfSet.size === 1 ? Array.from(sfSet)[0] : null;
+    return {
+      true_owner_id: o.true_owner_id,
+      entity_id: o.entity_id,
+      // "tombstoned" here means the entity never resolved at all (bridge
+      // missing) OR the resolved survivor is itself still merged (should not
+      // happen given the walk above, kept as a defensive check).
+      tombstoned: !o.entity_id,
+      isOperator: o.isOperator,
+      existingDomainSfId: null,   // caller already filtered salesforce_id IS NULL
+      sfAccountCount: sfSet ? sfSet.size : 0,
+      sf18,
+    };
+  });
+
+  return { ok: true, candidates };
+}
+
+/**
+ * Drain Unit 4 for one domain (dia only, guarded by WRITEBACK_DOMAINS). Fills
+ * dia.true_owners.salesforce_id fill-blanks-only, logs a reversible
+ * provenance_event_log row per fill (source=WRITEBACK_SOURCE,
+ * metadata.batch_tag=batchTag), and returns a summary. dryRun writes nothing.
+ */
+async function runSfWritebackUnit({ domain, dryRun, limit, batchTag, deadline }) {
+  const summary = {
+    domain, eligible: 0, fills_planned: 0, filled: 0,
+    skipped: { no_entity: 0, tombstoned: 0, operator: 0, already_set: 0, ambiguous_or_none: 0 },
+    errors: [], sample: [],
+  };
+  if (!WRITEBACK_DOMAINS.has(domain)) { summary.skipped_domain = true; return summary; }
+
+  const loaded = await loadDiaWritebackCandidates();
+  if (!loaded.ok) { summary.errors.push('load_failed:' + (loaded.status || '?')); return summary; }
+  summary.eligible = loaded.candidates.length;
+
+  const plan = planSfWriteback({ candidates: loaded.candidates });
+  summary.fills_planned = plan.fills.length;
+  summary.skipped = plan.skipped;
+  summary.sample = plan.fills.slice(0, 5).map((f) => ({ true_owner_id: f.true_owner_id, entity_id: f.entity_id, sf: f.sf18 }));
+
+  if (dryRun) return summary;
+
+  for (const f of plan.fills) {
+    if (summary.filled >= limit) break;
+    if (Date.now() > deadline) { summary.budget_stopped = true; break; }
+    try {
+      // Fill-blanks, race-safe: the salesforce_id=is.null filter on the PATCH
+      // means a concurrent writer that beat us to it makes this a no-op, not
+      // an overwrite.
+      const wr = await domainQuery('dia', 'PATCH',
+        'true_owners?true_owner_id=eq.' + encodeURIComponent(f.true_owner_id) + '&salesforce_id=is.null',
+        { salesforce_id: f.sf18 }, { Prefer: 'return=representation' });
+      if (!wr.ok) { summary.errors.push('write_failed:' + f.true_owner_id); continue; }
+      const wrote = Array.isArray(wr.data) ? wr.data.length > 0 : true;
+      if (!wrote) continue;   // lost the race — someone else filled it first
+
+      const pv = await domainQuery('dia', 'POST', 'provenance_event_log', {
+        target_database: 'dia_db', target_table: 'true_owners',
+        record_pk_value: f.true_owner_id, field_name: 'salesforce_id',
+        old_value: null, new_value: f.sf18,
+        source: WRITEBACK_SOURCE, confidence: 1,
+        metadata: { batch_tag: batchTag, entity_id: f.entity_id, unit: 'sf_link_reconcile_unit4' },
+      }, { Prefer: 'return=minimal' });
+
+      summary.filled++;
+      summary.sample.push({ true_owner_id: f.true_owner_id, entity_id: f.entity_id, sf: f.sf18, provenance_written: !!pv.ok });
+    } catch (e) {
+      summary.errors.push('exception:' + f.true_owner_id + ':' + String(e && e.message || e));
+    }
+  }
+  return summary;
+}
+
 // Mint a Decision-Center decision (idempotent on subject_ref). Returns the id or null.
 async function openDecision({ decisionType, workspaceId, question, context, subjectEntityId, subjectDomain, subjectRef }) {
   const r = await opsQuery('POST', 'rpc/lcc_open_decision', {
@@ -233,7 +461,9 @@ export async function handleSfLinkReconcileTick(req, res) {
     by_domain: {},
     totals: { account_ids: 0, contact_ids: 0, bridged: 0, already_linked: 0, unbridged: 0,
       attach_candidates: 0, attached: 0, conflicts: 0, collisions: 0, dups: 0,
-      decisions_opened: 0, contact_id_class: 0 },
+      decisions_opened: 0, contact_id_class: 0,
+      // C1d — Unit 4 (dia-only LCC->domain writeback of true_owners.salesforce_id)
+      writeback_eligible: 0, writeback_fills_planned: 0, writeback_filled: 0 },
     items: [],
   };
 
@@ -287,6 +517,11 @@ export async function handleSfLinkReconcileTick(req, res) {
     dom.conflicts = plan.conflicts.length;
     dom.collisions = plan.collisions.length;
     dom.dups = plan.dups.length;
+
+    // ── Unit 4 (C1d) — dia-only LCC->domain writeback. Runs on BOTH the
+    // dry-run and apply paths (dryRun is threaded through), so a GET reports
+    // the same fill count a POST would apply. See runSfWritebackUnit above.
+    dom.writeback = await runSfWritebackUnit({ domain, dryRun, limit, batchTag, deadline });
 
     if (dryRun) {
       // Sample the planned actions (small) — write nothing.
@@ -381,6 +616,10 @@ export async function handleSfLinkReconcileTick(req, res) {
     result.totals.dups += d.dups || 0;
     result.totals.decisions_opened += d.decisions_opened || 0;
     result.totals.contact_id_class += d.contact_id_class || 0;
+    const wb = d.writeback || {};
+    result.totals.writeback_eligible += wb.eligible || 0;
+    result.totals.writeback_fills_planned += wb.fills_planned || 0;
+    result.totals.writeback_filled += wb.filled || 0;
   }
 
   // Attaching an SF Account identity makes the owner "connected" (R6) → it can

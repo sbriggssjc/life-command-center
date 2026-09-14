@@ -18,6 +18,19 @@ import cors from 'cors';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join, extname } from 'path';
+import { authenticate } from './api/_shared/auth.js';
+import { opsQuery } from './api/_shared/ops-db.js';
+import { mountLccMcp } from './mcp/server.js';
+import { makeOpportunitySyncRoute } from './mcp/opportunity-sync.js';
+import { makeDealRosterRoute } from './mcp/deal-roster.js';
+import { handleDealEmailMatchCron } from './api/_handlers/deal-email-match-cron.js';
+import { handleOperatorNoteIntake } from './api/_handlers/operator-notes-intake.js';
+import { handleOperatorTriageTick } from './api/_handlers/operator-triage-tick.js';
+import { handleDealCommsPropagateTick } from './api/_handlers/deal-comms-propagate-tick.js';
+import { handleCommsOwnerAttributionTick } from './api/_handlers/comms-owner-attribution-tick.js';
+import { handleMarketBriefPsqlTick } from './api/_handlers/market-brief-psql-tick.js';
+import { handleMarketBriefRssTick } from './api/_handlers/market-brief-rss-tick.js';
+import { handleMarketBriefTab } from './api/_handlers/market-brief-tab.js';
 
 // ── Import the core 9 API handlers (Phase 4b consolidated) ─────────────────
 // daily-briefing, data-proxy, diagnostics absorbed into admin.js
@@ -48,6 +61,7 @@ import intakeShareHandler from './api/intake-share.js';
 import bovHandler from './api/bov.js';
 import compsHandler from './api/comps.js';
 import queryCompsHandler from './api/query-comps.js';
+import draftAssistHandler from './api/draft-assist.js';
 import { handleListingPageCrawl } from './api/_handlers/listing-page-crawl.js';
 
 // Wave 2 Task #110: Gov evidence + write backing routes (GOV_API_URL target)
@@ -58,6 +72,26 @@ import govEvidenceRouter from './api/gov-evidence.js';
 // ── App setup ───────────────────────────────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
+const PRIMARY_WORKSPACE_ID =
+  process.env.LCC_PRIMARY_WORKSPACE_ID
+  || process.env.LCC_DEFAULT_WORKSPACE_ID
+  || 'a0000000-0000-0000-0000-000000000001';
+const enc = (v) => encodeURIComponent(String(v));
+const opportunitySyncRoutes = makeOpportunitySyncRoute({
+  opsQuery,
+  enc,
+  WORKSPACE_ID: PRIMARY_WORKSPACE_ID,
+});
+const dealRosterRoutes = makeDealRosterRoute({
+  opsQuery,
+  enc,
+  WORKSPACE_ID: PRIMARY_WORKSPACE_ID,
+});
+const requireLccAuth = (handler) => async (req, res) => {
+  const user = await authenticate(req, res);
+  if (!user) return;
+  return handler(req, res);
+};
 
 // ── Deploy-derived asset version (R4-D #4, 2026-06-05) ──────────────────────
 // index.html shipped hard-coded `?v=2026050802` cache-busters on every <script>.
@@ -110,6 +144,7 @@ app.get(['/', '/index.html'], (req, res) => sendIndex(res));
 // of post-bytes JSON envelope. NorthMarq OMs from SF average 5-15 MB; the largest
 // observed (Pizza Hut Fairview OM, ingested via Flow 7 backfill) was 27 MB.
 app.use(express.json({ limit: '30mb' }));
+app.use(express.urlencoded({ extended: true }));
 app.use(cors({
   origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : '*',
   methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
@@ -136,6 +171,12 @@ app.use('/api', (req, res, next) => {
   next();
 });
 
+// ── Unified MCP surface: /mcp + OAuth + bounded read/comps HTTP routes ──────
+// Mounted before legacy /api aliases so /api/daily-briefing is owned by the
+// bounded MCP read handler, not the full admin edge-brief snapshot.
+mountLccMcp(app);
+console.log('[LCC] MCP surface mounted (/mcp + bounded /api/* read/comps routes)');
+
 // ── Sub-route aliases (friendly /api/<name> → handler + `?_route=<name>`) ────
 // These ARE the routing table (vercel.json is retired). Each alias sets the
 // query params the handler dispatches on, then delegates to the target handler.
@@ -152,6 +193,9 @@ app.all('/api/sf-sync-queue', (req, res) => { req.query._route = 'sf-sync-queue'
 app.all('/api/sf-owner-sync', (req, res) => { req.query._route = 'sf-owner-sync'; adminHandler(req, res); });
 app.all('/api/owner-reconcile', (req, res) => { req.query._route = 'owner-reconcile'; adminHandler(req, res); });
 app.all('/api/deal-correspondence-backfill', (req, res) => { req.query._route = 'deal-correspondence-backfill'; adminHandler(req, res); });
+// W7.1 alias — the correspondence-ingestion design names this receiver /api/intake-deal-backfill.
+// Same handler, same {deal_entity_id, messages[]} contract; kept so the connector work is drop-in.
+app.all('/api/intake-deal-backfill', (req, res) => { req.query._route = 'deal-correspondence-backfill'; adminHandler(req, res); });
 app.all('/api/sf-seller-owner', (req, res) => { req.query._route = 'sf-seller-owner'; adminHandler(req, res); });
 app.all('/api/storage-cleanup', (req, res) => { req.query._route = 'storage-cleanup'; adminHandler(req, res); });
 app.all('/api/consolidate-property', (req, res) => { req.query._route = 'consolidate-property'; adminHandler(req, res); });
@@ -159,10 +203,35 @@ app.all('/api/geocode-tick', (req, res) => { req.query._route = 'geocode-tick'; 
 app.all('/api/intake-rematch', (req, res) => { req.query._route = 'intake-rematch'; adminHandler(req, res); });
 app.all('/api/intake-promote-drain', (req, res) => { req.query._route = 'intake-promote-drain'; adminHandler(req, res); });
 app.all('/api/priority-band', (req, res) => { req.query._route = 'priority-band'; adminHandler(req, res); });
+app.all('/api/recorder-portal', (req, res) => { req.query._route = 'recorder-portal'; adminHandler(req, res); });
+app.all('/api/public-records-capture', (req, res) => { req.query._route = 'public-records-capture'; adminHandler(req, res); });
 app.all('/api/priority-queue', (req, res) => { req.query._route = 'priority-queue'; adminHandler(req, res); });
+app.all('/api/seller-prospect-queue', (req, res) => { req.query._route = 'seller-prospect-queue'; adminHandler(req, res); });
 app.all('/api/priority-trigger-properties', (req, res) => { req.query._route = 'priority-trigger-properties'; adminHandler(req, res); });
 app.all('/api/review-counts', (req, res) => { req.query._route = 'review-counts'; adminHandler(req, res); });
+app.all('/api/news-alerts', (req, res) => { req.query._route = 'news-alerts'; adminHandler(req, res); });
 app.all('/api/ops-health', (req, res) => { req.query._route = 'ops-health'; adminHandler(req, res); });
+app.all('/api/ollama-clean-assist-tick', (req, res) => { req.query._route = 'ollama-clean-assist-tick'; adminHandler(req, res); });
+app.all('/api/junk-prescreen-tick', (req, res) => { req.query._route = 'junk-prescreen-tick'; adminHandler(req, res); });
+app.all('/api/naming-hygiene-tick', (req, res) => { req.query._route = 'naming-hygiene-tick'; adminHandler(req, res); });
+app.all('/api/dup-pair-tick', (req, res) => { req.query._route = 'dup-pair-tick'; adminHandler(req, res); });
+app.all('/api/link-propagation-tick', (req, res) => { req.query._route = 'link-propagation-tick'; adminHandler(req, res); });
+app.all('/api/reachability-harvest-tick', (req, res) => { req.query._route = 'reachability-harvest-tick'; adminHandler(req, res); });
+app.all('/api/systemic-findings-tick', (req, res) => { req.query._route = 'systemic-findings-tick'; adminHandler(req, res); });
+app.all('/api/link-coverage-tick', (req, res) => { req.query._route = 'link-coverage-tick'; adminHandler(req, res); });
+app.all('/api/match-disambig-assist-tick', (req, res) => { req.query._route = 'match-disambig-assist-tick'; adminHandler(req, res); });
+app.all('/api/property-twin-assist-tick',  (req, res) => { req.query._route = 'property-twin-assist-tick';  adminHandler(req, res); });
+app.all('/api/ownership-chain-draft-tick', (req, res) => { req.query._route = 'ownership-chain-draft-tick'; adminHandler(req, res); });
+app.all('/api/ownt0j-sponsor-classify-tick', (req, res) => { req.query._route = 'ownt0j-sponsor-classify-tick'; adminHandler(req, res); });
+app.all('/api/briefing-analyst-take-tick', (req, res) => { req.query._route = 'briefing-analyst-take-tick'; adminHandler(req, res); });
+app.all('/api/dia-property-link-tick', (req, res) => { req.query._route = 'dia-property-link-tick'; adminHandler(req, res); });
+app.all('/api/tier0-auto-attach-tick',    (req, res) => { req.query._route = 'tier0-auto-attach-tick';    adminHandler(req, res); });
+app.all('/api/broker1-assign-tick',       (req, res) => { req.query._route = 'broker1-assign-tick';       adminHandler(req, res); });
+app.all('/api/ambiguous-entity-automerge-tick', (req, res) => { req.query._route = 'ambiguous-entity-automerge-tick'; adminHandler(req, res); });
+app.all('/api/bench-rank-tick',           (req, res) => { req.query._route = 'bench-rank-tick';           adminHandler(req, res); });
+app.all('/api/sf-link-assist-tick',        (req, res) => { req.query._route = 'sf-link-assist-tick';        adminHandler(req, res); });
+app.all('/api/sf-link-rescore-tick',       (req, res) => { req.query._route = 'sf-link-rescore-tick';       adminHandler(req, res); });
+app.all('/api/sf-donor-handoff-tick',      (req, res) => { req.query._route = 'sf-donor-handoff-tick';      adminHandler(req, res); });
 app.all('/api/fl-sos-enrich-link', (req, res) => { req.query._route = 'fl-sos-enrich-link'; adminHandler(req, res); });
 app.all('/api/resolve-owner-link', (req, res) => { req.query._route = 'resolve-owner-link'; adminHandler(req, res); });
 // R7 Phase 1 Slice 2 (2026-06-07): Decision Center list / verdict / SF search.
@@ -196,6 +265,13 @@ app.all('/api/artifact-offload',           (req, res) => { req.query._route = 'a
 app.all('/api/merge-log-reconcile',        (req, res) => { req.query._route = 'merge-log-reconcile';        adminHandler(req, res); });
 app.all('/api/sf-link-tick',               (req, res) => { req.query._route = 'sf-link-tick';               adminHandler(req, res); });
 app.all('/api/gov-buyer-sync',             (req, res) => { req.query._route = 'gov-buyer-sync';             adminHandler(req, res); });
+// W5.2 signal->task automation consumer ticks (GET dry-run / POST apply).
+app.all('/api/state-lease-consume',        (req, res) => { req.query._route = 'state-lease-consume';        adminHandler(req, res); });
+app.all('/api/agency-risk-consume',        (req, res) => { req.query._route = 'agency-risk-consume';        adminHandler(req, res); });
+app.all('/api/npi-consume',                (req, res) => { req.query._route = 'npi-consume';                adminHandler(req, res); });
+
+// W9.4 accelerator (Prompt 101) — Outlook display-name backfill (GET dry-run / POST apply / POST ?reverse=1&batch=).
+app.all('/api/outlook-name-backfill',      (req, res) => { req.query._route = 'outlook-name-backfill';      adminHandler(req, res); });
 
 // edge-data rewrites (formerly data-proxy)
 app.all('/api/gov-query', (req, res) => { req.query._route = 'edge-data'; req.query._source = 'gov'; adminHandler(req, res); });
@@ -249,6 +325,9 @@ app.all('/api/copilot/intelligence/:action', (req, res) => { req.query._route = 
 app.all('/api/copilot/compat/:action', (req, res) => { req.query._route = 'chat'; req.query._copilot_path = req.params.action; operationsHandler(req, res); });
 app.all('/api/copilot-spec', (req, res) => { req.query._route = 'chat'; req.query.copilot_spec = 'openapi'; operationsHandler(req, res); });
 app.all('/api/copilot-spec-v2', (req, res) => { req.query._route = 'chat'; req.query.copilot_spec = 'swagger2'; operationsHandler(req, res); });
+// Curated ChatGPT GPT-Action spec (Prompt 59) — the ≤30-op user-facing subset.
+// Also reachable via /api/copilot-spec?surface=chatgpt.
+app.all('/api/gpt-spec', (req, res) => { req.query._route = 'chat'; req.query.copilot_spec = 'chatgpt'; operationsHandler(req, res); });
 app.all('/api/copilot-manifest', (req, res) => { req.query._route = 'chat'; req.query.copilot_spec = 'manifest'; operationsHandler(req, res); });
 app.all('/api/chat', (req, res) => { req.query._route = 'chat'; operationsHandler(req, res); });
 app.all('/api/draft', (req, res) => { req.query._route = 'draft'; operationsHandler(req, res); });
@@ -256,9 +335,17 @@ app.all('/api/preassemble', (req, res) => { req.query._route = 'context'; req.qu
 app.all('/api/context', (req, res) => { req.query._route = 'context'; operationsHandler(req, res); });
 app.all('/api/weekly-report', (req, res) => { req.query._route = 'context'; req.query.action = 'weekly-intelligence-report'; operationsHandler(req, res); });
 app.all('/api/contact-acquisition-tick', (req, res) => { req.query._route = 'contact-acquisition-tick'; operationsHandler(req, res); });
+// W9.1 (Prompt 98) — contact-acquisition ENGINE tick (Stage 1: internal sources).
+// Distinct from the R16 contact-acquisition-tick above (that is the live SF worker).
+app.all('/api/contact-acquisition-engine-tick', (req, res) => { req.query._route = 'contact-acquisition-engine-tick'; operationsHandler(req, res); });
 app.all('/api/sf-contact-resolve-tick', (req, res) => { req.query._route = 'sf-contact-resolve-tick'; operationsHandler(req, res); });
 app.all('/api/sf-link-reconcile-tick', (req, res) => { req.query._route = 'sf-link-reconcile-tick'; operationsHandler(req, res); });
 app.all('/api/owner-contact-enrich-tick', (req, res) => { req.query._route = 'owner-contact-enrich-tick'; operationsHandler(req, res); });
+// BREAK-1 (Prompt 111) — owner-contact PROPAGATION tick. Distinct from the
+// enrich tick above: that drains owner_contact_pivot; this walks the panel's own
+// asset → lcc_property_owner graph and fill-blanks the owner entity from an
+// owner-bound dia/gov contacts row. GET = dry-run (default), POST = apply.
+app.all('/api/owner-contact-propagate-tick', (req, res) => { req.query._route = 'owner-contact-propagate-tick'; operationsHandler(req, res); });
 app.all('/api/owner-reconcile-tick', (req, res) => { req.query._route = 'owner-reconcile-tick'; operationsHandler(req, res); });
 app.all('/api/owner-reconcile-engine-tick', (req, res) => { req.query._route = 'owner-reconcile-engine-tick'; operationsHandler(req, res); });
 app.all('/api/institution-contact-tick', (req, res) => { req.query._route = 'institution-contact-tick'; operationsHandler(req, res); });
@@ -269,6 +356,20 @@ app.all('/api/developer-chain-resolve-tick', (req, res) => { req.query._route = 
 app.all('/api/contact-writeback-tick', (req, res) => { req.query._route = 'contact-writeback-tick'; operationsHandler(req, res); });
 app.all('/api/sf-record-lookup-tick', (req, res) => { req.query._route = 'sf-record-lookup-tick'; operationsHandler(req, res); });
 app.all('/api/sf-record-sync-tick', (req, res) => { req.query._route = 'sf-record-sync-tick'; operationsHandler(req, res); });
+// Deal-spine connector: Power Automate "SF Deal -> LCC Opportunity Sync"
+// posts standard Salesforce Opportunity records here. The implementation is
+// shared with the MCP engine so Railway and MCP stay behavior-identical.
+// W7.1 — recurring deal-email-matcher cron (X-LCC-Key auth; scheduled by pg_cron lcc-deal-email-match).
+app.all('/api/pipeline/match-deal-emails-cron', requireLccAuth(handleDealEmailMatchCron));
+// W7.2 — deal-comms propagation tick (X-LCC-Key auth; scheduled by pg_cron lcc-deal-comms-propagate).
+app.all('/api/deal-comms-propagate-tick', requireLccAuth(handleDealCommsPropagateTick));
+// W9.6 (Prompt 102) — correspondence → owner-LLC attribution tick (X-LCC-Key /
+// session auth; scheduled by pg_cron comms-owner-attribution-tick 05:05 UTC).
+app.all('/api/comms-owner-attribution-tick', requireLccAuth(handleCommsOwnerAttributionTick));
+app.post('/api/pipeline/ingest-opportunity', requireLccAuth(opportunitySyncRoutes.ingest));
+app.post('/api/pipeline/ingest-opportunities', requireLccAuth(opportunitySyncRoutes.ingestBatch));
+app.post('/api/pipeline/ingest-deal-parties', requireLccAuth(dealRosterRoutes.ingestParties));
+app.post('/api/pipeline/ingest-deal-contacts', requireLccAuth(dealRosterRoutes.ingestContactRoles));
 // SPEC Part B2 — external listing/property webpage crawl worker (cron:
 // lcc-listing-page-crawl every 30m via lcc_cron_post).
 app.all('/api/listing-page-crawl', (req, res) => handleListingPageCrawl(req, res));
@@ -285,6 +386,22 @@ app.all('/api/comps', compsHandler);
 app.all('/api/query-comps', queryCompsHandler);
 app.all('/api/synthesize-comps', queryCompsHandler);
 
+// W10 Stage 2 (Prompt 107) — retrieval-grounded drafting. GET = dry-run (assemble
+// a Scott-voiced draft + retrieval + facts, writes nothing); POST = save to
+// Outlook Drafts (flag DRAFT_ASSIST). NEVER sends. On-prem generation, fail-closed.
+app.all('/api/draft-assist', draftAssistHandler);
+
+// Prompt 68 — Copilot-namespaced comps routes. These set _copilot_path so the
+// shared authenticate() M365 passthrough applies (same as briefing/queue and the
+// other /api/copilot/{category}/:action routes), removing comps' dependence on a
+// matching LCC_API_KEY that the other connector tools never send. The flat routes
+// above stay keyed for the ChatGPT / MCP surfaces (which do send a real key).
+// _copilot_path also carries the synthesize-vs-query signal the flat routes derive
+// from req.path, so queryCompsHandler routes to the right engine endpoint.
+app.all('/api/copilot/comps/synthesize-comps', (req, res) => { req.query._copilot_path = 'synthesize-comps'; queryCompsHandler(req, res); });
+app.all('/api/copilot/comps/query-comps', (req, res) => { req.query._copilot_path = 'query-comps'; queryCompsHandler(req, res); });
+app.all('/api/copilot/comps/generate-comps', (req, res) => { req.query._copilot_path = 'generate-comps'; compsHandler(req, res); });
+
 // entity-hub rewrites
 app.all('/api/unified-contacts', (req, res) => { req.query._domain = 'contacts'; entityHubHandler(req, res); });
 app.all('/api/contacts', (req, res) => { req.query._domain = 'contacts'; entityHubHandler(req, res); });
@@ -298,6 +415,7 @@ app.all('/api/recalculate-cap-rates', (req, res) => { req.query._domain = 'cap-r
 // intake rewrites
 app.all('/api/copilot/action', (req, res) => { req.query._route = 'copilot-action'; intakeHandler(req, res); });
 app.all('/api/intake-outlook-message', (req, res) => { req.query._route = 'outlook-message'; intakeHandler(req, res); });
+app.all('/api/intake-outlook-sent', (req, res) => { req.query._route = 'outlook-sent'; intakeHandler(req, res); });
 app.all('/api/intake-summary', (req, res) => { req.query._route = 'summary'; intakeHandler(req, res); });
 app.all('/api/intake-extract', (req, res) => { req.query._route = 'extract'; intakeHandler(req, res); });
 app.all('/api/intake-queue', (req, res) => { req.query._route = 'queue'; intakeHandler(req, res); });
@@ -306,10 +424,46 @@ app.all('/api/intake-create-property', (req, res) => { req.query._route = 'creat
 app.all('/api/intake-ocr-reextract', (req, res) => { req.query._route = 'ocr-reextract'; intakeHandler(req, res); });
 app.all('/api/intake-discard', (req, res) => { req.query._route = 'discard'; intakeHandler(req, res); });
 app.all('/api/intake-pdf', (req, res) => { req.query._route = 'ingest_pdf'; intakeHandler(req, res); });
+// W7.3 path A: in-app "Log call" quick-log → deal-stamped call activity.
+app.all('/api/intake-log-call', (req, res) => { req.query._route = 'log-call'; intakeHandler(req, res); });
+// W7.3 path C: Outlook category-tagging receiver (Power Automate). The
+// correspondence design names this receiver /api/intake-tagged-comm.
+app.all('/api/intake-tagged-comm', (req, res) => { req.query._route = 'tagged-comm'; intakeHandler(req, res); });
+// OC-a — operator-note funnel (spec EXEC-BRIEFS-SPEC.md §6): one intake
+// endpoint for every channel (in-app Note, MCP log_operator_note, Cowork,
+// Teams/PA) + the OC2 triage tick. Mounted directly (not via intakeHandler's
+// _route dispatch) — each handler is its own auth boundary.
+app.all('/api/operator-notes', handleOperatorNoteIntake);
+app.all('/api/operator-triage-tick', handleOperatorTriageTick);
+// MB-a — market brief producers, dialysis lane first (spec EXEC-BRIEFS-SPEC.md
+// §2, MB1/MB2). Flag-gated (MARKET_BRIEF_PSQL / MARKET_BRIEF_PRSS), both off
+// until live-verified. GET is always a dry run.
+app.all('/api/market-brief-psql-tick', handleMarketBriefPsqlTick);
+app.all('/api/market-brief-rss-tick', handleMarketBriefRssTick);
+// MB-b — read-only data for the homepage Market Briefs tab (#/briefs/<lane>).
+// Flag-gated (MARKET_BRIEF_RENDER); GET returns {enabled:false} while off,
+// never a 404/500.
+app.all('/api/market-brief-tab', handleMarketBriefTab);
+// W7.6 Mailbox Mirror: deterministic worklist of closed-loop flagged emails +
+// the PA mover's ack endpoint. Flag-gated (MAILBOX_MIRROR).
+app.all('/api/mailbox-reconcile-worklist', (req, res) => { req.query._route = 'mailbox-reconcile-worklist'; intakeHandler(req, res); });
+app.all('/api/mailbox-reconcile-ack', (req, res) => { req.query._route = 'mailbox-reconcile-ack'; intakeHandler(req, res); });
+// P120 — Move-Queue Executor (the leg that actually moves an intake email).
+app.all('/api/move-queue-worklist', (req, res) => { req.query._route = 'move-queue-worklist'; intakeHandler(req, res); });
+app.all('/api/move-queue-ack', (req, res) => { req.query._route = 'move-queue-ack'; intakeHandler(req, res); });
 // Phase 2 folder-feed worker (cron + manual): GET=dry-run, POST=drain.
 app.all('/api/folder-feed-tick', (req, res) => { req.query._route = 'folder-feed-tick'; intakeHandler(req, res); });
 // Phase 2 Slice 2d (Unit 3): bounded async extraction drain. GET=dry-run, POST=drain.
 app.all('/api/intake-extract-drain', (req, res) => { req.query._route = 'intake-extract-drain'; intakeHandler(req, res); });
+
+// Restricted ASC research overlay. These routes write only to the private
+// frozen-50 research ledger; they never invoke the dia/gov sidebar propagator
+// or any Salesforce/outreach writer.
+app.all('/api/asc-research-import', (req, res) => { req.query._route = 'asc-research-import'; intakeHandler(req, res); });
+app.all('/api/asc-research-target', (req, res) => { req.query._route = 'asc-research-target'; intakeHandler(req, res); });
+app.all('/api/asc-research-capture', (req, res) => { req.query._route = 'asc-research-capture'; intakeHandler(req, res); });
+app.all('/api/asc-research-complete', (req, res) => { req.query._route = 'asc-research-complete'; intakeHandler(req, res); });
+app.all('/api/asc-research-review', (req, res) => { req.query._route = 'asc-research-review'; intakeHandler(req, res); });
 
 // Phase 2 Slice 2b: write an LCC-generated deliverable INTO a property folder.
 app.all('/api/property-doc-writeback', (req, res) => { req.query._route = 'property-doc-writeback'; intakeHandler(req, res); });
@@ -330,6 +484,8 @@ app.all('/api/intake/document-notify', (req, res) => { req.query._route = 'docum
 // Phase 2 Slice 3b (Unit 2): mirror Salesforce Task/Activity records into the
 // canonical activity_events timeline (linked via external_identities).
 app.all('/api/sf-activity', (req, res) => { req.query._route = 'sf-activity'; intakeHandler(req, res); });
+// Salesforce Closed-IS (CIS) national export → dia_nm_cis_closings (Power Automate).
+app.all('/api/intake-sf-cis', (req, res) => { req.query._route = 'sf-cis'; intakeHandler(req, res); });
 
 // intake rewrites — slash-path Copilot action presets. These were present in
 // vercel.json's rewrites but missing from server.js, so PA Flow requests to

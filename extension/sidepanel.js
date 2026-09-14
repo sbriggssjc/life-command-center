@@ -94,11 +94,25 @@ const DOMAIN_LABELS = {
   salesforce: 'Salesforce',
   outlook: 'Outlook',
   'public-records': 'Public Records',
+  rca: 'RCA',
 };
+
+// EXT-HOST (2026-09-10): the side panel cannot import background.js, so it
+// carries the same one-line rule — a stored *.vercel.app origin is the retired
+// deployment (still serving a frozen build with live credentials) and is
+// replaced by the Railway default. Keep in sync with pickIntakeHost().
+const SIDEPANEL_DEFAULT_HOST = 'https://tranquil-delight-production-633f.up.railway.app';
+function normalizeLCCHost(raw) {
+  if (!raw) return raw;
+  try { if (/\.vercel\.app$/i.test(new URL(String(raw)).hostname)) return SIDEPANEL_DEFAULT_HOST; } catch (_) {}
+  return raw;
+}
 
 async function getLCCConfig() {
   return new Promise((resolve) => {
-    chrome.storage.sync.get(['LCC_RAILWAY_URL', 'LCC_API_KEY'], resolve);
+    chrome.storage.sync.get(['LCC_RAILWAY_URL', 'LCC_API_KEY'], (cfg) => {
+      resolve({ ...cfg, LCC_RAILWAY_URL: normalizeLCCHost(cfg && cfg.LCC_RAILWAY_URL) });
+    });
   });
 }
 
@@ -225,6 +239,306 @@ async function getPageContext() {
     chrome.storage.session.get(['pageContext'], (result) => {
       resolve(result.pageContext || null);
     });
+  });
+}
+
+async function getActiveTabUrl() {
+  try {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    return tabs?.[0]?.url || null;
+  } catch {
+    return null;
+  }
+}
+
+async function validateCostarContext(ctx) {
+  if (!ctx || ctx.domain !== 'costar') return { ok: true, reasons: [] };
+  const activeUrl = await getActiveTabUrl();
+  return window.LccPropertyIdentity.contextIntegrity(ctx, activeUrl);
+}
+
+async function getFreshAscTenantContext(ctx) {
+  const activeUrl = await getActiveTabUrl();
+  if (!/\/tenant(?:[/?#]|$)/i.test(activeUrl || '')) {
+    return { ok: true, context: ctx };
+  }
+  try {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tabId = tabs?.[0]?.id;
+    const target = window.LccPropertyIdentity.freshTenantFrameTarget(ctx, tabId);
+    if (!target.ok) return target;
+    const fresh = await new Promise((resolve) => {
+      chrome.tabs.sendMessage(
+        target.tabId,
+        { type: 'GET_FRESH_ASC_TENANT_CONTEXT' },
+        { frameId: target.frameId },
+        (response) => {
+          if (chrome.runtime.lastError) resolve(null);
+          else resolve(response || null);
+        },
+      );
+    });
+    if (!fresh?.ok) return { ok: false, reasons: ['fresh_tenant_scan_unavailable'] };
+    return window.LccPropertyIdentity.mergeFreshTenantRoster(ctx, fresh, activeUrl);
+  } catch {
+    return { ok: false, reasons: ['fresh_tenant_scan_failed'] };
+  }
+}
+
+function formatAscIdentityDiagnostics(diagnostics) {
+  if (!diagnostics?.checks) return null;
+  const failed = Object.entries(diagnostics.checks)
+    .filter(([, passed]) => passed !== true)
+    .map(([name]) => name);
+  return [
+    `Identity checks failed: ${failed.length ? failed.join(', ') : 'none reported'}.`,
+    `Roster: ${Number(diagnostics.tenant_count) || 0}; source: ${diagnostics.source || 'missing'};`,
+    `CoStar ID: ${diagnostics.costar_property_id || 'missing'}; parcel: ${diagnostics.parcel_number || 'missing'};`,
+    `token: ${diagnostics.captured_address_token || 'missing'}.`,
+  ].join(' ');
+}
+
+// ── Restricted ASC frozen-50 research target ───────────────────────────────
+// This is a separate evidence-only path. It never calls Save Property, the
+// dia/gov propagator, Salesforce writeback, opportunity creation, or outreach.
+async function wireAscResearchAction(ctx, actions) {
+  if (!ctx?.address || !actions) return;
+  const result = await apiCall('/api/asc-research-target', null, 'GET');
+  const target = result.ok ? result.data?.target : null;
+  if (!target) return;
+
+  const identity = target.cms_identity || {};
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'margin-top:8px;padding:8px;border:1px solid #93C5FD;border-radius:6px;background:#EFF6FF;';
+  const title = document.createElement('div');
+  title.style.cssText = 'font-size:11px;font-weight:700;color:#1E3A8A;margin-bottom:5px;';
+  title.textContent = `ASC Research ${target.sample_ordinal}/50 — ${identity.facility_name || identity.ccn || 'Frozen candidate'}`;
+  wrap.appendChild(title);
+  const detail = document.createElement('div');
+  detail.style.cssText = 'font-size:10px;color:#475569;margin-bottom:6px;';
+  detail.textContent = `${identity.address || ''}, ${identity.city || ''}, ${identity.state || ''} ${identity.zip || ''}`.trim();
+  wrap.appendChild(detail);
+  const button = document.createElement('button');
+  button.className = 'btn btn-sm btn-primary';
+  button.textContent = 'Attach capture to ASC research';
+  wrap.appendChild(button);
+  const missing = document.createElement('button');
+  missing.className = 'btn btn-sm btn-secondary';
+  missing.style.cssText = 'margin-left:5px;margin-top:5px;';
+  missing.textContent = 'Complete: CoStar + RCA not found';
+  wrap.appendChild(missing);
+  const parcelEvidenceAlias = (
+    Array.isArray(target.cms_evidence?.approved_same_parcel_address_conflicts)
+      ? target.cms_evidence.approved_same_parcel_address_conflicts : []
+  ).find((alias) =>
+    alias?.status === 'approved'
+    && alias?.reason_code === 'service_location_multi_address_same_parcel_recorded_owner_identity'
+    && alias?.capture_authorized === false
+    && alias?.second_review_required === true
+    && alias?.costar_property_id
+    && alias?.parcel_number
+  );
+  const parcelEvidence = parcelEvidenceAlias ? document.createElement('button') : null;
+  if (parcelEvidence) {
+    parcelEvidence.className = 'btn btn-sm btn-secondary';
+    parcelEvidence.style.cssText = 'margin-left:5px;margin-top:5px;';
+    parcelEvidence.textContent = 'Complete parcel evidence only';
+    wrap.appendChild(parcelEvidence);
+  }
+  const parcelSitusAlias = (
+    Array.isArray(target.cms_evidence?.approved_parcel_situs_evidence)
+      ? target.cms_evidence.approved_parcel_situs_evidence : []
+  ).find((alias) =>
+    alias?.status === 'approved'
+    && alias?.reason_code === 'service_location_exact_parcel_situs_adjacent_context_record'
+    && alias?.adjacent_context_only === true
+    && alias?.capture_authorized === false
+    && alias?.second_review_required === true
+    && alias?.context_costar_property_id
+    && alias?.parcel_number
+  );
+  const parcelSitus = parcelSitusAlias ? document.createElement('button') : null;
+  if (parcelSitus) {
+    parcelSitus.className = 'btn btn-sm btn-secondary';
+    parcelSitus.style.cssText = 'margin-left:5px;margin-top:5px;';
+    parcelSitus.textContent = 'Complete parcel situs evidence only';
+    wrap.appendChild(parcelSitus);
+  }
+  actions.appendChild(wrap);
+
+  const appendCaptureCompletion = () => {
+    if (wrap.querySelector('[data-asc-capture-complete]')) return;
+    const complete = document.createElement('button');
+    complete.dataset.ascCaptureComplete = 'true';
+    complete.className = 'btn btn-sm btn-secondary';
+    complete.style.marginLeft = '5px';
+    complete.textContent = 'Complete property capture';
+    wrap.appendChild(complete);
+    missing.disabled = true;
+    complete.addEventListener('click', async () => {
+      complete.disabled = true;
+      complete.textContent = 'Advancing…';
+      const advanced = await apiCall('/api/asc-research-complete', {
+        run_id: target.run_id,
+        candidate_fingerprint: target.candidate_fingerprint,
+      });
+      if (advanced.ok) {
+        complete.textContent = 'Complete ✓ — open next property';
+        detail.textContent = 'Evidence collection completed for this candidate. The next frozen candidate will load on the next page scan.';
+      } else {
+        complete.disabled = false;
+        complete.textContent = 'Complete property capture';
+        detail.textContent = toErrorMessage(
+          advanced.data?.detail || advanced.data?.error || advanced.error
+        ) || 'Could not advance candidate';
+      }
+    });
+  };
+  if (Number(target.capture_count) > 0) appendCaptureCompletion();
+
+  parcelEvidence?.addEventListener('click', async () => {
+    const confirmed = window.confirm(
+      'Confirm this candidate has approved same-parcel recorded-owner evidence. This will advance the worklist with zero captures and mandatory second review.',
+    );
+    if (!confirmed) return;
+    parcelEvidence.disabled = true;
+    button.disabled = true;
+    missing.disabled = true;
+    parcelEvidence.textContent = 'Recording parcel evidence…';
+    const advanced = await apiCall('/api/asc-research-complete', {
+      run_id: target.run_id,
+      candidate_fingerprint: target.candidate_fingerprint,
+      completion_mode: 'parcel_evidence_only',
+    });
+    if (advanced.ok) {
+      parcelEvidence.textContent = 'Parcel evidence recorded ✓ — open next property';
+      detail.textContent = 'Candidate advanced with zero captures and mandatory second review. Reload the next property to load the next frozen candidate.';
+    } else {
+      parcelEvidence.disabled = false;
+      button.disabled = false;
+      missing.disabled = false;
+      parcelEvidence.textContent = 'Complete parcel evidence only';
+      detail.textContent = toErrorMessage(
+        advanced.data?.detail || advanced.data?.error || advanced.error
+      ) || 'Could not complete parcel evidence';
+    }
+  });
+
+  parcelSitus?.addEventListener('click', async () => {
+    const confirmed = window.confirm(
+      'Confirm this candidate has approved exact-situs parcel evidence and the open CoStar property is adjacent context only. This will advance the worklist with zero captures and mandatory second review.',
+    );
+    if (!confirmed) return;
+    parcelSitus.disabled = true;
+    button.disabled = true;
+    missing.disabled = true;
+    if (parcelEvidence) parcelEvidence.disabled = true;
+    parcelSitus.textContent = 'Recording parcel situs evidence…';
+    const advanced = await apiCall('/api/asc-research-complete', {
+      run_id: target.run_id,
+      candidate_fingerprint: target.candidate_fingerprint,
+      completion_mode: 'parcel_situs_evidence_only',
+    });
+    if (advanced.ok) {
+      parcelSitus.textContent = 'Parcel situs evidence recorded ✓ — open next property';
+      detail.textContent = 'Candidate advanced with zero captures and mandatory second review. Reload the next property to load the next frozen candidate.';
+    } else {
+      parcelSitus.disabled = false;
+      button.disabled = false;
+      missing.disabled = false;
+      if (parcelEvidence) parcelEvidence.disabled = false;
+      parcelSitus.textContent = 'Complete parcel situs evidence only';
+      detail.textContent = toErrorMessage(
+        advanced.data?.detail || advanced.data?.error || advanced.error
+      ) || 'Could not complete parcel situs evidence';
+    }
+  });
+
+  missing.addEventListener('click', async () => {
+    const label = identity.facility_name || identity.ccn || 'this frozen candidate';
+    const confirmed = window.confirm(
+      `Confirm you manually searched the exact frozen candidate (${label}) in both CoStar and RCA and found no matching property. No evidence capture will be created.`,
+    );
+    if (!confirmed) return;
+    missing.disabled = true;
+    button.disabled = true;
+    missing.textContent = 'Recording missingness…';
+    const advanced = await apiCall('/api/asc-research-complete', {
+      run_id: target.run_id,
+      candidate_fingerprint: target.candidate_fingerprint,
+      source_dispositions: { costar: 'not_found', rca: 'not_found' },
+    });
+    if (advanced.ok) {
+      missing.textContent = 'Missingness recorded ✓ — open next property';
+      detail.textContent = 'CoStar and RCA not-found dispositions recorded with zero captures; second review required. The next frozen candidate will load on the next page scan.';
+    } else {
+      missing.disabled = false;
+      button.disabled = false;
+      missing.textContent = 'Complete: CoStar + RCA not found';
+      detail.textContent = toErrorMessage(
+        advanced.data?.detail || advanced.data?.error || advanced.error
+      ) || 'Could not record licensed-source missingness';
+    }
+  });
+
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    button.textContent = 'Validating address…';
+    // CoStar injects this extension into same-origin child frames. A child
+    // frame can update session.pageContext after the property card rendered,
+    // but without carrying the subject address/state. Do not let that partial
+    // context replace the complete page context that produced this card.
+    const sessionCtx = await getPageContext();
+    let liveCtx = sessionCtx?.address && sessionCtx?.state ? sessionCtx : ctx;
+    const refreshed = await getFreshAscTenantContext(liveCtx);
+    if (!refreshed.ok) {
+      button.disabled = true;
+      button.textContent = 'Capture blocked — refresh tenants';
+      button.className = 'btn btn-sm btn-danger';
+      detail.textContent = `Fresh CoStar tenant validation failed: ${refreshed.reasons.join(', ')}. Keep the Tenant tab open and retry.`;
+      return;
+    }
+    liveCtx = refreshed.context;
+    const integrity = await validateCostarContext(liveCtx);
+    if (!integrity.ok) {
+      button.disabled = true;
+      button.textContent = 'Capture blocked — record changed';
+      button.className = 'btn btn-sm btn-danger';
+      detail.textContent = `CoStar record integrity failed: ${integrity.reasons.join(', ')}. Reload the current property before attaching.`;
+      return;
+    }
+    const domain = liveCtx.domain || liveCtx.source || '';
+    const context = {
+      ...buildMetadata(liveCtx, domain),
+      address: liveCtx.address,
+      city: liveCtx.city,
+      state: liveCtx.state,
+      zip: liveCtx.zip,
+      page_url: liveCtx.page_url,
+      source: domain,
+      costar_property_id: domain === 'costar'
+        ? (liveCtx.costar_property_id
+          || window.LccPropertyIdentity.costarPropertyId(liveCtx.page_url))
+        : null,
+    };
+    const capture = await apiCall('/api/asc-research-capture', { target, context });
+    if (capture.ok) {
+      button.textContent = 'ASC evidence captured ✓';
+      button.className = 'btn btn-sm btn-success';
+      const lccCount = capture.data?.reconciliation?.lcc_matches?.length || 0;
+      const sfCount = capture.data?.reconciliation?.salesforce_identities?.length || 0;
+      detail.textContent = `Structured evidence saved privately; LCC matches: ${lccCount}; Salesforce identities: ${sfCount}. No canonical or CRM writes.`;
+      appendCaptureCompletion();
+    } else {
+      button.disabled = false;
+      button.textContent = 'Capture blocked — retry';
+      button.className = 'btn btn-sm btn-danger';
+      const errorText = toErrorMessage(
+        capture.data?.detail || capture.data?.error || capture.error
+      ) || 'Capture failed';
+      const diagnostics = formatAscIdentityDiagnostics(capture.data?.identity_diagnostics);
+      detail.textContent = diagnostics ? `${errorText}. ${diagnostics}` : errorText;
+    }
   });
 }
 
@@ -787,19 +1101,44 @@ async function loadPropertyTab(opts) {
     return;
   }
 
+  // Public-records assessor/recorder scans (entity_type 'property' but there is
+  // no CRE-site property match to resolve — the scanner classified the page as
+  // 'assessor'/'recorder', not a CoStar/LoopNet/CREXi listing). These need an
+  // explicit operator-supplied LCC property before the capture can be saved
+  // (we do not auto-match a county page's address to a domain property here).
+  if (source.domain === 'public-records' && (siteType === 'assessor' || siteType === 'recorder')) {
+    loadPublicRecordPropertyView(source, domainLabel, siteType);
+    return;
+  }
+
   // Property entities (CRE sites, assessor, recorder, search results)
   const address = source.address || source.name || '';
   const city = source.city || '';
   const state = source.state || '';
+  const sourceCostarId = source.domain === 'costar'
+    ? (source.costar_property_id || window.LccPropertyIdentity.costarPropertyId(source.page_url))
+    : null;
 
   header.innerHTML = `
     <div class="property-title">${escapeHtml(address)}</div>
     ${city || state ? `<div class="property-subtitle">${escapeHtml([city, state].filter(Boolean).join(', '))}</div>` : ''}
-    <div class="property-source">${domainBadge(domain)} ${escapeHtml(domainLabel)}${siteType ? ` (${escapeHtml(siteType)})` : ''}${source._version ? ` v${source._version}` : ''}</div>
+    <div class="property-source">${domainBadge(domain)} ${escapeHtml(domainLabel)}${siteType ? ` (${escapeHtml(siteType)})` : ''}${source._version ? ` v${source._version}` : ''}${sourceCostarId ? ` · CoStar ID ${escapeHtml(sourceCostarId)}` : ''}${source._source_field_provenance ? ' · provenance locked' : ''}</div>
   `;
 
   body.innerHTML = '<div class="loading"><div class="spinner"></div><br>Looking up property...</div>';
   actions.innerHTML = '';
+
+  const sourceIntegrity = await validateCostarContext(source);
+  if (!sourceIntegrity.ok) {
+    body.innerHTML = `<div class="domain-mismatch-banner" style="background:#FEF2F2;border:1px solid #DC2626;border-radius:6px;padding:10px;margin:8px;font-size:12px;color:#991B1B;">
+      <div style="font-weight:700;margin-bottom:5px;">Capture blocked — CoStar record changed</div>
+      <div>The stored snapshot does not belong entirely to the active CoStar record. No Save, Update, or ASC Attach action is available.</div>
+      <div style="margin-top:6px;font-size:10px;">Snapshot ID: ${escapeHtml(sourceIntegrity.costarPropertyId || 'unknown')} · Active ID: ${escapeHtml(sourceIntegrity.activeCostarPropertyId || 'unknown')} · ${escapeHtml(sourceIntegrity.reasons.join(', '))}</div>
+      <div style="margin-top:6px;">Reload the current CoStar property and wait for a fresh, provenance-locked scan.</div>
+    </div>`;
+    actions.innerHTML = '<button class="btn btn-sm btn-danger" disabled>Capture blocked — record integrity</button>';
+    return;
+  }
 
   // Query LCC to see if this property already exists.
   // Round 76ek: lookup_asset now accepts entity_id, source_url, and
@@ -1301,6 +1640,7 @@ async function loadPropertyTab(opts) {
       actions.innerHTML = `<button class="btn btn-sm btn-success" id="saveLccBtn">Save Property to LCC</button>`;
     }
     wirePropertyActions(ctx, lccEntity);
+    wireAscResearchAction(ctx, actions).catch((err) => console.warn('[ASC research action]', err?.message || err));
   }
 
   console.log('[Re-run btn] matched:', matched,
@@ -1351,6 +1691,24 @@ async function loadPropertyTab(opts) {
       // or wrote nothing returns pipeline_failed=true — surface it, don't toast
       // "success".
       const pipelineFailed = !!result.data?.pipeline_failed;
+
+      // Durable document capture: the extraction just upserted url_captured
+      // property_documents rows; fetch each doc's bytes in THIS authenticated tab
+      // and store a durable copy server-side (keyed by domain+source_url), so a
+      // later OCR never has to re-authenticate to CoStar. Fire-and-forget.
+      if (result.ok && !pipelineFailed) {
+        try {
+          const capDomain = result.data?.summary?.domain || result.data?.domain || ctx?.domain;
+          const docLinks = Array.isArray(ctx?.document_links) ? ctx.document_links : [];
+          if (capDomain && docLinks.length) {
+            chrome.runtime.sendMessage(
+              { type: 'CAPTURE_DOC_BYTES_BATCH', domain: capDomain, docs: docLinks },
+              () => void (chrome.runtime && chrome.runtime.lastError),
+            );
+          }
+        } catch { /* best-effort */ }
+      }
+
       if (result.ok && !pipelineFailed) {
         const toast = document.createElement('div');
         toast.className = 'update-toast updated';
@@ -1728,7 +2086,9 @@ function renderCompareTable(ctx, lccEntity, sourceLabel) {
     sale_price: ['sale_price', 'last_sale_price'],
     sale_date: ['sale_date', 'last_sale_date'],
     cap_rate: ['cap_rate'],
-    asking_price: ['asking_price', 'list_price'],
+    asking_price: ['asking_price'],
+    list_price: ['list_price'],
+    original_price: ['original_price', 'list_price'],
     noi: ['noi', 'net_operating_income'],
     tenant_name: ['tenant_name', 'tenant', 'primary_tenant'],
     owner_name: ['owner_name', 'owner', 'recorded_owner'],
@@ -1996,7 +2356,9 @@ function renderLccFields(entity, data, ctx) {
     occupancy:      ['occupancy', 'occupancy_percent', 'gov_occupancy_pct'],
     cap_rate:       ['cap_rate', 'asking_cap_rate', 'current_cap_rate'],
     noi:            ['noi', 'net_operating_income'],
-    asking_price:   ['asking_price', 'list_price'],
+    asking_price:   ['asking_price'],
+    list_price:     ['list_price'],
+    original_price: ['original_price', 'list_price'],
     tenant_name:    ['tenant_name', 'tenant', 'primary_tenant', 'agency', 'agency_full_name'],
     lease_expiration: ['lease_expiration', 'lease_exp'],
     lease_term:     ['lease_term'],
@@ -2161,6 +2523,12 @@ function wirePropertyActions(ctx, lccEntity) {
       // Re-read live pageContext so OM-enriched data is included
       // (the closure ctx may be stale if OM ingestion happened after render)
       const liveCtx = (await getPageContext()) || ctx;
+      const integrity = await validateCostarContext(liveCtx);
+      if (!integrity.ok) {
+        updateBtn.textContent = 'Update blocked — record changed';
+        updateBtn.className = 'btn btn-sm btn-danger';
+        return;
+      }
 
       // PATCH the existing entity — merge new CRE data into metadata
       const fields = extractSourceFields(liveCtx);
@@ -2209,6 +2577,12 @@ function wirePropertyActions(ctx, lccEntity) {
 
       // Re-read live pageContext so OM-enriched data is included
       const liveCtx = (await getPageContext()) || ctx;
+      const integrity = await validateCostarContext(liveCtx);
+      if (!integrity.ok) {
+        saveBtn.textContent = 'Save blocked — record changed';
+        saveBtn.className = 'btn btn-sm btn-danger';
+        return;
+      }
 
       const fields = extractSourceFields(liveCtx);
       const metadata = buildMetadata(liveCtx, domain);
@@ -2460,6 +2834,19 @@ function buildMetadata(ctx, domain) {
     if (v == null || v === '') return null;
     return /\d/.test(String(v)) ? v : null;
   };
+  const parseMoneyLike = (v) => {
+    if (v == null || v === '') return null;
+    if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+    const m = String(v).trim().match(/^\$?\s*([\d,]+(?:\.\d+)?)\s*([KMB])?\b/i);
+    if (!m) return null;
+    let n = Number(m[1].replace(/,/g, ''));
+    if (!Number.isFinite(n)) return null;
+    const suffix = (m[2] || '').toUpperCase();
+    if (suffix === 'K') n *= 1e3;
+    else if (suffix === 'M') n *= 1e6;
+    else if (suffix === 'B') n *= 1e9;
+    return n;
+  };
   // Round 76ej.w (2026-05-05): a real CRE asking price for any
   // building with measurable SF is in the hundreds of thousands or
   // millions. Sub-$5k values are always price-per-SF leaks ($8,286 /
@@ -2472,10 +2859,10 @@ function buildMetadata(ctx, domain) {
   const sanitizeAskingPrice = (v, ctxNoi) => {
     if (v == null || v === '') return null;
     if (!/\d/.test(String(v))) return null;
-    const numeric = Number(String(v).replace(/[^0-9.]/g, ''));
+    const numeric = parseMoneyLike(v);
     if (!Number.isFinite(numeric) || numeric < 25000) return null;
     if (ctxNoi) {
-      const noiNumeric = Number(String(ctxNoi).replace(/[^0-9.]/g, ''));
+      const noiNumeric = parseMoneyLike(ctxNoi);
       if (Number.isFinite(noiNumeric) && noiNumeric > 0
           && Math.abs(numeric - noiNumeric) / Math.max(numeric, noiNumeric) < 0.01) {
         return null;
@@ -2491,6 +2878,11 @@ function buildMetadata(ctx, domain) {
     extracted_at: new Date().toISOString(),
     // Financials
     asking_price: sanitizeAskingPrice(ctx.asking_price, ctx.noi),
+    list_price: sanitizeAskingPrice(ctx.list_price, ctx.noi),
+    original_price: sanitizeAskingPrice(ctx.original_price || ctx.list_price, ctx.noi),
+    original_cap_rate: sanitizeNumericField(ctx.original_cap_rate),
+    last_price_change: ctx.last_price_change || null,
+    price_change_history: Array.isArray(ctx.price_change_history) ? ctx.price_change_history : null,
     cap_rate: sanitizeNumericField(ctx.cap_rate),
     noi: sanitizeNumericField(ctx.noi),
     price_per_sf: sanitizeNumericField(ctx.price_per_sf),
@@ -2581,6 +2973,13 @@ function buildMetadata(ctx, domain) {
     loans: ctx.loans || [],
     // Sale notes & document links from CoStar comp detail pages
     sale_notes_raw: ctx.sale_notes_raw || null,
+    // Sale/Investment Highlights bullets (content/costar.js). On a property
+    // Summary page these often carry the ONLY government/operator tenant signal
+    // (USDA/FSA/GSA prose), and the server classifyDomain() reads
+    // metadata.investment_highlights — MUST be whitelisted here or the captured
+    // text is silently dropped and the property drops to no_domain (same class
+    // as the loans/portfolio_properties drops above). 2026-08-14.
+    investment_highlights: ctx.investment_highlights || null,
     document_links: ctx.document_links || [],
     documents: ctx.documents || [],
     // Listing broker (from OM extraction)
@@ -2793,6 +3192,11 @@ async function wireStageListingButton(ctx) {
           state: ctx.state || null,
           tenant_name: ctx.tenant_name || null,
           asking_price: ctx.asking_price || null,
+          list_price: ctx.list_price || null,
+          original_price: ctx.original_price || ctx.list_price || null,
+          original_cap_rate: ctx.original_cap_rate || null,
+          last_price_change: ctx.last_price_change || null,
+          price_change_history: Array.isArray(ctx.price_change_history) ? ctx.price_change_history : null,
           cap_rate: ctx.cap_rate || null,
           lease_expiration: ctx.lease_expiration || null,
           // Round 76ej.l: marketing-description-mined lease facts so the
@@ -2897,6 +3301,11 @@ async function wireStageListingButton(ctx) {
             state: ctx.state || null,
             tenant_name: ctx.tenant_name || null,
             asking_price: ctx.asking_price || null,
+            list_price: ctx.list_price || null,
+            original_price: ctx.original_price || ctx.list_price || null,
+            original_cap_rate: ctx.original_cap_rate || null,
+            last_price_change: ctx.last_price_change || null,
+            price_change_history: Array.isArray(ctx.price_change_history) ? ctx.price_change_history : null,
             cap_rate: ctx.cap_rate || null,
             lease_expiration: ctx.lease_expiration || null,
             // Round 76ej.l: marketing-description-mined lease facts.
@@ -3685,20 +4094,35 @@ async function loadOrgView(source, domainLabel) {
     doSearch();
   });
 
+  // Backward-compat, no-worklist-target save. Previously this discarded
+  // everything the SOS scan captured except `name` — officers, registered
+  // agent and both addresses were thrown away. It now routes the full
+  // capture through applySosEntityCapture (api/_shared/public-records-
+  // writeback.js), which mints/resolves the org entity AND creates
+  // llc_member/llc_manager entity_relationships edges for named officers and
+  // the registered agent, gated by the same residential-vs-agent-service
+  // classifier the reachability worker uses (a CSC/registered-agent address
+  // is never recorded as a person's residence).
   const saveBtn = $('#saveOrgBtn');
   if (saveBtn) {
     saveBtn.addEventListener('click', async () => {
       saveBtn.disabled = true;
       saveBtn.textContent = 'Saving...';
-      const result = await apiCall('/api/entities', {
-        entity_type: 'organization',
-        name,
-        org_type: source.entity_type_detail || null,
-        description: `Imported from ${source.domain || 'public-records'}`,
+      const capture = {};
+      for (const [key] of SOS_CAPTURE_FIELDS) {
+        const v = $('#sosf_' + key)?.value;
+        if (v != null && String(v).trim() !== '') capture[key] = v.trim();
+      }
+      if (!capture.name) capture.name = name;
+      const result = await apiCall('/api/public-records-capture', {
+        site_type: 'sos',
+        source_url: source.page_url || null,
+        capture,
       });
-      if (result.ok) {
+      if (result.ok && result.data?.ok) {
+        const nEdges = Array.isArray(result.data.edges) ? result.data.edges.filter((e) => e.ok).length : 0;
         saveBtn.className = 'btn btn-sm btn-success';
-        saveBtn.textContent = 'Saved!';
+        saveBtn.textContent = `Saved!${nEdges ? ` (+${nEdges} contact${nEdges === 1 ? '' : 's'})` : ''}`;
       } else {
         saveBtn.disabled = false;
         saveBtn.textContent = 'Save Failed — Retry';
@@ -3707,6 +4131,110 @@ async function loadOrgView(source, domainLabel) {
       }
     });
   }
+
+  $('#lastUpdated').textContent = `Entity: ${new Date().toLocaleTimeString()}`;
+}
+
+// ── Public-records assessor/recorder capture → real writers (PR-scanner, 2026-09-10) ─
+//
+// Until this, an assessor/recorder scan had NO save path at all — only the SOS
+// scan flow (loadOrgView) offered one, and even that fell back to a bare
+// "create an organization entity" write. This routes the scanner's structured
+// fields (assessed value, tax amount, deed parties/addresses) through real
+// domain writers (api/_shared/public-records-writeback.js), fill-blanks,
+// provenance-tagged, reversible by source tag + fetched_at. Human-triggered
+// only: the operator reviews the editable form and clicks Save.
+//
+// Requires the operator to name the domain property (address matching a county
+// page to a specific domain property row is out of scope here — never guess).
+const PR_ASSESSOR_FIELDS = [
+  ['parcel_number', 'Parcel / APN'], ['county', 'County'], ['state', 'State'],
+  ['owner_name', 'Owner (per county)'], ['mailing_address', 'Mailing Address'],
+  ['assessed_value', 'Assessed Value'], ['land_value', 'Land Value'],
+  ['improvement_value', 'Improvement Value'], ['tax_amount', 'Tax Amount'],
+  ['property_type', 'Property Type / Land Use'], ['year_built', 'Year Built'],
+  ['square_footage', 'Building SF'], ['lot_size', 'Lot Size'], ['zoning', 'Zoning'],
+];
+const PR_RECORDER_FIELDS = [
+  ['document_type', 'Document Type'], ['grantor', 'Grantor'], ['grantee', 'Grantee'],
+  ['sale_price', 'Sale Price / Consideration'], ['sale_date', 'Recording Date'],
+  ['book_page', 'Document / Instrument Number'], ['county', 'County'], ['state', 'State'],
+];
+
+function loadPublicRecordPropertyView(source, domainLabel, siteType) {
+  const header = $('#propertyHeader');
+  const body = $('#propertyBody');
+  const actions = $('#propertyActions');
+  const fields = siteType === 'recorder' ? PR_RECORDER_FIELDS : PR_ASSESSOR_FIELDS;
+
+  header.innerHTML = `
+    <div class="property-title">${escapeHtml(source.address || source.page_title || 'Public record')}</div>
+    <div class="property-source">${domainBadge(source.domain)} ${escapeHtml(domainLabel)} (${escapeHtml(siteType)})</div>
+  `;
+
+  const fieldHtml = fields.map(([key, label]) => {
+    const val = escapeHtml(source[key] != null ? String(source[key]) : '');
+    return `<div style="margin-bottom:6px;">
+      <label style="display:block;font-size:10px;color:var(--text-secondary);margin-bottom:2px;">${escapeHtml(label)}</label>
+      <input id="prf_${key}" type="text" class="sos-capture-input" value="${val}" style="width:100%;box-sizing:border-box;" />
+    </div>`;
+  }).join('');
+
+  body.innerHTML = `
+    <div class="section-label">Save this capture to a specific property</div>
+    <div style="font-size:10px;color:var(--text-secondary);margin-bottom:6px;">
+      County pages aren't auto-matched to a property — enter the LCC domain property id
+      (open the property in the app to find it).
+    </div>
+    <div style="margin-bottom:6px;">
+      <label style="display:block;font-size:10px;color:var(--text-secondary);margin-bottom:2px;">Domain</label>
+      <select id="prf_domain" class="sos-capture-input" style="width:100%;box-sizing:border-box;">
+        <option value="government">Government</option>
+        <option value="dialysis">Dialysis</option>
+      </select>
+    </div>
+    <div style="margin-bottom:6px;">
+      <label style="display:block;font-size:10px;color:var(--text-secondary);margin-bottom:2px;">Property ID</label>
+      <input id="prf_property_id" type="text" class="sos-capture-input" style="width:100%;box-sizing:border-box;" />
+    </div>
+    <div class="section-label">${siteType === 'recorder' ? 'Deed / Recording Details' : 'Assessor Details'} (editable)</div>
+    ${fieldHtml}
+  `;
+
+  actions.innerHTML = `<button class="btn btn-sm btn-success" id="prfSaveBtn">Save to LCC</button>`;
+
+  $('#prfSaveBtn')?.addEventListener('click', async () => {
+    const btn = $('#prfSaveBtn');
+    const domain = $('#prf_domain')?.value;
+    const propertyId = $('#prf_property_id')?.value?.trim();
+    if (!propertyId) {
+      _sosToast('Enter the domain property id first.');
+      return;
+    }
+    const capture = {};
+    for (const [key] of fields) {
+      const v = $('#prf_' + key)?.value;
+      if (v != null && String(v).trim() !== '') capture[key] = v.trim();
+    }
+    btn.disabled = true;
+    btn.textContent = 'Saving…';
+    const result = await apiCall('/api/public-records-capture', {
+      site_type: siteType,
+      domain,
+      property_id: propertyId,
+      source_url: source.page_url || null,
+      capture,
+    });
+    if (result.ok && result.data?.ok) {
+      btn.className = 'btn btn-sm btn-success';
+      btn.textContent = '✓ Saved';
+    } else {
+      btn.disabled = false;
+      btn.textContent = 'Save to LCC (retry)';
+      btn.className = 'btn btn-sm btn-danger';
+      _sosToast(toErrorMessage(result.error) || toErrorMessage(result.data?.error) || `HTTP ${result.status || 'error'}`);
+    }
+  });
 
   $('#lastUpdated').textContent = `Entity: ${new Date().toLocaleTimeString()}`;
 }

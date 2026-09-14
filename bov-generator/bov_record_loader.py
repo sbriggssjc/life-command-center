@@ -32,9 +32,10 @@ class BovRecordError(Exception):
     """Raised when a cre_property_id record can't be loaded (missing config,
     no reviewed record, or a transport error). The API maps this to a clear 4xx/5xx."""
 
-    def __init__(self, message: str, status: int = 502):
+    def __init__(self, message: str, status: int = 502, envelope: Optional[dict] = None):
         super().__init__(message)
         self.status = status
+        self.envelope = envelope
 
 
 def _config() -> Tuple[str, str]:
@@ -78,6 +79,165 @@ def _get(url: str, key: str, path: str) -> list:
     return data if isinstance(data, list) else []
 
 
+def _post(url: str, key: str, path: str, payload: dict) -> None:
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        f"{url}/rest/v1/{path}",
+        data=data,
+        method="POST",
+        headers={
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "Prefer": "return=minimal",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10):
+            return
+    except Exception:
+        return
+
+
+def _candidate_from_cre_row(row: dict) -> dict:
+    return {
+        "id": row.get("id"),
+        "property_id": row.get("id"),
+        "type": "asset",
+        "name": row.get("address") or row.get("tenant_brand"),
+        "address": row.get("address"),
+        "city": row.get("city"),
+        "state": row.get("state"),
+        "domain": "cre",
+        "confidence": 0.95,
+        "resolved_via": "bov_cre_address",
+    }
+
+
+def _candidate_from_cre_id(cre_property_id: int, resolved_via: str = "bov_cre_property_id") -> dict:
+    return {
+        "id": int(cre_property_id),
+        "property_id": int(cre_property_id),
+        "type": "asset",
+        "domain": "cre",
+        "confidence": 1.0 if resolved_via == "bov_cre_property_id" else 0.9,
+        "resolved_via": resolved_via,
+    }
+
+
+def _envelope(status: str, lookup, entity=None, candidates=None, confidence=0, resolved_via=None, error=None) -> dict:
+    return {
+        "status": status,
+        "entity": entity,
+        "type": "asset",
+        "confidence": confidence,
+        "resolved_via": resolved_via,
+        "candidates": candidates or [],
+        "raw_ref": lookup,
+        **({"error": error} if error else {}),
+    }
+
+
+def _log_resolution(url: str, key: str, lookup, envelope: dict, tool: str = "generate_bov") -> None:
+    row = {
+        "raw_ref": lookup,
+        "status": envelope.get("status"),
+        "chosen_entity": (envelope.get("entity") or {}).get("id"),
+        "candidates_n": len(envelope.get("candidates") or []),
+        "tool": tool,
+    }
+    print(f"[subject-resolver] {json.dumps(row, default=str)}")
+    payload = {
+        "surface": "bov",
+        "tool": tool,
+        "raw_request": str(lookup),
+        "raw_args": {"property_lookup": lookup},
+        "resolved_subject": {
+            "chosen_entity": row["chosen_entity"],
+            "candidates_n": row["candidates_n"],
+        },
+        "resolution_status": row["status"],
+        "confidence": envelope.get("confidence"),
+        "alternatives": envelope.get("candidates") or [],
+    }
+    _post(url, key, "interpretation_logs", payload)
+
+
+def resolve_property_lookup_envelope(lookup) -> dict:
+    """
+    Resolve `property_lookup` using the shared Subject Resolver envelope:
+    resolved / ambiguous / not_on_file. Ambiguity is still enforced by
+    resolve_property_id(), which maps this envelope back to the existing 409.
+    """
+    s = str(lookup or "").strip()
+    if not s:
+        return _envelope("not_on_file", lookup, error="property_lookup is empty")
+    if s.isdigit():
+        cid = int(s)
+        return _envelope(
+            "resolved",
+            lookup,
+            entity={"id": cid, "property_id": cid, "domain": "cre"},
+            candidates=[_candidate_from_cre_id(cid)],
+            confidence=1.0,
+            resolved_via="bov_cre_property_id",
+        )
+
+    url, key = _config()
+    parts = [p.strip() for p in s.split(",") if p.strip()]
+    street = parts[0] if parts else s
+    state = None
+    if len(parts) >= 2:
+        tail = parts[-1].upper()
+        if len(tail) == 2 and tail.isalpha():
+            state = tail
+    q = f"lcc_cre_properties?select=id,address,city,state,tenant_brand&address=ilike.*{urllib.parse.quote(street)}*"
+    if state:
+        q += f"&state=eq.{urllib.parse.quote(state)}"
+    q += "&limit=25"
+    rows = _get(url, key, q)
+
+    if not rows:
+        rq = (
+            "lcc_cre_bov_extraction?select=cre_property_id"
+            f"&record->property->>address=ilike.*{urllib.parse.quote(street)}*&limit=25"
+        )
+        rec_rows = _get(url, key, rq)
+        ids = sorted({r["cre_property_id"] for r in rec_rows if r.get("cre_property_id") is not None})
+        if len(ids) == 1:
+            cid = int(ids[0])
+            return _envelope(
+                "resolved",
+                lookup,
+                entity={"id": cid, "property_id": cid, "domain": "cre"},
+                candidates=[_candidate_from_cre_id(cid, "bov_reviewed_record_address")],
+                confidence=0.9,
+                resolved_via="bov_reviewed_record_address",
+            )
+        if len(ids) > 1:
+            cands = [_candidate_from_cre_id(int(cid), "bov_reviewed_record_address") for cid in ids[:10]]
+            return _envelope("ambiguous", lookup, candidates=cands, resolved_via="bov_reviewed_record_address")
+
+    if not rows:
+        return _envelope("not_on_file", lookup, error=f"No LCC property matches address '{s}'. Check the address or pass cre_property_id.")
+    if len(rows) > 1:
+        return _envelope(
+            "ambiguous",
+            lookup,
+            candidates=[_candidate_from_cre_row(r) for r in rows[:10]],
+            resolved_via="bov_cre_address",
+        )
+    cid = int(rows[0]["id"])
+    return _envelope(
+        "resolved",
+        lookup,
+        entity={"id": cid, "property_id": cid, "domain": "cre"},
+        candidates=[_candidate_from_cre_row(rows[0])],
+        confidence=0.95,
+        resolved_via="bov_cre_address",
+    )
+
+
 def resolve_property_id(lookup) -> int:
     """
     Resolve a `property_lookup` to a cre_property_id (lcc_cre_properties.id).
@@ -91,56 +251,26 @@ def resolve_property_id(lookup) -> int:
     This lives in the generator so EVERY caller (MCP tool, Northmarq Project
     OpenAPI action, Copilot plugin, curl) gets address-or-id resolution for free.
     """
-    s = str(lookup or "").strip()
-    if not s:
-        raise BovRecordError("property_lookup is empty", status=422)
-    if s.isdigit():
-        return int(s)
-
-    url, key = _config()
-    # Split "207 Fob James Dr, Valley, AL" → street="207 Fob James Dr", state="AL".
-    parts = [p.strip() for p in s.split(",") if p.strip()]
-    street = parts[0] if parts else s
-    state = None
-    if len(parts) >= 2:
-        tail = parts[-1].upper()
-        if len(tail) == 2 and tail.isalpha():
-            state = tail
-    # ilike wildcards around the street token; PostgREST uses * as the wildcard.
-    q = f"lcc_cre_properties?select=id,address,city,state,tenant_brand&address=ilike.*{urllib.parse.quote(street)}*"
-    if state:
-        q += f"&state=eq.{urllib.parse.quote(state)}"
-    q += "&limit=25"
-    rows = _get(url, key, q)
-
-    # Fallback: many CRE rows were registered by tenant+city with a NULL address,
-    # but the reviewed BOV record carries the real street address. Match on the
-    # record's `property.address` so lookup works even before the registry address
-    # is backfilled — and it only surfaces properties that HAVE a buildable record.
-    if not rows:
-        rq = (
-            "lcc_cre_bov_extraction?select=cre_property_id"
-            f"&record->property->>address=ilike.*{urllib.parse.quote(street)}*&limit=25"
-        )
-        rec_rows = _get(url, key, rq)
-        ids = sorted({r["cre_property_id"] for r in rec_rows if r.get("cre_property_id") is not None})
-        if len(ids) == 1:
-            return int(ids[0])
-        if len(ids) > 1:
-            raise BovRecordError(
-                f"'{s}' matches {len(ids)} property records — pass cre_property_id. Candidate ids: {ids[:10]}",
-                status=409,
-            )
-
-    if not rows:
-        raise BovRecordError(f"No LCC property matches address '{s}'. Check the address or pass cre_property_id.", status=404)
-    if len(rows) > 1:
+    env = resolve_property_lookup_envelope(lookup)
+    try:
+        url, key = _config()
+        _log_resolution(url, key, lookup, env)
+    except BovRecordError:
+        print(f"[subject-resolver] {json.dumps({'raw_ref': lookup, 'status': env.get('status'), 'chosen_entity': (env.get('entity') or {}).get('id'), 'candidates_n': len(env.get('candidates') or []), 'tool': 'generate_bov'}, default=str)}")
+    if env["status"] == "resolved":
+        return int(env["entity"]["property_id"])
+    if env["status"] == "ambiguous":
         cands = "; ".join(
-            f"id={r.get('id')}: {r.get('address') or r.get('tenant_brand') or '?'}, {r.get('city') or ''} {r.get('state') or ''}".strip()
-            for r in rows[:10]
+            f"id={c.get('property_id')}: {c.get('address') or c.get('name') or '?'}, {c.get('city') or ''} {c.get('state') or ''}".strip()
+            for c in (env.get("candidates") or [])[:10]
         )
-        raise BovRecordError(f"'{s}' matches {len(rows)} properties — pass cre_property_id to disambiguate. Candidates: {cands}", status=409)
-    return int(rows[0]["id"])
+        raise BovRecordError(
+            f"'{str(lookup or '').strip()}' matches {len(env.get('candidates') or [])} properties — pass cre_property_id to disambiguate. Candidates: {cands}",
+            status=409,
+            envelope=env,
+        )
+    status = 422 if str(lookup or "").strip() == "" else 404
+    raise BovRecordError(env.get("error") or "Property not found", status=status, envelope=env)
 
 
 def load_bov_record(cre_property_id: int, extractor_version: Optional[str] = None) -> dict:

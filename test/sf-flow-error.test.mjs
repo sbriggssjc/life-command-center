@@ -7,7 +7,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { pickFlowMessage } from '../api/_shared/salesforce.js';
+import { getSalesforceAccountById, pickFlowMessage } from '../api/_shared/salesforce.js';
 
 // Mirror of the production slice so each case proves "no throw under any shape".
 const summarize = (raw) => String(raw || '').slice(0, 500);
@@ -60,5 +60,43 @@ describe('pickFlowMessage', () => {
       pickFlowMessage({ message: "Object with id '003Vs000015j8hMIAQ' does not exist" }),
     );
     assert.equal(detail, "Object with id '003Vs000015j8hMIAQ' does not exist");
+  });
+});
+
+describe('getSalesforceAccountById', () => {
+  it('falls back to generic record lookup when the lookup flow cannot validate by id', async () => {
+    const out = await getSalesforceAccountById('0018W00002MMNwAQAX', {
+      lookupFlow: async () => ({ ok: false, reason: 'flow_http_error', status: 500, detail: 'Switch case missing' }),
+      recordLookup: async (args) => {
+        assert.equal(args.objectType, 'Account');
+        assert.deepEqual(args.ids, ['0018W00002MMNwAQAX']);
+        return { ok: true, records: [{ Id: '0018W00002MMNwAQAX', Name: 'US Federal Properties Trust', Type: 'Investor' }] };
+      },
+    });
+
+    assert.equal(out.ok, true);
+    assert.equal(out.source, 'sf_record_lookup');
+    assert.deepEqual(out.account, {
+      Id: '0018W00002MMNwAQAX',
+      Name: 'US Federal Properties Trust',
+      Type: 'Investor',
+      Industry: null,
+    });
+  });
+
+  it('keeps the primary flow error detail when fallback lookup also fails', async () => {
+    const out = await getSalesforceAccountById('0018W00002MMNwAQAX', {
+      lookupFlow: async () => ({ ok: false, reason: 'flow_http_error', status: 502, detail: 'find_account_by_id failed' }),
+      recordLookup: async () => ({ ok: false, reason: 'flow_http_error', errors: [{ detail: 'record lookup failed' }] }),
+    });
+
+    assert.equal(out.ok, false);
+    assert.equal(out.reason, 'flow_http_error');
+    assert.equal(out.detail, 'record lookup failed');
+    assert.deepEqual(out.lookup_flow, {
+      reason: 'flow_http_error',
+      status: 502,
+      detail: 'find_account_by_id failed',
+    });
   });
 });

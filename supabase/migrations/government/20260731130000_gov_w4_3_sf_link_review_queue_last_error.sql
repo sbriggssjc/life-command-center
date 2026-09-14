@@ -1,3 +1,9 @@
+-- ⚠️ HISTORICAL — DO NOT RE-APPLY. This directory does not own the government database;
+-- `government-lease` does (see supabase/migrations/government/README.md, 2026-09-12).
+-- This file is kept as a record of what this repo applied in the past. The live, correct
+-- copy of any object it defines may have since diverged -- read the deployed database or
+-- government-lease's committed source, never this file, before trusting its content.
+
 -- W4.3 follow-up (2026-07-31): the SF-link candidate review lane needs
 -- last_error on v_sf_link_review_queue to flag the conflict rows (dia carries
 -- the pre-existing sf id in last_error as 'w4_3_conflict_existing_sf_company_id_<ID>').

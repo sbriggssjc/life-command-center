@@ -392,7 +392,14 @@ All alerts should fire to a Teams channel and create a Salesforce task for ops r
 
 ## 7. Implementation Notes
 
-**Deployment:** Context Broker runs as a Vercel Edge Function (or Supabase Edge Function) co-located with the LCC app. Latency target for cache hits is <50ms. Assembly target is <2,000ms for all packet types except daily briefing.
+**Deployment:** ⚠️ **STALE (DOCMAP1, 2026-09-08) — "Vercel Edge Function" names a deployment target
+that no longer exists.** Vercel was retired 2026-07-20 (root `CLAUDE.md`: "PRODUCTION RUNS ON
+RAILWAY (Vercel retired 2026-07-20)"); `server.js` on Railway is now the single source of `/api/*`
+routing and there is no per-function cap to route around. If/when this spec is built, it runs as a
+Railway Express route (or a Supabase Edge Function for the cache-hit-critical path), never Vercel.
+Original text, for the record: *"Context Broker runs as a Vercel Edge Function (or Supabase Edge
+Function) co-located with the LCC app."* Latency target for cache hits is <50ms. Assembly target is
+<2,000ms for all packet types except daily briefing.
 
 **Authentication:** All requests use the LCC session token. The broker inherits the user's row-level security permissions from Supabase — it cannot return data the user doesn't have access to.
 

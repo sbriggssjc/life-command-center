@@ -1,5 +1,10 @@
 # LCC ↔ Microsoft / Salesforce Pipeline — Gap Analysis
 
+> 🗄️ **HISTORICAL (DOCMAP1, 2026-09-08).** Contains its own "✅ DONE" markers for several items — a gap-analysis worklog whose findings have since shipped; not itself the living reference.
+>
+> Kept for the record — nothing below was edited; treat any status/data claim in it as a
+> point-in-time snapshot, not current state.
+
 Last updated: 2026-05-14
 Owner: LCC Control Plane / architecture-audit track
 Companion docs: `power-automate-flow-audit.md` (portfolio registry), `power-automate-observability-standards.md` (the reliability bar), `flows/FLOW_CHANGES_LOG.md` (change ledger).

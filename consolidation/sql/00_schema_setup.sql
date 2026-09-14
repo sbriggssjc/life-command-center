@@ -4,7 +4,7 @@
 -- TEMPLATE — NOT FOR EXECUTION YET.
 --
 -- This is the Phase 1 schema-setup script for the Supabase consolidation
--- plan (see ../../SUPABASE_CONSOLIDATION_PLAN.md). It creates the four
+-- plan (see ../../docs/architecture/supabase-consolidation-plan.md). It creates the four
 -- domain schemas and sets up default privileges. It does NOT migrate
 -- any data — that's Phase 2.
 --

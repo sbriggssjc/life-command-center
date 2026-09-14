@@ -1,0 +1,46 @@
+-- ============================================================================
+-- Rent Intelligence Phase 5a — SALE CAP DERIVATION (dia). Ancestry-checked.
+-- DB: Dialysis_DB zqzrriwuavgrquhisnoa. Applied live via mcp apply_migration
+-- (dia_rent_intelligence_phase5a_sale_cap_derivation +
+--  dia_sales_cap_rate_quality_add_derived_rent_timeline). Authoritative bodies
+-- in-DB; reproduce via pg_get_functiondef('public.dia_derive_sale_caps').
+--
+-- For sales 2016+, sold_price>0, cap_rate_final IS NULL (no usable final cap),
+-- where the CURRENT rent timeline carries rent at the sale year with
+-- confidence>=0.7: derive cap = rent_annual / sold_price into the existing
+-- recalc fields (fill-blanks: cap_rate_final IS NULL only, so STATED caps are
+-- byte-identical). Each candidate is ancestry-checked — the rent used may not
+-- descend from THIS sale (self-anchored rent_at_sale) — else skipped+logged.
+-- Derived cap banded [0.03,0.15] else queued to rent_reconcile_queue.
+--
+--   cap_rate_quality  = 'derived_rent_timeline'  (NEW distinct label; the CHECK
+--       constraint was extended additively so a derived cap never masquerades as
+--       verified/stated in the CM views).
+--   rent_source / cap_rate_source = 'rent_timeline'
+--   cap_rate_method  = 'rent_timeline_div_price_phase5a'
+--   cap_rate_confidence = timeline conf>=0.85 -> 'medium' else 'low'
+--   provenance edge  : ('sale_cap', sale_id) derived_from ('timeline', tid)
+--       so future inverse-evidence (5f) built on this cap is blocked from
+--       re-corroborating its own timeline year.
+--
+--   dia_derive_sale_caps(p_dry_run default true, p_batch, p_limit) -> jsonb
+--       report (candidates_seen, derived, skipped_circular, queued_out_of_band,
+--       usable_cap_before/after/delta). Dry-run default.
+--   dia_sale_cap_derivation_log  reversible ledger (old values per sale).
+--   dia_revert_sale_cap_derivation(p_batch)  full reversal (restores old
+--       cap_rate_final/calculated_cap_rate/rent_source, clears the derived
+--       fields, deletes the batch's provenance edges).
+--
+-- Grounded live result (batch phase5a_20260808):
+--   candidates_seen 301 | derived 148 | skipped_circular 88 (Ancestry Rule) |
+--   queued_out_of_band 65 | usable (non-implausible) caps 2757 -> 2875.
+--   CM sold-cap-by-term chart: +44 plottable dots (35 term-bucketed).
+--   (The spec's "~475 / +22%" was an ungrounded estimate; the grounded figures
+--    above are authoritative.)
+-- Acceptance: skipped-circular sales (44, 56, 84 ...) each have a STATED timeline
+--   row at the sale year whose provenance.sale_id = the sale itself (genuinely
+--   self-anchored) -> the self-anchored sale is correctly skipped.
+--
+-- See: docs/reports/rent-intelligence-engine-phase5-report.md
+-- ============================================================================
+-- (Executable bodies applied live; see report for full functions + verification.)

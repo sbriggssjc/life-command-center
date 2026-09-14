@@ -32,7 +32,7 @@
 
 import { authenticate } from '../_shared/auth.js';
 import { opsQuery, pgFilterVal } from '../_shared/ops-db.js';
-import { ensureEntityLink, looksLikePersonName } from '../_shared/entity-link.js';
+import { ensureEntityLink, looksLikePersonName, isOwnerNameRestated } from '../_shared/entity-link.js';
 import { linkPersonToEntity, stampContactOnActiveCadence } from '../_shared/contact-attach.js';
 import { buildDeedParseAdapter, isDeedAdapterConfigured } from '../_shared/deed-signatory.js';
 import { buildSosLookupAdapter, isSosAdapterConfigured } from '../_shared/sos-lookup.js';
@@ -272,12 +272,58 @@ export async function processOwnerEnrichmentRow(row, deps) {
   const looksPerson = deps.looksLikePersonName || looksLikePersonName;
   const normalize = deps.normalizePersonName || normalizePersonName;
 
-  if (row.active_contact_entity_id) {
+  // P163 — a PHANTOM contact is not a contact. `active_contact_is_phantom` is
+  // the DB's verdict (v_lcc_phantom_owner_contact_worklist: the owner's own name
+  // minted as a person, carrying no email and no phone). The rule is not
+  // re-derived here on purpose — one definition, in SQL.
+  //
+  // Before this, ANY active_contact_entity_id short-circuited to
+  // `already_linked`, which sits in ADVANCED_OUTCOMES and therefore READ AS
+  // PROGRESS in the tick's own tally while changing nothing. Measured
+  // 2026-08-21: 1,246 of 1,406 queue rows (88.6%) could only ever return this,
+  // re-qualifying every tick forever — including 168 phantoms holding $242.7M of
+  // annual rent, among them LCC's single largest owner (Boyd Watterson Asset
+  // Management, 198 assets, $179.8M), whose "decision-maker" was a person entity
+  // named "Boyd Watterson" with no contact detail and no relationship edge.
+  //
+  // Same lesson as P159a, one layer up: judge a worker by the STATE DELTA it
+  // produces, never by the outcome it reports about itself.
+  if (row.active_contact_entity_id && !row.active_contact_is_phantom) {
     return { entity_id: row.entity_id, outcome: 'already_linked' };
   }
 
   const personName = row.active_contact_name ? normalize(row.active_contact_name) : null;
-  const isPerson = !!(personName && looksPerson(personName));
+  // P163 — ⚠️ A PHANTOM'S NAME MUST NEVER TAKE THE ATTACH BRANCH.
+  //
+  // The phantom name IS the company's own name ("Boyd Watterson" for Boyd
+  // Watterson Asset Management, LLC), and it is shaped exactly like a person, so
+  // looksLikePersonName says yes. Letting it through would call
+  // attachPersonToOwner with that name and RE-ATTACH THE VERY PHANTOM the queue
+  // change just unblocked — PATCHing active_contact_entity_id back to the same
+  // id and returning `attached`. A fabricated success, and a self-healing loop
+  // that would have made the whole of P162/P163 look like it worked while
+  // changing nothing. Caught before the first tick ran, by asking what the
+  // worker does AFTER the guard rather than assuming the guard was the fix.
+  //
+  // Branch (b) is wrong for the same reason: drilling the phantom as a "manager
+  // firm" just mints the owner's own name as an org. A phantom is not a person
+  // and not a manager — it is an owner with NO contact, so it belongs in the
+  // external-enrichment chain (c), which is what the public-records path exists
+  // for.
+  // P164 — close the TAP, not just the drain. P163b stopped EXISTING phantoms
+  // re-attaching; this stops NEW ones being minted. Measured 2026-08-21: the
+  // hourly tick created 5 fresh phantoms in a single hour (pivot updated_at
+  // 19:25:13-19:25:30), so clearing the 168 historical ones without this would
+  // have regrown the population at ~120/day.
+  //
+  // `looksLikePersonName` cannot catch this class — "Boyd Watterson" is shaped
+  // exactly like a person. The tell is that every token of it already appears in
+  // the OWNER's name. Rejected candidates fall through to research rather than
+  // being written, so the guard fails in the safe direction.
+  const restatesOwner = !!(personName && isOwnerNameRestated(personName, row.owner_name));
+  const isPerson = !!(personName && looksPerson(personName))
+    && !row.active_contact_is_phantom
+    && !restatesOwner;
   let out;
 
   if (isPerson) {
@@ -290,7 +336,8 @@ export async function processOwnerEnrichmentRow(row, deps) {
       out.disposition = { enrichment_action: 'manual_research',
         active_source: 'attach_failed:' + (r.reason || r.outcome || 'unknown') };
     }
-  } else if (row.active_contact_name && Number(row.active_authority_level) <= 2) {
+  } else if (row.active_contact_name && !row.active_contact_is_phantom && !restatesOwner
+             && Number(row.active_authority_level) <= 2) {
     // (b) MANAGER-ENTITY DRILL-THROUGH: the pick is a FIRM, not a person.
     out = await runManagerDrillthrough(row, deps);
     if (out.outcome !== 'manager_drillthrough') {
@@ -330,7 +377,11 @@ export async function processOwnerEnrichmentRow(row, deps) {
  */
 export function classifyEnrichRow(row, looksPersonImpl) {
   const looksPerson = looksPersonImpl || looksLikePersonName;
-  if (row.active_contact_entity_id) return 'already_linked';
+  // P163 — mirrors processOwnerEnrichmentRow. A phantom contact (the owner's own
+  // name minted as a person, no email, no phone) is NOT a link, so the dry-run
+  // and the single-owner preview must not report it as one. This function is pure
+  // and shared by both precisely so the two cannot drift.
+  if (row.active_contact_entity_id && !row.active_contact_is_phantom) return 'already_linked';
   const personName = row.active_contact_name ? normalizePersonName(row.active_contact_name) : null;
   if (personName && looksPerson(personName)) return 'attach_person';
   if (row.active_contact_name && Number(row.active_authority_level) <= 2) return 'manager_drillthrough';
@@ -457,9 +508,27 @@ export async function handleOwnerContactEnrichTick(req, res) {
       + 'active_contact_role,enrichment_action,status&entity_id=eq.'
       + pgFilterVal(entityId) + '&limit=1';
 
+    // P163 — the single-owner path reads owner_contact_pivot DIRECTLY (it must
+    // work for owners the queue view legitimately excludes), and the pivot TABLE
+    // has no `active_contact_is_phantom` column. Without this the flag would read
+    // undefined here and the phantom gate would silently never fire on this path
+    // while working fine on the batch path — a split-brain that measures as
+    // shipped. Stamped from the same single SQL definition.
+    const stampPhantom = async (row) => {
+      if (!row || !row.active_contact_entity_id) return row;
+      try {
+        const ph = await opsQuery('GET',
+          'v_lcc_phantom_owner_contact_worklist?select=owner_entity_id'
+          + '&confidence=eq.phantom_no_contact_detail'
+          + '&owner_entity_id=eq.' + pgFilterVal(row.entity_id) + '&limit=1');
+        row.active_contact_is_phantom = !!(ph.ok && Array.isArray(ph.data) && ph.data.length);
+      } catch (_e) { row.active_contact_is_phantom = false; }
+      return row;
+    };
+
     if (req.method === 'GET') {
       const pr = await opsQuery('GET', pivotSel);
-      const row = (pr.ok && Array.isArray(pr.data)) ? pr.data[0] : null;
+      const row = await stampPhantom((pr.ok && Array.isArray(pr.data)) ? pr.data[0] : null);
       if (!row) return res.status(200).json({ ok: true, single: true, preview: true, would: 'no_pivot' });
       return res.status(200).json({ ok: true, single: true, preview: true, would: classifyEnrichRow(row),
         adapters: { sos: isConfiguredSos(), address: isConfiguredAddress(), deed: isConfiguredDeed() } });
@@ -468,7 +537,7 @@ export async function handleOwnerContactEnrichTick(req, res) {
     // POST → ensure the pivot exists (idempotent; seeds from v_owner_active_contact)
     await opsQuery('POST', 'rpc/lcc_ensure_owner_pivot', { p_entity_id: entityId });
     const pr = await opsQuery('GET', pivotSel);
-    const row = (pr.ok && Array.isArray(pr.data)) ? pr.data[0] : null;
+    const row = await stampPhantom((pr.ok && Array.isArray(pr.data)) ? pr.data[0] : null);
     if (!row) {
       return res.status(404).json({ ok: false, single: true, outcome: 'no_pivot',
         detail: 'owner has no contact-selection pivot (not bridged with domain signals)' });
@@ -491,9 +560,17 @@ export async function handleOwnerContactEnrichTick(req, res) {
   // contactless rows carrying an enrichment_action. status locked/superseded are
   // engaged/retired — skip.
   const COLS = 'entity_id,owner_name,workspace_id,active_contact_name,'
-    + 'active_contact_entity_id,active_authority_level,active_contact_role,enrichment_action,status';
-  const FILTERS = '&active_contact_entity_id=is.null'
-    + '&status=in.(active,exhausted)'
+    + 'active_contact_entity_id,active_authority_level,active_contact_role,enrichment_action,status,'
+    // P163 — the DB's phantom verdict. Must be SELECTed or the gate in
+    // processOwnerEnrichmentRow reads undefined and silently never fires.
+    + 'active_contact_is_phantom';
+  // P163 — the `&active_contact_entity_id=is.null` filter that used to live here
+  // is GONE, and deliberately so. v_owner_contact_enrich_queue now enforces
+  // `(active_contact_entity_id IS NULL OR the contact is a phantom)` itself, so
+  // repeating the null test here would re-exclude the 168 phantom-blocked owners
+  // ($242.7M of annual rent) this change exists to re-open — an inert fix that
+  // still measures as shipped. One owner of the rule: the view.
+  const FILTERS = '&status=in.(active,exhausted)'
     + '&or=(active_contact_name.not.is.null,enrichment_action.not.is.null)';
   // VALUE-RANKED (rank_value DESC) so the worker spends its budget-limited attach
   // effort on the highest-value owners FIRST instead of FIFO — and the value-gated

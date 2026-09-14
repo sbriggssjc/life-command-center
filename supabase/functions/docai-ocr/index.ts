@@ -36,9 +36,49 @@
 //
 // COST: Document AI bills per PAGE. The response carries `pages`; the callers
 // (lease-extractor / lease-backfill / document-text worker) aggregate pages ×
-// provider per tick so the spend is observable. The synchronous OCR processor
-// caps at ~15 pages/request — DOCAI_MAX_PAGES (default 15) is a per-request
-// cost guard that refuses an over-cap doc instead of erroring mid-process.
+// provider per tick so the spend is observable.
+//
+// ── DOC8 (2026-09-01) — THE SYNC PAGE CAP WAS SENDING LEASES TO gpt-4o ───────
+// Measured across every OCR row the CRE lane has produced: gpt-4o served 19 of
+// 22 (86%) at avg 1,579 chars against DocAI's 14,687 — the EXPENSIVE tier
+// returning 9.3× LESS text, minimum 31 characters. Read from this function's
+// own log rather than guessed, the cause is not the documented Custom-Extractor
+// footgun (the processor is the correct Enterprise Document OCR one):
+//
+//   "Document pages in non-imageless mode exceed the limit: 15 got 19.
+//    Try using imageless mode to increase the limit to 30."  PAGE_LIMIT_EXCEEDED
+//
+// Google's own error names the fix. `imagelessMode` is a TOP-LEVEL boolean on
+// ProcessRequest — NOT under processOptions.ocrConfig — verified against the
+// live v1 discovery document (documentai.googleapis.com/$discovery/rest?version=v1,
+// read 2026-09-01): GoogleCloudDocumentaiV1ProcessRequest.imagelessMode, type
+// boolean, "Optional. Option to remove images from the document." It suppresses
+// the rendered page IMAGE (Document.pages[].image) only; pages[].layout,
+// .tokens and .textAnchor — everything pageTextsFromDoc and meanConfidence read
+// — are separate fields and are unaffected.
+//
+// ⚠️ 30 IS STILL A CAP. A lease over 30 pages is completely ordinary. The CALLER
+// does a pdf-parse page pre-flight and writes a named, dated `over_docai_page_cap`
+// marker rather than falling silently through to gpt-4o (which, measured, returns
+// a fragment on exactly this class). This function's job is to report the cap
+// honestly: an over-cap 400 comes back `reason:'over_page_cap'` carrying the page
+// count Google names in the error, so the caller learns the true page count even
+// though nothing was processed.
+//
+// ⚠️ SAFE DEPLOY: a processor that rejects the field must not break the ≤15-page
+// path that works today, so an INVALID_ARGUMENT naming `imagelessMode` retries
+// ONCE without it. `DOCAI_IMAGELESS_MODE=false` is the kill switch.
+//
+// ✅ CONFIRMED LIVE, v23, 2026-09-01 16:00:35 UTC — the processor ACCEPTS the
+// field and the cap really did move. A 40-page lease came back:
+//   [docai-ocr] Document AI 400 (processor=…5ecc6339861c88e1, imageless=true):
+//     "Document pages exceed the limit: 30 got 40"   PAGE_LIMIT_EXCEEDED
+//     metadata { page_limit: "30", pages: "40" }
+// The limit Google reports is now **30, not 15**, and the phrase "in non-imageless
+// mode" is gone. ⚠️ That is also the first real 31+-page observation this lane has
+// ever had, and it fell through to gpt-4o for 211 chars — because the CALLER-side
+// pre-flight is JS and had not yet shipped. It is exactly the class the
+// `over_docai_page_cap` marker exists for.
 // ============================================================================
 
 // ── Env ─────────────────────────────────────────────────────────────────────
@@ -53,13 +93,31 @@ const PROJECT_ID = Deno.env.get("GOOGLE_DOCAI_PROJECT_ID") || "";
 const LOCATION = (Deno.env.get("GOOGLE_DOCAI_LOCATION") || "us").toLowerCase();
 const PROCESSOR_ID = Deno.env.get("GOOGLE_DOCAI_PROCESSOR_ID") || "";
 
-const SHARED_SECRET =
-  Deno.env.get("DOCAI_SHARED_SECRET") ||
-  Deno.env.get("OCR_CLOUD_OCR_KEY") ||
-  Deno.env.get("LCC_API_KEY") ||
-  "";
+// ⚠️ DOC18 TRAP 4 — this used to be `A || B || C`, so the FIRST env var set
+// SHADOWED the others: a caller holding a perfectly valid one of the other two
+// got 401. Not a defect for Railway (it sends the one that happens to be first)
+// but it makes the function unreachable from pg_net, which is the only channel a
+// sandbox has, and DOC17's very first probe call 401'd on it. Every configured
+// secret is now accepted. This is a strict SUPERSET of what authenticated
+// before, so the live drain cannot regress; it is still closed when none is set.
+const SHARED_SECRETS: string[] = [
+  Deno.env.get("DOCAI_SHARED_SECRET") || "",
+  Deno.env.get("OCR_CLOUD_OCR_KEY") || "",
+  Deno.env.get("LCC_API_KEY") || "",
+].filter((v) => v.length > 0);
 
-const MAX_PAGES = Number(Deno.env.get("DOCAI_MAX_PAGES") || 15);
+// DOC8: imageless mode raises the SYNCHRONOUS page cap 15 -> 30 on Enterprise
+// Document OCR. Default ON; set DOCAI_IMAGELESS_MODE=false to fall back.
+const IMAGELESS_MODE = String(Deno.env.get("DOCAI_IMAGELESS_MODE") ?? "true").toLowerCase() !== "false";
+
+// Google's caps, reported so the caller's pre-flight and this function agree on
+// one number. These are DOCUMENTED LIMITS, not guards we enforce — the only
+// thing that can count a PDF's pages is something that parses the PDF, and this
+// function is handed base64. `DOCAI_MAX_PAGES` used to sit here as a const that
+// was never once read; a constant wearing a guard's clothes is worse than none.
+export const DOCAI_SYNC_PAGE_CAP = 15;
+export const DOCAI_SYNC_PAGE_CAP_IMAGELESS = 30;
+
 const MAX_BYTES = Number(Deno.env.get("DOCAI_MAX_BYTES") || 20_000_000);
 
 // ── Resolve the processor resource name ──────────────────────────────────────
@@ -212,16 +270,166 @@ function pageTextsFromDoc(doc: Record<string, unknown>): Array<{ page: number; t
   return out;
 }
 
+// ── DOC8 — the Document AI call, and the two things its errors tell us ───────
+
+/**
+ * POST one document to the processor. `imageless` sets ProcessRequest.imagelessMode
+ * (a TOP-LEVEL boolean, verified against the live v1 discovery document — it is
+ * NOT under processOptions.ocrConfig, which is where an OcrConfig flag would go).
+ * It raises the synchronous page cap 15 -> 30 by dropping the rendered page
+ * images from the response; layout / tokens / textAnchor are untouched, so
+ * pageTextsFromDoc and meanConfidence keep working.
+ */
+function callDocai(
+  resourceName: string,
+  token: string,
+  contentB64: string,
+  mimeType: string,
+  imageless: boolean,
+  processOptions: Record<string, unknown> | null = null,
+): Promise<Response> {
+  return fetch(docaiEndpoint(resourceName), {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      skipHumanReview: true,
+      rawDocument: { content: contentB64, mimeType },
+      ...(imageless ? { imagelessMode: true } : {}),
+      // DOC18 — ProcessOptions.page_range is a `oneof`: individualPageSelector |
+      // fromStart | fromEnd. ABSENT unless the caller asked for a range, so the
+      // ordinary drain's request body is byte-for-byte what it sends today.
+      ...(processOptions ? { processOptions } : {}),
+    }),
+  });
+}
+
+/**
+ * DOC18 — translate the caller's `page_range` into ProcessOptions.
+ *   { from_start: 30 }      -> { fromStart: 30 }           (the ONLY shape DOC17
+ *                                                           measured carrying 30)
+ *   { from: 31, to: 45 }    -> { individualPageSelector: { pages: [31..45] } }
+ *
+ * ⚠️ NO LOCAL PAGE-COUNT GUARD. The 30-from-page-1 / 15-anywhere-else rule lives
+ * in the CALLER's planner (document-text.js `planPageWindow`), and restating it
+ * here would create two copies of one rule that can drift — the normaliser drift
+ * this repo keeps paying for. Google is the authority; an over-size selection
+ * comes back as a page-cap refusal and is reported honestly.
+ * Returns null for an absent/unusable range so the request is unchanged.
+ */
+export function processOptionsFromPageRange(raw: unknown): Record<string, unknown> | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const fromStart = Number(r.from_start ?? r.fromStart);
+  if (Number.isFinite(fromStart) && fromStart > 0) {
+    return { fromStart: Math.floor(fromStart) };
+  }
+  const from = Number(r.from);
+  const to = Number(r.to);
+  if (Number.isFinite(from) && Number.isFinite(to) && from >= 1 && to >= from) {
+    const first = Math.floor(from);
+    const last = Math.floor(to);
+    // A sanity bound on the PAYLOAD, not on Google's rule: an absurd list is a
+    // caller bug, and a 10,000-element array is not worth serialising to find out.
+    if (last - first + 1 > 200) return null;
+    const pages: number[] = [];
+    for (let p = first; p <= last; p++) pages.push(p);
+    return { individualPageSelector: { pages } };
+  }
+  return null;
+}
+
+/**
+ * Does this 400 body say the processor does not know the `imagelessMode` field?
+ * The shape a REST endpoint returns for an unrecognised field is
+ * `Invalid JSON payload received. Unknown name "imagelessMode": Cannot find field.`
+ * (googleapis/google-cloud-ruby#26951 hit exactly this on an older API surface).
+ * Deliberately NARROW — it must not swallow PAGE_LIMIT_EXCEEDED or a quota error
+ * and silently re-bill a second call.
+ */
+export function rejectsImagelessMode(detail: string): boolean {
+  const d = String(detail || "");
+  if (!/imagelessMode|imageless_mode/i.test(d)) return false;
+  return /Unknown name|Cannot find field|INVALID_ARGUMENT|not supported|unsupported/i.test(d);
+}
+
+/**
+ * Pull the page count out of a PAGE_LIMIT_EXCEEDED body. Nothing was processed,
+ * so this is the ONLY page count anyone gets on this path — the caller records it
+ * on its marker instead of a NULL that reads as "we never looked" (P180: unknown
+ * is not zero, and either half stays null when genuinely absent).
+ *
+ * ⚠️ PREFER THE STRUCTURED FIELD, because the MESSAGE has already changed once.
+ * Pre-DOC8 it read `"Document pages in non-imageless mode exceed the limit: 15
+ * got 19."`; live at 16:00:35 UTC on 2026-09-01, with imageless mode accepted, the
+ * same failure reads `"Document pages exceed the limit: 30 got 40"` — the phrase
+ * dropped and the number moved. Both carry the same machine-readable shape:
+ *   details[].reason = "PAGE_LIMIT_EXCEEDED"
+ *   details[].metadata = { page_limit: "30", pages: "40" }   // int64 -> STRING
+ * So parse that first and keep the prose regex as the fallback. A detector keyed
+ * only on wording is one Google copy-edit away from silently returning null.
+ */
+export function pageLimitFromError(detail: string): { limit: number | null; got: number | null } {
+  const d = String(detail || "");
+
+  try {
+    const parsed = JSON.parse(d);
+    const details = (parsed?.error?.details as Array<Record<string, unknown>>) || [];
+    for (const item of details) {
+      const md = (item?.metadata as Record<string, unknown>) || {};
+      const lim = Number(md.page_limit);
+      const got = Number(md.pages);
+      if (Number.isFinite(got) && got > 0) {
+        return { limit: Number.isFinite(lim) && lim > 0 ? lim : null, got };
+      }
+    }
+  } catch { /* not JSON, or a shape we do not know — fall through to the prose */ }
+
+  const m = /exceed(?:s)? the limit:\s*(\d+)\s*got\s*(\d+)/i.exec(d);
+  if (m) return { limit: Number(m[1]), got: Number(m[2]) };
+
+  // ⚠️ DOC18 TRAP 2 — THE THIRD ERROR SHAPE. With imageless mode ON, an over-size
+  // selection that does not start at page 1 comes back as the bare sentence
+  // `At most 15 pages in one call please.` — with NO `details[]` at all, so the
+  // structured read above yields nothing, and it matches NEITHER
+  // `exceed the limit: N got M` NOR the bare `got N` fallback below. Both halves
+  // of this parser were blind to it (measured, DOC17 row 5). It was harmless while
+  // the live path sent no selector; the window route sends one on every call.
+  // `got` stays NULL — the message does not say how many were asked for, and
+  // unknown is not zero (P180).
+  const atMost = /At most\s+(\d+)\s+pages?\s+in one call/i.exec(d);
+  if (atMost) return { limit: Number(atMost[1]), got: null };
+
+  const g = /\bgot\s+(\d+)\b/i.exec(d);
+  const l = /\blimit:?\s*(\d+)\b/i.exec(d);
+  return { limit: l ? Number(l[1]) : null, got: g ? Number(g[1]) : null };
+}
+
+/**
+ * DOC18 — is this 400 body a page-cap refusal? Three shapes are known:
+ *   "Document pages exceed the limit: 30 got 316"                PAGE_LIMIT_EXCEEDED
+ *   "Document pages in non-imageless mode exceed the limit: 15 got 30"
+ *   "At most 15 pages in one call please."      <- NO details[], no reason code
+ * The third was invisible to the old `/PAGE_LIMIT_EXCEEDED|exceed the limit/`
+ * test, so it would have been reported as a generic `docai_400` and the window
+ * route could not have told a cap refusal from a real error.
+ */
+export function isPageCapError(detail: string): boolean {
+  const d = String(detail || "");
+  return /PAGE_LIMIT_EXCEEDED|exceed(?:s)? the limit|At most\s+\d+\s+pages?\s+in one call/i.test(d);
+}
+
 // ── Auth on this endpoint (shared secret) ────────────────────────────────────
 function authorized(req: Request): boolean {
-  if (!SHARED_SECRET) {
+  if (!SHARED_SECRETS.length) {
     console.warn("[docai-ocr] no DOCAI_SHARED_SECRET/OCR_CLOUD_OCR_KEY/LCC_API_KEY set — running transitional (open)");
     return true;
   }
   const auth = req.headers.get("authorization") || "";
   const bearer = auth.startsWith("Bearer ") ? auth.slice(7) : "";
   const xkey = req.headers.get("x-lcc-key") || "";
-  return constantEq(bearer, SHARED_SECRET) || constantEq(xkey, SHARED_SECRET);
+  // Any configured secret authenticates (see SHARED_SECRETS above). Both
+  // comparisons stay constant-time per candidate.
+  return SHARED_SECRETS.some((sec) => constantEq(bearer, sec) || constantEq(xkey, sec));
 }
 function constantEq(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
@@ -246,6 +454,18 @@ Deno.serve(async (req: Request) => {
   if (req.method === "GET") {
     // Health probe — no GCP call, no spend.
     return json({ ok: true, engine: "google_docai", ready: configured, configured,
+      // 2026-08-12 diag: expose WHICH processor is configured (resource name is not a
+      // secret) — an `entity_types` INVALID_ARGUMENT on documents:process means this
+      // points at a Custom Extractor, not the Enterprise Document OCR processor.
+      processor: resourceName || null,
+      // DOC8: which sync page cap is in force, so a caller's pre-flight and this
+      // function can never disagree about the number silently.
+      imageless_mode: IMAGELESS_MODE,
+      page_cap: IMAGELESS_MODE ? DOCAI_SYNC_PAGE_CAP_IMAGELESS : DOCAI_SYNC_PAGE_CAP,
+      // DOC18 — a caller can check for selector support WITHOUT spending. A build
+      // that predates this returns `undefined`, which is how the window route
+      // tells "ignored" from "honoured" before it pays for a call.
+      page_range_supported: true,
       missing: configured ? [] : [
         ...(sa ? [] : ["GOOGLE_DOCAI_SA_KEY"]),
         ...(resourceName ? [] : ["GOOGLE_DOCAI_PROCESSOR (or PROJECT_ID+PROCESSOR_ID)"]),
@@ -262,6 +482,15 @@ Deno.serve(async (req: Request) => {
   if (!contentB64) return json({ ok: false, reason: "no_content" }, 400);
   // mime_type is the documented field; media_type is what the existing seam sends.
   const mimeType = String(body?.mime_type || body?.media_type || "application/pdf");
+  // DOC18 — the page selector. `page_range_applied` is ECHOED on every response
+  // because an unknown body field is otherwise IGNORED SILENTLY, and a silently
+  // ignored selector returns pages 1..N and reads as a clean success (which is
+  // how a three-call window would concatenate the same 30 pages three times).
+  const pageRange = body?.page_range ?? body?.pageRange ?? null;
+  const processOptions = processOptionsFromPageRange(pageRange);
+  if (pageRange && !processOptions) {
+    return json({ ok: false, reason: "bad_page_range", page_range_applied: null }, 400);
+  }
 
   // Per-request cost guard: reject an over-cap doc up front (the sync OCR
   // processor caps at ~15 pages anyway) instead of erroring mid-process.
@@ -275,27 +504,50 @@ Deno.serve(async (req: Request) => {
     return json({ ok: false, reason: `auth_failed:${(err as Error)?.message || "err"}` }, 502);
   }
 
+  // DOC8: request imageless mode (sync cap 15 -> 30). Retries ONCE without it if
+  // this processor rejects the field, so the deploy cannot break the path that
+  // already works.
+  let imagelessUsed = IMAGELESS_MODE;
   let dResp: Response;
   try {
-    dResp = await fetch(docaiEndpoint(resourceName), {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        skipHumanReview: true,
-        rawDocument: { content: contentB64, mimeType },
-      }),
-    });
+    dResp = await callDocai(resourceName, token, contentB64, mimeType, imagelessUsed, processOptions);
+    if (!dResp.ok && imagelessUsed) {
+      const peek = await dResp.clone().text().catch(() => "");
+      if (rejectsImagelessMode(peek)) {
+        console.warn("[docai-ocr] processor rejected imagelessMode — retrying without it:", peek.slice(0, 300));
+        imagelessUsed = false;
+        dResp = await callDocai(resourceName, token, contentB64, mimeType, false, processOptions);
+      }
+    }
   } catch (err) {
     return json({ ok: false, reason: `docai_fetch_threw:${(err as Error)?.message || "err"}` }, 502);
   }
 
   if (!dResp.ok) {
     const detail = await dResp.text().catch(() => "");
-    console.error(`[docai-ocr] Document AI ${dResp.status}:`, detail.slice(0, 300));
+    console.error(`[docai-ocr] Document AI ${dResp.status} (processor=${resourceName}, imageless=${imagelessUsed}):`, detail.slice(0, 800));
     // PAGE_LIMIT_EXCEEDED comes back 400 — surface it distinctly so the tiered
     // seam can fall through to the gpt-4o last resort on a too-big scan.
-    const reason = /PAGE_LIMIT_EXCEEDED|exceeds the limit/i.test(detail) ? "over_page_cap" : `docai_${dResp.status}`;
-    return json({ ok: false, reason, status: dResp.status }, 502);
+    const overPageCap = isPageCapError(detail);
+    const reason = overPageCap ? "over_page_cap" : `docai_${dResp.status}`;
+    // ⚠️ The error carries the ONLY page count anyone gets on this path: nothing
+    // was processed, so there is no document to count. Pass it back rather than
+    // discarding it — the caller records a real page count on its marker instead
+    // of a NULL that reads as "we never looked" (P180: unknown is not zero).
+    const limits = overPageCap ? pageLimitFromError(detail) : null;
+    return json({
+      ok: false, reason, status: dResp.status,
+      imageless: imagelessUsed,
+      // What this function actually asked for. The caller re-plans off THIS and
+      // off `imageless` — never off `page_limit`, which reports the MAXIMUM
+      // ACHIEVABLE limit rather than the one in force (DOC17 trap 1: a 30-page
+      // selection refused because the applicable limit is 15 says
+      // `page_limit: "30"`, and a caller that sizes a retry from it re-sends the
+      // same rejected selection forever).
+      page_range_applied: processOptions,
+      ...(limits?.got != null ? { pages: limits.got } : {}),
+      ...(limits?.limit != null ? { page_limit: limits.limit } : {}),
+    }, 502);
   }
 
   let data: Record<string, unknown>;
@@ -317,7 +569,17 @@ Deno.serve(async (req: Request) => {
     engine: "google_docai",
     text,
     confidence: meanConfidence(doc),
+    // ⚠️ For a RANGE call this is the number of pages RETURNED (the selection),
+    // never the document's length. `page_texts[].page` carries the document's
+    // real page NUMBERS — DocAI reports 31..45 for a [31..45] selection — which
+    // is what lets the caller verify the selector was honoured.
     pages,
     page_texts: pageTexts,
+    // DOC18 — echo what was applied, so an ignored selector is observable.
+    page_range_applied: processOptions,
+    // Which mode actually served this document. `imageless:false` on a build
+    // where IMAGELESS_MODE is true means the processor rejected the field and
+    // the fallback ran — i.e. this document was still capped at 15 pages.
+    imageless: imagelessUsed,
   });
 });

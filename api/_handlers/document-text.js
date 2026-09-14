@@ -32,6 +32,7 @@
 import { authenticate } from '../_shared/auth.js';
 import { domainQuery, getDomainCredentials } from '../_shared/domain-db.js';
 import { extractDocumentText } from '../_shared/document-text.js';
+import { writeTextProvenance } from '../_shared/document-text-provenance.js';
 import { downloadFromStorage } from '../_shared/artifact-storage.js';
 import { processDeedDocument, propagateStoredDeedExtraction } from './deed-parser.js';
 // R59 — BD-spine propagation deps for the deed parser (Units 1-4). Importing them
@@ -232,6 +233,16 @@ export async function processOneDoc(domain, row, deps = {}) {
   await q(domain, 'PATCH', `property_documents?document_id=eq.${row.document_id}`,
     { raw_text: ext.text, ingestion_status: 'text_extracted' }, { Prefer: 'return=minimal' }).catch(() => {});
 
+  // OCR2 — the provenance write is ordered AFTER the deed parse below, never
+  // here. The parser writes extracted_data too, and although it now MERGES
+  // (deed-parser.js, via the same RPC) rather than replacing, ordering the
+  // telemetry last means a provenance row can only ever describe an extraction
+  // that actually completed its whole pass. `writeProvenance` is bound once so
+  // both exits use one call site and cannot drift.
+  const writeProvenance = () => (deps.writeTextProvenance || writeTextProvenance)(
+    domain, row.document_id, ext, {}, { ...deps, domainQuery: q },
+  ).catch((e) => ({ ok: false, reason: `provenance_threw:${e?.message || e}` }));
+
   const isDeed = String(row.document_type || '').toLowerCase().includes('deed');
   if (isDeed && row.property_id != null) {
     // Pass the property's real state/city so the transfer-tax→price calc isn't
@@ -241,9 +252,14 @@ export async function processOneDoc(domain, row, deps = {}) {
     const pr = await q(domain, 'GET', `properties?property_id=eq.${row.property_id}&select=city,state&limit=1`).catch(() => null);
     if (pr?.ok && pr.data?.[0]) opts = { city: pr.data[0].city || undefined, state: pr.data[0].state || undefined };
     const deedRes = await runDeed(domain, row.property_id, row.document_id, ext.text, opts, deps).catch((e) => ({ error: e?.message || String(e) }));
+    const prov = await writeProvenance();
     return {
       document_id: row.document_id, outcome: 'deed_parsed', method: ext.method, text_len: ext.text_len,
       ocr_tier: ext.ocr_tier || null, ocr_engine: ext.ocr_engine || null, ocr_pages: ext.ocr_pages ?? null,
+      // OCR2 — read this, never the tier fields above: they say what the tick
+      // COMPUTED, this says what was PERSISTED. That gap was the whole defect.
+      provenance_written: prov.ok === true,
+      provenance_reason: prov.ok ? null : (prov.reason || 'unknown'),
       grantor: deedRes?.parsed?.grantor || null,
       grantee: deedRes?.parsed?.grantee || null,
       implied_price: deedRes?.parsed?.implied_sale_price || null,
@@ -261,7 +277,13 @@ export async function processOneDoc(domain, row, deps = {}) {
     };
   }
 
-  return { document_id: row.document_id, outcome: 'text_extracted', method: ext.method, text_len: ext.text_len, ocr_tier: ext.ocr_tier || null, ocr_engine: ext.ocr_engine || null, ocr_pages: ext.ocr_pages ?? null };
+  const prov = await writeProvenance();
+  return {
+    document_id: row.document_id, outcome: 'text_extracted', method: ext.method, text_len: ext.text_len,
+    ocr_tier: ext.ocr_tier || null, ocr_engine: ext.ocr_engine || null, ocr_pages: ext.ocr_pages ?? null,
+    provenance_written: prov.ok === true,
+    provenance_reason: prov.ok ? null : (prov.reason || 'unknown'),
+  };
 }
 
 /**

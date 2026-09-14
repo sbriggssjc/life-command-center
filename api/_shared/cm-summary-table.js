@@ -74,12 +74,59 @@ function quartersBefore(as_of, n) {
 }
 
 /**
+ * Latest period_end present in `rows` that is <= cap. Rows are assumed sorted
+ * ASC by period_end but this scans defensively so an unsorted array is fine.
+ * Returns null when no row is at or before the cap.
+ */
+function latestPeriodAtOrBefore(rows, cap) {
+  if (!Array.isArray(rows) || !cap) return null;
+  const capStr = String(cap).slice(0, 10);
+  let best = null;
+  for (const r of rows) {
+    const pe = r?.period_end ? String(r.period_end).slice(0, 10) : null;
+    if (!pe || pe > capStr) continue;
+    if (best == null || pe > best) best = pe;
+  }
+  return best;
+}
+
+/**
  * Compute trailing-N-quarter average ending at as_of (inclusive).
  * Skips nulls. Returns null if no valid samples.
+ *
+ * The anchor index is the row AT `asOfPeriod` when present, otherwise the last
+ * row whose period_end is <= asOfPeriod. Anchoring on the nearest preceding
+ * quarter (rather than requiring an exact match) keeps the trailing averages
+ * populated when the requested as-of quarter runs a quarter ahead of the
+ * latest data row — the bug that blanked the 5/10/15-yr columns.
  */
+/**
+ * Detect the cadence of a period-ordered row stream and return the number of
+ * rows per year. Quarterly streams → 4, monthly streams → 12. Cadence is
+ * inferred from the gap between the last two period_end dates (< ~60 days apart
+ * ⇒ monthly). Defaults to quarterly (4) when the stream is too short to tell.
+ * The trailing-average window then = years × stride, so a labeled 5/10/15-yr
+ * column spans the right number of calendar years regardless of row grain.
+ */
+function detectStride(rows) {
+  let stride = 4; // quarterly default
+  if (Array.isArray(rows) && rows.length >= 2) {
+    const t1 = new Date(rows[rows.length - 1].period_end).getTime();
+    const t0 = new Date(rows[rows.length - 2].period_end).getTime();
+    const days = Math.abs(t1 - t0) / 86400000;
+    if (days > 0 && days < 60) stride = 12; // monthly
+  }
+  return stride;
+}
+
 function trailingAvg(rows, asOfPeriod, nQuarters, fieldKeys) {
   if (!Array.isArray(rows) || rows.length === 0) return null;
-  const idx = rows.findIndex((r) => r.period_end === asOfPeriod);
+  let idx = rows.findIndex((r) => r.period_end === asOfPeriod);
+  if (idx < 0) {
+    const anchor = latestPeriodAtOrBefore(rows, asOfPeriod);
+    if (anchor == null) return null;
+    idx = rows.findIndex((r) => String(r.period_end).slice(0, 10) === anchor);
+  }
   if (idx < 0) return null;
   const start = Math.max(0, idx - nQuarters + 1);
   let sum = 0, count = 0;
@@ -117,6 +164,26 @@ export function buildVolumeCapSummary({ volumeRows = [], capRows = [], quartileR
   // The cap-rate gate filters out partial-quarter rows that have a few sales
   // but not enough to publish a representative cap rate.
   let resolved = asOf;
+  // When an explicit as_of is supplied but no source series carries a row at
+  // that exact quarter (e.g. the report quarter runs a quarter ahead of the
+  // latest published data), snap the anchor DOWN to the latest available
+  // period <= as_of. Without this the current-Q column AND all 5/10/15-yr
+  // trailing averages come up blank while prior/YoY/cycle (which happen to land
+  // on real rows) fill in — the reported "missing averages" symptom.
+  if (resolved) {
+    const cap = String(resolved).slice(0, 10);
+    const hasExact =
+      volumeRows.some((r) => String(r.period_end).slice(0, 10) === cap) ||
+      capRows.some((r) => String(r.period_end).slice(0, 10) === cap) ||
+      quartileRows.some((r) => String(r.period_end).slice(0, 10) === cap);
+    if (!hasExact) {
+      resolved =
+        latestPeriodAtOrBefore(volumeRows, cap) ||
+        latestPeriodAtOrBefore(capRows, cap) ||
+        latestPeriodAtOrBefore(quartileRows, cap) ||
+        resolved;
+    }
+  }
   if (!resolved) {
     const capPeriods = new Set(
       capRows.filter((r) => pickValue(r, FIELD_KEYS.cap_rate) != null).map((r) => r.period_end)
@@ -147,6 +214,15 @@ export function buildVolumeCapSummary({ volumeRows = [], capRows = [], quartileR
     const prq = rowAt(sourceRows, periods.prior_q);
     const yoy = rowAt(sourceRows, periods.yoy_q);
     const cyc = rowAt(sourceRows, periods.prior_cycle_q);
+    // Trailing 5/10/15-yr averages must span the labeled window in CALENDAR
+    // years, not in row-count. The source views feeding this table are the
+    // MONTHLY `cm_{vertical}_*_ttm_m` streams (period_end steps one month per
+    // row), so a 5-yr window is 60 rows, not 20. Detect cadence off the row gap
+    // and multiply — mirroring the sibling `buildInlineSummary` — so a monthly
+    // stream uses 12× (60/120/180) and a quarterly stream uses 4× (20/40/60).
+    // Without this the columns under-count the window 3× (the "5-Yr Avg reads
+    // low" bug: it was really a trailing ~1.7-year mean).
+    const stride = detectStride(sourceRows);
     return {
       metric: label,
       format,
@@ -154,9 +230,9 @@ export function buildVolumeCapSummary({ volumeRows = [], capRows = [], quartileR
       prior_q:       pickValue(prq, fieldKeys),
       yoy_q:         pickValue(yoy, fieldKeys),
       prior_cycle_q: pickValue(cyc, fieldKeys),
-      avg_5yr:       trailingAvg(sourceRows, resolved, 20, fieldKeys),
-      avg_10yr:      trailingAvg(sourceRows, resolved, 40, fieldKeys),
-      avg_15yr:      trailingAvg(sourceRows, resolved, 60, fieldKeys),
+      avg_5yr:       trailingAvg(sourceRows, resolved, 5  * stride, fieldKeys),
+      avg_10yr:      trailingAvg(sourceRows, resolved, 10 * stride, fieldKeys),
+      avg_15yr:      trailingAvg(sourceRows, resolved, 15 * stride, fieldKeys),
     };
   };
 
@@ -311,13 +387,7 @@ export function buildInlineSummary({ rows = [], metrics = [], asOf = null }) {
   // monthly master_m we use a 12× multiplier so 5-yr = 60 monthly samples;
   // for quarterly streams we use 4× so 5-yr = 20 quarterly samples. We
   // detect cadence by scanning the period_end gap between the last two rows.
-  let stride = 4;  // quarterly default
-  if (rows.length >= 2) {
-    const t1 = new Date(rows[rows.length - 1].period_end).getTime();
-    const t0 = new Date(rows[rows.length - 2].period_end).getTime();
-    const days = Math.abs(t1 - t0) / 86400000;
-    if (days > 0 && days < 60) stride = 12;  // monthly
-  }
+  const stride = detectStride(rows);
 
   return metrics.map((m) => {
     const cur = rowAt(rows, periods.current_q);

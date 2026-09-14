@@ -1,5 +1,10 @@
 # Calendar Timezone + Missing-Calendar Fix — Deployment Runbook
 
+> 🗄️ **HISTORICAL (DOCMAP1, 2026-09-08).** Named deployment runbook for one fix; calendar-system-status.md is the living as-built reference.
+>
+> Kept for the record — nothing below was edited; treat any status/data claim in it as a
+> point-in-time snapshot, not current state.
+
 Branch: `claude/fix-calendar-issues-l4200`
 
 ## What this changes

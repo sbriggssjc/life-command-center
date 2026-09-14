@@ -15,7 +15,11 @@ process.env.OPS_SUPABASE_URL = 'https://ops.test.local';
 process.env.OPS_SUPABASE_KEY = 'service-key';
 
 const { assemblePropertyPacket } = await import('../api/operations.js');
-const { resolveContextPacket } = await import('../api/_handlers/property-handler.js');
+const {
+  resolveContextPacket,
+  resolveEntityByPropertyIdentity,
+  resolveEntityByAddressPropertyIdentity,
+} = await import('../api/_handlers/property-handler.js');
 
 const ENTITY_ID = '9782c412-e9b7-4061-ac73-edc670b9273c';
 
@@ -266,5 +270,70 @@ describe('resolveContextPacket — assemble-on-miss (Unit 2)', () => {
     const assembleFn = async () => { throw new Error('boom'); };
     const { context_packet } = await resolveContextPacket({ cachedRow: null, entity, assembleFn });
     assert.equal(context_packet, null);
+  });
+});
+
+describe('get_property_context entity resolution — property-id identity first', () => {
+  const WOODLAND_ID = 'd118b3a1-0000-4000-9000-000000035724';
+  const otherEntity = {
+    id: 'wrong-address-match',
+    name: '20931 Burbank Blvd',
+    entity_type: 'asset',
+    workspace_id: 'ws-1',
+  };
+  const woodlandEntity = {
+    id: WOODLAND_ID,
+    name: 'Woodland Hills',
+    entity_type: 'asset',
+    workspace_id: 'ws-1',
+    external_identities: [{ source_system: 'dia', source_type: 'asset', external_id: '35724' }],
+  };
+
+  function makeResolverOps() {
+    const calls = [];
+    const ops = async (_method, path) => {
+      calls.push(path);
+      if (path.startsWith('external_identities?source_system=eq.dia')
+          && path.includes('external_id=eq.35724')) {
+        return { ok: true, data: [{ entity_id: WOODLAND_ID }] };
+      }
+      if (path.startsWith('external_identities?source_system=eq.gov')) {
+        return { ok: true, data: [] };
+      }
+      if (path.startsWith('entities?id=eq.' + encodeURIComponent(WOODLAND_ID))) {
+        return { ok: true, data: [woodlandEntity] };
+      }
+      if (path.startsWith('entities?entity_type=eq.asset')) {
+        return { ok: true, data: [otherEntity] };
+      }
+      return { ok: true, data: [] };
+    };
+    return { ops, calls };
+  }
+
+  it('resolves direct dia asset property_id 35724 to entity d118b3a1', async () => {
+    const { ops, calls } = makeResolverOps();
+    const entity = await resolveEntityByPropertyIdentity({ domain: 'dia', propertyId: 35724, ops });
+    assert.equal(entity.id, WOODLAND_ID);
+    assert.ok(calls[0].startsWith('external_identities?source_system=eq.dia'));
+    assert.ok(!calls.some((p) => p.startsWith('entities?entity_type=eq.asset')));
+  });
+
+  it('uses address -> domain property_id -> external identity before fuzzy entity address', async () => {
+    const { ops, calls } = makeResolverOps();
+    const findDomainProperty = async (domain, address) => {
+      assert.equal(domain, 'dia');
+      assert.match(address, /20931 Burbank Blvd/i);
+      return { domain: 'dia', property: { property_id: 35724, address: '20931 Burbank Blvd, Ste A' } };
+    };
+
+    const entity = await resolveEntityByAddressPropertyIdentity({
+      address: '20931 Burbank Blvd',
+      ops,
+      findDomainProperty,
+    });
+    assert.equal(entity.id, WOODLAND_ID);
+    assert.ok(calls[0].startsWith('external_identities?source_system=eq.dia'));
+    assert.ok(!calls.some((p) => p.startsWith('entities?entity_type=eq.asset')));
   });
 });

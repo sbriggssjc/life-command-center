@@ -25,7 +25,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { CRITICAL_SUBROUTES } from './critical-subroutes.mjs';
+import { CRITICAL_ROUTES_NON_OPERATIONS, CRITICAL_SUBROUTES } from './critical-subroutes.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (f) => readFileSync(join(root, f), 'utf8');
@@ -114,6 +114,13 @@ describe('operations.js sub-route dispatch guard', () => {
   it('server.js mounts every critical sub-route (it is the sole routing source of truth)', () => {
     const server = read('server.js');
     for (const r of CRITICAL_SUBROUTES) {
+      assert.ok(server.includes(`/api/${r}'`), `server.js does not mount /api/${r}`);
+    }
+  });
+
+  it('server.js mounts every critical non-operations route', () => {
+    const server = read('server.js');
+    for (const r of CRITICAL_ROUTES_NON_OPERATIONS) {
       assert.ok(server.includes(`/api/${r}'`), `server.js does not mount /api/${r}`);
     }
   });

@@ -8,7 +8,12 @@ function _setText(id, text) { const el = document.getElementById(id); if (el) el
 // ============================================================
 // CONFIG & STATE
 // ============================================================
-const API = 'https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/ai-copilot';
+// COPILOT-OPEN-gate: a browser can never hold PA_WEBHOOK_SECRET, so reads of
+// the ai-copilot edge function route through Railway's user-authenticated
+// proxy (/api/sync?_route=copilot-read&what=...) instead of the edge URL
+// directly. See api/sync.js::handleCopilotRead + docs/architecture/
+// edge-function-deploy-drift.md.
+const COPILOT_READ = '/api/sync?_route=copilot-read';
 const CHAT_API = '/api/chat';
 
 // ============================================================
@@ -1106,10 +1111,10 @@ function handlePageLoad(pageId) {
     case 'pageHome':
       renderDailyBriefingPanel();
       if (!dailyBriefingLoaded) loadDailyBriefingData();
+      if (typeof renderMarketBriefsWidget === 'function') renderMarketBriefsWidget();
       renderNextBestActionPanel();
       if (!nbaLoaded) loadNextBestActionData();
-      if (typeof renderOutreachOnramp === 'function') renderOutreachOnramp();
-      if (typeof renderTodayBdActions === 'function') renderTodayBdActions();
+      if (typeof renderTodaySections === 'function') renderTodaySections();
       break;
     case 'pagePipeline':
       // Reflect the active sub-view's display state, then render it.
@@ -1130,6 +1135,7 @@ function handlePageLoad(pageId) {
     case 'pageReviewConsole': if (typeof renderReviewConsolePage === 'function') renderReviewConsolePage(); break;
     case 'pagePriorityQueue': if (typeof renderPriorityQueuePage === 'function') renderPriorityQueuePage(); break;
     case 'pageResearch': if (typeof renderResearchPage === 'function') renderResearchPage(); break;
+    case 'pageMarketBriefs': if (typeof renderMarketBriefsPage === 'function') renderMarketBriefsPage(); break;
     case 'pageMetrics': if (typeof renderMetricsPage === 'function') renderMetricsPage(); break;
     case 'pageOpsHealth': if (typeof renderOpsHealthPage === 'function') renderOpsHealthPage(); break;
     case 'pageSyncHealth': if (typeof renderSyncHealthPage === 'function') renderSyncHealthPage(); break;
@@ -1347,7 +1353,7 @@ window.lccErrorBuffer = () => _lccErrBuffer.slice();
 // LIST SORT + COMPLETENESS CHIPS — Item #6 Phase B-3 + Item #9 Phase B
 // (2026-05-17)
 //
-// Generic helpers for any list tab to adopt. See AUDIT_PROGRESS.md item-6-B-3
+// Generic helpers for any list tab to adopt. See docs/history/worklogs/AUDIT_PROGRESS_2026-05.md item-6-B-3
 // closeout for the per-tab migration pattern.
 // ============================================================================
 
@@ -1942,116 +1948,13 @@ window.lccRenderSortToggle = lccRenderSortToggle;
   });
 })();
 
-// ── Custom Modal (async replacements for confirm/prompt) ──────────────
-let _modalResolve = null;
-let _modalPrevFocus = null;
-let _modalIsPrompt = false;
+// ─── custom modal (async confirm/prompt) ─────────────────────────────────────
+// MOVED to app-modal.js (W6.5 Stage 3, Unit 1 — 2026-08-20): _modalResolve,
+// _modalPrevFocus, _modalIsPrompt, _isModalOpen, _showModal, _closeModal,
+// _modalCancel, lccConfirm, lccPrompt + the DOMContentLoaded wiring.
+// Loaded as a classic script BEFORE this file, same global scope.
+// ─────────────────────────────────────────────────────────────────────────────
 
-function _isModalOpen() {
-  const overlay = document.getElementById('lcc-modal-overlay');
-  return overlay && overlay.style.display !== 'none';
-}
-
-function _showModal(msg, inputMode, defaultVal, okLabel) {
-  // Race guard: if a modal is already open, resolve the old one with cancel before opening new
-  if (_isModalOpen() && _modalResolve) {
-    _modalResolve(_modalIsPrompt ? null : false);
-    _modalResolve = null;
-  }
-  return new Promise(resolve => {
-    _modalResolve = resolve;
-    _modalIsPrompt = !!inputMode;
-    _modalPrevFocus = document.activeElement;
-    const overlay = document.getElementById('lcc-modal-overlay');
-    const msgEl = document.getElementById('lcc-modal-msg');
-    const inputWrap = document.getElementById('lcc-modal-input-wrap');
-    const inputEl = document.getElementById('lcc-modal-input');
-    const okBtn = document.getElementById('lcc-modal-ok');
-    if (!overlay) { resolve(inputMode ? null : false); return; }
-    msgEl.textContent = msg;
-    okBtn.textContent = okLabel || 'Confirm';
-    // Defensive: re-enable in case a caller mistakenly disabled the button.
-    okBtn.disabled = false;
-    if (inputMode) {
-      inputWrap.style.display = 'block';
-      inputEl.value = defaultVal || '';
-    } else {
-      inputWrap.style.display = 'none';
-    }
-    overlay.style.display = 'flex';
-    // Focus: input for prompts, OK button for confirms
-    setTimeout(() => {
-      if (inputMode) { inputEl.focus(); inputEl.select(); }
-      else { okBtn.focus(); }
-    }, 50);
-  });
-}
-
-function _closeModal(val) {
-  const overlay = document.getElementById('lcc-modal-overlay');
-  if (overlay) overlay.style.display = 'none';
-  if (_modalResolve) { _modalResolve(val); _modalResolve = null; }
-  // Restore focus to previous element
-  if (_modalPrevFocus && typeof _modalPrevFocus.focus === 'function') {
-    try { _modalPrevFocus.focus(); } catch (_) {}
-    _modalPrevFocus = null;
-  }
-}
-
-function _modalCancel() {
-  _closeModal(_modalIsPrompt ? null : false);
-}
-
-document.addEventListener('DOMContentLoaded', () => {
-  const okBtn = document.getElementById('lcc-modal-ok');
-  const cancelBtn = document.getElementById('lcc-modal-cancel');
-  const inputEl = document.getElementById('lcc-modal-input');
-  const overlay = document.getElementById('lcc-modal-overlay');
-
-  okBtn?.addEventListener('click', () => {
-    if (_modalIsPrompt) {
-      _closeModal(document.getElementById('lcc-modal-input')?.value ?? '');
-    } else {
-      _closeModal(true);
-    }
-  });
-  cancelBtn?.addEventListener('click', _modalCancel);
-  overlay?.addEventListener('click', e => {
-    if (e.target.id === 'lcc-modal-overlay') _modalCancel();
-  });
-
-  // Keyboard: Enter to submit, Escape to cancel, Tab focus trap
-  const modalEl = document.getElementById('lcc-modal');
-  modalEl?.addEventListener('keydown', e => {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      e.stopPropagation();
-      _modalCancel();
-      return;
-    }
-    if (e.key === 'Enter' && e.target.id !== 'lcc-modal-cancel') {
-      e.preventDefault();
-      okBtn?.click();
-      return;
-    }
-    // Focus trap: Tab wraps between Cancel and OK (and input if visible)
-    if (e.key === 'Tab') {
-      const focusable = (_modalIsPrompt ? [document.getElementById('lcc-modal-input')].filter(Boolean) : [])
-        .concat(Array.from(modalEl.querySelectorAll('button'))).filter(el => !el.disabled);
-      if (focusable.length === 0) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault(); last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault(); first.focus();
-      }
-    }
-  });
-});
-
-function lccConfirm(msg, okLabel) { return _showModal(msg, false, null, okLabel); }
-function lccPrompt(msg, defaultVal) { return _showModal(msg, true, defaultVal, 'OK'); }
 
 function getGreeting() {
   const h = parseInt(new Date().toLocaleString('en-US', { hour: 'numeric', hour12: false, timeZone: 'America/Chicago' }), 10);
@@ -2222,7 +2125,10 @@ const ROUTE_SLUG_TO_PAGE = {
   contacts: 'pageContacts',
   entities: 'pageEntities',
   business: 'pageBiz',
+  capmarkets: 'pageBiz',
   metrics: 'pageMetrics',
+  'seller-prospects': 'pageSellerProspectQueue',
+  briefs: 'pageMarketBriefs', // MB-b — #/briefs/<lane> (sub-path, parsed like #/inbox/<id>)
   calendar: 'pageCal',
   'sync-health': 'pageSyncHealth',
   'ops-health': 'pageOpsHealth',
@@ -2282,14 +2188,14 @@ function _routeParseHash(rawHash) {
   try {
     let h = String(rawHash || '');
     if (h.startsWith('#')) h = h.slice(1);
-    if (!h) return { page: null, detail: null, focus: null };
+    if (!h) return { page: null, detail: null, focus: null, baseSlug: '' };
     // Legacy PWA shortcut: #page=pageMyWork
     if (h.startsWith('page=')) {
       const pid = h.slice(5);
       const canon = ROUTE_PAGE_ALIAS[pid] || pid;
-      return { page: (canon && document.getElementById(canon)) || ROUTE_PAGE_TO_SLUG[canon] ? canon : null, detail: null, focus: null };
+      return { page: (canon && document.getElementById(canon)) || ROUTE_PAGE_TO_SLUG[canon] ? canon : null, detail: null, focus: null, baseSlug: '' };
     }
-    if (!h.startsWith('/')) return { page: null, detail: null, focus: null };
+    if (!h.startsWith('/')) return { page: null, detail: null, focus: null, baseSlug: '' };
     h = h.slice(1);
     let slug = h;
     let detailToken = null;
@@ -2315,10 +2221,16 @@ function _routeParseHash(rawHash) {
       let itemId = subPath;
       try { itemId = decodeURIComponent(subPath); } catch (_) {}
       focus = { kind: 'inbox', id: itemId };
+    } else if (page === 'pageMarketBriefs') {
+      // MB-b — #/briefs/<lane>; no sub-path = default lane ('dialysis', the
+      // only lane with a live producer today, spec §3 "no new gov/NL lanes").
+      let lane = subPath ? subPath.toLowerCase() : 'dialysis';
+      try { lane = decodeURIComponent(lane).toLowerCase(); } catch (_) {}
+      focus = { kind: 'market_brief', lane };
     }
-    return { page, detail: _routeParseDetail(detailToken), focus };
+    return { page, detail: _routeParseDetail(detailToken), focus, baseSlug };
   } catch (_) {
-    return { page: null, detail: null, focus: null };
+    return { page: null, detail: null, focus: null, baseSlug: '' };
   }
 }
 
@@ -2349,10 +2261,14 @@ function _routeSameDetail(a, b) {
 // Read the hash and drive the page + detail via the existing render paths.
 // Loop-guarded: _routerApplying suppresses the WRITE side while we apply.
 function applyRoute() {
-  const { page, detail, focus } = _routeParseHash(location.hash);
+  const { page, detail, focus, baseSlug } = _routeParseHash(location.hash);
   _routerApplying = true;
   try {
     const targetPage = page || 'pageHome';
+    if (baseSlug === 'capmarkets') {
+      currentBizTab = 'dialysis';
+      currentDiaTab = 'capital-markets';
+    }
     if (!_routeIsPageActive(targetPage) && typeof navTo === 'function') {
       navTo(targetPage);
     }
@@ -2398,6 +2314,13 @@ function applyRoute() {
     // router releases (_routerApplying) — it never writes the hash, so no loop.
     if (focus && focus.kind === 'inbox' && focus.id && typeof focusInboxItem === 'function') {
       Promise.resolve().then(() => { try { focusInboxItem(focus.id); } catch (_) {} });
+    }
+    // MB-b — #/briefs/<lane>. navTo(targetPage) above already showed
+    // pageMarketBriefs; this loads the requested lane's data (fire-and-
+    // forget, same pattern as the inbox focus above — no hash write, no
+    // router-loop risk).
+    if (focus && focus.kind === 'market_brief' && typeof renderMarketBriefsPage === 'function') {
+      Promise.resolve().then(() => { try { renderMarketBriefsPage(focus.lane); } catch (_) {} });
     }
   } finally {
     _routerApplying = false;
@@ -2708,7 +2631,7 @@ document.getElementById('bizSubTabs')?.addEventListener('click', (e) => {
     } else if (typeof loadMarketing === 'function') {
       const el = document.getElementById('bizPageInner');
       if (el) el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading prospects...</p></div>';
-      loadMarketing().then(() => renderDomainProspects('all_other'));
+      loadMarketing().then(() => renderDomainProspectsIfCurrent('all_other'));
     } else {
       renderBizContent();
     }
@@ -2729,7 +2652,7 @@ document.getElementById('govInnerTabs')?.addEventListener('click', (e) => {
     } else if (typeof loadMarketing === 'function') {
       const el = document.getElementById('bizPageInner');
       if (el) el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading prospects...</p></div>';
-      loadMarketing().then(() => renderDomainProspects('government'));
+      loadMarketing().then(() => renderDomainProspectsIfCurrent('government'));
     }
   } else {
     renderGovTab();
@@ -2745,7 +2668,7 @@ function goToGovTab(tabName) {
     else if (typeof loadMarketing === 'function') {
       const el = document.getElementById('bizPageInner');
       if (el) el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading prospects...</p></div>';
-      loadMarketing().then(() => renderDomainProspects('government'));
+      loadMarketing().then(() => renderDomainProspectsIfCurrent('government'));
     }
   } else {
     renderGovTab();
@@ -2772,7 +2695,7 @@ document.getElementById('diaInnerTabs')?.addEventListener('click', (e) => {
     if (_mktOpportunitiesLoaded) {
       renderDomainProspects('dialysis');
     } else if (typeof loadMarketing === 'function') {
-      loadMarketing().then(() => renderDomainProspects('dialysis'));
+      loadMarketing().then(() => renderDomainProspectsIfCurrent('dialysis'));
     }
   } else if (typeof diaDataLoaded !== 'undefined' && diaDataLoaded) {
     renderDiaTab();
@@ -2791,7 +2714,7 @@ document.getElementById('govTabGroups')?.addEventListener('click', (e) => {
   syncDomainTabGroup('government', currentGovTab);
   if (currentGovTab === 'prospects') {
     if (_mktOpportunitiesLoaded) renderDomainProspects('government');
-    else if (typeof loadMarketing === 'function') loadMarketing().then(() => renderDomainProspects('government'));
+    else if (typeof loadMarketing === 'function') loadMarketing().then(() => renderDomainProspectsIfCurrent('government'));
   } else {
     renderGovTab();
   }
@@ -2808,7 +2731,7 @@ document.getElementById('diaTabGroups')?.addEventListener('click', (e) => {
     renderBizContent();
   } else if (currentDiaTab === 'prospects') {
     if (_mktOpportunitiesLoaded) renderDomainProspects('dialysis');
-    else if (typeof loadMarketing === 'function') loadMarketing().then(() => renderDomainProspects('dialysis'));
+    else if (typeof loadMarketing === 'function') loadMarketing().then(() => renderDomainProspectsIfCurrent('dialysis'));
   } else if (typeof diaDataLoaded !== 'undefined' && diaDataLoaded) {
     renderDiaTab();
   } else if (typeof loadDiaData === 'function') {
@@ -2929,7 +2852,7 @@ function renderBizContent() {
     } else if (typeof loadMarketing === 'function') {
       const innerEl = document.getElementById('bizPageInner');
       if (innerEl) innerEl.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading prospects...</p></div>';
-      loadMarketing().then(() => renderDomainProspects('all_other'));
+      loadMarketing().then(() => renderDomainProspectsIfCurrent('all_other'));
       return;
     }
   }
@@ -3386,21 +3309,32 @@ async function loadMarketing() {
         }
       }
 
-      // Load opportunities separately — paginated to capture all rows (DB has 11K+)
+      // Load opportunities — 11,831 rows of v_opportunity_domain_classified.
+      //
+      // PERF 2026-08-15: this was a hand-rolled STRICTLY SEQUENTIAL loop, so a
+      // live page load showed 12 round-trips one after another (console:
+      // "[Marketing] Opportunities page 1..12"). Serial paging multiplies
+      // latency by page count, and the count grows with the table.
+      //
+      // Now uses diaQueryAllThrottled — the concurrency-4 pager that R2-W-6
+      // specified and deferred in dialysis.js. Deliberately NOT unbounded
+      // parallel: QA-27 shipped that and QA-33/R2-W-6 rolled it back twice
+      // because N concurrent page requests overwhelm Vercel/Supabase/browser
+      // when several dashboards stack pagers. Four is the documented ceiling.
+      //
+      // `select` stays '*': the matview has 21 columns and the mapper below
+      // reads 19 of them, so a column list would save ~2 fields — not worth
+      // the drift risk of maintaining a hand-written list against a matview.
       let opportunitiesRaw = [];
       try {
-        let oppOffset = 0;
-        const OPP_PAGE = 1000; // Must match PostgREST max-rows (1000)
-        for (let pg = 0; pg < 15; pg++) { // safety cap: 15 pages = 15,000 rows max
-          const batch = await diaQuery('v_opportunity_domain_classified', '*', { limit: OPP_PAGE, offset: oppOffset });
-          if (!batch || batch.length === 0) break;
-          opportunitiesRaw = opportunitiesRaw.concat(batch);
-          console.debug('[Marketing] Opportunities page ' + (pg + 1) + ': ' + batch.length + ' rows (total: ' + opportunitiesRaw.length + ')');
-          var statusEl = document.getElementById('mktLoadStatus');
-          if (statusEl) statusEl.textContent = 'Loading opportunities... ' + opportunitiesRaw.length.toLocaleString() + ' rows';
-          if (batch.length < OPP_PAGE) break;
-          oppOffset += OPP_PAGE;
-        }
+        var statusEl0 = document.getElementById('mktLoadStatus');
+        if (statusEl0) statusEl0.textContent = 'Loading opportunities...';
+        opportunitiesRaw = (typeof diaQueryAllThrottled === 'function')
+          ? await diaQueryAllThrottled('v_opportunity_domain_classified', '*', {}, 4)
+          : await diaQueryAll('v_opportunity_domain_classified', '*', {});
+        console.debug('[Marketing] Opportunities loaded: ' + opportunitiesRaw.length + ' rows (throttled-parallel, concurrency 4)');
+        var statusEl = document.getElementById('mktLoadStatus');
+        if (statusEl) statusEl.textContent = 'Loaded ' + opportunitiesRaw.length.toLocaleString() + ' opportunities';
       } catch (e) {
         console.warn('Opportunity domain query failed, will retry in 10s:', e.message);
       }
@@ -4011,7 +3945,7 @@ function renderUnifiedContacts() {
     html += '<div class="stat-card" style="cursor:pointer" onclick="loadHotLeads()"><div class="stat-label">Hot Leads</div><div class="stat-value" style="color:var(--red)">' + (ucDataQuality.hot_leads || 0) + '</div><div class="stat-sub">Score &ge; 60</div></div>';
     html += '<div class="stat-card"><div class="stat-label">WebEx Linked</div><div class="stat-value" style="color:var(--green)">' + (ucDataQuality.webex_linked || 0) + '</div></div>';
     html += '<div class="stat-card"><div class="stat-label">Stale Data</div><div class="stat-value" style="color:' + (((ucDataQuality.stale_emails || 0) + (ucDataQuality.stale_phones || 0)) > 0 ? 'var(--orange)' : 'var(--green)') + '">' + ((ucDataQuality.stale_emails || 0) + (ucDataQuality.stale_phones || 0)) + '</div><div class="stat-sub">' + (ucDataQuality.stale_emails || 0) + ' email · ' + (ucDataQuality.stale_phones || 0) + ' phone</div></div>';
-    html += '<div class="stat-card" style="cursor:pointer" onclick="loadMergeQueue()"><div class="stat-label">Merge Queue</div><div class="stat-value" style="color:' + (ucDataQuality.pending_merges > 0 ? 'var(--red)' : 'var(--green)') + '">' + (ucDataQuality.pending_merges || 0) + '</div><div class="stat-sub">Click to review</div></div>';
+    html += '<div class="stat-card" style="cursor:pointer" onclick="ucLoadMergeQueue()"><div class="stat-label">Merge Queue</div><div class="stat-value" style="color:' + (ucDataQuality.pending_merges > 0 ? 'var(--red)' : 'var(--green)') + '">' + (ucDataQuality.pending_merges || 0) + '</div><div class="stat-sub">Click to review</div></div>';
     html += '</div>';
     // Sync action buttons
     html += '<div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">';
@@ -4378,7 +4312,28 @@ async function runDuplicateDetection() {
 }
 
 // Placeholder for merge queue viewer
-async function loadMergeQueue() {
+// WARNING - RENAMED 2026-08-20 (W6.5 Stage 4). This function previously shared a
+// top-level name with a DIFFERENT function in contacts-ui.js (~1078) that loads
+// _cui.mergeQueue and calls renderContactsPage(). contacts-ui.js loads AFTER
+// app.js in index.html, so in the shared global scope IT SILENTLY WON and this
+// 2,403-byte implementation never ran.
+//
+// The symptom was a DEAD BUTTON. renderContactsPage() writes into
+// #contactsContent, which lives on #pageContacts - a different page from the
+// #bizPageInner this function renders into. So on Marketing -> Unified Contacts,
+// clicking the "Merge Queue / Click to review" stat card (~3927) fetched the
+// queue, re-rendered a HIDDEN page, and showed the user nothing at all. The
+// whole app.js merge UI below - ucMerge (~4379) and ucDismissMerge (~4393) - was
+// unreachable, and their own post-action refresh calls landed on contacts-ui's
+// loader too, so a merge never refreshed this list either.
+//
+// Third instance of this class found on 2026-08-20 (after _opsSparkline and
+// buildResearchAssistantPrompt). See test/frontend-duplicate-definitions.test.mjs.
+//
+// NOTE FOR PRODUCT (not decided here): LCC now has TWO merge-queue surfaces -
+// this one and the Contacts page's merge_queue tab. Restoring this one is the
+// reversible fix; consolidating them is a separate call.
+async function ucLoadMergeQueue() {
   const el = document.getElementById('bizPageInner');
   if (!el) return;
   el.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading merge queue...</p></div>';
@@ -4473,7 +4428,7 @@ async function ucMerge(keepId, mergeId, queueId) {
     });
     if (!r.ok) { showToast('Merge failed (HTTP ' + r.status + ')', 'error'); return; }
     showToast('Contacts merged', 'success');
-    loadMergeQueue();
+    ucLoadMergeQueue();
   } catch (e) { showToast('Merge error: ' + e.message, 'error'); }
 }
 
@@ -4486,7 +4441,7 @@ async function ucDismissMerge(queueId) {
       body: JSON.stringify({ queue_id: queueId })
     });
     if (!r.ok) { showToast('Dismiss failed (HTTP ' + r.status + ')', 'error'); return; }
-    loadMergeQueue();
+    ucLoadMergeQueue();
   } catch (e) { showToast('Dismiss error: ' + e.message, 'error'); }
 }
 
@@ -4685,6 +4640,35 @@ function renderProspectCardsHTML(items, options = {}) {
  * Render a full prospect subtab for a given domain.
  * Called by dialysis.js, gov.js, and the All Other section.
  */
+// UX20 (2026-09-02) — a late async render must not overwrite a tab the
+// operator has already left.
+//
+// Deals opens on its group default, Pipeline (the `prospects` tab), whose
+// loader is loadMarketing() — the slowest load in the app (~11.8k rows of
+// v_opportunity_domain_classified, documented). Clicking another Deals sub-tab
+// mid-load correctly switched currentDiaTab and re-rendered, and then the
+// in-flight loadMarketing().then(...) resolved and wrote Pipeline back into the
+// shared #bizPageInner unconditionally. That is the "jumps back to Pipeline"
+// Scott reported: not a navigation bug, a last-writer-wins race on one
+// container.
+//
+// Every deferred prospects render now re-checks that its own tab is still the
+// current one at RESOLVE time. A render into an explicit containerId is exempt
+// (it is not writing the shared page container).
+function prospectsRenderStillWanted(domain) {
+  if (typeof currentBizTab === 'undefined') return true;
+  if (domain === 'dialysis')   return currentBizTab === 'dialysis'   && currentDiaTab === 'prospects';
+  if (domain === 'government') return currentBizTab === 'government' && currentGovTab === 'prospects';
+  if (domain === 'all_other')  return currentBizTab === 'other';
+  return true;
+}
+function renderDomainProspectsIfCurrent(domain, containerId) {
+  if (containerId) return renderDomainProspects(domain, containerId);
+  if (!prospectsRenderStillWanted(domain)) return '';
+  return renderDomainProspects(domain, containerId);
+}
+window.renderDomainProspectsIfCurrent = renderDomainProspectsIfCurrent;
+
 function renderDomainProspects(domain, containerId) {
   const el = containerId ? document.getElementById(containerId) : document.getElementById('bizPageInner');
   if (!el) return '';
@@ -5388,267 +5372,13 @@ async function mktReassignDeal(activityId, newOwner, sfContactId) {
   }
 }
 
-// ── Shared task store helpers (works across marketing + domain prospect views) ──
-function _updateTaskInAllStores(sfContactId, subject, action, newDate) {
-  // Update a task across mktData and all _mktProspectContacts domains
-  var stores = [mktData];
-  ['government', 'dialysis', 'all_other'].forEach(function(dom) {
-    if (window._mktProspectContacts && window._mktProspectContacts[dom]) {
-      stores.push(window._mktProspectContacts[dom]);
-    }
-  });
+// ─── shared task store + Salesforce task sync ────────────────────────────────
+// MOVED to app-tasks.js (W6.5 Stage 3, Unit 4 — 2026-08-20): _updateTaskInAllStores,
+// _rerenderCurrentView, _syncTaskToSalesforce, _closeOriginalSfTask,
+// _updateSfTaskDate, completeTask, rescheduleTask, dismissTask.
+// submitLogReschedule below still calls into them; that resolves at call time.
+// ─────────────────────────────────────────────────────────────────────────────
 
-  stores.forEach(function(store) {
-    for (var i = store.length - 1; i >= 0; i--) {
-      var d = store[i];
-      if (d.sf_contact_id !== sfContactId || !d.open_tasks) continue;
-
-      if (action === 'complete') {
-        // Remove only the FIRST task matching this subject (not all with same subject)
-        var removed = false;
-        d.open_tasks = d.open_tasks.filter(function(t) {
-          if (!removed && t.subject === subject) { removed = true; return false; }
-          return true;
-        });
-        d.open_task_count = d.open_tasks.length;
-        d.completed_activity_count = (d.completed_activity_count || 0) + 1;
-        // Remove from active view when no open tasks remain
-        if (d.open_tasks.length === 0) store.splice(i, 1);
-      } else if (action === 'reschedule') {
-        // Only reschedule the FIRST matching task
-        var rescheduled = false;
-        d.open_tasks.forEach(function(t) {
-          if (!rescheduled && t.subject === subject) { t.date = newDate; rescheduled = true; }
-        });
-        d.due_date = newDate;
-      } else if (action === 'dismiss') {
-        // Remove only the FIRST task matching this subject
-        var dismissed = false;
-        d.open_tasks = d.open_tasks.filter(function(t) {
-          if (!dismissed && t.subject === subject) { dismissed = true; return false; }
-          return true;
-        });
-        d.open_task_count = d.open_tasks.length;
-        // Remove from active view when no open tasks remain
-        if (d.open_tasks.length === 0) store.splice(i, 1);
-      }
-    }
-  });
-}
-
-function _rerenderCurrentView() {
-  if (typeof currentBizTab !== 'undefined') {
-    if (currentBizTab === 'marketing') { renderMarketing(); return; }
-    if (currentBizTab === 'other') { renderDomainProspects('all_other'); return; }
-  }
-  // Check if we're on a domain sub-tab (prospects)
-  if (typeof currentGovTab !== 'undefined' && currentGovTab === 'prospects') {
-    renderDomainProspects('government'); return;
-  }
-  if (typeof currentDiaTab !== 'undefined' && currentDiaTab === 'prospects') {
-    renderDomainProspects('dialysis'); return;
-  }
-  // Fallback: re-render marketing
-  renderMarketing();
-}
-
-// ── Salesforce outbound sync helper ──
-// Fire-and-forget: log task action to Salesforce via the outbound sync pipeline
-function _syncTaskToSalesforce(sfContactId, subject, action) {
-  // Look up sf_company_id and deal context from local stores
-  var sfCompanyId = null;
-  var dealName = '';
-  var stores = [mktData];
-  ['government', 'dialysis', 'all_other'].forEach(function(dom) {
-    if (window._mktProspectContacts && window._mktProspectContacts[dom]) stores.push(window._mktProspectContacts[dom]);
-  });
-  for (var s = 0; s < stores.length; s++) {
-    for (var i = 0; i < stores[s].length; i++) {
-      if (stores[s][i].sf_contact_id === sfContactId) {
-        sfCompanyId = stores[s][i].sf_company_id;
-        // Find the deal_name from the matching task
-        var tasks = stores[s][i].open_tasks || [];
-        for (var j = 0; j < tasks.length; j++) {
-          if (tasks[j].subject === subject && tasks[j].deal_name) {
-            dealName = tasks[j].deal_name;
-            break;
-          }
-        }
-        break;
-      }
-    }
-    if (sfCompanyId) break;
-  }
-
-  var today = localToday();
-  var actionLabel = action === 'complete' ? 'Completed' : action === 'dismiss' ? 'Dismissed' : 'Updated';
-  // Map action to appropriate SF activity_type
-  var activityType = action === 'complete' ? 'Call' : 'Follow-up';
-  var payload = {
-    sf_contact_id: sfContactId,
-    sf_company_id: sfCompanyId || undefined,
-    activity_type: activityType,
-    activity_date: today,
-    subject: subject,
-    deal_name: dealName || undefined,
-    notes: '[' + actionLabel + '] ' + subject + (dealName ? ' | Deal: ' + dealName : ''),
-    force: true
-  };
-
-  // Non-blocking: fire the sync, log errors but don't block UI
-  fetch('/api/sync?action=outbound', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      command: 'log_to_sf',
-      payload
-    })
-  }).then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }).then(function(data) {
-    if (data.status === 'completed' || data.success) {
-      console.debug('[SF Sync] ' + actionLabel + ' logged for ' + sfContactId + ': ' + subject);
-    } else if (data.warning) {
-      console.warn('[SF Sync] Warning: ' + (data.message || 'Recent activity detected'));
-    } else {
-      console.error('[SF Sync] Error: ' + (data.error || 'Unknown'));
-    }
-  }).catch(function(e) {
-    console.error('[SF Sync] Network error:', e.message);
-    showToast('SF activity sync failed', 'error');
-  });
-}
-
-// Fire-and-forget: close the original open SF task via Power Automate
-function _closeOriginalSfTask(sfContactId, subject) {
-  fetch('/api/sync?action=complete_sf_task', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sf_contact_id: sfContactId, subject: subject })
-  }).then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }).then(function(data) {
-    if (data.success) {
-      var action = data.pa_response && data.pa_response.action;
-      if (action === 'completed') {
-        console.debug('[SF Complete] Original task closed for ' + sfContactId + ': ' + subject);
-      } else {
-        console.debug('[SF Complete] Original task not found (already closed?) for ' + sfContactId);
-      }
-    } else {
-      console.error('[SF Complete] Error: ' + (data.error || 'Unknown'));
-    }
-  }).catch(function(e) {
-    console.error('[SF Complete] Network error:', e.message);
-  });
-}
-
-// Fire-and-forget: push new task date to SF via Power Automate
-function _updateSfTaskDate(sfContactId, subject, newDate) {
-  fetch('/api/sync?action=complete_sf_task', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sf_contact_id: sfContactId, subject: subject, action: 'reschedule', new_date: newDate })
-  }).then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }).then(function(data) {
-    if (data.success) {
-      var action = data.pa_response && data.pa_response.action;
-      if (action === 'rescheduled') {
-        console.debug('[SF Reschedule] Task date updated to ' + newDate + ' for ' + sfContactId + ': ' + subject);
-      } else {
-        console.debug('[SF Reschedule] Original task not found for ' + sfContactId + ' (may need manual update in SF)');
-      }
-    } else {
-      console.error('[SF Reschedule] Error: ' + (data.error || 'Unknown'));
-    }
-  }).catch(function(e) {
-    console.error('[SF Reschedule] Network error:', e.message);
-  });
-}
-
-// ── Task management: complete, reschedule, dismiss ──
-async function completeTask(sfContactId, subject) {
-  showToast('Marking task complete...', 'success');
-  try {
-    const result = await applyChangeWithFallback({
-      proxyBase: '/api/dia-query',
-      table: 'salesforce_activities',
-      idColumn: 'sf_contact_id',
-      idValue: sfContactId,
-      matchFilters: [{ column: 'subject', value: subject }],
-      data: { status: 'Completed' },
-      source_surface: 'marketing_task_complete',
-      notes: subject,
-      propagation_scope: 'salesforce_activity_status'
-    });
-    if (!result.ok) {
-      throw new Error((result.errors || ['Unable to complete task']).join('; '));
-    }
-    showToast('Task completed!', 'success');
-    // Sync completion to Salesforce (non-blocking) — includes deal context
-    _syncTaskToSalesforce(sfContactId, subject, 'complete');
-    // Close the ORIGINAL open task in SF via Power Automate (non-blocking)
-    _closeOriginalSfTask(sfContactId, subject);
-    // Remove from local data (marketing + prospect contacts) and re-render
-    _updateTaskInAllStores(sfContactId, subject, 'complete');
-    _rerenderCurrentView();
-  } catch (e) {
-    showToast('Error completing task: ' + e.message, 'error');
-  }
-}
-
-async function rescheduleTask(sfContactId, subject, newDate) {
-  if (!newDate) return;
-  showToast('Rescheduling to ' + newDate + '...', 'success');
-  try {
-    const result = await applyChangeWithFallback({
-      proxyBase: '/api/dia-query',
-      table: 'salesforce_activities',
-      idColumn: 'sf_contact_id',
-      idValue: sfContactId,
-      matchFilters: [{ column: 'subject', value: subject }],
-      data: { activity_date: newDate },
-      source_surface: 'marketing_task_reschedule',
-      notes: subject,
-      propagation_scope: 'salesforce_activity_date'
-    });
-    if (!result.ok) {
-      throw new Error((result.errors || ['Unable to reschedule task']).join('; '));
-    }
-    showToast('Rescheduled to ' + newDate, 'success');
-    // Push new date to SF via Power Automate (non-blocking)
-    _updateSfTaskDate(sfContactId, subject, newDate);
-    // Update local data (marketing + prospect contacts)
-    _updateTaskInAllStores(sfContactId, subject, 'reschedule', newDate);
-    _rerenderCurrentView();
-  } catch (e) {
-    showToast('Error rescheduling: ' + e.message, 'error');
-  }
-}
-
-async function dismissTask(sfContactId, subject) {
-  if (!(await lccConfirm('Dismiss "' + subject + '"? This will mark it as Abandoned.', 'Dismiss'))) return;
-  showToast('Dismissing task...', 'success');
-  try {
-    const result = await applyChangeWithFallback({
-      proxyBase: '/api/dia-query',
-      table: 'salesforce_activities',
-      idColumn: 'sf_contact_id',
-      idValue: sfContactId,
-      matchFilters: [{ column: 'subject', value: subject }],
-      data: { status: 'Abandoned' },
-      source_surface: 'marketing_task_dismiss',
-      notes: subject,
-      propagation_scope: 'salesforce_activity_status'
-    });
-    if (!result.ok) {
-      throw new Error((result.errors || ['Unable to dismiss task']).join('; '));
-    }
-    showToast('Task dismissed', 'success');
-    // Sync dismissal to Salesforce (non-blocking) — includes deal context
-    _syncTaskToSalesforce(sfContactId, subject, 'dismiss');
-    // Remove from local data (marketing + prospect contacts)
-    _updateTaskInAllStores(sfContactId, subject, 'dismiss');
-    _rerenderCurrentView();
-  } catch (e) {
-    showToast('Error dismissing task: ' + e.message, 'error');
-  }
-}
 
 // ── Reclassify deal domain ──
 async function mktReclassifyDeal(activityId, newDomain) {
@@ -5963,6 +5693,11 @@ function closeDetail() {
   // Close the companion property dock (dual-panel) with the main panel — it is
   // anchored to the contact/owner that just closed.
   if (typeof closeCompanion === 'function') closeCompanion();
+  // UI-2: `_activePrimaryKind` was set on every open but never cleared, so after
+  // a close it still claimed 'property' and could dock a lone companion beside
+  // nothing. Clear it with the panel.
+  if (typeof _setPrimaryKind === 'function') _setPrimaryKind(null);
+  if (typeof _panelSyncResizers === 'function') _panelSyncResizers();
   const overlay = document.getElementById('detailOverlay');
   if (overlay) {
     overlay.classList.remove('open');
@@ -6739,7 +6474,7 @@ async function applyInsertWithFallback(opts) {
 let activitiesLoaded = false;
 async function loadActivities() {
   try {
-    const res = await fetch(`${API}/sync/sf-activities?limit=2000&sort_dir=desc&assigned_to=all`);
+    const res = await fetch(`${COPILOT_READ}&what=sf-activities&limit=2000&sort_dir=desc&assigned_to=all`);
     if (!res.ok) { console.warn('Activities API returned', res.status); return; }
     const text = await res.text();
     let data; try { data = JSON.parse(text); } catch (_) { console.warn('Activities API returned non-JSON'); return; }
@@ -6802,7 +6537,7 @@ async function loadEmails() {
 
 async function loadCalendar() {
   try {
-    const res = await fetch(`${API}/sync/calendar-events?days_back=1&days_forward=14&limit=200`);
+    const res = await fetch(`${COPILOT_READ}&what=calendar-events&days_back=1&days_forward=14&limit=200`);
     if (!res.ok) throw new Error('API returned ' + res.status);
     const text = await res.text();
     let data; try { data = JSON.parse(text); } catch (_) { throw new Error('Calendar API returned non-JSON'); }
@@ -6819,7 +6554,7 @@ async function loadCalendar() {
 
 async function loadHealth() {
   try {
-    const res = await fetch(`${API}/health`);
+    const res = await fetch(`${COPILOT_READ}&what=health`);
     if (!res.ok) throw new Error(res.status);
     const text = await res.text();
     const data = JSON.parse(text);
@@ -6886,237 +6621,14 @@ function weatherDesc(code) {
   return 'Cloudy';
 }
 
-// ── Treasury Yield Chart ──
-let yieldHistoryCache = {};
-let currentYieldRange = '5D';
+// ─── Treasury yield widget + chart ───────────────────────────────────────────
+// MOVED to app-treasury-chart.js (W6.5 Stage 3, Unit 2 — 2026-08-20):
+// yieldHistoryCache, currentYieldRange, loadMarket, yearsForRange,
+// fetchYieldHistory, filterByRange, loadYieldChart, renderYieldSVG.
+// The yieldChartControls wiring STAYS below — it shares a DOMContentLoaded
+// block with the applyRoute() router bootstrap, and the router does not move.
+// ─────────────────────────────────────────────────────────────────────────────
 
-async function loadMarket() {
-  try {
-    const res = await fetch(TREASURY_API_URL);
-    if (!res.ok) throw new Error('API returned ' + res.status);
-    const d = await res.json();
-    if (d.error) throw new Error(d.error);
-    if (d.ten_yr) {
-      _setText('mktTreasury', d.ten_yr.toFixed(2) + '%');
-      if (d.prev_ten_yr) {
-        const chg = d.ten_yr - d.prev_ten_yr;
-        const chgEl = document.getElementById('mktTreasuryChg');
-        if (chgEl) {
-          chgEl.textContent = (chg >= 0 ? '+' : '') + chg.toFixed(2) + '% (as of ' + d.date + ')';
-          chgEl.className = 'market-chg ' + (chg >= 0 ? 'market-up' : 'market-down');
-        }
-      }
-    } else {
-      throw new Error('No yield data');
-    }
-  } catch (e) {
-    console.error('Market load error:', e);
-    _setText('mktTreasury', '--');
-    _setHTML('mktTreasuryChg', '<div class="widget-error"><div class="err-msg">Market data unavailable</div><button class="retry-btn" onclick="loadMarket()">Retry</button></div>');
-  }
-  // Load chart after market data
-  loadYieldChart('1D');
-}
-
-function yearsForRange(range) {
-  if (range === '3Y') return 3;
-  if (range === '1Y') return 2; // fetch 2 to ensure full year coverage
-  return 1;
-}
-
-async function fetchYieldHistory(numYears) {
-  const key = 'y' + numYears;
-  if (yieldHistoryCache[key]) return yieldHistoryCache[key];
-  try {
-    const res = await fetch(TREASURY_API_URL + '?history=true&years=' + numYears);
-    if (!res.ok) throw new Error('History API returned ' + res.status);
-    const d = await res.json();
-    if (d.history && d.history.length > 0) {
-      yieldHistoryCache[key] = d.history;
-      return d.history;
-    }
-  } catch (e) {
-    console.error('Yield history error:', e);
-  }
-  return [];
-}
-
-function filterByRange(data, range) {
-  if (!data.length) return data;
-  // 1D: show last 2 trading days (today + previous close) — Treasury only has daily closes
-  if (range === '1D') return data.slice(-2);
-  const now = new Date();
-  let cutoff;
-  switch (range) {
-    case '5D': cutoff = new Date(now); cutoff.setDate(cutoff.getDate() - 10); break; // 10 calendar ≈ 5-7 trading
-    case '1M': cutoff = new Date(now); cutoff.setMonth(cutoff.getMonth() - 1); break;
-    case '3M': cutoff = new Date(now); cutoff.setMonth(cutoff.getMonth() - 3); break;
-    case '6M': cutoff = new Date(now); cutoff.setMonth(cutoff.getMonth() - 6); break;
-    case 'YTD': cutoff = new Date(now.getFullYear(), 0, 1); break;
-    case '1Y': cutoff = new Date(now); cutoff.setFullYear(cutoff.getFullYear() - 1); break;
-    case '3Y': cutoff = new Date(now); cutoff.setFullYear(cutoff.getFullYear() - 3); break;
-    default: return data.slice(-10);
-  }
-  const cutStr = cutoff.toISOString().split('T')[0];
-  return data.filter(d => d.date && d.date >= cutStr);
-}
-
-async function loadYieldChart(range) {
-  currentYieldRange = range;
-  const container = document.getElementById('yieldChartContainer');
-  if (!container) return;
-  container.innerHTML = '<div class="chart-loading"><span class="spinner"></span></div>';
-
-  // Update active button
-  document.querySelectorAll('#yieldChartControls button').forEach(b => {
-    b.classList.toggle('active', b.dataset.range === range);
-  });
-
-  try {
-    const numYears = yearsForRange(range);
-    const allData = await fetchYieldHistory(numYears);
-    const data = filterByRange(allData, range);
-
-    if (data.length < 2) {
-      container.innerHTML = '<div class="chart-loading" style="font-size:12px;color:var(--text2)">Not enough data for this range</div>';
-      return;
-    }
-
-    renderYieldSVG(container, data, range);
-  } catch (e) {
-    console.warn('loadYieldChart error:', e);
-    container.innerHTML = '<div class="chart-loading" style="font-size:12px;color:var(--text2)">Unable to load chart</div>';
-  }
-}
-
-function renderYieldSVG(container, data, range) {
-  const W = container.clientWidth || 320;
-  const H = container.clientHeight || 160;
-  const pad = { top: 10, right: 10, bottom: 24, left: 54 };
-  const cw = W - pad.left - pad.right;
-  const ch = H - pad.top - pad.bottom;
-
-  const vals = data.map(d => d.ten_yr).filter(v => typeof v === 'number' && !isNaN(v));
-  if (vals.length < 2) { container.innerHTML = '<div class="chart-loading" style="font-size:12px;color:var(--text2)">Insufficient numeric data</div>'; return; }
-  const minY = Math.floor((Math.min(...vals) - 0.05) * 20) / 20;
-  const maxY = Math.ceil((Math.max(...vals) + 0.05) * 20) / 20;
-  const rangeY = maxY - minY || 0.1;
-
-  const xScale = (i) => pad.left + (i / (data.length - 1)) * cw;
-  const yScale = (v) => pad.top + ch - ((v - minY) / rangeY) * ch;
-
-  // Determine color: green if last > first, red if down
-  const startVal = data[0].ten_yr;
-  const endVal = data[data.length - 1].ten_yr;
-  const lineColor = endVal >= startVal ? 'var(--green, #22c55e)' : 'var(--red, #ef4444)';
-  const fillColor = endVal >= startVal ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)';
-
-  // Build path
-  let pathD = '';
-  let areaD = '';
-  data.forEach((d, i) => {
-    const x = xScale(i);
-    const y = yScale(d.ten_yr);
-    pathD += (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1);
-    areaD += (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1);
-  });
-  // Close area path
-  areaD += 'L' + xScale(data.length - 1).toFixed(1) + ',' + (pad.top + ch) + 'L' + pad.left + ',' + (pad.top + ch) + 'Z';
-
-  // Y-axis ticks (4-5 ticks)
-  const numTicks = 4;
-  const tickStep = rangeY / numTicks;
-  let yTicks = '';
-  let gridLines = '';
-  for (let i = 0; i <= numTicks; i++) {
-    const val = minY + i * tickStep;
-    const y = yScale(val);
-    yTicks += `<text x="${pad.left - 4}" y="${y + 3}" text-anchor="end" class="yield-axis">${val.toFixed(2)}%</text>`;
-    if (i > 0 && i < numTicks) {
-      gridLines += `<line x1="${pad.left}" y1="${y}" x2="${W - pad.right}" y2="${y}" class="yield-grid"/>`;
-    }
-  }
-
-  // X-axis labels (3-5 dates)
-  const labelCount = Math.min(5, data.length);
-  let xLabels = '';
-  for (let i = 0; i < labelCount; i++) {
-    const idx = Math.round(i * (data.length - 1) / (labelCount - 1));
-    const x = xScale(idx);
-    const d = data[idx];
-    const dt = new Date(d.date + 'T12:00:00');
-    const label = (dt.getMonth() + 1) + '/' + dt.getDate() + (range === '1Y' || range === '3Y' ? '/' + String(dt.getFullYear()).slice(2) : '');
-    xLabels += `<text x="${x}" y="${H - 4}" text-anchor="middle" class="yield-axis">${label}</text>`;
-  }
-
-  const svg = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
-    <g class="yield-grid">${gridLines}</g>
-    ${yTicks}${xLabels}
-    <path d="${areaD}" fill="${fillColor}"/>
-    <path d="${pathD}" fill="none" stroke="${lineColor}" stroke-width="1.5" stroke-linejoin="round"/>
-    <line id="yieldCrossH" class="yield-crosshair" x1="0" y1="0" x2="0" y2="0" style="display:none"/>
-    <circle id="yieldDot" cx="0" cy="0" r="3" fill="${lineColor}" style="display:none"/>
-    <rect class="yield-hover-zone" x="${pad.left}" y="${pad.top}" width="${cw}" height="${ch}" fill="transparent" style="cursor:crosshair"/>
-  </svg>`;
-
-  container.innerHTML = svg;
-
-  // Tooltip
-  const tooltip = document.createElement('div');
-  tooltip.className = 'yield-tooltip';
-  tooltip.style.display = 'none';
-  container.appendChild(tooltip);
-
-  const hoverZone = container.querySelector('.yield-hover-zone');
-  const crossH = container.querySelector('#yieldCrossH');
-  const dot = container.querySelector('#yieldDot');
-  const svgEl = container.querySelector('svg');
-  if (!hoverZone || !crossH || !dot || !svgEl) return;
-  const svgRect = () => svgEl.getBoundingClientRect();
-
-  function handleMove(e) {
-    const rect = svgRect();
-    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    const relX = clientX - rect.left;
-    const scaleRatio = W / rect.width;
-    const svgX = relX * scaleRatio;
-    const dataX = (svgX - pad.left) / cw;
-    const idx = Math.max(0, Math.min(data.length - 1, Math.round(dataX * (data.length - 1))));
-    const d = data[idx];
-    const cx = xScale(idx);
-    const cy = yScale(d.ten_yr);
-
-    crossH.setAttribute('x1', cx); crossH.setAttribute('y1', pad.top);
-    crossH.setAttribute('x2', cx); crossH.setAttribute('y2', pad.top + ch);
-    crossH.style.display = '';
-    dot.setAttribute('cx', cx); dot.setAttribute('cy', cy);
-    dot.style.display = '';
-
-    const dt = new Date(d.date + 'T12:00:00');
-    const dateStr = dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-    const chg = d.ten_yr - startVal;
-    const chgStr = (chg >= 0 ? '+' : '') + chg.toFixed(2);
-    const chgColor = chg >= 0 ? 'var(--green, #22c55e)' : 'var(--red, #ef4444)';
-    tooltip.innerHTML = `<div class="tt-date">${dateStr}</div><div class="tt-val">${d.ten_yr.toFixed(2)}%</div><div style="font-size:11px;color:${chgColor}">${chgStr}% from start</div>`;
-    tooltip.style.display = '';
-
-    // Position tooltip
-    const tipX = relX < rect.width / 2 ? relX + 12 : relX - tooltip.offsetWidth - 12;
-    tooltip.style.left = tipX + 'px';
-    tooltip.style.top = '0px';
-  }
-
-  function handleLeave() {
-    crossH.style.display = 'none';
-    dot.style.display = 'none';
-    tooltip.style.display = 'none';
-  }
-
-  hoverZone.addEventListener('mousemove', handleMove);
-  hoverZone.addEventListener('mouseleave', handleLeave);
-  hoverZone.addEventListener('touchmove', handleMove, { passive: true });
-  hoverZone.addEventListener('touchend', handleLeave);
-}
 
 // Wire up chart range buttons
 document.addEventListener('DOMContentLoaded', () => {
@@ -7823,6 +7335,166 @@ async function loadDailyBriefingData(force = false) {
 window.loadDailyBriefingData = loadDailyBriefingData;
 
 // ============================================================
+// MB-b — Market Briefs: the homepage widget teaser + the full
+// #/briefs/<lane> tab (EXEC-BRIEFS-SPEC.md §2/MB4). Read-only; renders
+// EXACTLY what GET /api/market-brief-tab returns — every number here comes
+// verbatim from a fact object, never computed client-side (the same rule
+// the email block's renderer follows).
+// ============================================================
+
+const MARKET_BRIEF_SECTION_LABELS = {
+  operators: 'Operators', policy: 'Policy', capital_markets: 'Capital Markets',
+  trades: 'Trades', implications: 'Implications',
+};
+const MARKET_BRIEF_SECTION_ORDER = ['operators', 'policy', 'capital_markets', 'trades', 'implications'];
+
+async function _fetchMarketBriefTab(lane) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+  const res = await fetch(`/api/market-brief-tab?lane=${encodeURIComponent(lane)}`, { headers });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  return res.json();
+}
+
+function _marketBriefFactRow(f) {
+  const asOf = f.source_date ? esc(String(f.source_date)) : '';
+  const staleBadge = f.is_stale
+    ? `<span style="color:#B42318;font-size:11px;">(stale — as of ${asOf})</span>`
+    : (asOf ? `<span style="color:#6A748C;font-size:11px;">(as of ${asOf})</span>` : '');
+  const cite = f.source_url
+    ? ` <a href="${esc(f.source_url)}" target="_blank" rel="noopener" style="font-size:11px;">source</a>`
+    : (f.source_title ? ` <span style="color:#6A748C;font-size:11px;">(${esc(f.source_title)})</span>` : '');
+  const isGap = f.unit === 'gap_marker';
+  return `<div style="padding:6px 0;border-bottom:1px solid #E7E6E6;font-size:13px;${isGap ? 'color:#6A748C;font-style:italic;' : ''}">`
+    + `${esc(f.claim_text)} ${staleBadge}${cite}</div>`;
+}
+
+// Swimlanes MB tracks — must match api/_shared/market-brief-render.js's
+// KNOWN_LANES/LANE_LABELS exactly (frontend/backend duplicate the list on
+// purpose per CLAUDE.md's shared-const-across-runtimes limits; keep both in
+// sync by hand when a lane is added/removed).
+const MARKET_BRIEF_LANES = ['dialysis', 'government', 'net_lease'];
+const MARKET_BRIEF_LANE_LABELS = { dialysis: 'Dialysis', government: 'Government-Leased', net_lease: 'Net Lease' };
+
+function _marketBriefSnapshotLine(lane, data) {
+  const label = esc(MARKET_BRIEF_LANE_LABELS[lane] || lane);
+  const allFacts = MARKET_BRIEF_SECTION_ORDER.flatMap((s) => (data.sections?.[s] || []));
+  const real = allFacts.filter((f) => f.unit !== 'gap_marker');
+  const top = real[0];
+  const count = real.length;
+  const asOf = top?.source_date ? ` (as of ${esc(String(top.source_date))})` : '';
+  const snippet = top ? esc(top.claim_text).slice(0, 140) + (top.claim_text.length > 140 ? '…' : '') : '';
+  return `<div style="padding:8px 0;border-bottom:1px solid #E7E6E6;">`
+    + `<div style="font-size:12px;font-weight:700;color:#003DA5;">${label} <span style="font-weight:400;color:#6A748C;">— ${count} live fact${count === 1 ? '' : 's'}</span></div>`
+    + (snippet ? `<div style="font-size:13px;padding:3px 0;">${snippet}${asOf}</div>` : '')
+    + `<a href="#/briefs/${lane}" style="font-size:12px;">Open full ${label} brief &rarr;</a>`
+    + `</div>`;
+}
+
+function _marketBriefPendingLine(lane) {
+  const label = esc(MARKET_BRIEF_LANE_LABELS[lane] || lane);
+  return `<div style="padding:4px 0;color:#6A748C;font-size:12px;font-style:italic;">${label} — no live facts yet (producer not built).</div>`;
+}
+
+/**
+ * Homepage widget: a short snapshot per lane (one live-fact-count line +
+ * the single freshest claim), not the full fact list — that lives on the
+ * #/briefs/<lane> page. A lane with no live facts yet (no producer built)
+ * shows one muted "not yet" line instead of being silently omitted, so the
+ * gap is visible and self-explanatory rather than confusing. Best-effort;
+ * a load failure degrades to a plain message.
+ */
+async function renderMarketBriefsWidget() {
+  const el = document.getElementById('marketBriefsWidgetContent');
+  if (!el) return;
+  try {
+    const results = await Promise.all(MARKET_BRIEF_LANES.map((lane) =>
+      _fetchMarketBriefTab(lane).then((data) => ({ lane, data })).catch(() => ({ lane, data: null }))
+    ));
+
+    const anyEnabled = results.some((r) => r.data && r.data.enabled);
+    if (!anyEnabled) {
+      el.innerHTML = `<div style="padding:10px 0;color:#6A748C;font-size:12px;">Not live yet.</div>`;
+      return;
+    }
+
+    const withFacts = results.filter((r) => r.data && r.data.enabled && r.data.has_facts);
+    const withoutFacts = results.filter((r) => r.data && r.data.enabled && !r.data.has_facts);
+
+    const html = withFacts.map((r) => _marketBriefSnapshotLine(r.lane, r.data)).join('')
+      + withoutFacts.map((r) => _marketBriefPendingLine(r.lane)).join('');
+    el.innerHTML = html || `<div style="padding:10px 0;color:#6A748C;font-size:12px;">No live facts yet.</div>`;
+  } catch (e) {
+    console.warn('[MarketBriefs] widget load failed:', e.message);
+    el.innerHTML = `<div style="padding:10px 0;color:#6A748C;font-size:12px;">Unavailable right now.</div>`;
+  }
+}
+window.renderMarketBriefsWidget = renderMarketBriefsWidget;
+
+let _marketBriefsCurrentLane = 'dialysis';
+
+/** Full #/briefs/<lane> page. */
+async function renderMarketBriefsPage(lane) {
+  const el = document.getElementById('marketBriefsContent');
+  if (!el) return;
+  const requestedLane = (lane || _marketBriefsCurrentLane || 'dialysis').toLowerCase();
+  _marketBriefsCurrentLane = requestedLane;
+  el.innerHTML = `<div class="loading"><span class="spinner"></span></div>`;
+
+  const laneTabs = MARKET_BRIEF_LANES;
+  const laneLabels = MARKET_BRIEF_LANE_LABELS;
+  const tabsHtml = `<div style="display:flex;gap:6px;margin-bottom:12px;">` + laneTabs.map((l) =>
+    `<button type="button" class="pipeline-tab${l === requestedLane ? ' active' : ''}" onclick="location.hash='#/briefs/${l}'">${esc(laneLabels[l])}</button>`
+  ).join('') + `</div>`;
+
+  try {
+    const data = await _fetchMarketBriefTab(requestedLane);
+
+    if (!data.enabled) {
+      el.innerHTML = tabsHtml + `<div class="empty-state">Market Briefs are not live yet for this lane. `
+        + `${esc(data.hint || '')}</div>`;
+      return;
+    }
+    if (!data.has_facts) {
+      el.innerHTML = tabsHtml + `<div class="empty-state">No live facts yet for ${esc(laneLabels[requestedLane] || requestedLane)}.</div>`;
+      return;
+    }
+
+    const changed = Array.isArray(data.changed_since_last_issue) ? data.changed_since_last_issue : [];
+    const changedHtml = changed.length
+      ? `<div style="margin-bottom:14px;padding:8px 10px;background:#E0E8F4;border-radius:6px;font-size:12.5px;">`
+        + `<strong>Changed since last issue:</strong><br>`
+        + changed.slice(0, 10).map((c) => `${c.action === 'added' ? 'New' : 'Updated'} — ${esc(c.claim_text)}`).join('<br>')
+        + `</div>`
+      : '';
+
+    const sectionsHtml = MARKET_BRIEF_SECTION_ORDER.map((s) => {
+      const facts = (data.sections && data.sections[s]) || [];
+      if (!facts.length) return '';
+      return `<div style="margin-top:14px;">`
+        + `<div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#003DA5;padding-bottom:4px;">${esc(MARKET_BRIEF_SECTION_LABELS[s] || s)}</div>`
+        + facts.map(_marketBriefFactRow).join('') + `</div>`;
+    }).join('');
+
+    const archive = Array.isArray(data.archive) ? data.archive : [];
+    const archiveHtml = archive.length
+      ? `<div style="margin-top:20px;">`
+        + `<div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#003DA5;padding-bottom:4px;">Issue Archive</div>`
+        + archive.slice(0, 20).map((i) =>
+            `<div style="padding:4px 0;font-size:12px;color:#6A748C;">${esc(i.issue_date)} — ${esc(i.issue_type)}${i.summary ? ' — ' + esc(i.summary) : ''}</div>`
+          ).join('')
+        + `</div>`
+      : '';
+
+    el.innerHTML = tabsHtml + changedHtml + (sectionsHtml || `<div class="empty-state">No live facts yet.</div>`) + archiveHtml;
+  } catch (e) {
+    console.warn('[MarketBriefs] page load failed:', e.message);
+    el.innerHTML = tabsHtml + `<div class="empty-state">Failed to load: ${esc(e.message)}</div>`;
+  }
+}
+window.renderMarketBriefsPage = renderMarketBriefsPage;
+
+// ============================================================
 // TOP DATA GAPS TO CLOSE — Home rail (Item #4 Phase C, 2026-05-17;
 //   relabeled R25 Unit 5, 2026-06-15). This is the DATA-GAP cockpit:
 //   highest-value records missing ownership/agency data, ranked by
@@ -7899,125 +7571,215 @@ function openNbaItem(srcDomain, propertyId) {
 }
 window.openNbaItem = openNbaItem;
 
-// R59 Unit 2 — Today "Top BD Actions" card: the BD-action cockpit's top slice on
-// the home screen. Reads the same unified, value-ranked v_lcc_bd_worklist as the
-// full Priority-Queue "Top BD Actions" list, shows the top 5, and routes each row
-// to the property carrying its signal (NEXT STEP becomes the signal's action).
-let _todayBdLoaded = false;
-let _todayBdInFlight = false;
-// R60 Unit 1 — the card used to early-return forever when ops.js's opsApi wasn't
-// ready yet AND was never invoked on the initial Home render (bootApp loads the
-// NBA panel but not this card; renderTodayBdActions only fired via
-// handlePageLoad('pageHome'), which doesn't run on the default-page boot). The
-// result was a card stuck on its static spinner. This version (a) retries if
-// opsApi isn't loaded yet instead of dying on the spinner, (b) wraps the render
-// in try/catch with a watchdog timeout so it can NEVER leave an indefinite
-// spinner, and (c) only marks "loaded" on a clean result so a later nav retries.
-function _todayBdFallback(msg) {
-  const el = document.getElementById('todayBdActionsContent');
-  if (!el) return;
-  el.innerHTML = '<div class="nba-empty">' + esc(msg || 'BD actions unavailable.')
-    + ' <button class="retry-btn" onclick="renderTodayBdActions(true)">Retry</button>'
-    + ' <button class="retry-btn" onclick="navTo(&quot;pagePriorityQueue&quot;);setTimeout(function(){if(typeof renderBdWorklist===&quot;function&quot;)renderBdWorklist();},300)">View all →</button></div>';
+// UX-T1a-today (2026-09-03) — Today recut into Significant / Important /
+// Urgent (docs/os/canon/blocks/operator-doctrine.md 1.8.0). Replaces the old
+// "Work Your Outreach" + "Top BD Actions" cards, which had no section
+// structure and no due-today boundary. Reads GET /api/operations?
+// action=today_sections (api/_shared/today-sections.js owns the pure
+// classification; this renderer only draws what the server already ranked).
+let _todaySectionsLoaded = false;
+let _todaySectionsInFlight = false;
+
+function _todaySectionsFallback(msg) {
+  ['todaySignificantContent', 'todayImportantContent', 'todayUrgentContent'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = '<div class="nba-empty">' + esc(msg || 'Today unavailable.')
+      + ' <button class="retry-btn" onclick="renderTodaySections(true)">Retry</button></div>';
+  });
 }
-// Work Your Outreach — the Today on-ramp (2026-06-26). An honest, actionable
-// count of reachable, value-ranked prospect cadences DUE, with a button that
-// lands directly in the focus session (ops.js renderOutreachFocus). N = overdue
-// actionable cadences, $X = sum of their rank_value (in-reach value); both are
-// the workable set, never raw producer output. Reuses the cadence_dashboard
-// action — same data the focus session works.
-let _outreachOnrampLoaded = false;
-let _outreachOnrampInFlight = false;
-async function renderOutreachOnramp(force) {
-  const el = document.getElementById('outreachOnrampContent');
+
+function _todayMoney(x) {
+  const n = Number(x);
+  return (x !== null && x !== undefined && isFinite(n)) ? '$' + Math.round(n).toLocaleString() : 'value unknown';
+}
+
+// Renders one section's rows into its content div. `openFn` returns the
+// onclick JS for a row (or '' for a non-clickable row) — kept per-section
+// because Significant/Important open an entity, Urgent's worklist half opens
+// a decision-center lane.
+function _renderTodaySection(contentId, section, viewAllLabel, viewAllOnclick) {
+  const el = document.getElementById(contentId);
   if (!el) return;
-  if (_outreachOnrampLoaded && !force) return;
-  if (_outreachOnrampInFlight) return;
-  if (typeof opsApi !== 'function') { setTimeout(() => renderOutreachOnramp(force), 300); return; }
-  _outreachOnrampInFlight = true;
-  el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  const items = (section && Array.isArray(section.items)) ? section.items : [];
+  // HP1 Finding 1 (1e) — a section can be empty for two DIFFERENT reasons: no
+  // work today (a real, good finding), or its source degraded THIS request
+  // (server-side Promise.allSettled, HP1 P0). The two must never render the
+  // same "Nothing here right now. ✓" — that reads as a false all-clear on a
+  // seller-prospect/pipeline-hygiene queue. `section.source_error` (set only
+  // when the server actually reports a degraded lane) picks the message.
+  if (!items.length) {
+    if (section && section.source_error) {
+      el.innerHTML = '<div class="nba-empty">This section is unavailable right now — ' + esc(String(section.source_error))
+        + ' <button class="retry-btn" onclick="renderTodaySections(true)">Retry</button></div>';
+    } else {
+      el.innerHTML = '<div class="nba-empty">Nothing here right now. ✓</div>';
+    }
+    return;
+  }
+  let html = '';
+  // Partially degraded (some rows came back, but the section is honestly
+  // incomplete for this request) — say so instead of presenting a thinned
+  // list as the whole population.
+  if (section && section.source_error) {
+    html += '<div class="nba-empty" style="margin-bottom:6px;font-size:0.85em;">⚠ partially unavailable — '
+      + esc(String(section.source_error)) + '</div>';
+  }
+  items.forEach((it) => {
+    const dl = it.deep_link || {};
+    const clickable = dl.surface === 'entity' && !!dl.entity_id;
+    const onclick = clickable ? 'openEntityDetail(' + JSON.stringify(String(dl.entity_id)) + ')' : '';
+    const title = it.who || it.what || it.property_id || '—';
+    const meta = [];
+    const v = _todayMoney(it.value);
+    if (v && v !== 'value unknown') meta.push(v);
+    if (it.basis) meta.push(esc(it.basis));
+    html += '<div class="nba-item' + (clickable ? ' clickable' : '') + '"'
+      + (clickable ? ' onclick=\'' + onclick.replace(/'/g, "\\'") + '\'' : '')
+      + ' style="cursor:' + (clickable ? 'pointer' : 'default') + '">'
+      + '<div class="nba-item-head"><span class="nba-item-title">' + esc(String(title)) + '</span></div>'
+      + (meta.length ? '<div class="nba-item-sub">' + meta.join(' · ') + '</div>' : '')
+      + '</div>';
+  });
+  // HP1-badge (2026-09-12): `section.total_open || items.length` silently
+  // turned BOTH "count unknown" (null) and "count is genuinely 0" (falsy)
+  // into the capped page length — the exact badge-that-lies failure this
+  // fix exists to close. A number renders only when the server actually
+  // measured it; unknown or not-yet-measured renders the plain arrow with
+  // no count, never a fabricated one.
+  const total = Number.isFinite(section.total_open) ? section.total_open : null;
+  if (viewAllLabel && total !== null && total > items.length) {
+    html += '<button type="button" class="nba-viewall" onclick="' + viewAllOnclick + '">'
+      + esc(viewAllLabel) + ' (' + total + ') →</button>';
+  } else if (viewAllLabel) {
+    html += '<button type="button" class="nba-viewall" onclick="' + viewAllOnclick + '">' + esc(viewAllLabel) + ' →</button>';
+  }
+  el.innerHTML = html;
+}
+
+// HP1-P2f-urgent (2026-09-12): Urgent excludes v_lcc_bd_worklist's
+// contact_writeback rows (CRM plumbing, not deal work) from its ranked union
+// and instead reports the TRUE, uncapped count of what was moved — never a
+// silent absence (P159a's "excluding is not hiding"). Renders a persistent
+// row appended below the section (mirrors the Inbox hygiene_pointer pattern,
+// ops.js renderInbox), linking to the BD worklist's own contact_writeback
+// chip, where every one of these rows already carries a "Push to CRM" action.
+function _renderUrgentHygienePointer(pointer) {
+  const el = document.getElementById('todayUrgentContent');
+  if (!el || !pointer || !(pointer.count > 0)) return;
+  el.innerHTML += '<div class="ops-hygiene-pointer" style="padding:10px 12px;margin:8px 0 0;'
+    + 'background:var(--s2);border-radius:8px;font-size:12px;color:var(--text2);'
+    + 'display:flex;justify-content:space-between;align-items:center;gap:10px">'
+    + '<span>🧹 ' + esc(pointer.label) + ' — <b>' + pointer.count.toLocaleString() + ' contact'
+    + (pointer.count === 1 ? '' : 's') + '</b> (not deal work; not shown here)</span>'
+    + '<button class="q-action" style="font-size:11px;padding:4px 10px" '
+    + 'onclick="navTo(\'pagePriorityQueue\');setTimeout(function(){if(typeof renderBdWorklist===\'function\')'
+    + 'renderBdWorklist(\'contact_writeback\');},300)">Review →</button>'
+    + '</div>';
+}
+
+async function renderTodaySections(force) {
+  const el = document.getElementById('todaySignificantContent');
+  if (!el) return;
+  if (_todaySectionsLoaded && !force) return;
+  if (_todaySectionsInFlight) return;
+  if (typeof opsApi !== 'function') { setTimeout(() => renderTodaySections(force), 300); return; }
+  _todaySectionsInFlight = true;
+  ['todaySignificantContent', 'todayImportantContent', 'todayUrgentContent'].forEach((id) => {
+    const e = document.getElementById(id);
+    if (e) e.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  });
   try {
     const res = await Promise.race([
-      opsApi('/api/operations?action=cadence_dashboard&limit=200'),
-      new Promise((resolve) => setTimeout(() => resolve({ ok: false, error: 'timeout' }), 12000)),
+      opsApi('/api/operations?action=today_sections'),
+      new Promise((resolve) => setTimeout(() => resolve({ ok: false, _timedOut: true }), 12000)),
     ]);
     if (!res.ok || !res.data || !res.data.ok) {
-      el.innerHTML = '<div class="nba-empty">Outreach list unavailable. <button class="retry-btn" onclick="renderOutreachOnramp(true)">Retry</button></div>';
+      _todaySectionsFallback('Today unavailable — HTTP ' + (res && res.status || '?'));
+      console.error('renderTodaySections failed:', res);
       return;
     }
-    _outreachOnrampLoaded = true;
-    const items = Array.isArray(res.data.items) ? res.data.items : [];
-    if (!items.length) { el.innerHTML = '<div class="nba-empty">No prospects to work right now. ✓</div>'; return; }
-    const overdue = items.filter((it) => Number(it.days_overdue) > 0).length;
-    const valueSum = items.reduce((s, it) => { const v = Number(it.rank_value); return s + (isFinite(v) && v > 0 ? v : 0); }, 0);
-    const money = (x) => { const n = Number(x); return (isFinite(n) && n > 0) ? '$' + Math.round(n).toLocaleString() : ''; };
-    const valStr = valueSum > 0 ? ' · ' + money(valueSum) + ' in reach' : '';
-    const dueLabel = overdue > 0 ? ('<strong>' + overdue + '</strong> due') : ('<strong>' + items.length + '</strong> ready');
-    el.innerHTML = '<div class="nba-meta"><span class="nba-count">' + dueLabel
-      + (overdue > 0 && items.length !== overdue ? ' · ' + items.length + ' total ready' : '') + valStr + '</span></div>'
-      + '<button type="button" class="nba-viewall" style="margin-top:8px;font-weight:600;color:var(--nm-blue,#003DA5)" '
-      + 'onclick="navTo(\'pagePriorityQueue\');setTimeout(function(){if(typeof renderOutreachFocus===\'function\')renderOutreachFocus();},300)">'
-      + '▶ Start working →</button>';
+    _todaySectionsLoaded = true;
+    const data = res.data;
+    _renderTodaySection('todaySignificantContent', data.significant, 'See all seller prospects',
+      "navTo('pageSellerProspectQueue')");
+    _renderTodaySection('todayImportantContent', data.important, 'See all opportunities',
+      "navTo('pagePipeline')");
+    _renderTodaySection('todayUrgentContent', data.urgent, 'See all BD actions',
+      "navTo('pagePriorityQueue');setTimeout(function(){if(typeof renderBdWorklist==='function')renderBdWorklist();},300)");
+    _renderUrgentHygienePointer(data.urgent && data.urgent.pointer);
   } catch (e) {
-    el.innerHTML = '<div class="nba-empty">Outreach list unavailable. <button class="retry-btn" onclick="renderOutreachOnramp(true)">Retry</button></div>';
+    _todaySectionsFallback('Today unavailable — ' + ((e && e.message) ? String(e.message).slice(0, 160) : 'request threw'));
+    console.error('renderTodaySections threw:', e);
   } finally {
-    _outreachOnrampInFlight = false;
+    _todaySectionsInFlight = false;
   }
 }
-window.renderOutreachOnramp = renderOutreachOnramp;
+window.renderTodaySections = renderTodaySections;
 
-async function renderTodayBdActions(force) {
-  const el = document.getElementById('todayBdActionsContent');
+// UX-T1a-today — the seller-prospect-queue page (v_lcc_seller_prospect_queue's
+// first front-end surface; the API existed with no page since UX-T1a-queue).
+// Server-side chips + real pagination, mirroring the API's own contract.
+let _sellerProspectPage = { chip: 'all', offset: 0 };
+async function renderSellerProspectQueuePage(force, opts) {
+  const el = document.getElementById('sellerProspectQueueContent');
   if (!el) return;
-  if (_todayBdLoaded && !force) return;
-  if (_todayBdInFlight) return;
-  // ops.js provides opsApi; on a very early call (e.g. boot) it may not have
-  // executed yet. Retry shortly instead of leaving the static spinner forever.
-  if (typeof opsApi !== 'function') { setTimeout(() => renderTodayBdActions(force), 300); return; }
-  _todayBdInFlight = true;
+  if (typeof opsApi !== 'function') { setTimeout(() => renderSellerProspectQueuePage(force, opts), 300); return; }
+  if (opts && opts.chip) { _sellerProspectPage.chip = opts.chip; _sellerProspectPage.offset = 0; }
+  if (opts && typeof opts.offset === 'number') { _sellerProspectPage.offset = opts.offset; }
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
   try {
-    // Watchdog: opsApi already aborts at 30s, but the Today card should fall back
-    // faster — never hang the home screen on a spinner.
-    const res = await Promise.race([
-      opsApi('/api/operations?action=bd_worklist&limit=5'),
-      new Promise((resolve) => setTimeout(() => resolve({ ok: false, error: 'timeout' }), 12000)),
-    ]);
-    if (!res.ok || !res.data || !res.data.ok) { _todayBdFallback('BD actions unavailable.'); return; }
-    const items = Array.isArray(res.data.worklist) ? res.data.worklist : [];
-    _todayBdLoaded = true; // clean result — don't auto-refetch on re-nav
-    if (!items.length) { el.innerHTML = '<div class="nba-empty">No BD actions right now. ✓</div>'; return; }
-    window._bdWorklistItems = items; // reuse the ops.js index-based open handler
-    const labels = { loan_maturity: 'Loan maturity', suspected_sale: 'Suspected sale',
-      owner_source_conflict: 'Owner conflict', contact_writeback: 'Push to CRM', ownership_chain: 'Ownership chain' };
-    const money = (x) => { const n = Number(x); return (isFinite(n) && n > 0) ? '$' + Math.round(n).toLocaleString() : ''; };
+    const q = 'chip=' + encodeURIComponent(_sellerProspectPage.chip) + '&limit=50&offset=' + _sellerProspectPage.offset;
+    const res = await opsApi('/api/seller-prospect-queue?' + q);
+    if (!res.ok || !res.data) {
+      el.innerHTML = '<div class="nba-empty">Seller prospect queue unavailable — HTTP ' + (res && res.status || '?')
+        + '. <button class="retry-btn" onclick="renderSellerProspectQueuePage(true)">Retry</button></div>';
+      return;
+    }
+    const data = res.data;
+    const chipsEl = document.getElementById('sellerProspectChips');
+    if (chipsEl && Array.isArray(data.chips)) {
+      chipsEl.innerHTML = data.chips.map((c) =>
+        '<button type="button" class="nba-domain-btn' + (c.key === data.chip ? ' active' : '') + '" '
+        + 'onclick="renderSellerProspectQueuePage(true,{chip:' + JSON.stringify(c.key) + '})">'
+        + esc(c.label) + (c.n != null ? ' (' + c.n + ')' : '') + '</button>'
+      ).join(' ');
+    }
+    const items = Array.isArray(data.items) ? data.items : [];
+    if (!items.length) { el.innerHTML = '<div class="nba-empty">No prospects for this filter. ✓</div>'; return; }
     let html = '';
-    items.slice(0, 5).forEach(function (it, ix) {
-      const dom = String(it.domain || '');
-      const pid = it.property_id == null ? '' : String(it.property_id);
-      const val = money(it.rank_value);
-      const meta = [];
-      if (val) meta.push(val + ' rent');
-      if (it.who) meta.push(esc(it.who));
-      if (it.city || it.state) meta.push(esc([it.city, it.state].filter(Boolean).join(', ')));
-      const clickable = !!(dom && pid);
+    items.forEach((r) => {
+      const clickable = !!r.entity_id;
       html += '<div class="nba-item' + (clickable ? ' clickable' : '') + '"'
-        + (clickable ? ' onclick="bdOpenWorklistItem(' + ix + ')"' : '')
+        + (clickable ? ' onclick=\'openEntityDetail(' + JSON.stringify(String(r.entity_id)) + ')\'' : '')
         + ' style="cursor:' + (clickable ? 'pointer' : 'default') + '">'
-        + '<div class="nba-item-head"><span class="nba-item-title">' + esc(it.what || '—') + '</span>'
-        + '<span class="q-badge type">' + esc(labels[it.signal_type] || it.signal_type) + '</span>'
-        + (it.is_distressed ? '<span class="q-badge pri-high" title="Distressed loan">⚠</span>' : '') + '</div>'
-        + (meta.length ? '<div class="nba-item-sub">' + meta.join(' · ') + '</div>' : '')
-        + '</div>';
+        + '<div class="nba-item-head"><span class="nba-item-title">' + esc(r.owner_name || r.entity_name || '—') + '</span>'
+        + '<span class="q-badge type">' + esc(r.reach_state || '') + '</span></div>'
+        + '<div class="nba-item-sub">' + esc(_todayMoney(r.rank_value))
+        + ([r.newer_lease ? 'newer lease' : null, r.reason_debt ? 'debt maturing' : null,
+            r.reason_value_creation_developer ? 'developer' : null].filter(Boolean).length
+              ? ' · ' + [r.newer_lease ? 'newer lease' : null, r.reason_debt ? 'debt maturing' : null,
+                  r.reason_value_creation_developer ? 'developer' : null].filter(Boolean).join(', ') : '')
+        + ([r.city, r.state].filter(Boolean).length ? ' · ' + esc([r.city, r.state].filter(Boolean).join(', ')) : '')
+        + '</div></div>';
     });
     el.innerHTML = html;
+    const pager = document.getElementById('sellerProspectPager');
+    if (pager && data.pagination) {
+      const p = data.pagination;
+      pager.innerHTML = (p.total != null ? 'Page ' + p.page + ' of ' + p.total_pages + ' (' + p.total + ' total)' : '')
+        + ' '
+        + '<button type="button" class="retry-btn" ' + (p.offset > 0 ? '' : 'disabled')
+        + ' onclick="renderSellerProspectQueuePage(true,{offset:' + Math.max(0, p.offset - p.limit) + '})">← Prev</button> '
+        + '<button type="button" class="retry-btn" ' + (p.has_more ? '' : 'disabled')
+        + ' onclick="renderSellerProspectQueuePage(true,{offset:' + (p.offset + p.limit) + '})">Next →</button>';
+    }
   } catch (e) {
-    _todayBdFallback('BD actions unavailable.');
-  } finally {
-    _todayBdInFlight = false;
+    el.innerHTML = '<div class="nba-empty">Seller prospect queue unavailable — '
+      + esc((e && e.message) ? String(e.message).slice(0, 160) : 'request threw') + '</div>';
   }
 }
-window.renderTodayBdActions = renderTodayBdActions;
+window.renderSellerProspectQueuePage = renderSellerProspectQueuePage;
+
 
 function renderNextBestActionPanel() {
   const el = document.getElementById('nextBestActionContent');
@@ -8243,7 +8005,7 @@ async function loadCalendarFull(force) {
   const calEl = document.getElementById('calendarFull');
   if (calEl && !calFullLoaded) calEl.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
   try {
-    const res = await fetch(`${API}/sync/calendar-events?days_back=${CAL_DAYS_BACK}&days_forward=${CAL_DAYS_FORWARD}&limit=500`);
+    const res = await fetch(`${COPILOT_READ}&what=calendar-events&days_back=${CAL_DAYS_BACK}&days_forward=${CAL_DAYS_FORWARD}&limit=500`);
     if (!res.ok) throw new Error('API returned ' + res.status);
     const text = await res.text();
     let data; try { data = JSON.parse(text); } catch (_) { throw new Error('Calendar API returned non-JSON'); }
@@ -8525,7 +8287,7 @@ let personalTodoLists = ['Personal', 'Family', 'Kids', 'Health', 'Finance', 'Hou
 
 async function loadPersonalCalendar() {
   try {
-    const res = await fetch(`${API}/sync/calendar-events?days_back=1&days_forward=30&limit=200&calendar=personal`);
+    const res = await fetch(`${COPILOT_READ}&what=calendar-events&days_back=1&days_forward=30&limit=200&calendar=personal`);
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
     personalCalEvents = data.events || [];
@@ -9620,8 +9382,8 @@ function bootApp() {
       applyFeatureFlags();
       autoConnectCredentials().then(() => {
         Promise.all([loadActivities(), loadEmails(), loadCalendar(), loadHealth(), loadWeather(), loadMarket(), loadPersonalCalendar(), loadPersonalTasks(), loadCanonicalData(), loadDailyBriefingData(), loadNextBestActionData()])
-          .then(() => { updateGreeting(); if (typeof renderOutreachOnramp === 'function') renderOutreachOnramp(); if (typeof renderTodayBdActions === 'function') renderTodayBdActions(); if (checkFlag('auto_sync_on_load')) triggerCanonicalSync(); })
-          .catch(() => { updateGreeting(); if (typeof renderOutreachOnramp === 'function') renderOutreachOnramp(); if (typeof renderTodayBdActions === 'function') renderTodayBdActions(); if (checkFlag('auto_sync_on_load')) triggerCanonicalSync(); });
+          .then(() => { updateGreeting(); if (typeof renderTodaySections === 'function') renderTodaySections(); if (checkFlag('auto_sync_on_load')) triggerCanonicalSync(); })
+          .catch(() => { updateGreeting(); if (typeof renderTodaySections === 'function') renderTodaySections(); if (checkFlag('auto_sync_on_load')) triggerCanonicalSync(); });
       });
     });
   });
@@ -12917,78 +12679,12 @@ window.bindLiveIngestWorkbench = bindLiveIngestWorkbench;
 window.parseLiveIngestOutcomeNotes = parseLiveIngestOutcomeNotes;
 window.renderLiveIngestOutcomeProvenance = renderLiveIngestOutcomeProvenance;
 
-// === Export Comps to Excel (Briggs CRE Template) ===
-function exportCompsToXlsx(data, type) {
-  if (typeof XLSX === 'undefined') { showToast('Excel export library not loaded yet — please try again', 'error'); return; }
-  if (!data || data.length === 0) { showToast('No data to export', 'error'); return; }
+// ─── export comps to Excel ───────────────────────────────────────────────────
+// MOVED to app-export-comps.js (W6.5 Stage 3, Unit 3 — 2026-08-20):
+// exportCompsToXlsx + its window export, which dialysis.js and gov.js reach
+// from inline onclick at CLICK time.
+// ─────────────────────────────────────────────────────────────────────────────
 
-  var sheetName = type === 'lease' ? 'Lease Comps' : 'Sales Comps';
-  var fileType = type === 'lease' ? 'Lease' : 'Sales';
-
-  var rows = data.map(function(r) {
-    return {
-      'Address': r.address || '',
-      'City': r.city || '',
-      'State': r.state || '',
-      'Sale Date': r.sold_date || r.sale_date || '',
-      'Sale Price': r.price || r.sale_price || r.ask_price || null,
-      'Price/SF': r.price_psf || r.price_per_sf || null,
-      'Cap Rate': r.cap_rate || r.ask_cap || null,
-      'SF': r.rba || r.building_sf || r.sf || null,
-      'Year Built': r.year_built || null,
-      'Buyer': r.buyer || r.buyer_name || '',
-      'Seller': r.seller || r.seller_name || '',
-      'Tenant': r.agency || r.tenant_operator || r.tenant || r.tenant_name || '',
-      'Property Type': r.property_type || '',
-      'Source': r.source || r.data_source || ''
-    };
-  });
-
-  var ws = XLSX.utils.json_to_sheet(rows);
-
-  // Column widths for readability
-  ws['!cols'] = [
-    { wch: 30 }, // Address
-    { wch: 15 }, // City
-    { wch: 8 },  // State
-    { wch: 12 }, // Sale Date
-    { wch: 15 }, // Sale Price
-    { wch: 12 }, // Price/SF
-    { wch: 10 }, // Cap Rate
-    { wch: 10 }, // SF
-    { wch: 10 }, // Year Built
-    { wch: 25 }, // Buyer
-    { wch: 25 }, // Seller
-    { wch: 25 }, // Tenant
-    { wch: 15 }, // Property Type
-    { wch: 15 }  // Source
-  ];
-
-  // Apply number formats to data cells
-  var range = XLSX.utils.decode_range(ws['!ref']);
-  for (var R = range.s.r + 1; R <= range.e.r; R++) {
-    // Sale Price (col 4) — currency
-    var priceCell = ws[XLSX.utils.encode_cell({ r: R, c: 4 })];
-    if (priceCell && typeof priceCell.v === 'number') { priceCell.t = 'n'; priceCell.z = '$#,##0'; }
-    // Price/SF (col 5) — currency
-    var psfCell = ws[XLSX.utils.encode_cell({ r: R, c: 5 })];
-    if (psfCell && typeof psfCell.v === 'number') { psfCell.t = 'n'; psfCell.z = '$#,##0.00'; }
-    // Cap Rate (col 6) — percentage
-    var capCell = ws[XLSX.utils.encode_cell({ r: R, c: 6 })];
-    if (capCell && typeof capCell.v === 'number') { capCell.t = 'n'; capCell.z = '0.00%'; }
-    // SF (col 7) — comma-separated number
-    var sfCell = ws[XLSX.utils.encode_cell({ r: R, c: 7 })];
-    if (sfCell && typeof sfCell.v === 'number') { sfCell.t = 'n'; sfCell.z = '#,##0'; }
-  }
-
-  var wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, sheetName);
-
-  var today = new Date().toISOString().slice(0, 10);
-  XLSX.writeFile(wb, 'LCC_' + fileType + '_Comps_' + today + '.xlsx');
-  showToast('Exported ' + data.length + ' records to Excel', 'success');
-}
-window.exportCompsToXlsx = exportCompsToXlsx;
 
 // Show iOS-specific install hint (Safari doesn't fire beforeinstallprompt)
 if (/iPhone|iPad|iPod/.test(navigator.userAgent) && !navigator.standalone && !isStandalone) {

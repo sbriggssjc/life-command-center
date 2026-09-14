@@ -75,10 +75,43 @@ let _udIntakeState = {
  * @param {object} ids - { property_id, lease_number } lookup keys
  * @param {object} fallback - the raw record from the list (shown while loading)
  */
-async function openUnifiedDetail(db, ids, fallback, initialTab) {
+// ───────────────────────────────────────────────────────────────────────────
+// Where the ONE property panel currently lives.
+//
+// The entity panel could be mounted by passing three element refs through as
+// locals, because openEntityDetail captured them once. The property panel
+// cannot: 16 call sites across 12 functions re-grab `#detailBody` on their own
+// (in-panel actions that re-render — dismiss lead, CMS link, sales filter,
+// lease sub-view…). Threading a mount argument through every one of those, and
+// through the onclick strings that call them, would be both large and easy to
+// get half-right.
+//
+// A module-level pointer is normally the wrong answer — it is global mount
+// state, and two panels loading concurrently would cross wires. It is SAFE here
+// for the same reason the entity dock refuses entity-beside-entity: `_udCache`
+// is itself a module singleton, so **only one property panel can exist at a
+// time**, in either slot but never both. `openCompanionProperty` enforces that
+// explicitly rather than leaving it to luck.
+//
+// If _udCache is ever made per-panel, this pointer MUST become a parameter.
+let _udMount = 'primary';
+const _UD_HOST_IDS = {
+  primary:   { header: 'detailHeader',    tabs: 'detailTabs',    body: 'detailBody' },
+  companion: { header: 'companionHeader', tabs: 'companionTabs', body: 'companionBody' },
+};
+/** The element hosting the live property panel — never a hard-coded id. */
+function _udHost(part) {
+  const ids = _UD_HOST_IDS[_udMount] || _UD_HOST_IDS.primary;
+  return document.getElementById(ids[part]);
+}
+
+async function openUnifiedDetail(db, ids, fallback, initialTab, opts) {
+  const inCompanion = !!(opts && opts.mount === 'companion');
+  _udMount = inCompanion ? 'companion' : 'primary';
   // Track that a PROPERTY is now the primary panel, so entity chips clicked from
-  // here dock beside it (companion) instead of replacing it.
-  if (typeof _setPrimaryKind === 'function') _setPrimaryKind('property');
+  // here dock beside it (companion) instead of replacing it. A property in the
+  // DOCK does not own the panel stack, so it must not claim the primary kind.
+  if (!inCompanion && typeof _setPrimaryKind === 'function') _setPrimaryKind('property');
   // Normalize db aliases - callers may pass 'dialysis' or 'government'
   if (db === 'dialysis') db = 'dia';
   if (db === 'government') db = 'gov';
@@ -87,15 +120,25 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
   _opsExtraCache = null; // reset operations extra data for new clinic
   _opsGovCache   = null; // reset gov Operations cache for new property
   _salesCache = null; // reset sales data for new property
-  const panel = document.getElementById('detailPanel');
+  const panel = document.getElementById(inCompanion ? 'companionPanel' : 'detailPanel');
   const overlay = document.getElementById('detailOverlay');
-  if (!panel || !overlay) return;
+  if (!panel || (!inCompanion && !overlay)) return;
 
   fallback = fallback || {};  // guard against null/undefined callers
 
-  // Show panel immediately with loading state
+  // Show panel immediately with loading state. The dock has no overlay — it
+  // sits BESIDE the primary rather than over the page.
   panel.style.display = 'block';
-  overlay.classList.add('open');
+  if (inCompanion) {
+    panel.classList.add('open');
+    const _minTab = document.getElementById('companionMin');
+    if (_minTab) _minTab.classList.remove('open');
+    _companionState = { kind: 'property', db, propertyId: (ids && ids.property_id) || null,
+                        summary: fallback || {}, label: (fallback && fallback.address) || '(property)' };
+    if (typeof _panelSyncResizers === 'function') _panelSyncResizers();
+  } else {
+    overlay.classList.add('open');
+  }
 
   // Render loading header from fallback record
   const title = fallback.page_title ||
@@ -113,27 +156,33 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
   // the subtitle when it's a substring of the title.
   const locForSubtitle = (loc && title && title.toLowerCase().includes(loc.toLowerCase())) ? '' : loc;
 
-  const headerEl = document.getElementById('detailHeader');
-  const tabsEl = document.getElementById('detailTabs');
-  const bodyEl = document.getElementById('detailBody');
+  const headerEl = _udHost('header');
+  const tabsEl = _udHost('tabs');
+  const bodyEl = _udHost('body');
 
   if (headerEl) headerEl.innerHTML = `
-    <button class="detail-back" onclick="detailBack()">&#x2190;<span>Back</span></button>
+    ${inCompanion ? '' : '<button class="detail-back" onclick="detailBack()">&#x2190;<span>Back</span></button>'}
     <div class="detail-header-info">
       <div style="flex:1;min-width:0">
-        <div class="detail-title">${esc(title)}</div>
+        <div class="detail-title"${inCompanion ? ' style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis"' : ''}>${esc(title)}</div>
         ${locForSubtitle ? `<div class="detail-subtitle">${esc(locForSubtitle)}</div>` : ''}
       </div>
+      ${inCompanion ? '' : `<button class="detail-action-btn" title="Open a print-ready property dossier"
+        onclick="_udOpenPropertyDossier(this)"
+        style="background:transparent;border:1px solid var(--border);color:var(--text2);padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;margin-right:8px">
+        Dossier
+      </button>
       <button class="detail-action-btn" id="consolidateBtn"
         title="Find duplicate properties + same-tenant clusters"
         onclick="openConsolidateModal('${db}', ${ids.property_id || 'null'})"
         style="background:transparent;border:1px solid var(--border);color:var(--text2);padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;margin-right:8px"
         ${ids.property_id ? '' : 'disabled'}>
         🔗 Consolidate
-      </button>
+      </button>`}
       <span class="detail-badge" style="background:${db === 'gov' ? 'var(--gov-green)' : 'var(--purple)'};color:#fff">${db === 'gov' ? 'GOV' : 'DIA'}</span>
+      ${inCompanion && typeof _panelHeaderControls === 'function' ? _panelHeaderControls('companion') : ''}
     </div>
-    <button class="detail-close" onclick="closeDetail()">&times;</button>`;
+    ${inCompanion ? '' : '<button class="detail-close" onclick="closeDetail()">&times;</button>'}`;
 
   // Render tab bar — highlight initialTab if provided, else first tab.
   // Tabs restructured to match broker workflow (2026-04-15).
@@ -143,9 +192,14 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
   // de-anonymization climax + prospecting feed) -> activity. Ownership & CRM moved
   // after Deal History so the user understands the economics before resolving who
   // owns it. Dispatch is a name-keyed switch (_udRenderTab), so order is display-only.
-  const tabs = ['Overview', 'Rent Roll', 'Operations', 'Deal History', 'Ownership & CRM', 'Activity Log'];
+  // Renamed 'Ownership & CRM' -> 'Ownership' (redesign 2026-08-15 §2): the
+  // '& CRM' was the licence under which the whole contact stack colonised a
+  // property tab. Legacy callers + DB-sourced rail chips still pass the old
+  // string; _udMapLegacyTab maps it.
+  const tabs = ['Overview', 'Rent Roll', 'Operations', 'Deal History', 'Ownership', 'Documents', 'Activity Log'];
   const mappedInitialTab = initialTab ? _udMapLegacyTab(initialTab) : null;
   const activeTab = (mappedInitialTab && tabs.includes(mappedInitialTab)) ? mappedInitialTab : tabs[0];
+  if (tabsEl) tabsEl.style.display = '';
   if (tabsEl) tabsEl.innerHTML = tabs.map(t =>
     `<button class="detail-tab ${t === activeTab ? 'active' : ''}" onclick="switchUnifiedTab(decodeURIComponent('${encodeURIComponent(t)}'))">${esc(t)}</button>`
   ).join('');
@@ -156,13 +210,13 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
   // reload / pasted deep-link re-opens this exact detail. Loop-guarded (no-op
   // when the router is the one driving this open). Needs a stable property_id;
   // clinic-only opens (no property_id) are not deep-linked this phase.
-  if (typeof _routeSetDetailHash === 'function' && ids && ids.property_id) {
+  if (!inCompanion && typeof _routeSetDetailHash === 'function' && ids && ids.property_id) {
     _routeSetDetailHash({ kind: 'prop', db, id: ids.property_id, tab: activeTab });
   }
   // UI Phase 4: reconcile the back-stack so a lateral/drill hop pushes a new
   // level (and the breadcrumb updates immediately). Uses the fallback-derived
   // title as the crumb label; refined to the real title once data loads below.
-  if (typeof _detailStackSync === 'function' && ids && ids.property_id) {
+  if (!inCompanion && typeof _detailStackSync === 'function' && ids && ids.property_id) {
     _detailStackSync({ kind: 'prop', db, id: ids.property_id, tab: activeTab }, title);
   }
 
@@ -231,7 +285,7 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
   if (!mainFilter) {
     // No property_id or lease_number — render a fallback detail panel
     // using the fields already present on the search card record
-    _setUdCache({ db, ids, property: null, leases: [], ownership: null, chain: [], rankings: null, fallback, _fallbackOnly: true });
+    _setUdCache({ db, ids, property: null, leases: [], ownership: null, chain: [], rankings: null, fallback, ownReconciled: null, _fallbackOnly: true });
     _udRenderFallbackHeader(db, fallback);
     if (bodyEl) bodyEl.innerHTML = _udRenderTab(activeTab);
     return;
@@ -388,12 +442,42 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
       const lookupAddr = (synthProperty && synthProperty.address) || fallback.address;
       const lookupState = (synthProperty && synthProperty.state) || fallback.state;
       const lookupCity = (synthProperty && synthProperty.city) || fallback.city;
-      if (lookupAddr) {
+      // ID FIRST, address only as a fallback (fixed 2026-08-16).
+      //
+      // This resolved the panel's own asset entity by ADDRESS STRING even though
+      // the caller already holds the exact domain property id. Address matching
+      // is a fuzzy string compare and it silently misses on ordinary variation:
+      //   panel:  "3233 East Coliseum Blvd."   (spelled out, trailing period)
+      //   entity: "3233 E Coliseum Blvd"       (abbreviated, no period)
+      // -> no match -> no `ent` -> no `ent.property_owner` -> NO Current Owner
+      // card and NO "Work this owner ->" hand-off, even though
+      // lcc_property_owner held the answer (Agree Realty CORP, confidence 1.0)
+      // and /api/entities returned it correctly when asked by id.
+      //
+      // 2,743 of 3,886 asset entities (70.6%) carry an exact
+      // metadata.domain_property_id, and 2,117 of those also have a resolved
+      // owner — that is the population that was gambling on a string compare.
+      // Same doctrine as CLAUDE.md's "resolve a domain owner to an LCC entity by
+      // ID, never by name": prefer the identifier we already have.
+      const lookupPid = (synthProperty && synthProperty.property_id) || (ids && ids.property_id) || null;
+      let ent = null;
+      if (lookupPid && db) {
+        try {
+          const idParams = new URLSearchParams({
+            action: 'lookup_asset', domain: db, domain_property_id: String(lookupPid),
+          });
+          const idRes = await _entityApiFetch('/api/entities?' + idParams.toString());
+          ent = idRes?.entity || null;
+        } catch (_eId) { /* fall through to the address lookup */ }
+      }
+      if (!ent && lookupAddr) {
         const params = new URLSearchParams({ action: 'lookup_asset', address: lookupAddr });
         if (lookupCity) params.set('city', lookupCity);
         if (lookupState) params.set('state', lookupState);
         const entRes = await _entityApiFetch('/api/entities?' + params.toString());
-        const ent = entRes?.entity || null;
+        ent = entRes?.entity || null;
+      }
+      if (ent || lookupAddr) {
         entityMeta = ent?.metadata || null;
         if (ent && ent.id) resolvedLccEntityId = ent.id;
         // Stash the resolved asset entity id onto the ownership cache so the
@@ -432,6 +516,24 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
       console.warn('entity metadata lookup failed', e);
     }
 
+    // ── OWN-T0 ──────────────────────────────────────────────────────────
+    // The ONE reconciled ownership chain for this asset. Best-effort: a miss
+    // leaves ownReconciled null and the tab SAYS the reconciler was
+    // unreachable rather than rendering an empty chain, because "no owner" and
+    // "could not ask" are different facts (C10 — the polite `|| ''` default is
+    // exactly what let a wiring bug read as missing data).
+    let ownReconciled = null;
+    try {
+      const _ownPid = (synthProperty && synthProperty.property_id) || (ids && ids.property_id) || null;
+      if (_ownPid && (db === 'dia' || db === 'gov')) {
+        const _ownParams = new URLSearchParams({
+          action: 'ownership_chain', domain: db, property_id: String(_ownPid),
+        });
+        const _ownRes = await _entityApiFetch('/api/entities?' + _ownParams.toString());
+        if (_ownRes && Array.isArray(_ownRes.links)) ownReconciled = _ownRes;
+      }
+    } catch (_eOwn) { console.warn('reconciled ownership chain unavailable', _eOwn); }
+
     // Merge the direct-from-properties anchor / escalation columns onto the
     // view-sourced property record so _udPickCurrentRent can read them
     // without another fetch. The view may not expose these columns.
@@ -457,7 +559,7 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
         })
       : synthProperty;
 
-    _setUdCache({ db, ids, property: mergedProperty, leases, ownership, chain, rankings, fallback, entityMeta, lccEntityId: resolvedLccEntityId, completeness: completenessRow, nextAction: nextActionRow, _fallbackOnly: allEmpty });
+    _setUdCache({ db, ids, property: mergedProperty, leases, ownership, chain, rankings, fallback, entityMeta, lccEntityId: resolvedLccEntityId, completeness: completenessRow, nextAction: nextActionRow, ownReconciled, _fallbackOnly: allEmpty });
     // Render the data completeness rail at the top of the detail panel.
     // Best-effort: never throws upward (Item #6 Phase A, 2026-05-17).
     try { _udRenderCompletenessRail(); } catch (e) { console.warn('completeness rail render failed', e); }
@@ -480,8 +582,8 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
     // Ownership tab if it's the active one once they load.
     _udEnrichOwnershipSignals().then(function () {
       try {
-        var _bodyEl = document.getElementById('detailBody');
-        if (_bodyEl && typeof activeTab !== 'undefined' && activeTab === 'Ownership & CRM') _bodyEl.innerHTML = _udRenderTab('Ownership & CRM');
+        var _bodyEl = _udHost('body');
+        if (_bodyEl && typeof activeTab !== 'undefined' && activeTab === 'Ownership') _bodyEl.innerHTML = _udRenderTab('Ownership');
       } catch (_e) {}
       try { _udRenderNextStep(); } catch (_e) {}
     });
@@ -546,10 +648,10 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
         if (!_udCache) return;
         _setUdCache({ ..._udCache, leaseExtensions: enrichment.extensions, leaseRentSchedule: enrichment.schedule, leaseOptions: enrichment.options || new Map() });
         // Re-render if the Rent Roll tab is currently active
-        const activeTabEl = document.querySelector('#detailTabs .detail-tab.active');
+        const activeTabEl = (_udHost('tabs') || document).querySelector('.detail-tab.active');
         const activeLabel = activeTabEl ? activeTabEl.textContent.trim() : '';
         if (activeLabel === 'Rent Roll' || activeLabel === 'Lease') {
-          const bodyEl = document.getElementById('detailBody');
+          const bodyEl = _udHost('body');
           if (bodyEl) bodyEl.innerHTML = _udRenderTab(activeLabel);
         }
       }).catch((e) => { console.warn('lease enrichment fetch failed', e); });
@@ -563,7 +665,7 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
       const pipelineName = _udPipelineName(synthProperty, fallback, db);
       const realTitle = pipelineName || legalName || synthProperty.address || fallback.address || '(Unknown)';
       // UI Phase 4: refine this level's breadcrumb crumb to the loaded title.
-      if (typeof _detailStackSetLabel === 'function' && (propertyId || ids.property_id)) {
+      if (!inCompanion && typeof _detailStackSetLabel === 'function' && (propertyId || ids.property_id)) {
         _detailStackSetLabel({ kind: 'prop', db, id: propertyId || ids.property_id }, realTitle);
       }
       const loc2 = (synthProperty.city || '') + (synthProperty.state ? ', ' + synthProperty.state : '');
@@ -582,35 +684,46 @@ async function openUnifiedDetail(db, ids, fallback, initialTab) {
       const dismissBtn = (db === 'dia' && (fallback.clinic_id || fallback.medicare_id))
         ? `<button onclick="_udDismissLead()" style="background:rgba(239,68,68,0.12);color:var(--red,#ef4444);border:1px solid rgba(239,68,68,0.25);border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;font-family:Outfit,sans-serif;margin-right:6px" title="Mark as not a viable lead (hospital campus, etc.)">Not a Lead</button>`
         : '';
+      // The header was laid out for the 720px+ primary slot. Dropped into the
+      // 620px dock it collapsed: the title wrapped to three lines, the key-field
+      // strip re-printed "Address:" directly under a title that IS the address,
+      // and the comps/Consolidate controls squeezed the panel controls onto their
+      // own row. In the dock, keep identity + the panel controls and let the BODY
+      // carry the detail — the full tab set is one click away and the same
+      // actions live inside it.
+      const _compactHeader = inCompanion;
       if (headerEl) headerEl.innerHTML = `
         <div class="detail-header-info">
-          <div style="flex:1">
-            <div class="detail-title">${esc(realTitle)}</div>
+          <div style="flex:1;min-width:0">
+            <div class="detail-title"${_compactHeader ? ' style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis"' : ''}>${esc(realTitle)}</div>
             ${_subtitleHtml}
-            ${_udKeyFields(db, synthProperty, ownership)}
+            ${_compactHeader ? '' : _udKeyFields(db, synthProperty, ownership)}
           </div>
-          ${dismissBtn}
-          ${_udLeaseCompsControlHtml(db, propertyId || synthProperty?.property_id || ids.property_id)}
-          <button class="detail-action-btn" id="consolidateBtn"
+          ${_compactHeader ? '' : dismissBtn}
+          ${_compactHeader ? '' : _udLeaseCompsControlHtml(db, propertyId || synthProperty?.property_id || ids.property_id)}
+          ${_compactHeader ? '' : `<button class="detail-action-btn" id="consolidateBtn"
             title="Find duplicate properties + same-tenant clusters"
             onclick="openConsolidateModal('${db}', ${(propertyId || ids.property_id) || 'null'})"
             style="background:transparent;border:1px solid var(--border);color:var(--text2);padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;margin-right:8px"
             ${(propertyId || ids.property_id) ? '' : 'disabled'}>
             🔗 Consolidate
-          </button>
+          </button>`}
           <span class="detail-badge" style="background:${db === 'gov' ? 'var(--gov-green)' : 'var(--purple)'};color:#fff">${db === 'gov' ? 'GOV' : 'DIA'}</span>
-          <button class="detail-close" onclick="closeDetail()">&times;</button>
+          ${typeof _panelHeaderControls === 'function' ? _panelHeaderControls(_udMount) : '<button class="detail-close" onclick="closeDetail()">&times;</button>'}
         </div>`;
     }
+    if (typeof _panelSyncResizers === 'function') _panelSyncResizers();
 
     // Render active tab (preserve on refresh) or default to Overview
-    const activeTabEl = document.querySelector('#detailTabs .detail-tab.active');
+    const activeTabEl = (_udHost('tabs') || document).querySelector('.detail-tab.active');
     const activeTab = activeTabEl ? activeTabEl.textContent.trim() : 'Overview';
     // Operations and Deal History tabs need async data loading
     if (activeTab === 'Operations' && db === 'dia') {
       _udRenderOperationsAsync(bodyEl);
     } else if (activeTab === 'Deal History') {
       _udRenderDealHistoryAsync(bodyEl);
+    } else if (activeTab === 'Documents') {
+      _udRenderDocumentsAsync(bodyEl);
     } else if (activeTab === 'Activity Log') {
       _udRenderActivityLogAsync(bodyEl);
     } else {
@@ -756,7 +869,7 @@ function _udDismissLead() {
       </div>
     </div>`;
 
-  const body = document.getElementById('detailBody');
+  const body = _udHost('body');
   if (body) body.insertAdjacentHTML('afterbegin', formHTML);
 }
 window._udDismissLead = _udDismissLead;
@@ -885,15 +998,17 @@ function switchUnifiedTab(tabName) {
   // Client routing (UI Phase 1): keep the tab segment in the hash current
   // (replace, so reload keeps the tab and no history entry / loop is created).
   if (typeof _routeUpdateTabHash === 'function') _routeUpdateTabHash(tabName);
-  document.querySelectorAll('#detailTabs .detail-tab').forEach(t => {
+  (_udHost('tabs') || document).querySelectorAll('.detail-tab').forEach(t => {
     t.classList.toggle('active', t.textContent.trim() === tabName);
   });
-  const bodyEl = document.getElementById('detailBody');
+  const bodyEl = _udHost('body');
   // Operations tab may need async data loading
   if (tabName === 'Operations' && _udCache.db === 'dia') {
     _udRenderOperationsAsync(bodyEl);
   } else if (tabName === 'Deal History') {
     _udRenderDealHistoryAsync(bodyEl);
+  } else if (tabName === 'Documents') {
+    _udRenderDocumentsAsync(bodyEl);
   } else if (tabName === 'Activity Log') {
     _udRenderActivityLogAsync(bodyEl);
   } else {
@@ -914,7 +1029,7 @@ function _udMapLegacyTab(name) {
   switch (n.toLowerCase()) {
     case 'property':         return 'Overview';
     case 'lease':            return 'Rent Roll';
-    case 'ownership':        return 'Ownership & CRM';
+    case 'ownership':        return 'Ownership';
     // Round 76bj (2026-04-28): clicking a row in Sales/Avail dashboard tables
     // used to land on Deal History tab. Scott wants Overview as the default
     // landing tab regardless of which dashboard table the click came from —
@@ -927,7 +1042,7 @@ function _udMapLegacyTab(name) {
     case 'overview':         return 'Overview';
     case 'rent roll':        return 'Rent Roll';
     case 'operations':       return 'Operations';
-    case 'ownership & crm':  return 'Ownership & CRM';
+    case 'ownership & crm':  return 'Ownership';   // legacy / DB rail chips
     case 'deal history':     return 'Deal History';
     case 'intel':            return 'Overview';
     case 'activity log':     return 'Activity Log';
@@ -1126,7 +1241,7 @@ async function _udCmsLinkCandidate(medicareId, method) {
   if (!_udCache) return;
   const propertyId = _udCache.ids?.property_id || _udCache.property?.property_id;
   if (!propertyId) { showToast('Property ID not available', 'error'); return; }
-  const bodyEl = document.getElementById('detailBody');
+  const bodyEl = _udHost('body');
   if (bodyEl) bodyEl.innerHTML = '<div style="text-align:center;padding:32px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Linking CMS facility…</p></div>';
   try {
     const headers = { 'Content-Type': 'application/json' };
@@ -1183,7 +1298,7 @@ async function _udCmsClearLink() {
     _opsExtraCache = null;
     _setUdCache(_udCache);
     showToast('CMS link removed', 'success');
-    const bodyEl = document.getElementById('detailBody');
+    const bodyEl = _udHost('body');
     if (bodyEl) _udRenderOperationsAsync(bodyEl);
   } catch (err) {
     showToast('Unlink failed: ' + err.message, 'error');
@@ -1328,6 +1443,7 @@ async function _udRenderOperationsAsync(bodyEl) {
       promises.push(diaQuery('clinic_trends', '*', { filter: mFilter, limit: 1 }).catch(() => []));
       promises.push(diaQuery('clinic_quality_metrics', '*', { filter: mFilter, order: 'snapshot_date.desc', limit: 1 }).catch(() => []));
       promises.push(diaQuery('clinic_financial_estimates', '*', { filter: mFilter, filter2: 'is_primary=eq.true', limit: 1 }).catch(() => []));
+      promises.push(diaQuery('facility_economics', '*', { filter: mFilter, limit: 1 }).catch(() => []));
       promises.push(diaQuery('facility_cost_reports', '*', { filter: mFilter, order: 'fiscal_year_end.desc', limit: 1 }).catch(() => []));
       promises.push(diaQuery('v_clinic_payer_mix', '*', { filter: mFilter, limit: 1 }).catch(() => []));
       promises.push(diaQuery('v_payer_mix_geo_averages', '*', { filter: mFilter, limit: 1 }).catch(() => []));
@@ -1339,7 +1455,7 @@ async function _udRenderOperationsAsync(bodyEl) {
         promises.push(Promise.resolve([]));
       }
       // Hours of operation from medicare_clinics
-      promises.push(diaQuery('medicare_clinics', 'medicare_id,weekly_operating_hours,late_shift,hours_json,hours_summary_text,hours_source,hours_confidence,hours_last_checked_at', { filter: mFilter, limit: 1 }).catch(() => []));
+      promises.push(diaQuery('medicare_clinics', 'medicare_id,stations,number_of_chairs,latest_estimated_patients,ttm_total_treatments,estimated_annual_treatments,weekly_operating_hours,late_shift,hours_json,hours_summary_text,hours_source,hours_confidence,hours_last_checked_at', { filter: mFilter, limit: 1 }).catch(() => []));
       // Competitors: same-county clinics (need county from rankings)
       const county = (_udCache.rankings && _udCache.rankings.county) || null;
       const countyState = (_udCache.rankings && _udCache.rankings.state) || null;
@@ -1356,10 +1472,15 @@ async function _udRenderOperationsAsync(bodyEl) {
       } else {
         promises.push(Promise.resolve([]));
       }
+      // Reconciled clinic economics (model dialysis_econ_reconciled_v1): full per-year
+      // series (revenue/profit/EBITDA over time) + the value crosswalk (rent coverage,
+      // implied value). Both already allowlisted; degrade gracefully (edge redeploy activates).
+      promises.push(diaQuery('v_clinic_econ_series', '*', { filter: mFilter, order: 'fiscal_year.asc', limit: 100 }).catch(() => []));
+      promises.push(diaQuery('v_dia_econ_value_crosswalk', '*', { filter: mFilter, limit: 1 }).catch(() => []));
     }
-    const [patientHistory, trends, quality, financialDetail, costReports, payerMixData, geoPayerData, leaseData, hoursData, competitorData, demographicData] = clinicId
+    const [patientHistory, trends, quality, financialDetail, facilityEconomics, costReports, payerMixData, geoPayerData, leaseData, hoursData, competitorData, demographicData, econSeriesData, valueCrosswalkData] = clinicId
       ? await Promise.all(promises)
-      : [[], [], [], [], [], [], [], [], [], [], []];
+      : [[], [], [], [], [], [], [], [], [], [], [], [], [], []];
 
     // R50 — geographic BD bundle (nearby owners / sales / distance competitors).
     // Heavy haversine scan stays in the dia DB; soft-fails to null.
@@ -1388,6 +1509,7 @@ async function _udRenderOperationsAsync(bodyEl) {
       trends: (trends || [])[0] || null,
       quality: (quality || [])[0] || null,
       financialDetail: (financialDetail || [])[0] || null,
+      facilityEconomics: (facilityEconomics || [])[0] || null,
       costReports: (costReports || [])[0] || null,
       payerMix: (payerMixData || [])[0] || null,
       geoPayerMix: (geoPayerData || [])[0] || null,
@@ -1395,11 +1517,13 @@ async function _udRenderOperationsAsync(bodyEl) {
       hours: (hoursData || [])[0] || null,
       competitors: (competitorData || []).filter(c => c.medicare_id !== clinicId),
       demographics: (demographicData || [])[0] || null,
+      econSeries: (econSeriesData || []),
+      valueCrosswalk: (valueCrosswalkData || [])[0] || null,
       geo: _geo,
     };
   } catch (err) {
     console.warn('Operations extra data load error:', err);
-    _opsExtraCache = { medicare_id: clinicId, patientHistory: [], trends: null, quality: null, financialDetail: null, costReports: null, payerMix: null, geoPayerMix: null, lease: null, hours: null, competitors: [], demographics: null, geo: null };
+    _opsExtraCache = { medicare_id: clinicId, patientHistory: [], trends: null, quality: null, financialDetail: null, facilityEconomics: null, costReports: null, payerMix: null, geoPayerMix: null, lease: null, hours: null, competitors: [], demographics: null, econSeries: [], valueCrosswalk: null, geo: null };
   }
 
   if (bodyEl) bodyEl.innerHTML = _udTabOperations();
@@ -1455,7 +1579,7 @@ function _udSynthPropertyFromFallback(fb, db) {
 function _udRenderFallbackHeader(db, fb) {
   const title = fb.page_title || fb.tenant_operator || fb.tenant_agency || fb.agency || fb.facility_name || fb.address || '(Unknown)';
   const loc = (fb.city || '') + (fb.city && fb.state ? ', ' : '') + (fb.state || '');
-  const el = document.getElementById('detailHeader');
+  const el = _udHost('header');
   if (!el) return;
   el.innerHTML = `
     <div class="detail-header-info">
@@ -1500,8 +1624,12 @@ function _udRenderCompletenessRail() {
   // is positionally aligned to the field catalog rather than dense). Filter
   // them out — they would crash the chip renderer on f.key.
   missing = missing.filter(f => f && typeof f === 'object' && f.key);
-  // Top 6 highest-weight missing fields (already weight-sorted by the view).
-  const top = missing.slice(0, 6);
+  // Top 4 highest-weight missing fields (already weight-sorted by the view).
+  // Redesign 2026-08-15 (§2.1): was 6, which wrapped to two rows above the fold
+  // and pushed the Next-step card — the thing the layout is supposed to be
+  // driving you toward — off screen. Four fits one row at every panel width;
+  // the rest roll into "+N more".
+  const top = missing.slice(0, 4);
 
   const parts = [];
   parts.push('<div class="cr-summary">');
@@ -1574,8 +1702,8 @@ window._udCompletenessChipClick = _udCompletenessChipClick;
 // Map a gap_type to the detail panel tab where the action is best executed.
 function _udNextActionTabForGap(gapType) {
   const t = String(gapType || '');
-  if (t === 'missing_recorded_owner') return 'Ownership & CRM';
-  if (t === 'llc_research_pending')   return 'Ownership & CRM';
+  if (t === 'missing_recorded_owner') return 'Ownership';
+  if (t === 'llc_research_pending')   return 'Ownership';
   if (t === 'lease_tenant_drift')     return 'Rent Roll';
   if (t === 'orphan_sale_owner')      return 'Deal History';
   if (t === 'stale_active_listing')   return 'Overview';
@@ -2014,7 +2142,8 @@ function _udRenderTab(tab) {
     case 'Overview':        return _udTabOverview();
     case 'Rent Roll':       return _udTabRentRoll();
     case 'Operations':      return _udTabOperations();
-    case 'Ownership & CRM': return _udTabOwnership();
+    case 'Ownership': return _udTabOwnership();
+    case 'Ownership & CRM': return _udTabOwnership();  // legacy alias
     case 'Deal History':    return _udTabDealHistory();
     case 'Activity Log':    return _udTabActivityLog();
     default: return '<div class="detail-empty">Unknown tab</div>';
@@ -2548,6 +2677,10 @@ function _udTabOverview() {
     extra += '<div class="overview-ai-research" style="display:none">';
     extra += _udAssistantSection('intel', 'Research Assistant', 'Turn the current notes and property context into a clean analyst summary and recommended next actions.');
     extra += _udResearchIntakeSection();
+    // Research Notes relocated here from the Ownership tab (redesign §2.2).
+    // They are ASSET evidence — they only lived on Ownership for historical
+    // reasons, and they are what the Research Assistant above reads.
+    extra += _udResearchNotesSection();
     extra += '</div></div>';
   }
 
@@ -3431,282 +3564,14 @@ function _udCoerceDate(v) {
   return isNaN(d.getTime()) ? null : d;
 }
 
-/** Project anchorRent from anchorDate to targetDate using step escalation
- *  anchored on leaseCommencement (so bumps fall on lease anniversaries).
- *  1:1 port of projectRentAtDate in api/_shared/rent-projection.js. */
-function _udProjectRent({ anchorRent, anchorDate, targetDate, bumpPct, bumpIntervalMonths, leaseCommencement }) {
-  const anchorD = _udCoerceDate(anchorDate);
-  const targetD = _udCoerceDate(targetDate);
-  if (anchorRent == null || !anchorD || !targetD || !bumpIntervalMonths) return null;
-  const baseD = _udCoerceDate(leaseCommencement) || anchorD;
-  const pct = Number(bumpPct || 0);
-  const bumps = (d) => {
-    const m = _udMonthsBetween(baseD, d);
-    return m <= 0 ? 0 : Math.floor(m / bumpIntervalMonths);
-  };
-  const delta = bumps(targetD) - bumps(anchorD);
-  let projected;
-  if (pct === 0 || delta === 0)  projected = Number(anchorRent);
-  else if (delta > 0)            projected = Number(anchorRent) * Math.pow(1 + pct, delta);
-  else                           projected = Number(anchorRent) / Math.pow(1 + pct, -delta);
-  return { projected_rent: Math.round(projected * 100) / 100, bumps_applied: delta };
-}
+// ─── rent source-tier policy + escalation parser ─────────────────────────────
+// MOVED to detail-rent.js (W6.5 Stage 2, Unit 1 — 2026-08-20): _udProjectRent,
+// _udPickCurrentRent, _udParseRentEscalation, _udBuildRentSchedule. Loaded as a
+// classic script BEFORE this file, same global scope, callable unchanged.
+// The rent RENDERERS (_udRenderRentChart / _udRenderRentRoll / _udRentPsfTagHtml)
+// and _udCoerceDate stay here.
+// ─────────────────────────────────────────────────────────────────────────────
 
-/** Pick the rent-of-record for `property`+`lease` at `targetDate` (default: today)
- *  and project it. Returns { rent, rent_psf, tier, source, anchor_date, bumps_applied }
- *  or null if nothing is available. Never reads last_known_rent. */
-function _udPickCurrentRent(property, lease, em, targetDate) {
-  const p = property || {};
-  const l = lease || {};
-  const e = em || {};
-  const today = targetDate || new Date().toISOString().slice(0, 10);
-
-  const bumpPct      = p.lease_bump_pct != null ? Number(p.lease_bump_pct) : null;
-  const bumpInterval = p.lease_bump_interval_mo != null ? Number(p.lease_bump_interval_mo) : null;
-  const leaseStart   = l.lease_start || e.lease_commencement || p.lease_commencement || null;
-  const leasedSF     = l.leased_area != null ? Number(l.leased_area)
-                     : (e.sf_leased != null ? Number(e.sf_leased)
-                     : (p.rba != null ? Number(p.rba) : null));
-
-  // Tier 1/2/5/6: property.anchor_rent triplet — canonical cross-sale anchor.
-  if (p.anchor_rent != null && p.anchor_rent_date && bumpPct != null && bumpInterval) {
-    const src = String(p.anchor_rent_source || '').toLowerCase();
-    const tier = src === 'lease_confirmed' ? 1
-               : src === 'om_confirmed'    ? 2
-               : src === 'manual_entry'    ? 5
-               : src === 'costar_stated'   ? 6
-               : 3;
-    const proj = _udProjectRent({
-      anchorRent: Number(p.anchor_rent),
-      anchorDate: p.anchor_rent_date,
-      targetDate: today,
-      bumpPct, bumpIntervalMonths: bumpInterval,
-      leaseCommencement: leaseStart || p.anchor_rent_date,
-    });
-    if (proj && proj.projected_rent != null) {
-      return {
-        rent:           proj.projected_rent,
-        rent_psf:       leasedSF ? Math.round((proj.projected_rent / leasedSF) * 100) / 100 : null,
-        tier,
-        source:         `anchor:${src || 'unknown'}`,
-        anchor_rent:    Number(p.anchor_rent),
-        anchor_date:    p.anchor_rent_date,
-        bumps_applied:  proj.bumps_applied,
-      };
-    }
-  }
-
-  // Tier 3/4/5: lease-row annual_rent projected from lease_start → today.
-  const baseRent = l.annual_rent != null ? Number(l.annual_rent)
-                 : (e.annual_rent != null ? Number(e.annual_rent) : null);
-  if (baseRent != null && leaseStart) {
-    const conf = String(l.source_confidence || '').toLowerCase();
-    const tier = conf === 'documented' ? 3
-               : conf === 'estimated'  ? 4
-               : 5;
-    if (bumpPct != null && bumpInterval) {
-      const proj = _udProjectRent({
-        anchorRent: baseRent,
-        anchorDate: leaseStart,
-        targetDate: today,
-        bumpPct, bumpIntervalMonths: bumpInterval,
-        leaseCommencement: leaseStart,
-      });
-      if (proj && proj.projected_rent != null) {
-        return {
-          rent:           proj.projected_rent,
-          rent_psf:       leasedSF ? Math.round((proj.projected_rent / leasedSF) * 100) / 100 : null,
-          tier,
-          source:         `lease:${conf || 'unknown'}`,
-          anchor_rent:    baseRent,
-          anchor_date:    leaseStart,
-          bumps_applied:  proj.bumps_applied,
-        };
-      }
-    }
-    // No escalation metadata — return the base rent unprojected.
-    return {
-      rent:           baseRent,
-      rent_psf:       leasedSF ? Math.round((baseRent / leasedSF) * 100) / 100 : null,
-      tier,
-      source:         `lease:${conf || 'unknown'}:unprojected`,
-      anchor_rent:    baseRent,
-      anchor_date:    leaseStart,
-      bumps_applied:  0,
-    };
-  }
-
-  return null;
-}
-
-window._udPickCurrentRent = _udPickCurrentRent;
-window._udProjectRent     = _udProjectRent;
-
-// ── Rent escalation parser ────────────────────────────────────────────────
-//
-// Parses freeform rent-escalation strings into a structured schedule.
-// Supported phrasings (case-insensitive):
-//   "2% annually"            → { stepPct: 0.02, intervalYears: 1 }
-//   "2% per year"            → same
-//   "3.5% yearly"            → { stepPct: 0.035, intervalYears: 1 }
-//   "10% every 5 years"      → { stepPct: 0.10, intervalYears: 5 }
-//   "$0.50/sf per year"      → { stepPsf: 0.50, intervalYears: 1 }
-//   "CPI" / "FMV" / unparsed → null (caller falls back to flat rent)
-function _udParseRentEscalation(text) {
-  if (!text) return null;
-  const s = String(text).toLowerCase().replace(/\s+/g, ' ').trim();
-  if (!s) return null;
-  if (/\bcpi\b/.test(s) || /\bfmv\b/.test(s) || /\bmarket\b/.test(s)) {
-    // Index-linked or FMV reset — not a deterministic step, skip.
-    return null;
-  }
-  // "Fixed" rent — explicitly 0% bump.
-  if (/\bfixed\b/.test(s) || /\bflat\b/.test(s)) {
-    return { stepPct: 0, intervalYears: 1 };
-  }
-
-  // "X% every N years"
-  let m = s.match(/(\d+(?:\.\d+)?)\s*%\s*every\s*(\d+)\s*year/);
-  if (m) return { stepPct: parseFloat(m[1]) / 100, intervalYears: parseInt(m[2], 10) };
-
-  // "X% annually" / "X% per year" / "X% yearly" / "X% / year"
-  m = s.match(/(\d+(?:\.\d+)?)\s*%\s*(?:annually|per\s*year|yearly|\/\s*year|a\s*year|p\.?a\.?)/);
-  if (m) return { stepPct: parseFloat(m[1]) / 100, intervalYears: 1 };
-
-  // "$X/sf per year" (rent/psf bump in dollars, e.g. "$0.50/SF annually")
-  m = s.match(/\$?(\d+(?:\.\d+)?)\s*\/\s*sf\s*(?:annually|per\s*year|yearly)/);
-  if (m) return { stepPsf: parseFloat(m[1]), intervalYears: 1 };
-
-  // Bare "X%" with no interval — assume annual (safe default for triple-net).
-  m = s.match(/^(\d+(?:\.\d+)?)\s*%$/);
-  if (m) return { stepPct: parseFloat(m[1]) / 100, intervalYears: 1 };
-
-  return null;
-}
-
-/**
- * Build a structured rent schedule for a lease. Prefers rows from
- * lease_rent_schedule when present; otherwise synthesizes one from the
- * parsed escalation string + base rent + term.
- * Returns an array of { year, period_start, period_end, base_rent, rent_psf,
- * bump_pct, cumulative_rent, is_option_window }.
- */
-function _udBuildRentSchedule(lease, storedRows, em) {
-  // Resolve leased SF once — needed in both branches to backfill rent_psf when
-  // upstream rows carry a base_rent but no rent_psf.
-  const prop = _udCache?.property || {};
-  let leasedSF = lease?.leased_area != null ? Number(lease.leased_area)
-                 : (em?.sf_leased != null ? Number(em.sf_leased) : null);
-  if (!leasedSF && prop.rba)           leasedSF = Number(prop.rba);
-  if (!leasedSF && prop.building_sf)   leasedSF = Number(prop.building_sf);
-  if (!leasedSF && prop.building_size) leasedSF = Number(prop.building_size);
-  if (!(leasedSF > 0)) leasedSF = null;
-
-  // Case 1: DB-sourced rows — use as-is (authoritative), but compute rent_psf
-  // from base_rent / leasedSF when the stored row has a null rent_psf.
-  if (Array.isArray(storedRows) && storedRows.length > 0) {
-    let cum = 0;
-    return storedRows
-      .slice()
-      .sort((a, b) => (a.lease_year || 0) - (b.lease_year || 0))
-      .map(r => {
-        const base = r.base_rent != null ? Number(r.base_rent) : null;
-        cum += base || 0;
-        let rentPsf = r.rent_psf != null ? Number(r.rent_psf) : null;
-        if (rentPsf == null && base != null && leasedSF) {
-          rentPsf = Math.round((base / leasedSF) * 100) / 100;
-        }
-        return {
-          year: r.lease_year,
-          period_start: r.period_start,
-          period_end: r.period_end,
-          base_rent: base,
-          rent_psf: rentPsf,
-          bump_pct: r.bump_pct != null ? Number(r.bump_pct) : null,
-          cumulative_rent: r.cumulative_rent != null ? Number(r.cumulative_rent) : cum,
-          is_option_window: !!r.is_option_window,
-          source: r.source || 'db',
-        };
-      });
-  }
-
-  // Case 2: synthesize from base rent + escalation info.
-  const baseRent =
-    (lease?.annual_rent != null ? Number(lease.annual_rent) : null) ??
-    (em?.annual_rent != null ? Number(em.annual_rent) : null);
-  if (!baseRent || baseRent <= 0) return [];
-
-  const start = lease?.lease_start || em?.lease_commencement || prop.lease_commencement;
-  const end   = lease?.lease_expiration || em?.lease_expiration;
-  if (!start) return [];
-  const startD = new Date(start);
-  const endD   = end ? new Date(end) : null;
-  if (isNaN(startD)) return [];
-  let termYears;
-  if (endD && !isNaN(endD)) {
-    termYears = Math.max(1, Math.round((endD - startD) / (365.25 * 24 * 3600 * 1000)));
-  } else if (lease?.initial_term_years) {
-    termYears = Math.round(Number(lease.initial_term_years));
-  } else {
-    termYears = 10; // reasonable default for NNN single-tenant
-  }
-  termYears = Math.min(termYears, 40); // cap runaway synthesis
-
-  // Escalation source priority: verified lease.rent_cagr → parsed escalation
-  // text → property-level lease_bump_pct / lease_bump_interval_mo → 0%.
-  let stepPct = 0;
-  let intervalYears = 1;
-  let stepPsf = 0;
-  if (lease?.rent_cagr != null) {
-    stepPct = Number(lease.rent_cagr);
-    intervalYears = 1;
-  } else {
-    const parsed =
-      _udParseRentEscalation(lease?.renewal_options) ||
-      _udParseRentEscalation(em?.rent_escalations);
-    if (parsed) {
-      stepPct = parsed.stepPct || 0;
-      stepPsf = parsed.stepPsf || 0;
-      intervalYears = parsed.intervalYears || 1;
-    } else if (prop.lease_bump_pct != null) {
-      // properties.lease_bump_pct is stored as a decimal (0.02 = 2%);
-      // lease_bump_interval_mo is months (60 = every 5 years).
-      stepPct = Number(prop.lease_bump_pct);
-      const mo = Number(prop.lease_bump_interval_mo);
-      intervalYears = Number.isFinite(mo) && mo >= 12 ? Math.max(1, Math.round(mo / 12)) : 1;
-    }
-  }
-
-  const rows = [];
-  let rent = baseRent;
-  let cum = 0;
-  for (let y = 1; y <= termYears; y++) {
-    // Apply step at each interval boundary (y > 1 and (y-1) % interval === 0)
-    const bumpThisYear = (y > 1 && (y - 1) % intervalYears === 0);
-    if (bumpThisYear) {
-      if (stepPct) rent = rent * (1 + stepPct);
-      else if (stepPsf && leasedSF) rent = rent + (stepPsf * leasedSF);
-    }
-    const yearStart = new Date(startD);
-    yearStart.setFullYear(startD.getFullYear() + (y - 1));
-    const yearEnd = new Date(startD);
-    yearEnd.setFullYear(startD.getFullYear() + y);
-    yearEnd.setDate(yearEnd.getDate() - 1);
-    cum += rent;
-    rows.push({
-      year: y,
-      period_start: yearStart.toISOString().slice(0, 10),
-      period_end:   yearEnd.toISOString().slice(0, 10),
-      base_rent: Math.round(rent * 100) / 100,
-      rent_psf:  leasedSF ? Math.round((rent / leasedSF) * 100) / 100 : null,
-      bump_pct:  bumpThisYear ? stepPct : 0,
-      cumulative_rent: Math.round(cum * 100) / 100,
-      is_option_window: false,
-      source: 'parsed_estimate',
-    });
-  }
-  return rows;
-}
 
 /**
  * Render a stepped-line SVG chart of annual rent vs lease year.
@@ -3830,7 +3695,7 @@ function _udRenderRentRoll(leases, storedScheduleMap, em) {
 function switchLeaseSubView(view) {
   if (!_udCache) return;
   _udCache.leaseSubView = view;
-  const body = document.getElementById('detailBody');
+  const body = _udHost('body');
   if (body) body.innerHTML = _udRenderTab('Lease');
 }
 window.switchLeaseSubView = switchLeaseSubView;
@@ -3861,6 +3726,59 @@ function _udLeaseRowH(label, valueHtml, isEst) {
     <div class="detail-lbl">${esc(label)}</div>
     <div class="detail-val">${valueHtml}${badge}</div>
   </div>`;
+}
+
+function _udLeaseBuildingSf(lease, em) {
+  const p = _udCache?.property || {};
+  const sf = lease?.leased_area ?? lease?.leased_sf ?? em?.sf_leased ??
+             p.building_size ?? p.building_sf ?? p.rba ?? _udCache?.fallback?.building_sf;
+  const n = Number(sf);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function _udRentPsfTagHtml(rent, sf, label) {
+  const r = Number(rent);
+  const s = Number(sf);
+  if (!Number.isFinite(r) || !Number.isFinite(s) || s <= 0) return null;
+  const psf = Math.round((r / s) * 100) / 100;
+  return esc('$' + psf.toFixed(2) + '/SF') +
+    ` <span style="color:var(--purple,#a78bfa);font-size:11px;font-style:italic">Derived: ${esc(label)} $${Math.round(r).toLocaleString()} ÷ ${Math.round(s).toLocaleString()} SF</span>`;
+}
+
+function _udPickCurrentRentFromSchedule(lease, storedRows, em) {
+  if (!Array.isArray(storedRows) || storedRows.length === 0) return null;
+  const rows = _udBuildRentSchedule(lease, storedRows, em);
+  if (!rows.length) return null;
+  const now = new Date();
+  const current = rows.find(r => {
+    const s = r.period_start ? new Date(r.period_start) : null;
+    const e = r.period_end ? new Date(r.period_end) : null;
+    return s && !isNaN(s) && s <= now && (!e || isNaN(e) || now <= e);
+  }) || rows.filter(r => {
+    const s = r.period_start ? new Date(r.period_start) : null;
+    return s && !isNaN(s) && s <= now;
+  }).pop() || rows[0];
+  if (!current || current.base_rent == null) return null;
+  return {
+    rent: current.base_rent,
+    rent_psf: current.rent_psf,
+    source: 'lease_rent_schedule',
+    derived: `Derived: lease_rent_schedule ${current.period_start || ('Y' + (current.year || '?'))} as of ${now.toISOString().slice(0, 10)}`,
+  };
+}
+
+function _udOptionBumpsContinueRow(lease) {
+  const text = String(lease?.option_bumps_continue_text || lease?.option_rent_escalations ||
+    lease?.renewal_option_text || lease?.renewal_options || '').trim();
+  if (!text) return { html: esc('Not on file'), est: false };
+  if (/\b(same|continue|continuing)\b.{0,80}\b(escalation|increase|rent bump|bump)\b/i.test(text) ||
+      /\b(escalation|increase|rent bump|bump)\b.{0,80}\b(same|continue|continuing)\b/i.test(text)) {
+    return { html: esc('Yes') + ` <span style="color:var(--text3);font-size:11px">(source: renewal terms)</span>`, est: false };
+  }
+  if (/\b(fmv|fair market|market rent|then market|negotiated)\b/i.test(text)) {
+    return { html: esc('No / reset to market') + ` <span style="color:var(--text3);font-size:11px">(source: renewal terms)</span>`, est: false };
+  }
+  return { html: esc('Not on file'), est: false };
 }
 
 function _udTabLease() {
@@ -3967,13 +3885,45 @@ function _udTabLease() {
       ? { html: esc(l.data_source), est: false }
       : (estimatesOnly ? { html: esc('costar_estimate'), est: true } : { html: null, est: false });
 
+    const buildingSf = _udLeaseBuildingSf(l, em);
+    const year1Rent = l.annual_rent != null ? Number(l.annual_rent)
+                    : (em.annual_rent != null ? Number(em.annual_rent) : null);
+    let year1PsfHtml = null;
+    const storedYear1Psf = l.rent_psf ?? l.rent_per_sf ?? em.rent_per_sf;
+    if (storedYear1Psf != null && storedYear1Psf !== '') {
+      const psf = Number(storedYear1Psf);
+      year1PsfHtml = Number.isFinite(psf) ? esc('$' + psf.toFixed(2) + '/SF') : esc(String(storedYear1Psf));
+    } else if (year1Rent != null && buildingSf) {
+      year1PsfHtml = _udRentPsfTagHtml(year1Rent, buildingSf, 'year-1 rent');
+    }
+    const year1RentRow = year1Rent != null
+      ? {
+          html: esc(fmt(year1Rent)) + (year1PsfHtml ? ` <span style="color:var(--text3)">·</span> ${year1PsfHtml}` : ''),
+          est: !(l.annual_rent != null),
+        }
+      : { html: esc('Not on file'), est: false };
+
+    const storedRows = schedMap?.get(l.lease_id) || null;
+    const scheduledCurrent = _udPickCurrentRentFromSchedule(l, storedRows, em);
+    const projectedCurrent = scheduledCurrent || _udPickCurrentRent(_udCache?.property || {}, l, em);
+    const currentRentRow = projectedCurrent && projectedCurrent.rent != null
+      ? {
+          html: esc(fmt(projectedCurrent.rent)) +
+            (projectedCurrent.rent_psf != null
+              ? ` <span style="color:var(--text3)">·</span> ${esc('$' + Number(projectedCurrent.rent_psf).toFixed(2) + '/SF')}`
+              : (buildingSf ? ` <span style="color:var(--text3)">·</span> ${_udRentPsfTagHtml(projectedCurrent.rent, buildingSf, 'current rent')}` : '')) +
+            ` <span style="color:var(--purple,#a78bfa);font-size:11px;font-style:italic">${esc(projectedCurrent.derived || `Derived: ${projectedCurrent.source || 'anchor rent'}; bumps applied ${projectedCurrent.bumps_applied ?? 0}`)}</span>`,
+          est: false,
+        }
+      : { html: esc('Not on file'), est: false };
+
     const leaseSections = [
       { label: 'Tenant',            row: pick(l.tenant, em.tenant_name) },
       { label: 'Commencement',      row: pick(l.lease_start, em.lease_commencement, dateFmt) },
       { label: 'Expiration',        row: pick(l.lease_expiration, em.lease_expiration, dateFmt) },
       { label: 'Term Remaining',    row: termRow },
-      { label: 'Annual Rent',       row: pick(l.annual_rent, em.annual_rent, moneyFmt) },
-      { label: 'Rent PSF',          row: pick(l.rent_psf, em.rent_per_sf, moneyFmt) },
+      { label: 'Year-1 rent + $/SF', row: year1RentRow },
+      { label: 'Current rent + $/SF', row: currentRentRow },
       { label: 'Expense Structure', row: (function() {
         const base = pick(l.expense_structure, em.expense_structure);
         if (!base.html) return base;
@@ -3986,6 +3936,7 @@ function _udTabLease() {
         return base;
       })() },
       { label: 'Renewal Options',   row: pick(l.renewal_options, em.renewal_options) },
+      { label: 'Bumps continue through options?', row: _udOptionBumpsContinueRow(l) },
       { label: 'Guarantor',         row: pick(l.guarantor, em.guarantor) },
       { label: 'Escalations',       row: esc_row },
       { label: 'Data Source',       row: dataSourceRow },
@@ -4038,6 +3989,85 @@ function _udTabLease() {
 }
 
 // ─── OPERATIONS TAB ──────────────────────────────────────────────────────────
+
+/**
+ * Resolve a clinic's "corrected clinic economics" (annual revenue, operating
+ * profit, margin) from the data the operations tab already loads.
+ *
+ * BUGFIX (2026-08): both the Operations tab and the client export used to read
+ * these figures ONLY from `ext.facilityEconomics` (the `facility_economics`
+ * HCRIS table). That table has NO estimated_annual_revenue / ttm_revenue /
+ * estimated_operating_profit columns at all, so revenue, operating profit and
+ * margin rendered "Not on file" / N/A for EVERY facility — even though the
+ * corrected HCRIS-actual figures are present on `v_property_rankings`
+ * (medicare_clinics denorm) for 7,631 of 7,655 clinics and are exactly what the
+ * report's Comparative Benchmarking revenue rank already uses. The N/A headline
+ * therefore contradicted its own revenue percentile.
+ *
+ * Source ladder (revenue & profit are always taken as a matched pair from the
+ * SAME source so the derived margin stays consistent):
+ *   1. v_property_rankings / medicare_clinics denorm (`r`) — the corrected
+ *      clinic economics (revenue_calc_method = hcris_actual), the same source
+ *      the benchmarking rank reads. Keeps the headline and the rank in agreement.
+ *   2. clinic_financial_estimates primary row (`fin`) — the modeled estimate.
+ *   3. facility_economics HCRIS (`fe`) — computed revenue_per_treatment ×
+ *      total_treatments, profit = revenue − total_costs.
+ */
+function _udResolveEconomics(r, fin, fe) {
+  r = r || {}; fin = fin || {}; fe = fe || {};
+  const num = v => (v == null || v === '' || !isFinite(Number(v))) ? null : Number(v);
+  let revenue = null, profit = null, method = null, source = null;
+
+  // 1) v_property_rankings / medicare_clinics denorm — the ONE reconciled truth figure.
+  //    Since 2026-08-13 this carries the unified per-(clinic,year) reconciliation
+  //    (model dialysis_econ_reconciled_v1 → medicare_clinics.revenue_calc_method='reconciled_truth_v1'):
+  //    HCRIS-anchored treatments+cost, payer-mix-weighted (MA-corrected) reimbursement,
+  //    plausibility-gated. estimated_annual_revenue/_profit ARE that figure for reconciled clinics.
+  let rev1 = num(r.estimated_annual_revenue); if (rev1 == null) rev1 = num(r.ttm_revenue);
+  let prof1 = num(r.estimated_annual_profit); if (prof1 == null) prof1 = num(r.ttm_operating_profit);
+  if (rev1 != null && prof1 != null && rev1 > 0) {
+    revenue = rev1; profit = prof1;
+    method = r.revenue_calc_method || 'hcris_actual';
+    source = (method === 'reconciled_truth_v1')
+      ? 'Reconciled economics (HCRIS-anchored)'
+      : 'Corrected clinic economics';
+  }
+
+  // 2) clinic_financial_estimates primary estimate (fallback for clinics not yet reconciled)
+  if (revenue == null || profit == null) {
+    const rev2 = num(fin.estimated_annual_revenue);
+    let prof2 = num(fin.estimated_annual_profit); if (prof2 == null) prof2 = num(fin.estimated_operating_profit);
+    if (rev2 != null && prof2 != null && rev2 > 0) {
+      revenue = rev2; profit = prof2;
+      method = fin.estimate_source || fin.revenue_calc_method || 'estimated';
+      source = fin.estimate_source ? ('Estimate · ' + fin.estimate_source) : 'Clinic financial estimate';
+    }
+  }
+
+  // 3) facility_economics HCRIS last-resort compute. NOTE: facility_economics is EMPTY in prod
+  //    (0 rows) — the reconciliation (tier 1) supersedes it; retained only as a defensive fallback.
+  if (revenue == null) {
+    const rpt = num(fe.revenue_per_treatment), tx = num(fe.total_treatments), cost = num(fe.total_costs);
+    if (rpt != null && tx != null && tx > 0) {
+      revenue = rpt * tx;
+      if (profit == null && cost != null) profit = revenue - cost;
+      method = 'hcris_facility'; source = 'HCRIS cost report';
+    }
+  }
+
+  const margin = (revenue != null && profit != null && revenue > 0) ? (profit / revenue) * 100 : null;
+  const basis = (revenue != null && profit != null && revenue > 0) ? 'corrected' : 'not_on_file';
+  // Reconciled per-year trend (volume-driven; rates held at CY2024) + confidence, from v_property_rankings.
+  const revYoY = num(r.reconciled_revenue_yoy_pct);
+  const revCagr = num(r.reconciled_revenue_cagr_pct);
+  const reconciledConfidence = r.reconciled_confidence_tier || null;
+  const isReconciled = (method === 'reconciled_truth_v1');
+  const ebitda = num(r.reconciled_ebitda);
+  const ebitdaMargin = (ebitda != null && revenue != null && revenue > 0) ? (ebitda / revenue) * 100 : null;
+  return { revenue: revenue, profit: profit, margin: margin, method: method, source: source, basis: basis,
+           revYoY: revYoY, revCagr: revCagr, reconciledConfidence: reconciledConfidence, isReconciled: isReconciled,
+           ebitda: ebitda, ebitdaMargin: ebitdaMargin };
+}
 
 function _udTabOperations() {
   const db = _udCache.db;
@@ -4294,7 +4324,8 @@ function _udTabOperations() {
     const pt = cmsLink.patient || {};
     effectiveRankings = {
       medicare_id:                cmsLink.medicare_id,
-      latest_estimated_patients:  pt.total_patients || pt.patient_count || null,
+      latest_estimated_patients:  f.latest_estimated_patients || pt.total_patients || pt.patient_count || null,
+      ttm_total_treatments:       f.ttm_total_treatments || f.estimated_annual_treatments || null,
       number_of_chairs:           f.number_of_chairs || f.stations || null,
       stations:                   f.stations || f.number_of_chairs || null,
       star_rating:                q.star_rating != null ? q.star_rating : null,
@@ -4322,11 +4353,13 @@ function _udTabOperations() {
   const trends = ext.trends || (cmsLink && cmsLink.trends) || {};
   const quality = ext.quality || (cmsLink && cmsLink.quality) || {};
   const finDetail = ext.financialDetail || {};
+  const facilityEconomics = ext.facilityEconomics || {};
   const costRpt = ext.costReports || (cmsLink && cmsLink.cost) || {};
   const payerMixHcris = ext.payerMix || (cmsLink && cmsLink.payer) || null;
   const geoPayerMix = ext.geoPayerMix || null;
   const lease = ext.lease || {};
-  const hoursInfo = ext.hours || null;
+  const clinicProfile = ext.hours || (cmsLink && cmsLink.facility) || {};
+  const hoursInfo = clinicProfile || null;
   const patientHistory = ext.patientHistory || [];
   const operator = (cmsLink && cmsLink.operator) || _udDetectOperator(r);
   let html = '';
@@ -4350,25 +4383,42 @@ function _udTabOperations() {
     html += '</div>';
   }
 
-  // ── Reconcile patient census: prefer latest snapshot over rankings aggregate ──
+  // ── Reconcile patient census: CMS clinic value is current; history is trend context ──
+  const clinicPatientCount = clinicProfile.latest_estimated_patients != null
+    ? Number(clinicProfile.latest_estimated_patients)
+    : (r.latest_estimated_patients != null ? Number(r.latest_estimated_patients) : null);
   const latestSnapshotPt = patientHistory.length > 0
     ? Number(patientHistory[patientHistory.length - 1].total_patients || patientHistory[patientHistory.length - 1].patient_count || 0)
     : 0;
-  const bestPatientCount = latestSnapshotPt > 0 ? latestSnapshotPt : (r.latest_estimated_patients ? Number(r.latest_estimated_patients) : null);
+  // Reconciled point-in-time census (dialysis_econ_reconciled_v1) — HCRIS-treatment
+  // anchored, the SAME volume basis as revenue/cost/profit. This is the single
+  // accurate census: it replaces the facility_patient_counts throughput series
+  // (patients_last_year etc. = annual patients SERVED, ~4.7x a concurrent census and
+  // physically impossible on the chair count for ~89% of clinics) for the current
+  // headline, the historical trend, and the projections. Falls back to the CMS
+  // latest-census / snapshot only when a clinic has no reconciled HCRIS series.
+  const _num0 = v => (v == null || v === '' || !isFinite(Number(v))) ? null : Number(v);
+  const reconCensusCurrent = _num0(r.reconciled_census_current);
+  const reconCensusLast    = _num0(r.reconciled_census_last_year);
+  const reconCensus3yr     = _num0(r.reconciled_census_3yr_avg);
+  const hasReconCensus     = reconCensusCurrent != null;
+  const bestPatientCount = hasReconCensus
+    ? reconCensusCurrent
+    : (clinicPatientCount || (latestSnapshotPt > 0 ? latestSnapshotPt : null));
 
   // ── Reconcile operating margin ──
   // Always prefer computing margin from profit / revenue for consistency,
   // since ttm_operating_margin may be stored as a raw ratio (0.008) instead of a percentage (0.8)
-  const bestProfit = finDetail.estimated_operating_profit || r.ttm_operating_profit;
-  const bestRevenue = finDetail.estimated_annual_revenue || r.estimated_annual_revenue || r.ttm_revenue;
-  let margin = null;
-  if (bestProfit && bestRevenue && Number(bestRevenue) > 0) {
-    margin = (Number(bestProfit) / Number(bestRevenue)) * 100;
-  } else if (r.ttm_operating_margin != null) {
-    // Fallback: use stored value, converting ratio to percentage if needed
-    margin = Number(r.ttm_operating_margin);
-    if (Math.abs(margin) > 0 && Math.abs(margin) < 1) margin = margin * 100;
-  }
+  // Corrected clinic economics — resolved from v_property_rankings / medicare_clinics
+  // (the denorm the benchmarking rank uses), falling back to the primary estimate
+  // and then computed HCRIS. See _udResolveEconomics for why facilityEconomics
+  // alone can never populate these (missing columns).
+  const _econ = _udResolveEconomics(r, finDetail, facilityEconomics);
+  const correctedRevenue = _econ.revenue;
+  const correctedProfit = _econ.profit;
+  const bestProfit = correctedProfit;
+  const bestRevenue = correctedRevenue;
+  const margin = _econ.margin;
 
   // ── Export Toolbar ──
   html += '<div style="display:flex;justify-content:flex-end;margin-bottom:8px">';
@@ -4388,15 +4438,19 @@ function _udTabOperations() {
   // regardless of the underlying cause.
   const cmsLinked = !!(r && (r.medicare_id || r.linked_medicare_facility_id || r.ccn));
 
-  // Revenue KPI
-  const estRevenue = finDetail.estimated_annual_revenue || r.estimated_annual_revenue || r.ttm_revenue;
+  // Revenue KPI — reconciled truth figure + volume-driven trend + confidence
+  const estRevenue = correctedRevenue;
+  const _reconInfo = _econ.isReconciled
+    ? ('Reconciled (HCRIS-anchored, payer-mix-weighted)' + (_econ.reconciledConfidence ? ' · ' + _econ.reconciledConfidence + ' confidence' : ''))
+    : (_econ.source || 'Corrected clinic economics');
   kpis.push({
     label: 'Est. Annual Revenue',
-    value: estRevenue ? '$' + _fmtCompact(estRevenue) : 'N/A',
+    value: estRevenue ? '$' + _fmtCompact(estRevenue) : 'Not on file',
     color: estRevenue ? '' : 'var(--text3)',
+    trend: (estRevenue && _econ.revYoY != null) ? _trendArrow(_econ.revYoY, 'YoY') : undefined,
     info: estRevenue
-      ? 'Revenue estimated using 4-payer treatment model'
-      : (cmsLinked ? 'No payer mix / patient counts on file yet' : 'No CMS link — match the property to a Medicare facility to populate')
+      ? (_reconInfo + (_econ.revCagr != null ? ' · ' + (_econ.revCagr >= 0 ? '+' : '') + _econ.revCagr + '%/yr CAGR' : ''))
+      : (cmsLinked ? 'Reconciled economics not on file; property-denorm revenue is retired' : 'No CMS link — match the property to a Medicare facility to populate')
   });
 
   // Operating Margin KPI
@@ -4410,6 +4464,17 @@ function _udTabOperations() {
       : (cmsLinked ? 'No CMS cost report on file for this facility' : 'No CMS link')
   });
 
+  // EBITDA KPI — operating profit + 10-K-anchored D&A (size/age-distributed)
+  if (_econ.ebitda != null) {
+    kpis.push({
+      label: 'Est. EBITDA',
+      value: '$' + _fmtCompact(_econ.ebitda),
+      color: '',
+      info: 'Operating profit + estimated D&A (10-K-anchored, size/age-adjusted)'
+            + (_econ.ebitdaMargin != null ? ' · ' + _econ.ebitdaMargin.toFixed(1) + '% margin' : '')
+    });
+  }
+
   // Patient Census KPI — use reconciled best count
   kpis.push({
     label: 'Patient Census',
@@ -4417,7 +4482,7 @@ function _udTabOperations() {
     color: '',
     trend: _trendArrow(r.patient_yoy_pct, 'YoY'),
     info: bestPatientCount
-      ? (latestSnapshotPt > 0 ? 'From latest CMS snapshot' : 'From rankings aggregate')
+      ? (clinicPatientCount ? 'From medicare_clinics.latest_estimated_patients' : 'From latest facility_patient_counts trend snapshot')
       : (cmsLinked ? 'No CMS snapshot on file yet' : 'No CMS link — match facility to populate')
   });
 
@@ -4490,7 +4555,7 @@ function _udTabOperations() {
   // 1b. CMS FACILITY PROFILE — operator, CCN, QIP, last survey, staffing, treatment count
   // ════════════════════════════════════════════════════════════════════════════
 
-  const facility = (cmsLink && cmsLink.facility) || {};
+  const facility = clinicProfile;
   const latestPt = (cmsLink && cmsLink.patient) || {};
   const qipScore = quality.quality_incentive_program_score
                 ?? quality.qip_total_score
@@ -4510,7 +4575,8 @@ function _udTabOperations() {
                   || costRpt.staff_total
                   || r.total_employees
                   || null;
-  const latestTreatments = (costRpt.total_medicare_treatments != null ? costRpt.total_medicare_treatments : null)
+  const latestTreatments = facility.ttm_total_treatments
+                        || (costRpt.total_medicare_treatments != null ? costRpt.total_medicare_treatments : null)
                         || r.ttm_total_treatments
                         || r.estimated_annual_treatments
                         || null;
@@ -4518,7 +4584,7 @@ function _udTabOperations() {
                         : (r.patient_yoy_pct != null ? Number(r.patient_yoy_pct) : null);
   const ccn = r.medicare_id || (cmsLink && cmsLink.medicare_id) || facility.medicare_id || '';
   const npi = facility.npi || r.npi || '';
-  const stationsVal = r.number_of_chairs || r.stations || facility.number_of_chairs || facility.stations || null;
+  const stationsVal = facility.stations || facility.number_of_chairs || r.stations || r.number_of_chairs || null;
 
   html += '<div class="detail-section">';
   html += '<div class="detail-section-title" style="display:flex;align-items:center;gap:8px">';
@@ -4556,11 +4622,11 @@ function _udTabOperations() {
   html += '<div class="detail-section-title">Financial Summary</div>';
 
   // Source badge
-  const revSource = finDetail.estimate_source || r.revenue_calc_method || 'CMS Patient Count';
+  const revSource = estRevenue ? (_econ.source || 'Corrected clinic economics') : 'Not on file';
   html += '<div style="margin-bottom:10px"><span style="display:inline-block;font-size:10px;padding:2px 8px;border-radius:10px;background:var(--purple);color:#fff;font-weight:600;letter-spacing:0.3px">' + esc(revSource) + '</span></div>';
 
   html += '<div class="detail-grid">';
-  html += _rowMoney('Est. Annual Revenue', finDetail.estimated_annual_revenue || r.estimated_annual_revenue);
+  html += estRevenue ? _rowMoney('Est. Annual Revenue', estRevenue) : _row('Est. Annual Revenue', 'Not on file');
 
   // ── Reconcile Operating Costs ──
   // Priority: 1) HCRIS cost report (facility-level actual)
@@ -4576,9 +4642,6 @@ function _udTabOperations() {
   if (hcrisCost > 0 && !hcrisCostEqualsRev) {
     bestCosts = hcrisCost;
     costSource = 'HCRIS';
-  } else if (finDetail.estimated_annual_revenue && finDetail.estimated_operating_profit) {
-    bestCosts = Number(finDetail.estimated_annual_revenue) - Number(finDetail.estimated_operating_profit);
-    costSource = 'derived';
   } else if (estRevenue && bestProfit) {
     bestCosts = Number(estRevenue) - Number(bestProfit);
     costSource = 'derived';
@@ -4603,7 +4666,7 @@ function _udTabOperations() {
     html += _row('Total Operating Costs', null);
   }
 
-  html += _rowMoney('Operating Profit', finDetail.estimated_operating_profit || r.ttm_operating_profit);
+  html += bestProfit ? _rowMoney('Operating Profit', bestProfit) : _row('Operating Profit', 'Not on file');
   html += _rowHtml('Operating Margin', margin != null ? _marginBadge(margin) : null);
 
   // ── Reconcile Treatments / Year ──
@@ -4613,7 +4676,7 @@ function _udTabOperations() {
   //           4) Model from patient count (patients × 156) — last resort, often inflated
   const hcrisTx = costRpt && costRpt.total_treatments ? Number(costRpt.total_treatments) : null;
   const finTx = finDetail.estimated_treatments_per_year ? Number(finDetail.estimated_treatments_per_year) : null;
-  const rawTx = r.estimated_annual_treatments || r.ttm_total_treatments;
+  const rawTx = facility.ttm_total_treatments || r.ttm_total_treatments || facility.estimated_annual_treatments || r.estimated_annual_treatments;
   const modelTx = bestPatientCount ? bestPatientCount * 156 : null; // 3 tx/week × 52 weeks
   let annualTx = null;
   let txLabel = '';
@@ -4737,10 +4800,37 @@ function _udTabOperations() {
   }
   html += '</div>';
 
-  // HCRIS Modeled vs Actual comparison callout
+  // Reconciliation basis vs HCRIS cost anchor.
+  //
+  // ⚠️ 2026-08-13: HCRIS is a COST report — facility_cost_reports.total_patient_revenue is set
+  // EQUAL to total_costs on every row (see dia model dialysis_econ_reconciled_v1). The reconciled
+  // truth figure (revenue_calc_method='reconciled_truth_v1') is revenue = HCRIS treatments ×
+  // payer-weighted (MA-corrected) reimbursement = cost + operating margin BY CONSTRUCTION. So for a
+  // reconciled clinic the reconciled-vs-HCRIS gap IS the modeled operating profit, not model error —
+  // rendering it as a red "overestimating revenue" alarm was misleading and contradicted the single
+  // reconciled truth figure. Show it instead as an honest reconciliation basis (revenue vs the HCRIS
+  // cost anchor → implied operating profit/margin). The legacy divergence WARNING is retained ONLY
+  // for non-reconciled fallback estimates, where an unanchored model genuinely can diverge.
   if (costRpt && costRpt.total_patient_revenue && estRevenue) {
-    const actual = Number(costRpt.total_patient_revenue);
     const modeled = Number(estRevenue);
+    const hcrisCost = Number(costRpt.total_costs != null ? costRpt.total_costs : costRpt.total_patient_revenue);
+    const fyLabel = costRpt.fiscal_year_end
+      ? String(costRpt.fiscal_year_end).trim().slice(-4)
+      : (costRpt.fiscal_year || '?');
+    if (_econ.isReconciled) {
+      const impliedProfit = (correctedProfit != null) ? Number(correctedProfit) : (modeled - hcrisCost);
+      const impliedMargin = (impliedProfit != null && modeled > 0) ? (impliedProfit / modeled * 100) : null;
+      html += '<div style="margin-top:14px;padding:10px 12px;background:rgba(59,130,246,0.06);border:1px solid rgba(59,130,246,0.2);border-radius:8px">';
+      html += '<div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px">&#x1F4CA; Reconciliation basis (FY' + esc(String(fyLabel)) + ')</div>';
+      html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:12px">';
+      html += '<div class="t-muted3">Reconciled Revenue</div><div style="text-align:right;font-weight:600">$' + _fmtCompact(modeled) + '</div>';
+      html += '<div class="t-muted3">HCRIS Cost Anchor</div><div style="text-align:right;font-weight:600">$' + _fmtCompact(hcrisCost) + '</div>';
+      html += '<div class="t-muted3">Implied Operating Profit</div><div style="text-align:right;font-weight:600;color:var(--green)">$' + _fmtCompact(impliedProfit) + (impliedMargin != null ? ' <span style="color:var(--text3);font-weight:400">(' + impliedMargin.toFixed(1) + '%)</span>' : '') + '</div>';
+      html += '</div>';
+      html += '<div style="margin-top:8px;padding:8px 10px;background:rgba(59,130,246,0.04);border-radius:6px;font-size:11px;color:var(--text2);line-height:1.5">Reconciled revenue = HCRIS treatments × payer-weighted reimbursement (MA-corrected). HCRIS is a cost report (booked revenue = cost), so the amount above the HCRIS cost anchor is the modeled operating profit — not a model-vs-actual discrepancy.</div>';
+      html += '</div>';
+    } else {
+    const actual = Number(costRpt.total_patient_revenue);
     const absVar = Math.abs(((modeled - actual) / actual * 100));
     const variance = ((modeled - actual) / actual * 100).toFixed(1);
     const isLargeGap = absVar >= 25;
@@ -4748,10 +4838,10 @@ function _udTabOperations() {
     const bgColor = isLargeGap ? 'rgba(239,68,68,0.06)' : (absVar >= 10 ? 'rgba(251,191,36,0.06)' : 'rgba(59,130,246,0.08)');
     const varColor = absVar < 10 ? 'var(--green)' : (absVar < 25 ? 'var(--yellow)' : '#ef4444');
     html += '<div style="margin-top:14px;padding:10px 12px;background:' + bgColor + ';border:1px solid ' + borderColor + ';border-radius:8px">';
-    html += '<div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px">' + (isLargeGap ? '&#x26A0;&#xFE0F;' : '&#x1F4CA;') + ' Modeled vs. HCRIS Actual (FY' + (costRpt.fiscal_year || '?') + ')</div>';
+    html += '<div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px">' + (isLargeGap ? '&#x26A0;&#xFE0F;' : '&#x1F4CA;') + ' Modeled vs. HCRIS cost (FY' + esc(String(fyLabel)) + ')</div>';
     html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:12px">';
     html += '<div class="t-muted3">Modeled Revenue</div><div style="text-align:right;font-weight:600">$' + _fmtCompact(modeled) + '</div>';
-    html += '<div class="t-muted3">HCRIS Actual</div><div style="text-align:right;font-weight:600">$' + _fmtCompact(actual) + '</div>';
+    html += '<div class="t-muted3">HCRIS Cost</div><div style="text-align:right;font-weight:600">$' + _fmtCompact(actual) + '</div>';
     html += '<div class="t-muted3">Variance</div><div style="text-align:right;font-weight:600;color:' + varColor + '">' + (variance > 0 ? '+' : '') + variance + '%</div>';
     html += '</div>';
     if (isLargeGap) {
@@ -4775,6 +4865,7 @@ function _udTabOperations() {
       html += '</div>';
     }
     html += '</div>';
+    }
   }
 
   html += '</div>';
@@ -4786,9 +4877,27 @@ function _udTabOperations() {
   html += '<div class="detail-section">';
   html += '<div class="detail-section-title">Patient Census & Trends</div>';
 
-  // Sparkline chart from patient history
-  if (patientHistory.length >= 2) {
-    html += _opsSparkline(patientHistory);
+  // Sparkline — prefer the reconciled point-in-time census series (HCRIS-treatment
+  // anchored, same basis as the headline & revenue) over the facility_patient_counts
+  // throughput series so the history and the current figure read on ONE basis.
+  const reconCensusSeries = hasReconCensus
+    ? (ext.econSeries || [])
+        .filter(s => s && s.reconciled_census != null && isFinite(Number(s.reconciled_census)) && Number(s.reconciled_census) > 0)
+        .map(s => ({ total_patients: Number(s.reconciled_census), snapshot_date: (s.fiscal_year != null ? String(s.fiscal_year) + '-12-31' : null) }))
+    : [];
+  // ⚠️ _opsSparkline takes an array of NUMBERS. Both call sites used to pass the
+  // OBJECT rows above, which silently rendered "no trend" on every property:
+  // detail.js defined its own _opsSparkline(history) that read {total_patients},
+  // but ops.js loads LATER and its _opsSparkline(series, opts) — expecting
+  // numbers — won in the shared global scope. Number({total_patients: 81, …}) is
+  // NaN, every point was filtered, and the chart reported "no trend" as though
+  // the data were missing. Map to numbers here; see
+  // test/frontend-duplicate-definitions.test.mjs for the duplicate-definition guard.
+  const _censusPt = (h) => Number(h && (h.total_patients ?? h.patient_count) || 0);
+  if (reconCensusSeries.length >= 2) {
+    html += _opsSparkline(reconCensusSeries.map(_censusPt).filter(v => v > 0));
+  } else if (patientHistory.length >= 2) {
+    html += _opsSparkline(patientHistory.map(_censusPt).filter(v => v > 0));
   }
 
   // Trend direction badge
@@ -4798,11 +4907,37 @@ function _udTabOperations() {
   if (trendConf) html += '<span class="t-meta3">Confidence: ' + esc(String(trendConf)) + '</span>';
   html += '</div>';
 
+  // Legacy throughput projections (from clinic_trends) — only used on the
+  // non-reconciled fallback path (both the patient rows and the revenue projection below).
+  const projPt1 = trends.projected_patients_1yr != null ? Math.round(Number(trends.projected_patients_1yr)) : null;
+  const projPt3 = trends.projected_patients_3yr != null ? Math.round(Number(trends.projected_patients_3yr)) : null;
+
   html += '<div class="detail-grid">';
   html += _row('Current Patients', bestPatientCount ? fmtN(bestPatientCount) : null);
-  if (r.patients_last_year) html += _rowTrend('Last Year', fmtN(r.patients_last_year), r.patient_yoy_pct);
-  if (r.patients_two_years_ago) html += _row('Two Years Ago', fmtN(r.patients_two_years_ago));
-  if (r.patient_3yr_avg) html += _rowTrend('3-Year Average', fmtN(r.patient_3yr_avg), r.patient_vs_3yr_avg_pct);
+  if (hasReconCensus) {
+    // Reconciled point-in-time census trend — one basis with revenue/cost/profit.
+    // YoY / CAGR reuse the reconciled_revenue_* rates (identical: reconciled revenue is
+    // proportional to the HCRIS treatment volume the census is derived from), so patient
+    // counts and dollars move together. Projected patients use the same YoY/CAGR as the
+    // reconciled revenue projection below.
+    if (reconCensusLast != null) html += _rowTrend('Last Year', fmtN(reconCensusLast), _econ.revYoY);
+    if (reconCensus3yr != null) {
+      const vs3 = reconCensus3yr > 0 ? ((reconCensusCurrent - reconCensus3yr) / reconCensus3yr * 100) : null;
+      html += _rowTrend('3-Year Average', fmtN(reconCensus3yr), vs3 != null ? Number(vs3.toFixed(1)) : null);
+    }
+    if (_econ.revCagr != null) {
+      const cg = Number(_econ.revCagr);
+      const cgColor = cg > 0 ? 'var(--green)' : cg < 0 ? 'var(--red)' : 'var(--text3)';
+      html += _rowHtml('Annualized Growth (CAGR)', '<span style="color:' + cgColor + ';font-weight:600">' + (cg > 0 ? '+' : '') + cg.toFixed(1) + '%</span>');
+    }
+    if (_econ.revYoY != null) html += _row('Projected Patients (1yr)', fmtN(Math.round(reconCensusCurrent * (1 + Number(_econ.revYoY) / 100))));
+    if (_econ.revCagr != null) html += _row('Projected Patients (3yr)', fmtN(Math.round(reconCensusCurrent * Math.pow(1 + Number(_econ.revCagr) / 100, 3))));
+  } else {
+  // Fallback basis (no reconciled HCRIS series): facility_patient_counts values are ANNUAL
+  // patients SERVED, not a point-in-time census — labelled so they never read as concurrent.
+  if (r.patients_last_year) html += _rowTrend('Patients Served/Yr (prior)', fmtN(r.patients_last_year), r.patient_yoy_pct);
+  if (r.patients_two_years_ago) html += _row('Patients Served/Yr (2yr prior)', fmtN(r.patients_two_years_ago));
+  if (r.patient_3yr_avg) html += _rowTrend('Patients Served/Yr (3yr avg)', fmtN(r.patient_3yr_avg), r.patient_vs_3yr_avg_pct);
 
   // Annualized growth rate (CAGR)
   const cagr = trends.annualized_growth_rate;
@@ -4818,27 +4953,39 @@ function _udTabOperations() {
   if (trends.regression_r_squared != null) {
     html += _row('R\u00B2', Number(trends.regression_r_squared).toFixed(3));
   }
-  // Projections — recalculate revenue from projected patients × per-patient revenue
-  // (database projected_revenue can be inconsistent with flat/declining patient trends)
-  const projPt1 = trends.projected_patients_1yr != null ? Math.round(Number(trends.projected_patients_1yr)) : null;
-  const projPt3 = trends.projected_patients_3yr != null ? Math.round(Number(trends.projected_patients_3yr)) : null;
-  if (projPt1 != null) html += _row('Projected Patients (1yr)', fmtN(projPt1));
-  if (projPt3 != null) html += _row('Projected Patients (3yr)', fmtN(projPt3));
-  // Revenue projections: derive from patient growth rate applied to current revenue (+ 3% annual inflation)
-  // CAUTION: bestPatientCount is total CMS census (all modalities), not just in-center.
-  // Using revenue / patients directly inflates per-patient cost if many patients are home/PD.
-  // Instead, apply the patient growth RATE to current revenue for more stable projections.
-  if (estRevenue && bestPatientCount && bestPatientCount > 0) {
+  if (projPt1 != null) html += _row('Projected Patients Served (1yr)', fmtN(projPt1));
+  if (projPt3 != null) html += _row('Projected Patients Served (3yr)', fmtN(projPt3));
+  }
+  // Revenue projections — anchored to the single reconciled truth figure.
+  // For a reconciled clinic, project the reconciled revenue forward with the reconciled
+  // YoY (1yr) and CAGR (3yr) the truth model itself produced (dialysis_econ_reconciled_v1;
+  // volume-driven, rates held at CY2024). This replaces the old projected-patients ÷
+  // current-patients ratio, which exploded whenever latest_estimated_patients was on a
+  // different basis than the trend series (e.g. 81 latest vs a 363 census base → a 4×
+  // ratio and a nonsensical ~$17M projection off a ~$3.9M base).
+  if (estRevenue && _econ.isReconciled && (_econ.revYoY != null || _econ.revCagr != null)) {
     const rev = Number(estRevenue);
-    if (projPt1 != null && projPt1 > 0) {
-      const growthRate1 = projPt1 / bestPatientCount;
-      const projRev1 = rev * growthRate1 * 1.03;
-      html += _rowMoney('Projected Revenue (1yr)', projRev1);
+    if (_econ.revYoY != null) {
+      html += _rowMoney('Projected Revenue (1yr)', rev * (1 + Number(_econ.revYoY) / 100));
+    }
+    if (_econ.revCagr != null) {
+      html += _rowMoney('Projected Revenue (3yr)', rev * Math.pow(1 + Number(_econ.revCagr) / 100, 3));
+    }
+  } else if (estRevenue && bestPatientCount && bestPatientCount > 0 && projPt1 != null) {
+    // Legacy fallback (non-reconciled clinics): patient growth RATE applied to revenue
+    // (+3% inflation). Base the rate on the census-trend base (patients_last_year) rather
+    // than bestPatientCount so a latest-vs-trend basis mismatch can't inflate it; clamp to a
+    // sane band and skip the row rather than print an implausible figure.
+    const rev = Number(estRevenue);
+    const baseCensus = (r.patients_last_year && Number(r.patients_last_year) > 0)
+      ? Number(r.patients_last_year) : bestPatientCount;
+    if (projPt1 > 0) {
+      const growthRate1 = projPt1 / baseCensus;
+      if (growthRate1 > 0 && growthRate1 < 3) html += _rowMoney('Projected Revenue (1yr)', rev * growthRate1 * 1.03);
     }
     if (projPt3 != null && projPt3 > 0) {
-      const growthRate3 = projPt3 / bestPatientCount;
-      const projRev3 = rev * growthRate3 * Math.pow(1.03, 3);
-      html += _rowMoney('Projected Revenue (3yr)', projRev3);
+      const growthRate3 = projPt3 / baseCensus;
+      if (growthRate3 > 0 && growthRate3 < 3) html += _rowMoney('Projected Revenue (3yr)', rev * growthRate3 * Math.pow(1.03, 3));
     }
   }
   html += '</div>';
@@ -5095,7 +5242,7 @@ function _udTabOperations() {
   html += '<span>&#x25B6;</span> Methodology & Data Sources</div>';
   html += '<div style="display:none;margin-top:10px;font-size:11px;color:var(--text3);line-height:1.6">';
 
-  html += '<p style="margin:0 0 8px">Revenue estimates use a 4-payer blended rate (~$357/tx): Medicare $279/tx, Medicaid $225/tx, Commercial $1,100/tx, Other $250/tx, at 156 treatments/year (3x/week). Chair-based model (chairs × 3 shifts × 5.5 days × 52 wks × 65% utilization) is primary where station data is available (validated median 1.00x vs TTM, n=7,115). Concurrent-ratio model (annual patients × 0.245 × 156 tx/yr) used as fallback. TTM-reported and 10-K filing data preferred over modeled estimates.</p>';
+  html += '<p style="margin:0 0 8px">Revenue &amp; operating profit are one reconciled figure per facility per year (model dialysis_econ_reconciled_v1): treatments and cost are anchored to audited HCRIS cost-report actuals; revenue = treatments × a payer-mix-weighted rate (Medicare $279, Medicaid $225, Commercial $1,100, Other $250/tx), with the reported private-payer share MA-corrected (only a calibrated fraction priced at the commercial rate) so the sector operating margin (~16%) is reproduced; operating profit = revenue − HCRIS cost. EBITDA = operating profit + 10-K-anchored D&amp;A (~$27/tx), distributed by facility size and age. Validated vs DaVita&rsquo;s FY2024 10-K (revenue/treatment within ~3%; facility EBITDA margin ~25%); aggregate revenue is conservative, not overstated. Each facility carries a high/medium/low confidence tier; the trend is volume-driven (rates held at CY2024).</p>';
 
   html += '<p style="margin:0 0 8px"><strong class="t-muted2">Risk Score Components:</strong></p>';
   html += '<p style="margin:0 0 4px;padding-left:8px"><strong class="t-muted2">Patient Trend (30%):</strong> Measures YoY patient growth/decline and regression trend direction. Declining census signals potential revenue erosion and operator dissatisfaction.</p>';
@@ -5121,22 +5268,171 @@ function _udTabOperations() {
 }
 
 /** Northmarq brand constants — extracted from northmarq.com live site */
+// Northmarq brand tokens for the client-deliverable export.
+// Palette + type rules per marketing's export-branding review (2026-08) and the
+// Northmarq Brand Style Guide (Nov 2024); hexes mirror public/reports/cm-brand.json.
 const NMQ_BRAND = {
-  blue:       '#003DA5',  // primary — links, CTA bg, header accents
-  navy:       '#001159',  // deep navy — dark headers, hover states
-  lightBlue:  '#62B5E5',  // secondary accent
-  blueTint:   '#E0E8F4',  // light blue background tint
-  warmWhite:  '#FAF9F5',  // warm off-white background
-  bodyText:   '#3D4A54',  // body copy
-  darkText:   '#191919',  // headings
-  muted:      '#6A748C',  // secondary text
-  border:     '#D8DFDF',  // borders, dividers
-  headingFont: "'futura-pt', 'Trebuchet MS', 'Arial', sans-serif",
-  bodyFont:    "'Open Sans', 'Segoe UI', system-ui, sans-serif",
+  blue:       '#003DA5',  // NM Blue — primary: header/footer bars, page header, CTA
+  navy:       '#001159',  // deep navy — reserved dark accent
+  lightBlue:  '#62B5E5',  // NM Sky — rule lines, section-header text
+  blueTint:   '#E0E8F4',  // NM Blue 12 — callout / card-header / table-head fills
+  iron:       '#D8DFDF',  // NM Iron — tile fills, row shading, borders
+  warmWhite:  '#D8DFDF',  // (was warm gray #FAF9F5) → NM Iron per marketing notes
+  bodyText:   '#191919',  // Rich Black / Ink — body & table copy (was charcoal)
+  darkText:   '#191919',  // Rich Black — headings
+  muted:      '#6A748C',  // NM Slate — table left-column labels, secondary text
+  slate:      '#6A748C',  // NM Slate
+  steel:      '#9EA9B7',  // NM Steel — alt address / muted accent
+  addressBlue:'#265AB2',  // NM Blue 85 — subtitle / address line
+  border:     '#D8DFDF',  // NM Iron — borders, dividers
+  // Futura PT (Adobe) is the brand face: Light (300) for the page header,
+  // Book (400) for body & sub-headers, Bold (700) for emphasis. Falls back to a
+  // locally-installed Futura PT, then the web-loaded Open Sans, then Arial so the
+  // export never renders in a serif.
+  // NOTE: Century Gothic was deliberately removed from the ladder (2026-08). It is
+  // installed by default on Windows, so on a local "Print to PDF" it won out over
+  // the un-loaded Futura and rendered its geometric single-stroke lowercase "l"
+  // (indistinguishable from I/1) in an over-emphasized way. The brand's sanctioned
+  // digital fallback is Open Sans (which we actually <link>-load), so we drop
+  // straight to it — matching the Northmarq brand fallback ladder (Futura → Arial
+  // print / Open Sans digital).
+  headingFont: "'futura-pt', 'Futura PT', 'Open Sans', Arial, sans-serif",
+  bodyFont:    "'futura-pt', 'Futura PT', 'Open Sans', Arial, sans-serif",
   logoUrl:     'https://www.northmarq.com/themes/custom/northmarq/logo.svg',
 };
 
 /** Export Operations tab as a Northmarq-branded client-deliverable HTML report */
+// Facility Financial Performance & Value exhibit (client export). Pure inline SVG
+// (no chart library), Northmarq-branded. Reads the reconciled per-year series
+// (ext.econSeries) + value crosswalk (ext.valueCrosswalk). Degrades gracefully.
+function _udBuildPerfExhibit(ext, econ, r, B) {
+  ext = ext || {}; econ = econ || {};
+  const num = v => (v == null || v === '' || !isFinite(Number(v))) ? null : Number(v);
+  const fmtUsd = v => { const n = num(v); if (n == null) return '—';
+    const a = Math.abs(n); return (n < 0 ? '-' : '') + (a >= 1e6 ? '$' + (a/1e6).toFixed(2) + 'M' : a >= 1e3 ? '$' + Math.round(a/1e3) + 'K' : '$' + Math.round(a)); };
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+  const series = (ext.econSeries || []).map(s => ({
+    fy: num(s.fiscal_year), rev: num(s.reconciled_revenue), op: num(s.reconciled_operating_profit),
+    ebitda: num(s.reconciled_ebitda), dna: num(s.reconciled_d_and_a), cost: num(s.cost),
+    margin: num(s.operating_margin), tier: s.confidence_tier
+  })).filter(s => s.fy && s.rev > 0).sort((a, b) => a.fy - b.fy);
+
+  // Nothing to show (edge not yet redeployed / clinic unreconciled) -> honest note.
+  if (!series.length) {
+    if (econ.revenue == null) return '';
+    return '<div class="section"><h2>Facility Financial Performance</h2>'
+      + '<p style="font-size:12px;color:' + B.slate + '">Reconciled current-year economics: revenue '
+      + fmtUsd(econ.revenue) + ', operating profit ' + fmtUsd(econ.profit)
+      + (econ.ebitda != null ? ', EBITDA ' + fmtUsd(econ.ebitda) : '')
+      + '. Multi-year trend chart populates once the reconciled series feed is enabled for this facility.</p></div>';
+  }
+
+  const last = series[series.length - 1];
+  const W = 720, H = 250, ml = 64, mr = 16, mt = 20, mb = 34;
+  const plotW = W - ml - mr, plotH = H - mt - mb;
+  const maxRev = Math.max.apply(null, series.map(s => s.rev));
+  const yMax = maxRev * 1.12 || 1;
+  const yOf = v => mt + plotH - (v / yMax) * plotH;
+  const n = series.length;
+  const slot = plotW / n, barW = Math.min(38, slot * 0.5);
+
+  // ---- Chart 1: revenue bars + EBITDA line, over time ----
+  let c1 = '<svg width="100%" viewBox="0 0 ' + W + ' ' + H + '" font-family="' + B.bodyFont + '" role="img">';
+  // y gridlines / labels ($M)
+  for (let i = 0; i <= 4; i++) {
+    const val = yMax * i / 4, y = yOf(val);
+    c1 += '<line x1="' + ml + '" y1="' + y.toFixed(1) + '" x2="' + (W - mr) + '" y2="' + y.toFixed(1) + '" stroke="' + B.blueTint + '" stroke-width="1"/>';
+    c1 += '<text x="' + (ml - 6) + '" y="' + (y + 3).toFixed(1) + '" text-anchor="end" font-size="9" fill="' + B.slate + '">$' + (val/1e6).toFixed(1) + 'M</text>';
+  }
+  series.forEach((s, i) => {
+    const cx = ml + slot * i + slot / 2;
+    const bx = cx - barW / 2, by = yOf(s.rev), bh = mt + plotH - by;
+    c1 += '<rect x="' + bx.toFixed(1) + '" y="' + by.toFixed(1) + '" width="' + barW.toFixed(1) + '" height="' + Math.max(0, bh).toFixed(1) + '" fill="' + B.lightBlue + '" rx="1.5"/>';
+    c1 += '<text x="' + cx.toFixed(1) + '" y="' + (H - mb + 14) + '" text-anchor="middle" font-size="9" fill="' + B.slate + '">' + s.fy + '</text>';
+  });
+  // EBITDA line + dots
+  const pts = series.map((s, i) => (ml + slot * i + slot / 2).toFixed(1) + ',' + yOf(Math.max(0, s.ebitda || 0)).toFixed(1));
+  c1 += '<polyline points="' + pts.join(' ') + '" fill="none" stroke="' + B.blue + '" stroke-width="2"/>';
+  series.forEach((s, i) => { const cx = ml + slot * i + slot / 2, cy = yOf(Math.max(0, s.ebitda || 0));
+    c1 += '<circle cx="' + cx.toFixed(1) + '" cy="' + cy.toFixed(1) + '" r="2.6" fill="' + B.blue + '"/>'; });
+  // legend
+  c1 += '<rect x="' + ml + '" y="4" width="10" height="10" fill="' + B.lightBlue + '"/><text x="' + (ml + 14) + '" y="13" font-size="9" fill="' + B.bodyText + '">Revenue</text>';
+  c1 += '<line x1="' + (ml + 78) + '" y1="9" x2="' + (ml + 92) + '" y2="9" stroke="' + B.blue + '" stroke-width="2"/><text x="' + (ml + 96) + '" y="13" font-size="9" fill="' + B.bodyText + '">EBITDA</text>';
+  c1 += '</svg>';
+
+  // ---- Chart 2: build-up waterfall (latest year) ----
+  const rev = last.rev, cost = last.cost != null ? last.cost : (rev - (last.op || 0));
+  const op = last.op != null ? last.op : (rev - cost);
+  const dna = last.dna != null ? last.dna : ((last.ebitda != null && op != null) ? last.ebitda - op : null);
+  const ebitda = last.ebitda != null ? last.ebitda : (op != null && dna != null ? op + dna : null);
+  let c2 = '';
+  if (op != null && ebitda != null) {
+    const steps = [
+      { label: 'Revenue', val: rev, base: 0, color: B.lightBlue, kind: 'total' },
+      { label: 'Operating cost', val: -cost, base: rev, color: B.slate, kind: 'delta' },
+      { label: 'Operating profit', val: op, base: 0, color: B.blue85, kind: 'total' },
+      { label: 'D&A add-back', val: dna || 0, base: op, color: B.iron, kind: 'delta' },
+      { label: 'EBITDA', val: ebitda, base: 0, color: B.blue, kind: 'total' }
+    ];
+    const WW = 720, HH = 210, wml = 64, wmr = 16, wmt = 16, wmb = 40;
+    const wpW = WW - wml - wmr, wpH = HH - wmt - wmb;
+    const wMax = Math.max(rev, ebitda) * 1.1 || 1;
+    const wY = v => wmt + wpH - (v / wMax) * wpH;
+    const sw = wpW / steps.length, sbw = Math.min(64, sw * 0.6);
+    c2 = '<svg width="100%" viewBox="0 0 ' + WW + ' ' + HH + '" font-family="' + B.bodyFont + '" role="img">';
+    c2 += '<line x1="' + wml + '" y1="' + wY(0).toFixed(1) + '" x2="' + (WW - wmr) + '" y2="' + wY(0).toFixed(1) + '" stroke="' + B.iron + '" stroke-width="1"/>';
+    steps.forEach((st, i) => {
+      const cx = wml + sw * i + sw / 2, bx = cx - sbw / 2;
+      const top = st.kind === 'total' ? st.val : (st.val >= 0 ? st.base + st.val : st.base);
+      const bot = st.kind === 'total' ? 0 : (st.val >= 0 ? st.base : st.base + st.val);
+      const y = wY(top), h = Math.max(1, wY(bot) - wY(top));
+      c2 += '<rect x="' + bx.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + sbw.toFixed(1) + '" height="' + h.toFixed(1) + '" fill="' + st.color + '" rx="1.5"/>';
+      c2 += '<text x="' + cx.toFixed(1) + '" y="' + (y - 4).toFixed(1) + '" text-anchor="middle" font-size="9" font-weight="700" fill="' + B.bodyText + '">' + fmtUsd(st.kind === 'total' ? st.val : Math.abs(st.val)) + '</text>';
+      c2 += '<text x="' + cx.toFixed(1) + '" y="' + (HH - wmb + 14) + '" text-anchor="middle" font-size="9" fill="' + B.slate + '">' + esc(st.label) + '</text>';
+    });
+    c2 += '</svg>';
+  }
+
+  // ---- Block 3: value crosswalk (rent coverage -> implied value) ----
+  const xw = ext.valueCrosswalk || {};
+  const rent = num(xw.annual_rent), cov = num(xw.rent_coverage_x), ebitdar = num(xw.ebitdar);
+  let c3 = '';
+  if (rent > 0 && cov != null) {
+    const rows = [
+      ['EBITDA (net of rent)', fmtUsd(num(xw.reconciled_ebitda))],
+      ['+ Contract rent', fmtUsd(rent)],
+      ['= EBITDAR (rent coverage basis)', fmtUsd(ebitdar)],
+      ['Rent coverage', cov.toFixed(2) + '×'],
+      ['Rent as % of EBITDAR', (num(xw.rent_to_ebitdar) != null ? (num(xw.rent_to_ebitdar) * 100).toFixed(1) + '%' : '—')]
+    ];
+    let tbl = '<table style="width:100%;border-collapse:collapse;font-size:12px">';
+    rows.forEach((rw, i) => { tbl += '<tr' + (i === 3 ? ' style="font-weight:700;color:' + B.blue + '"' : '') + '><td style="padding:4px 8px;border-bottom:1px solid ' + B.blueTint + '">' + rw[0] + '</td><td style="padding:4px 8px;border-bottom:1px solid ' + B.blueTint + ';text-align:right">' + rw[1] + '</td></tr>'; });
+    tbl += '</table>';
+    // implied value grid at a cap band
+    const caps = [['6.00%', xw.value_at_600bps], ['6.50%', xw.value_at_650bps], ['7.00%', xw.value_at_700bps], ['7.50%', xw.value_at_750bps]];
+    let grid = '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:6px"><tr style="background:' + B.blueTint + '">';
+    caps.forEach(cp => grid += '<th style="padding:4px 6px;color:' + B.navy + ';font-weight:700">' + cp[0] + '</th>');
+    grid += '</tr><tr>';
+    caps.forEach(cp => grid += '<td style="padding:5px 6px;text-align:center;border:1px solid ' + B.blueTint + '">' + fmtUsd(num(cp[1])) + '</td>');
+    grid += '</tr></table>';
+    c3 = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start">'
+      + '<div>' + tbl + '</div>'
+      + '<div><div style="font-size:11px;color:' + B.slate + ';margin-bottom:4px">Implied real-estate value = contract rent ÷ cap rate</div>' + grid
+      + '<div style="font-size:10px;color:' + B.slate + ';margin-top:6px">Coverage of <strong>' + cov.toFixed(2) + '×</strong> means facility cash flow (before rent) covers the rent ' + cov.toFixed(1) + ' times over — a measure of tenant durability supporting the cap rate.</div></div>'
+      + '</div>';
+  }
+
+  // ---- Assemble ----
+  const tierNote = last.tier ? ' · ' + esc(last.tier) + ' confidence' : '';
+  let out = '<div class="section page-break"><h2>Facility Financial Performance</h2>';
+  out += '<div style="font-size:11px;color:' + B.slate + ';margin:-4px 0 8px">Reconciled per-year economics (model dialysis_econ_reconciled_v1) — HCRIS-anchored volume &amp; cost, payer-mix-weighted revenue, validated against operator 10-K filings' + tierNote + '. Trend is volume-driven (rates held at CY2024).</div>';
+  out += '<div style="font-weight:700;font-size:12px;color:' + B.navy + ';margin:4px 0">Revenue &amp; EBITDA over time</div>' + c1;
+  if (c2) out += '<div style="font-weight:700;font-size:12px;color:' + B.navy + ';margin:12px 0 4px">How the number is built — FY' + last.fy + '</div>' + c2;
+  if (c3) out += '<div style="font-weight:700;font-size:12px;color:' + B.navy + ';margin:12px 0 4px">Real-estate value crosswalk — rent coverage</div>' + c3;
+  out += '</div>';
+  return out;
+}
+
 function _udExportOperations() {
   const rankings = _udCache.rankings;
   const cmsLink = _udCache.cms || null;
@@ -5145,11 +5441,13 @@ function _udExportOperations() {
   const ext = _opsExtraCache || {};
   const r = rankings || {};
   const finDetail = ext.financialDetail || {};
+  const facilityEconomics = ext.facilityEconomics || {};
   const costRpt = ext.costReports || {};
   const quality = ext.quality || {};
   const trends = ext.trends || {};
   const lease = ext.lease || {};
-  const hoursInfo = ext.hours || null;
+  const clinicProfile = ext.hours || (cmsLink && cmsLink.facility) || {};
+  const hoursInfo = clinicProfile || null;
   const patientHistory = ext.patientHistory || [];
   const payerMix = ext.payerMix || {};
   const competitors = ext.competitors || [];
@@ -5157,35 +5455,29 @@ function _udExportOperations() {
   const B = NMQ_BRAND;
 
   // Derive key values (same logic as _udTabOperations)
-  // Financial basis — present ONE consistent basis. The prior export mixed
-  // estimated_annual_revenue (a chair-CAPACITY model that overstates revenue for
-  // under-utilized clinics) with the HCRIS actual operating profit, producing a
-  // nonsensical margin (e.g. $7.6M est. revenue ÷ $522k HCRIS profit = 6.9%, and
-  // $1,156/treatment). Prefer HCRIS actuals (reflect real treatment volume); else
-  // the estimated model kept internally consistent (its own revenue + profit).
-  const _ttmMargin = (r.ttm_operating_margin != null) ? (Math.abs(Number(r.ttm_operating_margin)) < 1 ? Number(r.ttm_operating_margin) : Number(r.ttm_operating_margin) / 100) : null;
-  const _ttmProfit = (r.ttm_operating_profit != null) ? Number(r.ttm_operating_profit) : null;
-  const _estRev = (finDetail.estimated_annual_revenue != null) ? Number(finDetail.estimated_annual_revenue) : (r.estimated_annual_revenue != null ? Number(r.estimated_annual_revenue) : null);
-  const _estProfit = (finDetail.estimated_operating_profit != null) ? Number(finDetail.estimated_operating_profit)
-        : (finDetail.estimated_annual_profit != null) ? Number(finDetail.estimated_annual_profit)
-        : (r.estimated_annual_profit != null) ? Number(r.estimated_annual_profit) : null;
-  let finBasis, estRevenue, bestProfit, margin;
-  if (_ttmProfit != null && _ttmMargin != null && _ttmMargin > 0) {
-    finBasis = 'hcris';
-    estRevenue = _ttmProfit / _ttmMargin;   // the revenue base the HCRIS margin is computed against
-    bestProfit = _ttmProfit;
-    margin = _ttmMargin * 100;
-  } else if (_estRev != null && _estProfit != null && _estRev > 0) {
-    finBasis = 'estimated';
-    estRevenue = _estRev; bestProfit = _estProfit; margin = (_estProfit / _estRev) * 100;
-  } else {
-    finBasis = 'partial';
-    estRevenue = (_estRev != null) ? _estRev : (r.ttm_revenue != null ? Number(r.ttm_revenue) : null);
-    bestProfit = (_ttmProfit != null) ? _ttmProfit : _estProfit;
-    margin = (bestProfit != null && estRevenue) ? (Number(bestProfit) / Number(estRevenue)) * 100 : (_ttmMargin != null ? _ttmMargin * 100 : null);
-  }
+  // Financial basis — present ONE consistent basis. Since 2026-08-13 revenue AND
+  // profit are the single reconciled truth figure (dia model dialysis_econ_reconciled_v1,
+  // revenue_calc_method='reconciled_truth_v1'): HCRIS-anchored treatments+cost, payer-mix-
+  // weighted (MA-corrected) reimbursement, validated vs operator 10-Ks. This retired the
+  // prior chair-CAPACITY overstatement. Revenue & profit come from ONE matched source
+  // (see _udResolveEconomics) so the margin is internally consistent, and the headline
+  // agrees with the Comparative Benchmarking revenue rank (both read v_property_rankings).
+  const _econ = _udResolveEconomics(r, finDetail, facilityEconomics);
+  const finBasis = _econ.basis === 'corrected' ? 'estimated' : 'not_on_file';
+  const estRevenue = _econ.revenue;
+  const bestProfit = _econ.profit;
+  const margin = _econ.margin;
   const latestSnapshotPt = patientHistory.length > 0 ? Number(patientHistory[patientHistory.length - 1].total_patients || 0) : 0;
-  const bestPatientCount = latestSnapshotPt > 0 ? latestSnapshotPt : (r.latest_estimated_patients ? Number(r.latest_estimated_patients) : null);
+  const clinicPatientCount = clinicProfile.latest_estimated_patients != null
+    ? Number(clinicProfile.latest_estimated_patients)
+    : (r.latest_estimated_patients != null ? Number(r.latest_estimated_patients) : null);
+  // Reconciled point-in-time census (dialysis_econ_reconciled_v1) — the single accurate
+  // census, HCRIS-treatment anchored (same basis as revenue/cost/profit). Prefer it for
+  // the headline and trend so the export never shows the facility_patient_counts throughput
+  // figure (annual patients served) as a concurrent census.
+  const reconCensusCurrentX = (r.reconciled_census_current != null && isFinite(Number(r.reconciled_census_current))) ? Number(r.reconciled_census_current) : null;
+  const reconCensus3yrX = (r.reconciled_census_3yr_avg != null && isFinite(Number(r.reconciled_census_3yr_avg))) ? Number(r.reconciled_census_3yr_avg) : null;
+  const bestPatientCount = reconCensusCurrentX != null ? reconCensusCurrentX : (clinicPatientCount || (latestSnapshotPt > 0 ? latestSnapshotPt : null));
   const starVal = quality.star_rating != null ? Number(quality.star_rating) : (r.star_rating != null ? Number(r.star_rating) : null);
   const ccn = r.medicare_id
     || (cmsLink && cmsLink.medicare_id)
@@ -5204,7 +5496,7 @@ function _udExportOperations() {
   const zipVal   = property.zip_code || property.zip || fb.zip_code || fb.zip || '';
   const propertyId = property.property_id || _udCache.ids?.property_id || '';
   const address = _esc([addrLine, cityVal, stateVal, zipVal].filter(Boolean).join(', ') || '');
-  const stationsVal = r.number_of_chairs || property.number_of_chairs || r.stations || null;
+  const stationsVal = clinicProfile.stations || clinicProfile.number_of_chairs || r.stations || r.number_of_chairs || property.number_of_chairs || null;
   const buildingSize = property.building_size || null;
   const yearBuilt    = property.year_built || null;
   const yearReno     = property.year_renovated || null;
@@ -5221,10 +5513,16 @@ function _udExportOperations() {
   const finTxExp = finDetail.estimated_treatments_per_year ? Number(finDetail.estimated_treatments_per_year) : null;
   let annualTx;
   if (finBasis === 'estimated') {
-    annualTx = (r.estimated_annual_treatments != null) ? Number(r.estimated_annual_treatments) : (finTxExp || hcrisTx || (bestPatientCount ? bestPatientCount * 156 : null));
+    annualTx = (clinicProfile.ttm_total_treatments != null) ? Number(clinicProfile.ttm_total_treatments)
+      : (r.ttm_total_treatments != null) ? Number(r.ttm_total_treatments)
+      : (clinicProfile.estimated_annual_treatments != null) ? Number(clinicProfile.estimated_annual_treatments)
+      : (r.estimated_annual_treatments != null) ? Number(r.estimated_annual_treatments)
+      : (finTxExp || hcrisTx || (bestPatientCount ? bestPatientCount * 156 : null));
   } else {
     // hcris / partial basis → actual reported treatment volume
-    annualTx = (r.ttm_total_treatments != null) ? Number(r.ttm_total_treatments) : (hcrisTx || finTxExp || (bestPatientCount ? bestPatientCount * 156 : null));
+    annualTx = (clinicProfile.ttm_total_treatments != null) ? Number(clinicProfile.ttm_total_treatments)
+      : (r.ttm_total_treatments != null) ? Number(r.ttm_total_treatments)
+      : (hcrisTx || finTxExp || (bestPatientCount ? bestPatientCount * 156 : null));
   }
   const revPerTx = (estRevenue && annualTx) ? (Number(estRevenue) / annualTx) : null;
 
@@ -5233,7 +5531,9 @@ function _udExportOperations() {
   // chairs / utilization / treatments. The CMS annual snapshot count is a
   // cumulative facility figure kept separate to avoid the 158-vs-31 contradiction
   // the prior export shipped.
-  const concurrentCensus = (r.latest_estimated_patients != null) ? Number(r.latest_estimated_patients)
+  const concurrentCensus = (reconCensusCurrentX != null) ? reconCensusCurrentX
+        : (clinicProfile.latest_estimated_patients != null) ? Number(clinicProfile.latest_estimated_patients)
+        : (r.latest_estimated_patients != null) ? Number(r.latest_estimated_patients)
         : (finDetail.patient_count != null ? Number(finDetail.patient_count) : null);
   const cmsAnnualPatients = latestSnapshotPt > 0 ? latestSnapshotPt : null;
   const censusHeadline = concurrentCensus != null ? concurrentCensus : bestPatientCount;
@@ -5289,10 +5589,14 @@ function _udExportOperations() {
     if (!(prev > 0) || cur > prev * 4 || cur < prev / 4) return null;
     return { pct: ((cur - prev) / prev) * 100, curYear: years[i], prevYear: years[i-1] };
   }
+  // Prefer the reconciled census 3-yr trend (current vs reconciled 3-yr avg) — same basis
+  // as the headline and revenue; fall back to the legacy throughput trend only when absent.
+  const reconCensusTrend3 = (reconCensusCurrentX != null && reconCensus3yrX != null && reconCensus3yrX > 0)
+    ? ((reconCensusCurrentX - reconCensus3yrX) / reconCensus3yrX) * 100 : null;
   const trend3yr = (r.patient_trend_3yr != null && isFinite(Number(r.patient_trend_3yr))) ? Number(r.patient_trend_3yr) : null;
   const annualYoY = _annualSnapshotYoY(patientHistory);
-  const censusTrendPct = (trend3yr != null) ? trend3yr : (annualYoY ? annualYoY.pct : null);
-  const censusTrendLabel = (trend3yr != null) ? 'over 3 yr' : (annualYoY ? 'YoY' : '');
+  const censusTrendPct = (reconCensusTrend3 != null) ? reconCensusTrend3 : (trend3yr != null) ? trend3yr : (annualYoY ? annualYoY.pct : null);
+  const censusTrendLabel = (reconCensusTrend3 != null) ? 'over 3 yr' : (trend3yr != null) ? 'over 3 yr' : (annualYoY ? 'YoY' : '');
   const trendDirClean = (censusTrendPct == null)
     ? String(trends.trend_direction || trendDir || 'stable').toLowerCase()
     : (censusTrendPct > 2 ? 'growth' : censusTrendPct < -2 ? 'decline' : 'stable');
@@ -5338,10 +5642,11 @@ function _udExportOperations() {
     return n.toLocaleString('en-US', { maximumFractionDigits: 0 }) + ' SF (' + (n / 43560).toFixed(2) + ' acres)';
   };
   const today = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+  const perfExhibitHtml = _udBuildPerfExhibit(ext, _econ, r, B);
 
   const doc = `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>${facilityName} \u2014 Net-Lease Asset Profile | Northmarq</title>
-<link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@300;400;600;700&display=swap" rel="stylesheet">
 <style>
   @media print {
     body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
@@ -5349,17 +5654,17 @@ function _udExportOperations() {
     .page-break { page-break-before: always; }
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: ${B.bodyFont}; color: ${B.bodyText}; max-width: 860px; margin: 0 auto; padding: 0; line-height: 1.55; background: #fff; }
+  body { font-family: ${B.bodyFont}; font-weight: 300; color: ${B.bodyText}; max-width: 860px; margin: 0 auto; padding: 0; line-height: 1.55; background: #fff; }
 
   /* ── Header bar ── */
-  .nmq-header { background: ${B.navy}; color: #fff; padding: 24px 40px; display: flex; align-items: center; justify-content: space-between; }
+  .nmq-header { background: ${B.blue}; color: #fff; padding: 24px 40px; display: flex; align-items: center; justify-content: space-between; }
   .nmq-header img { height: 28px; filter: brightness(0) invert(1); }
-  .nmq-header .report-type { font-family: ${B.headingFont}; font-size: 13px; letter-spacing: 1.5px; text-transform: uppercase; opacity: 0.8; }
+  .nmq-header .report-type { font-family: ${B.headingFont}; font-weight: 400; font-size: 13px; letter-spacing: 1.5px; text-transform: uppercase; opacity: 0.85; }
 
   /* ── Title section ── */
-  .title-section { padding: 28px 40px 20px; border-bottom: 3px solid ${B.blue}; }
-  .title-section h1 { font-family: ${B.headingFont}; font-size: 26px; font-weight: 700; color: ${B.navy}; margin: 0 0 4px; letter-spacing: -0.3px; }
-  .title-section .subtitle { font-size: 14px; color: ${B.muted}; }
+  .title-section { padding: 28px 40px 20px; border-bottom: 3px solid ${B.lightBlue}; }
+  .title-section h1 { font-family: ${B.headingFont}; font-size: 26px; font-weight: 300; color: ${B.blue}; margin: 0 0 4px; letter-spacing: -0.3px; }
+  .title-section .subtitle { font-family: ${B.bodyFont}; font-weight: 400; font-size: 14px; color: ${B.addressBlue}; }
 
   /* ── Content area ── */
   .content { padding: 0 40px 32px; }
@@ -5367,25 +5672,25 @@ function _udExportOperations() {
   /* ── KPI banner ── */
   .kpi-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 24px 0; }
   .kpi { background: ${B.warmWhite}; border-radius: 6px; padding: 16px; text-align: center; border: 1px solid ${B.border}; }
-  .kpi-label { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: ${B.muted}; margin-bottom: 6px; font-weight: 600; }
-  .kpi-value { font-family: ${B.headingFont}; font-size: 22px; font-weight: 700; color: ${B.navy}; }
+  .kpi-label { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: ${B.slate}; margin-bottom: 6px; font-weight: 700; }
+  .kpi-value { font-family: ${B.headingFont}; font-size: 22px; font-weight: 700; color: ${B.blue}; }
 
-  /* ── Section headers ── */
-  h2 { font-family: ${B.headingFont}; font-size: 14px; text-transform: uppercase; letter-spacing: 1.2px; color: ${B.blue}; border-bottom: 2px solid ${B.blueTint}; padding-bottom: 6px; margin: 28px 0 14px; font-weight: 700; }
+  /* ── Section headers ── (Futura, NM Blue title; Sky rule beneath — marketing notes) */
+  h2 { font-family: ${B.headingFont}; font-size: 14px; text-transform: uppercase; letter-spacing: 1.2px; color: ${B.blue}; border-bottom: 2px solid ${B.lightBlue}; padding-bottom: 6px; margin: 28px 0 14px; font-weight: 700; }
 
-  /* ── Data tables ── */
+  /* ── Data tables ── (Futura PT Light body, Slate left-column labels) */
   .data-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 16px; }
-  .data-table tr:nth-child(even) { background: ${B.warmWhite}; }
-  .data-table td { padding: 8px 14px; border-bottom: 1px solid ${B.border}; }
-  .data-table td:first-child { color: ${B.muted}; font-weight: 600; width: 210px; }
-  .data-table td:last-child { color: ${B.darkText}; font-weight: 500; }
+  .data-table tr:nth-child(even) { background: ${B.iron}; }
+  .data-table td { padding: 8px 14px; border-bottom: 1px solid ${B.border}; font-weight: 300; }
+  .data-table td:first-child { color: ${B.slate}; font-weight: 600; width: 210px; }
+  .data-table td:last-child { color: ${B.darkText}; font-weight: 400; }
 
   /* ── Methodology box ── */
   .methodology { background: ${B.blueTint}; border-left: 4px solid ${B.blue}; border-radius: 0 6px 6px 0; padding: 18px 20px; font-size: 12px; color: ${B.bodyText}; line-height: 1.7; margin-top: 24px; }
-  .methodology strong { color: ${B.navy}; }
+  .methodology strong { color: ${B.blue}; }
 
   /* ── Footer ── */
-  .nmq-footer { margin-top: 32px; padding: 20px 40px; background: ${B.navy}; color: rgba(255,255,255,0.7); font-size: 11px; display: flex; justify-content: space-between; align-items: center; }
+  .nmq-footer { margin-top: 32px; padding: 20px 40px; background: ${B.blue}; color: rgba(255,255,255,0.78); font-size: 11px; display: flex; justify-content: space-between; align-items: center; }
   .nmq-footer strong { color: #fff; }
   .nmq-footer .sources { font-size: 10px; max-width: 50%; text-align: right; }
 
@@ -5400,9 +5705,9 @@ function _udExportOperations() {
   /* ── Net-lease export additions ── */
   .snap { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 22px 0 8px; }
   .sk { background: ${B.warmWhite}; border: 1px solid ${B.border}; border-radius: 6px; padding: 13px 14px; }
-  .sk .l { font-size: 8.5px; text-transform: uppercase; letter-spacing: .9px; color: ${B.muted}; font-weight: 700; margin-bottom: 5px; }
-  .sk .v { font-family: ${B.headingFont}; font-size: 19px; font-weight: 700; color: ${B.navy}; line-height: 1.1; }
-  .sk .v small { font-size: 11px; font-weight: 600; color: ${B.muted}; }
+  .sk .l { font-size: 8.5px; text-transform: uppercase; letter-spacing: .9px; color: ${B.slate}; font-weight: 700; margin-bottom: 5px; }
+  .sk .v { font-family: ${B.headingFont}; font-size: 19px; font-weight: 700; color: ${B.blue}; line-height: 1.1; }
+  .sk .v small { font-size: 11px; font-weight: 400; color: ${B.slate}; }
   .sk.accent { background: ${B.blue}; border-color: ${B.blue}; }
   .sk.accent .l { color: rgba(255,255,255,.8); }
   .sk.accent .v { color: #fff; }
@@ -5410,7 +5715,7 @@ function _udExportOperations() {
   h2 .note { float: right; text-transform: none; letter-spacing: 0; font-size: 10.5px; color: ${B.muted}; font-weight: 600; font-family: ${B.bodyFont}; }
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
   .card { border: 1px solid ${B.border}; border-radius: 6px; overflow: hidden; margin-bottom: 6px; }
-  .card .ch { background: ${B.blueTint}; color: ${B.navy}; font-family: ${B.headingFont}; font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: .8px; padding: 8px 14px; border-bottom: 1px solid ${B.border}; }
+  .card .ch { background: ${B.blueTint}; color: ${B.blue}; font-family: ${B.headingFont}; font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: .8px; padding: 8px 14px; border-bottom: 1px solid ${B.border}; }
   .card .data-table { margin: 0; }
   .card .data-table td:first-child { width: 140px; }
   .bar { display: inline-block; width: 120px; height: 9px; background: ${B.border}; border-radius: 5px; overflow: hidden; vertical-align: middle; margin-right: 8px; }
@@ -5421,12 +5726,12 @@ function _udExportOperations() {
   .pill.bad  { background: #FBE6E4; color: #B3261E; }
   .pill.neutral { background: ${B.blueTint}; color: ${B.blue}; }
   .callout { background: ${B.blueTint}; border-left: 4px solid ${B.blue}; border-radius: 0 6px 6px 0; padding: 12px 16px; font-size: 12.5px; margin: 10px 0 4px; }
-  .callout b { color: ${B.navy}; }
+  .callout b { color: ${B.blue}; }
   .rank-row { display: flex; align-items: center; gap: 10px; margin-bottom: 9px; font-size: 12.5px; }
   .rank-row .rl { width: 74px; flex-shrink: 0; color: ${B.muted}; font-weight: 600; }
   .rank-track { flex: 1; height: 18px; background: ${B.warmWhite}; border: 1px solid ${B.border}; border-radius: 4px; position: relative; overflow: hidden; }
   .rank-track i { position: absolute; left: 0; top: 0; bottom: 0; background: ${B.lightBlue}; opacity: .55; }
-  .rank-track span { position: absolute; left: 8px; top: 0; line-height: 18px; font-size: 11px; color: ${B.navy}; font-weight: 600; }
+  .rank-track span { position: absolute; left: 8px; top: 0; line-height: 18px; font-size: 11px; color: ${B.blue}; font-weight: 600; }
   .rank-pct { width: 120px; flex-shrink: 0; text-align: right; color: ${B.bodyText}; font-weight: 600; font-size: 11.5px; }
   .risk-wrap { display: grid; grid-template-columns: 200px 1fr; gap: 18px; align-items: center; }
   .rcmp { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; font-size: 12px; }
@@ -5435,7 +5740,7 @@ function _udExportOperations() {
   .rcmp .rct i { display: block; height: 100%; }
   .rcmp .rcv { width: 26px; text-align: right; font-weight: 700; }
   .comp-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 4px; }
-  .comp-table th { background: ${B.blueTint}; color: ${B.navy}; border-bottom: 2px solid ${B.blue}; padding: 8px 12px; }
+  .comp-table th { background: ${B.blueTint}; color: ${B.blue}; border-bottom: 2px solid ${B.lightBlue}; padding: 8px 12px; }
   .comp-table td { padding: 6px 12px; border-bottom: 1px solid ${B.border}; }
 </style></head><body>
 
@@ -5467,7 +5772,7 @@ function _udExportOperations() {
   <div class="sk"><div class="l">Census Trend</div><div class="v">${trendDirDisp}</div></div>
 </div>
 
-<div class="callout"><b>At a glance &mdash;</b> A ${stationsVal ? stationsVal + '-station ' : ''}${operatorName && operatorName !== 'N/A' ? operatorName + ' ' : ''}in-center hemodialysis facility${utilPct != null ? ' running at <b>' + utilPct.toFixed(1) + '% of modeled operating capacity</b>' : ''}${(competitors.length === 0 && r.county) ? ', and the <b>only CMS-certified dialysis provider in ' + _esc(r.county) + ' County' + (stateVal ? ', ' + _esc(stateVal) : '') + '</b>' : ''}. Estimated facility revenue is <b>${fmtDollar(estRevenue)}</b>${annualTx ? ' on ~' + annualTx.toLocaleString() + ' annual treatments' : ''}${(payerMix.private_pct != null || r.payer_mix_private_pct != null) ? ', with a commercial/private payer share of <b>' + Number(payerMix.private_pct != null ? payerMix.private_pct : r.payer_mix_private_pct).toFixed(1) + '%</b>' : ''}.</div>
+<div class="callout"><b>At a glance &mdash;</b> A ${stationsVal ? stationsVal + '-station ' : ''}${operatorName && operatorName !== 'N/A' ? operatorName + ' ' : ''}in-center hemodialysis facility${utilPct != null ? ' running at <b>' + utilPct.toFixed(1) + '% of modeled operating capacity</b>' : ''}${(competitors.length === 0 && r.county) ? ', and the <b>only CMS-certified dialysis provider in ' + _esc(r.county) + ' County' + (stateVal ? ', ' + _esc(stateVal) : '') + '</b>' : ''}. Corrected facility revenue is <b>${estRevenue ? fmtDollar(estRevenue) : 'Not on file'}</b>${annualTx ? ' with ' + annualTx.toLocaleString() + ' CMS annual treatments' : ''}${(payerMix.private_pct != null || r.payer_mix_private_pct != null) ? ', with a commercial/private payer share of <b>' + Number(payerMix.private_pct != null ? payerMix.private_pct : r.payer_mix_private_pct).toFixed(1) + '%</b>' : ''}.</div>
 
 <!-- Tenant & Operator -->
 <h2>Tenant &amp; Operator <span class="note">Source: CMS &middot; operator SEC filings</span></h2>
@@ -5480,11 +5785,11 @@ function _udExportOperations() {
 <!-- Facility Financial Performance -->
 <h2>Facility Financial Performance <span class="note">Source: CMS/HCRIS &middot; operator filings</span></h2>
 <table class="data-table">
-  <tr><td>Est. Facility Revenue (annual)</td><td>${fmtDollar(estRevenue)}<span class="ctx">${finBasis === 'hcris' ? 'Derived from CMS/HCRIS reported actuals (treatment volume &times; net revenue).' : finBasis === 'estimated' ? 'Estimated (chair-capacity model).' : 'Estimated.'}</span></td></tr>
+  <tr><td>Est. Facility Revenue (annual)</td><td>${estRevenue ? fmtDollar(estRevenue) : 'Not on file'}<span class="ctx">${finBasis === 'estimated' ? 'Corrected clinic economics.' : 'Property-denorm revenue retired; corrected clinic economics not on file.'}</span></td></tr>
   <tr><td>Revenue / Treatment (blended)</td><td>${revPerTx ? '$' + revPerTx.toFixed(0) : 'N/A'}<span class="ctx">Weighted by this facility's payer mix.</span></td></tr>
   <tr><td>Est. Operating Profit</td><td>${fmtDollar(bestProfit)}</td></tr>
-  <tr><td>Operating Margin</td><td>${fmtPct(margin)}${finBasis === 'estimated' ? (r.ttm_operating_margin != null ? '<span class="ctx">Estimated model; CMS/HCRIS TTM margin ' + (Number(r.ttm_operating_margin) * (Math.abs(Number(r.ttm_operating_margin)) < 1 ? 100 : 1)).toFixed(1) + '%.</span>' : '') : '<span class="ctx">CMS/HCRIS reported actuals (operating profit &divide; net patient revenue).</span>'}</td></tr>
-  <tr><td>Annual Treatments</td><td>${annualTx ? annualTx.toLocaleString() : 'N/A'}<span class="ctx">${finBasis === 'estimated' ? 'Modeled at chair capacity.' : 'CMS/HCRIS reported.'}</span></td></tr>
+  <tr><td>Operating Margin</td><td>${fmtPct(margin)}<span class="ctx">${margin != null ? 'Derived from corrected clinic economics.' : 'Not on file.'}</span></td></tr>
+  <tr><td>Annual Treatments</td><td>${annualTx ? annualTx.toLocaleString() : 'N/A'}<span class="ctx">CMS medicare_clinics TTM treatments.</span></td></tr>
 </table>
 
 <!-- Demand & Capacity -->
@@ -5550,12 +5855,18 @@ ${(function(){ var geoComps = (ext.geo && ext.geo.subject_geocoded && Array.isAr
   <tr><td>Year Built</td><td>${yearBuilt ? _esc(String(yearBuilt)) + (yearReno ? ' (renovated ' + _esc(String(yearReno)) + ')' : '') : 'N/A'}</td></tr>
 </table>
 
+${perfExhibitHtml}
+
 <div class="methodology">
   <strong>Methodology & Data Sources</strong><br><br>
-  <strong style="color:${B.navy}">Revenue Estimation</strong><br>
-  Revenue estimates are derived from a 4-payer blended reimbursement model applied to estimated annual treatment volume. Payer-specific rates reflect current CMS reimbursement schedules: Medicare ~$279/treatment, Medicaid ~$225/treatment, Commercial/Private ~$1,100/treatment, and Other ~$250/treatment. The blended average is approximately $357/treatment. Treatment volume assumes 156 treatments per patient per year (3x weekly, 52 weeks).<br><br>
+  <strong style="color:${B.navy}">Revenue &amp; Operating Profit (Reconciled Truth Model)</strong><br>
+  Revenue and operating profit are a single reconciled figure per facility per fiscal year (model <em>dialysis_econ_reconciled_v1</em>), rebuilt from first principles rather than a modeled-estimate-vs-actual either/or. The audited CMS HCRIS cost report is treated as what it actually is &mdash; a <em>cost</em> report (it books allowable cost as &ldquo;revenue,&rdquo; so revenue equals cost on every filing) &mdash; and therefore as a reliable anchor for <strong>treatment volume</strong> (Worksheet S) and <strong>operating cost</strong> (Worksheet D), but not for top-line revenue. Revenue is reconstructed as <strong>treatments &times; a payer-mix-weighted reimbursement rate</strong> (CY2024 schedules: Medicare ~$279, Medicaid ~$225, Commercial ~$1,100, Other ~$250/treatment); operating profit = revenue &minus; HCRIS cost. Because a facility&rsquo;s reported private-payer share conflates Medicare Advantage (which pays roughly Medicare rates) with true commercial, only a calibrated fraction of that share is priced at the commercial rate &mdash; calibrated so the national blend reproduces the observed sector operating margin (~16%). Legacy internal estimates are blended in only when they fall within a plausibility band of the payer-weighted rate; implausible values are excluded. Each facility carries a confidence tier (high/medium/low) based on the strength of its underlying HCRIS and payer-mix data.<br><br>
+  <strong style="color:${B.navy}">Validation against public filings</strong><br>
+  Aggregated bottom-up across all ~8,300 facilities, the model reconciles to operator SEC filings: for DaVita facilities the implied revenue-per-treatment (~$380) matches DaVita&rsquo;s FY2024 10-K (~$369&ndash;380/treatment) within ~3%, and the facility-level EBITDA margin (~25%) aligns with DaVita&rsquo;s reported dialysis EBITDA. Aggregate revenue is <em>conservative</em> relative to operator-reported totals (our treatment counts are audited CMS figures, which run below operator-reported treatments that include hospital/acute settings) &mdash; the model does not overstate.<br><br>
+  <strong style="color:${B.navy}">EBITDA</strong><br>
+  EBITDA = operating profit + estimated depreciation &amp; amortization. D&amp;A is anchored to operator 10-K disclosures (~$27/treatment) and distributed to each facility by <strong>size</strong> (treatment volume) and <strong>age</strong> (a plant/equipment depreciation curve from the facility&rsquo;s CMS certification age), bounded to a sane share of revenue. EBITDA is reported only where operating profit is available; it is never a fabricated add-back.<br><br>
   <strong style="color:${B.navy}">Treatment Volume</strong><br>
-  Annual treatment counts follow a data-priority hierarchy: (1) HCRIS cost report actuals, (2) XGBoost primary financial model estimates, (3) CMS-reported trailing twelve month totals, (4) modeled from patient census (patients \u00D7 156). The chair-based capacity model (stations \u00D7 3 shifts \u00D7 5.5 days \u00D7 52 weeks \u00D7 65% utilization) has been validated against reported figures with a median accuracy of 1.00x across 7,115 facilities.<br><br>
+  Annual treatment counts are anchored to HCRIS cost-report actuals (Worksheet S); where a facility has no HCRIS filing, volume falls back to the CMS trailing-twelve-month total, then to patient census &times; 156 (3&times; weekly, 52 weeks). The app&rsquo;s treatment counts reconcile to HCRIS at a median ratio of 1.00 across ~7,500 facilities.<br><br>
   <strong style="color:${B.navy}">Capacity Utilization</strong><br>
   Capacity Utilization is a modeled estimate of treatment volume against the facility's estimated operating capacity (stations &times; shifts &times; operating days &times; a standard utilization factor) &mdash; <em>not</em> a real-time occupancy reading. A figure near 90% indicates the facility is modeled to run close to its practical chair throughput; it does not mean that share of chairs is filled at any single moment.<br><br>
   <strong style="color:${B.navy}">Patient Counts</strong><br>
@@ -5563,9 +5874,9 @@ ${(function(){ var geoComps = (ext.geo && ext.geo.subject_geocoded && Array.isAr
   <strong style="color:${B.navy}">Comparative Benchmarking</strong><br>
   Percentile rank among CMS-certified dialysis facilities by estimated patient volume and revenue, within the state and nationally (higher percentile = larger facility). County-level ranking is omitted where the facility is the only one in its county.<br><br>
   <strong style="color:${B.navy}">Operating Costs & Margins</strong><br>
-  Operating costs are sourced from: (1) CMS HCRIS facility cost reports (actual facility-level data), or (2) derived from revenue minus operating profit where HCRIS data is unavailable or reflects known Medicare-only allocation quirks. Margins are calculated as operating profit divided by revenue.<br><br>
-  <strong style="color:${B.navy}">Revenue Projections</strong><br>
-  Projected revenue uses a growth-rate approach: current revenue is scaled by the ratio of projected-to-current patient census, plus 3% annual inflation compounding. This avoids per-patient revenue inflation caused by multi-modality census counts (in-center HD, home HD, peritoneal dialysis) that differ in reimbursement rates. Patient projections are derived from regression analysis of historical CMS enrollment snapshots.<br><br>
+  Operating cost is the audited HCRIS facility cost-report total (Worksheet D, all-payer, the same figure that anchors the reconciled model above); the median is ~$303/treatment and falls with facility scale (~$428/treatment at the smallest facilities to ~$278 at the largest). Margin is operating profit divided by revenue. Because cost is the audited per-facility figure rather than a flat assumption, genuinely sub-scale facilities can show a thin or negative operating margin &mdash; a real, audited signal, not a data gap.<br><br>
+  <strong style="color:${B.navy}">Revenue &amp; Profit Trend</strong><br>
+  Year-over-year and multi-year CAGR are computed from the facility&rsquo;s reconciled per-year series (FY2011&ndash;present), applying one figure per fiscal year with an order-of-magnitude outlier guard so definition mismatches cannot corrupt the trend. Reimbursement rates are held at the current (CY2024) schedule across all years, so the trend is <strong>volume-driven</strong> &mdash; it reflects the facility&rsquo;s treatment-volume trajectory (the signal that most drives value), not rate inflation.<br><br>
   <strong style="color:${B.navy}">Quality & Risk Metrics</strong><br>
   Quality data sourced from CMS Dialysis Facility Compare. Mortality, hospitalization, and readmission rates are per 100 patient-years, benchmarked against national averages (mortality ~15, hospitalization ~150, readmission ~25). The composite lease renewal risk score (0\u2013100) weights five factors: Patient Trend (30%), Financial Health (25%), Quality Metrics (20%), Lease Expiration (15%), and Market Conditions (10%).<br><br>
   <strong style="color:${B.navy}">Competitive Landscape</strong><br>
@@ -5603,47 +5914,11 @@ function _starsCompact(n) {
 }
 
 /** Patient history sparkline (inline SVG) */
-function _opsSparkline(history) {
-  if (!history || history.length < 2) return '';
-  const pts = history.map(h => Number(h.total_patients || h.patient_count || 0)).filter(v => v > 0);
-  if (pts.length < 2) return '';
+// _opsSparkline was DEFINED here and never ran: ops.js loads later and its
+// _opsSparkline(series, opts) won in the shared global scope. Removed rather
+// than left as live-looking dead code — the ONE implementation is ops.js's,
+// and the call sites above now pass it numbers. (2026-08-20)
 
-  const w = 280, h = 50, pad = 4;
-  const min = Math.min(...pts), max = Math.max(...pts);
-  const range = max - min || 1;
-
-  const points = pts.map((v, i) => {
-    const x = pad + (i / (pts.length - 1)) * (w - 2 * pad);
-    const y = pad + (1 - (v - min) / range) * (h - 2 * pad);
-    return x.toFixed(1) + ',' + y.toFixed(1);
-  });
-
-  const lastVal = pts[pts.length - 1];
-  const firstVal = pts[0];
-  const trendColor = lastVal >= firstVal ? 'var(--green)' : 'var(--red)';
-
-  let svg = '<div style="margin-bottom:8px">';
-  svg += '<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text3);margin-bottom:2px">';
-  svg += '<span>' + (history[0].snapshot_date ? _fmtDate(history[0].snapshot_date) : '') + '</span>';
-  svg += '<span>Patient Census History</span>';
-  svg += '<span>' + (history[history.length - 1].snapshot_date ? _fmtDate(history[history.length - 1].snapshot_date) : '') + '</span>';
-  svg += '</div>';
-  svg += '<svg width="100%" height="' + h + '" viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" style="display:block">';
-  // Fill area
-  svg += '<polygon points="' + pad + ',' + h + ' ' + points.join(' ') + ' ' + (w - pad) + ',' + h + '" fill="' + trendColor + '" fill-opacity="0.08"/>';
-  // Line
-  svg += '<polyline points="' + points.join(' ') + '" fill="none" stroke="' + trendColor + '" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>';
-  // Endpoint dot
-  const lastPt = points[points.length - 1].split(',');
-  svg += '<circle cx="' + lastPt[0] + '" cy="' + lastPt[1] + '" r="3" fill="' + trendColor + '"/>';
-  svg += '</svg>';
-  svg += '<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text2)">';
-  svg += '<span>' + fmtN(firstVal) + ' patients</span>';
-  svg += '<span style="font-weight:600;color:' + trendColor + '">' + fmtN(lastVal) + ' patients</span>';
-  svg += '</div>';
-  svg += '</div>';
-  return svg;
-}
 
 /** Compute composite lease risk score (0-100) */
 function _computeLeaseRisk(r, trends, quality, lease, leaseMonths, margin) {
@@ -6062,7 +6337,7 @@ async function _udOwnerBeginProspecting(trueOwnerId, ownerName) {
       showToast('No SF match found for "' + ownerName + '" — marked as actively prospecting. Create SF Account when ready.', 'info');
     }
     // 2. Refresh the Ownership tab to show updated status
-    const bodyEl = document.getElementById('detailBody');
+    const bodyEl = _udHost('body');
     // Re-fetch chain data to pick up the updated prospecting_status.
     // QA-08 (2026-05-18): gov v_ownership_chain has no property_id column
     // (its keys are ownership_id / lease_number / address). Using
@@ -6162,11 +6437,47 @@ function _udOwnershipLadder(own, db) {
   const conf = _udCache.ownerConf || null;
   const divergence = _udCache.ownerDivergence || null;
   const _sfAccId = own.sf_account_id || own.sf_company_id;
+
+  // Redesign 2026-08-15 (§0 corollary): never render the same name twice on one
+  // screen. When the deed owner and the decision-maker resolve to the SAME
+  // party, the two-card "recorded → true" ladder just prints the name again
+  // right under the Current Owner card (Scott's screenshot showed one owner name
+  // four times). Collapse to a single card with an explicit agreement note; the
+  // ladder only earns its two cards when there is genuinely a shell in front of
+  // a parent. Comparison is on the normalized core so casing / legal-suffix
+  // variants ("Rem Management" vs "REM Management LLC") still collapse.
+  const _norm = function(s) {
+    return String(s || '').toLowerCase()
+      .replace(/[.,]/g, ' ')
+      .replace(/\b(llc|l\.l\.c|inc|incorporated|corp|corporation|co|company|lp|llp|ltd|limited|trust|dst|reit)\b/g, ' ')
+      .replace(/[^a-z0-9]+/g, '');
+  };
+  // Require a substantive residue: the normalizer strips legal forms and
+  // punctuation, so two unrelated names that reduce to '' (or to one or two
+  // characters) must NOT be reported as the same party.
+  const _recCore = _norm(recDisplay);
+  const _ownersAgree = !!(recDisplay && trueResolved && _recCore.length >= 4 && _recCore === _norm(trueDisplay));
+  // UI-5 (found live on dia:31857, 2026-08-17): the OPERATOR-ELEVATION path also
+  // printed one name twice. When true_owner is flagged as the operator, the
+  // true-owner card below deliberately re-renders `recDisplay` (the operator is
+  // the tenant, never the owner — Scott 2026-07-31), so the screen showed
+  // "Netstreit Inc → Netstreit Inc" with an arrow between them. `_ownersAgree`
+  // could not catch it because it requires `trueResolved`, which is false by
+  // definition on this path. Collapse here too, and carry the operator fact
+  // into the note — it is the one thing the second card was actually adding.
+  const _operatorElevated = !!(trueIsOperator && recDisplay);
+  const _singleCard = _ownersAgree || _operatorElevated;
+
   let h = '';
-  h += '<div style="display:grid;grid-template-columns:1fr 26px 1fr;gap:0;align-items:stretch;margin-bottom:12px">';
+  h += _singleCard
+    ? '<div style="margin-bottom:12px">'
+    : '<div style="display:grid;grid-template-columns:1fr 26px 1fr;gap:0;align-items:stretch;margin-bottom:12px">';
   // Recorded owner
   h += '<div style="background:var(--s2);border:1px solid var(--border);border-radius:10px;padding:14px 16px">';
-  h += '<div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);margin-bottom:6px">Recorded Owner (deed)</div>';
+  h += '<div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);margin-bottom:6px">'
+    + (_ownersAgree ? 'Owner &mdash; deed &amp; decision maker'
+       : _operatorElevated ? 'Owner of record (deed)'
+       : 'Recorded Owner (deed)') + '</div>';
   if (recDisplay) {
     h += '<div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px">' + _ownerLink(recDisplay, _ownerCtxFromCurrent(own, db, 'recorded')) + '</div>';
     if (own.recorded_owner_type || own.owner_type) h += '<div style="font-size:11px;color:var(--text2)">' + esc(own.recorded_owner_type || own.owner_type) + '</div>';
@@ -6192,7 +6503,22 @@ function _udOwnershipLadder(own, db) {
     h += '<div style="font-size:15px;font-weight:700;color:var(--red);margin-bottom:4px">— not on file —</div>';
     h += '<div class="t-meta3">No recorded owner. Pull from county deed / CoStar / RCA.</div>';
   }
+  // Collapsed branch: deed owner == decision maker. Print the agreement + the
+  // confidence signal inline instead of a second card repeating the same name.
+  if (_singleCard) {
+    const _agreeBits = [_operatorElevated
+      ? 'Deed owner (recorded) — the real-estate owner. ' + esc(trueDisplay) + ' is the operator / tenant, not the owner.'
+      : 'Recorded deed owner and decision maker are the same party.'];
+    if (own.owner_source === 'lcc_property_owner' && own.lcc_property_owner && own.lcc_property_owner.confidence != null) {
+      _agreeBits.push('Resolved from ownership graph \u00b7 ' + Math.round(Number(own.lcc_property_owner.confidence) * 100) + '%');
+    } else if (conf && conf.value != null) {
+      _agreeBits.push('Confidence ' + Math.round(conf.value * 100) + '%' + (conf.role ? ' \u00b7 ' + esc(conf.role) : ''));
+    }
+    if (own.true_owner_sec_cik) h += '<a href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=' + esc(own.true_owner_sec_cik) + '" target="_blank" rel="noopener" style="font-size:11px;color:#62B5E5;display:inline-block;margin-top:6px">SEC filings \u2192</a>';
+    h += '<div style="margin-top:8px;font-size:11px;color:var(--text3);border-top:1px solid var(--border);padding-top:7px">' + _agreeBits.join(' \u00b7 ') + '</div>';
+  }
   h += '</div>';
+  if (!_singleCard) {
   h += '<div style="display:flex;align-items:center;justify-content:center;color:var(--purple);font-size:18px">→</div>';
   // True owner
   const trueStepBg = trueResolved
@@ -6237,6 +6563,7 @@ function _udOwnershipLadder(own, db) {
     h += '<div class="t-meta3">Beneficial owner not yet identified. Queue LLC / SoS research.</div>';
   }
   h += '</div>';
+  }
   h += '</div>';
   if (divergence) {
     const label = divergence.kind === 'assessor' ? 'Assessor disagrees' : 'Recorded vs true differ';
@@ -6267,11 +6594,11 @@ function _udBandClass(band) {
 }
 function _udResearchCta(researchType) {
   const t = String(researchType || '');
-  if (t.indexOf('missing_recorded_owner') !== -1) return { label: 'Pull recorded owner →', tab: 'Ownership & CRM' };
-  if (t.indexOf('llc') !== -1 || t.indexOf('true_owner') !== -1) return { label: 'Resolve true owner →', tab: 'Ownership & CRM' };
+  if (t.indexOf('missing_recorded_owner') !== -1) return { label: 'Pull recorded owner →', tab: 'Ownership' };
+  if (t.indexOf('llc') !== -1 || t.indexOf('true_owner') !== -1) return { label: 'Resolve true owner →', tab: 'Ownership' };
   if (t.indexOf('lease') !== -1) return { label: 'Confirm lease →', tab: 'Rent Roll' };
   if (t.indexOf('sale') !== -1) return { label: 'Review sale →', tab: 'Deal History' };
-  return { label: 'Take action →', tab: 'Ownership & CRM' };
+  return { label: 'Take action →', tab: 'Ownership' };
 }
 function _udResearchTitle(r) {
   const t = String(r.research_type || '');
@@ -6425,7 +6752,7 @@ function _udRenderNextStep() {
       onclick: 'navTo(&quot;pageReviewConsole&quot;);setTimeout(renderSosLinkWorklist,400)' };
   } else if (!trueResolved) {
     step = { label: 'Resolve the true owner', sub: 'Recorded owner known; decision-maker not resolved.', cta: 'Open Ownership \u2192',
-      onclick: 'switchUnifiedTab(&quot;Ownership &amp; CRM&quot;)' };
+      onclick: 'switchUnifiedTab(&quot;Ownership&quot;)' };
   } else if (band && (band.priority_band === 'P0.4' || band.reason === 'resolve_ownership_control') && band.resolve_is_connected === false) {
     // R6: the owner is resolved but the control structure isn't CONNECTED yet
     // (no Salesforce account / contact). Doctrine: connect first \u2014 the lead is
@@ -6434,7 +6761,7 @@ function _udRenderNextStep() {
       sub: band.resolve_true_owner_name
         ? ('True owner: ' + band.resolve_true_owner_name + ' \u2014 link a Salesforce account / contact before opening a lead.')
         : 'Identify the true owner/parent and link a CRM account / contact before opening a lead.',
-      cta: 'Open Ownership \u2192', onclick: 'switchUnifiedTab(&quot;Ownership &amp; CRM&quot;)' };
+      cta: 'Open Ownership \u2192', onclick: 'switchUnifiedTab(&quot;Ownership&quot;)' };
   } else if (needsLead) {
     step = { label: 'Create the lead', sub: 'Owner resolved' + (linked ? ' & CRM-linked' : '') + '. Open a BD opportunity.', cta: 'Create lead',
       onclick: '_udBtnGuard(this,_udCreateLeadFromProperty)' };
@@ -6956,14 +7283,84 @@ window._udOwnershipLadder = _udOwnershipLadder;
 // prominently as a clickable chip that opens the owner sidebar, with provenance +
 // last-verified. Domain-generic. Renders only when we have a resolved owner (never the
 // operator). See docs/architecture/property-owner-subsystem.md.
-function _udCurrentOwnerCard(own, db) {
-  if (!own) return '';
+/**
+ * Render an arbitrary string as a SAFE JS string argument inside an inline
+ * `onclick="..."` attribute.
+ *
+ * Two traps this closes, both of which shipped as live bugs:
+ *  1. `esc(name)` turns `'` into `&#39;`, which the HTML parser decodes back to
+ *     a RAW apostrophe inside the onclick source — so chaining
+ *     `.replace(/'/g,"\\'")` after esc() is a no-op (there is no `'` left to
+ *     match) and the handler is a SyntaxError for any O'Brien / D'Angelo owner.
+ *  2. `encodeURIComponent` does NOT escape `'` (it is in the unreserved set),
+ *     so the naive round-trip still emits a raw apostrophe.
+ * Percent-escaping the quote characters explicitly is what actually works.
+ */
+function _jsStrArg(s) {
+  return "decodeURIComponent('"
+    + encodeURIComponent(String(s == null ? '' : s)).replace(/'/g, '%27').replace(/"/g, '%22')
+    + "')";
+}
+
+/**
+ * The resolved owner of THIS asset, as a { name, id } reference.
+ * Single source for the Current Owner card, the hand-off CTA and the ladder
+ * de-duplication — so the three can never disagree about who the owner is.
+ * Never returns the operator/tenant (the P0.1 guard).
+ */
+function _udResolvedOwnerRef(own) {
+  if (!own) return null;
   const po = own.lcc_property_owner || null;
   const name = (po && po.owner_name)
     || (own.true_owner && !own.true_owner_is_operator ? (own.true_owner_canonical || own.true_owner) : null)
     || null;
+  if (!name) return null;
+  return { name: name, id: (po && po.owner_entity_id) || own.owner_entity_id || null };
+}
+
+/**
+ * "Work this owner →" — the seam between the property ladder and the owner
+ * ladder (redesign 2026-08-15 §4). Opens the owner in the companion dock when
+ * there's room, otherwise the full owner panel. `size:'hero'` renders the
+ * primary button inside the Current Owner card; `size:'footer'` renders the
+ * lighter repeat at the bottom of a long tab.
+ */
+function _udWorkOwnerCta(ref, size) {
+  if (!ref) return '';
+  const open = ref.id
+    ? `_openEntitySmart(${_jsStrArg(String(ref.id))})`
+    : `_openEntityByNameSmart(${_jsStrArg(ref.name)})`;
+  const hero = size === 'hero';
+  const btn = `<button onclick="${open}" title="Open the owner panel — calls, emails, cadence, contacts"`
+    + ` style="padding:${hero ? '9px 16px' : '7px 14px'};border-radius:8px;font-size:${hero ? '13px' : '12px'};font-weight:600;cursor:pointer;`
+    + `border:1px solid var(--accent);background:${hero ? 'var(--accent)' : 'transparent'};color:${hero ? '#fff' : 'var(--accent)'}">`
+    + `Work this owner &rarr;</button>`;
+  return `<div style="margin-top:${hero ? '10px' : '4px'};display:flex;align-items:center;gap:10px;flex-wrap:wrap">${btn}`
+    + `<span style="font-size:11px;color:var(--text3)">Calls, emails, cadence and contact records live on the owner panel.</span></div>`;
+}
+
+/** Footer repeat of the hand-off; also the empty-state pointer when unresolved. */
+function _udOwnerHandoffCard(own, db) {
+  const ref = _udResolvedOwnerRef(own);
+  let h = '<div class="detail-section" style="border-top:1px solid var(--border);padding-top:14px">';
+  if (ref) {
+    h += `<div style="font-size:12px;color:var(--text2);margin-bottom:2px">Owner: <strong style="color:var(--text)">${esc(ref.name)}</strong></div>`;
+    h += _udWorkOwnerCta(ref, 'footer');
+  } else {
+    h += '<div style="font-size:12px;color:var(--text2)">No owner resolved for this asset yet — fill in <strong>Resolve Ownership</strong> above, '
+      + 'then the owner panel (calls, emails, cadence, contacts) becomes reachable from here.</div>';
+  }
+  h += '</div>';
+  return h;
+}
+
+function _udCurrentOwnerCard(own, db) {
+  if (!own) return '';
+  const po = own.lcc_property_owner || null;
+  const _ref = _udResolvedOwnerRef(own);
+  const name = _ref && _ref.name;
   if (!name) return '';
-  const id = (po && po.owner_entity_id) || own.owner_entity_id || null;
+  const id = _ref.id;
   // With a resolved owner_entity_id, open it directly (entity type uses the id);
   // else fall back to name resolution (owner type).
   const chip = entityLink(name, id ? 'entity' : 'owner', id, db);
@@ -7004,14 +7401,121 @@ function _udCurrentOwnerCard(own, db) {
     if (eng.length) h += `<div style="font-size:11px;color:var(--text3);margin-top:2px">${eng.join(' · ')}</div>`;
   } else if (ps && ps.prospecting === false) {
     // Not prospected — P3.3 suggestion (research the owner / connect in SF).
-    const safe = esc(name).replace(/'/g, "\\'");
+    const safe = _jsStrArg(name);
     h += `<div style="margin-top:8px;font-size:12px;color:var(--text2)">Not yet prospected · ` +
       `<span style="color:var(--accent);cursor:pointer;text-decoration:underline;text-decoration-style:dotted" ` +
-      `onclick="_openEntityByNameSmart('${safe}')" title="Open owner to research / connect in SF">research owner &rarr;</span></div>`;
+      `onclick="_openEntityByNameSmart(${safe})" title="Open owner to research / connect in SF">research owner &rarr;</span></div>`;
   }
+  // The hand-off (redesign §2.5.1) — the card ends in the one CTA that carries
+  // the user from "this asset's owner is X" to actually working X.
+  h += _udWorkOwnerCta(_ref, 'hero');
   h += '</div>';
   return h;
 }
+
+/**
+ * OWN-T0 — the reconciled ownership chain, from the ONE view.
+ *
+ * `rec` is the /api/entities?action=ownership_chain payload
+ * (v_lcc_property_ownership_reconciled). Every store that can name an owner of
+ * this asset is already folded in there, labelled by the KIND of record that
+ * made the claim, so this renderer never consults a second source.
+ *
+ * The point is not to pick a winner quietly. Where two parties are both on
+ * record as current, the banner SAYS SO and names them, because that is the
+ * true state of the file — and on gov it is usually a sponsor and its SPE,
+ * both correct at different levels of the stack. Measured 2026-09-02: 756
+ * properties carry more than one current owner and the standing detector read
+ * zero. See docs/architecture/ownership-history-lane.md § OWN-T0.
+ */
+function _udRenderReconciledOwnership(rec, db) {
+  let h = '<div class="detail-section">';
+  h += '<div class="detail-section-title">Ownership</div>';
+
+  if (!rec) {
+    // Never render a silent blank: an unreachable reconciler and an owner-less
+    // property are different facts (P180 / C10 — a polite default is what let a
+    // wiring bug read as missing data for months).
+    h += '<div class="detail-empty" style="font-size:13px">Reconciled ownership is unavailable right now — the source records below are still shown.</div>';
+    return h + '</div>';
+  }
+
+  const links = Array.isArray(rec.links) ? rec.links : [];
+  const state = rec.property_state || 'no_owner_on_file';
+
+  if (state === 'no_owner_on_file') {
+    h += '<div class="detail-empty" style="font-size:13px">No owner on record for this property in any store.</div>';
+    return h + '</div>';
+  }
+
+  if (state === 'conflict') {
+    const names = links.filter(l => l.is_owner_candidate).map(l => l.owner_name).filter(Boolean);
+    const CLASS_NOTE = {
+      duplicate_entity: 'the same party is recorded twice — this is a merge, not a change of ownership',
+      sponsor_family_confirmed: 'a confirmed sponsor and its single-asset entity — both are correct, at different levels',
+      placeholder_in_pair: 'one of these is a placeholder name, not a party',
+      operator_in_pair: 'one of these is the operator/tenant, not the owner',
+      brokerage_in_pair: 'one of these is a brokerage — the agent, never the principal',
+      unclassified_rival: 'not yet classified. On a GSA asset this is usually a sponsor and its SPE (both true); it can also be two genuinely different owners',
+    };
+    const note = CLASS_NOTE[rec.conflict_class] || '';
+    h += '<div style="background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.25);border-radius:8px;padding:10px 14px;margin-bottom:12px">';
+    h += `<div style="font-size:12px;font-weight:600;color:var(--yellow)">${names.length} owners on record as current</div>`;
+    h += `<div style="font-size:11px;color:var(--text2);margin-top:3px">${esc(names.join('  ·  '))}</div>`;
+    if (note) h += `<div style="font-size:11px;color:var(--text3);margin-top:5px">${esc(note)}.</div>`;
+    h += '<div style="font-size:11px;color:var(--text3);margin-top:4px">Neither has been superseded — nothing here was chosen for you.</div>';
+    h += '</div>';
+  } else if (state === 'only_non_owner_claims') {
+    h += '<div style="background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.25);border-radius:8px;padding:10px 14px;margin-bottom:12px">';
+    h += '<div style="font-size:12px;font-weight:600;color:var(--yellow)">No owner on file</div>';
+    h += '<div style="font-size:11px;color:var(--text2);margin-top:3px">Every party recorded against this asset is an operator, a brokerage or a placeholder — none of them owns it.</div>';
+    h += '</div>';
+  } else if (state === 'no_current_owner') {
+    h += '<div style="background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.25);border-radius:8px;padding:10px 14px;margin-bottom:12px">';
+    h += '<div style="font-size:12px;font-weight:600;color:var(--yellow)">Ownership history only</div>';
+    h += '<div style="font-size:11px;color:var(--text2);margin-top:3px">Every recorded owner has an end date and nobody has been recorded since.</div>';
+    h += '</div>';
+  }
+
+  const LEVEL = {
+    reconciled: 'Reconciled', domain_record: 'Domain record', title_record: 'Deed / county',
+    transaction_record: 'Sale record', lease_record: 'GSA lease', chain_apply: 'Ownership chain',
+    unattributed: 'Source not recorded', other: 'Other',
+  };
+
+  h += '<div class="detail-timeline">';
+  links.forEach((l) => {
+    const cur = l.is_current === true;
+    const cls = (cur && l.is_primary) ? 'green' : '';
+    const start = l.ownership_start_date ? _fmtDate(l.ownership_start_date) : null;
+    const end   = l.ownership_end_date ? _fmtDate(l.ownership_end_date) : (cur ? 'Present' : 'Unknown');
+    h += `<div class="detail-timeline-item ${cls}">`;
+    // Dates: "Start not on file" is stated, never guessed at (A2 — the start of
+    // a chain stays NULL rather than being bridged).
+    h += `<div class="detail-card-date">${esc(start ? (start + ' → ' + end) : ('Start not on file → ' + end))}</div>`;
+    h += `<div class="detail-card-title">${l.owner_entity_id ? entityLink(l.owner_name, 'entity', l.owner_entity_id, db) : esc(l.owner_name || '—')}`;
+    if (l.is_primary) h += ' <span class="detail-badge" style="background:rgba(34,197,94,0.12);color:var(--green);border:1px solid rgba(34,197,94,0.35);font-size:9px;padding:2px 7px;border-radius:10px;margin-left:6px">Owner</span>';
+    if (l.is_operator) h += ' <span class="detail-badge" style="background:rgba(251,191,36,0.10);color:var(--yellow);border:1px solid rgba(251,191,36,0.35);font-size:9px;padding:2px 7px;border-radius:10px;margin-left:6px" title="Operator / tenant recorded in the owner slot — not the owner">Operator</span>';
+    if (l.is_brokerage) h += ' <span class="detail-badge" style="background:rgba(251,191,36,0.10);color:var(--yellow);border:1px solid rgba(251,191,36,0.35);font-size:9px;padding:2px 7px;border-radius:10px;margin-left:6px" title="A brokerage is the agent, never the principal">Brokerage</span>';
+    if (l.is_placeholder) h += ' <span class="detail-badge" style="background:rgba(148,163,184,0.12);color:var(--text3);font-size:9px;padding:2px 7px;border-radius:10px;margin-left:6px">Placeholder</span>';
+    h += '</div>';
+    h += '<div class="detail-card-body">';
+    const bits = [];
+    bits.push(esc(LEVEL[l.evidence_level] || l.evidence_level || 'Unknown source'));
+    if (l.is_primary && l.primary_reason) bits.push(esc(l.primary_reason));
+    if (l.resolver_confidence != null) bits.push(Math.round(Number(l.resolver_confidence) * 100) + '% confidence');
+    h += `<span class="t-meta3-sm">${bits.join(' · ')}</span>`;
+    if (l.gap_before) {
+      h += '<div style="font-size:11px;color:var(--yellow);margin-top:4px">Gap in the recorded chain before this owner — the intervening owner is not on file.</div>';
+    }
+    h += '</div></div>';
+  });
+  h += '</div>';
+  h += '<div style="font-size:11px;color:var(--text3);margin-top:8px">One chain, assembled from every store that names an owner of this asset. Nothing is end-dated to produce it.</div>';
+  h += '</div>';
+  return h;
+}
+window._udRenderReconciledOwnership = _udRenderReconciledOwnership;
 
 function _udTabOwnership() {
   const own = _udCache.ownership;
@@ -7021,6 +7525,8 @@ function _udTabOwnership() {
   let html = '';
   // P3.3 — lead with the reconciled current owner (clickable to the owner sidebar).
   html += _udCurrentOwnerCard(own, db);
+  // OWN-T0: the reconciled chain is THE ownership answer on this tab.
+  html += _udRenderReconciledOwnership(_udCache.ownReconciled, db);
 
   // If no ownership data but fallback has ownership fields, show them
   if (!own && chain.length === 0) {
@@ -7040,6 +7546,10 @@ function _udTabOwnership() {
   // ── DATA GAP INDICATOR ──────────────────────────────────────────────
   // Each gap badge is a one-click resolver that focuses the relevant input
   // or triggers a lookup action.
+  // Redesign 2026-08-15 (§2.5.3): ASSET-ownership gaps only. Contact email /
+  // phone / name and the Salesforce link are gaps in the PARTY record — they
+  // moved to the owner panel's Contacts tab. Resolving them from a property page
+  // is how one owner's phone number ended up stamped on a building.
   const gaps = [];
   if (!own) gaps.push({ label: 'ownership record', action: 'focus:udOwnRecorded' });
   else {
@@ -7048,17 +7558,6 @@ function _udTabOwnership() {
     // gives false confidence that the row is researched.
     const _trueOwnerTrusted = own.true_owner && !own.true_owner_is_operator;
     if (!_trueOwnerTrusted && !own.recorded_owner) gaps.push({ label: 'owner name', action: 'focus:udOwnRecorded' });
-    // Contact fields: offer one-click Add Contact inline (writes to
-    // unified_contacts scoped to this owner) instead of just focusing a
-    // form field that's downstream of the Resolve Ownership flow.
-    if (!own.contact_email) gaps.push({ label: 'contact email', action: 'add-contact' });
-    if (!own.contact_phone) gaps.push({ label: 'contact phone', action: 'add-contact' });
-    if (!own.contact_name && !own.contact_1_name) gaps.push({ label: 'contact name', action: 'add-contact' });
-    // Salesforce link: resolve sf_account_id on the fly; if still unknown,
-    // offer to create the SF Account inline.
-    if (!own.sf_contact_id && !own.salesforce_id && !own.sf_account_id && !own.sf_company_id) {
-      gaps.push({ label: 'Salesforce link', action: 'sf-lookup' });
-    }
     if (db === 'gov' && !_trueOwnerTrusted) gaps.push({ label: 'true owner (behind LLC)', action: 'focus:udOwnTrue' });
     if (db === 'gov' && !own.true_owner_state) gaps.push({ label: 'true owner state', action: 'focus:udOwnState' });
   }
@@ -7081,7 +7580,8 @@ function _udTabOwnership() {
     html += '</div></div></div>';
   }
 
-  html += _udAssistantSection('ownership', 'Ownership Assistant', 'Summarize the ownership picture, identify the likely owner or decision-maker, and suggest the next research steps.');
+  // Ownership Assistant REMOVED (redesign 2026-08-15 §2.5) — it researches the
+  // PARTY, not the asset, so it now lives on the owner panel Overview.
 
   // ── CURRENT OWNERSHIP ──────────────────────────────────────────────
   if (!own) {
@@ -7099,7 +7599,6 @@ function _udTabOwnership() {
   } else {
     html += '<div class="detail-section">';
     html += '<div class="detail-section-title">Current Ownership</div>';
-    html += '<div class="detail-grid">';
 
     // ── SIDE-BY-SIDE OWNER CARDS ──────────────────────────────────────
     // true_owner_is_operator is set by 20260513_dia_purge_cms_operator_owner_pollution
@@ -7117,26 +7616,20 @@ function _udTabOwnership() {
     // Inc"). Prefer canonical in display contexts; the Resolve Ownership
     // form below keeps the raw deed text so edits preserve verbatim names.
     // (display vars now computed inside _udOwnershipLadder — PR1)
-    html += '</div></div>'; // close detail-grid opened above — we'll use cards instead
+    // (No wrapper grid: the ladder below emits its own layout. The stray
+    // '</div></div>' that used to close a never-populated .detail-grid here left
+    // one unmatched close tag in the section — removed 2026-08-15.)
     html += _udOwnershipLadder(own, db);
 
-    // Additional details below cards
+    // Redesign 2026-08-15 (\u00a70/\u00a72.5): the contact roster (Contact 1/2, email,
+    // phone) and the party's CRM attributes (priority, developer tier, total
+    // properties owned, is-prospect) moved to the OWNER panel. They answer "who
+    // do I call", not "what is this asset" \u2014 and Total Properties / Current
+    // Count duplicated the owner card's portfolio line one screen above.
+    // Only the asset-scoped ownership qualifier stays here.
     html += '<div class="detail-grid" style="margin-bottom:0">';
-    if (db === 'dia') {
-      html += _rowHtml('Contact 1', own.contact_1_name && own.contact_1_id ? entityLink(own.contact_1_name, 'contact', own.contact_1_id, db) : esc(own.contact_1_name || ''));
-      html += _rowHtml('Contact 2', own.contact_2_name && own.contact_2_id ? entityLink(own.contact_2_name, 'contact', own.contact_2_id, db) : esc(own.contact_2_name || ''));
-      html += _rowLink('Email', own.contact_email, own.contact_email ? _outlookSearchUrl(own.contact_email) : null);
-      html += _rowLink('Phone', own.contact_phone, own.contact_phone ? 'tel:' + own.contact_phone : null);
-      html += _row('Priority', own.priority_level);
-      html += _row('Developer', own.developer_flag ? 'Yes' + (own.developer_tier ? ' \u00b7 Tier ' + own.developer_tier : '') : null);
-      html += _row('Total Properties', own.total_properties_owned ? fmtN(own.total_properties_owned) : null);
-      html += _row('Current Count', own.current_property_count ? fmtN(own.current_property_count) : null);
-      html += _row('Is Prospect', own.is_prospect ? 'Yes' : 'No');
-    } else {
-      html += _rowHtml('Contact', own.contact_name && own.contact_id ? entityLink(own.contact_name, 'contact', own.contact_id, db) : esc(own.contact_name || ''));
-      html += _rowLink('Email', own.contact_email, own.contact_email ? _outlookSearchUrl(own.contact_email) : null);
-      html += _rowLink('Phone', own.contact_phone, own.contact_phone ? 'tel:' + own.contact_phone : null);
-    }
+    html += _row('Ownership Type', own.ownership_type || own.owner_type);
+    html += _row('State of Incorporation', own.state_of_incorporation || own.recorded_owner_state || own.true_owner_state);
     html += '</div></div>';
 
     // ── SALESFORCE + SYSTEM LINKS ──────────────────────────────────────────
@@ -7163,7 +7656,12 @@ function _udTabOwnership() {
   html += `<input id="udOwnTrue" type="text" value="${esc(own?.true_owner || '')}" placeholder="Parent entity, developer, fund" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>`;
   html += '</div>';
 
-  html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:8px">';
+  // Redesign 2026-08-15 (§2.5.4): Contact Name / Phone / Email inputs REMOVED.
+  // Those write the party's `unified_contacts` record; editing them from a
+  // property panel is what keyed contact data to a building. Add or edit a
+  // contact on the owner panel's Contacts tab. `_udSaveOwnership` reads these
+  // ids with optional chaining, so their absence is a clean no-op.
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">';
   html += '<div><label class="t-label">Owner Type</label>';
   html += '<select id="udOwnType" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text)">';
   html += '<option value="">—</option>';
@@ -7171,15 +7669,6 @@ function _udTabOwnership() {
     html += `<option value="${t}" ${own?.owner_type === t ? 'selected' : ''}>${t.charAt(0).toUpperCase() + t.slice(1)}</option>`;
   });
   html += '</select></div>';
-  html += '<div><label class="t-label">Contact Name</label>';
-  html += `<input id="udOwnContact" type="text" value="${esc(own?.contact_1_name || own?.contact_name || '')}" placeholder="" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>`;
-  html += '<div><label class="t-label">Contact Phone</label>';
-  html += `<input id="udOwnPhone" type="tel" value="${esc(own?.contact_phone || '')}" placeholder="" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>`;
-  html += '</div>';
-
-  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">';
-  html += '<div><label class="t-label">Contact Email</label>';
-  html += `<input id="udOwnEmail" type="email" value="${esc(own?.contact_email || '')}" placeholder="" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>`;
   html += '<div><label class="t-label">State of Incorporation</label>';
   html += `<input id="udOwnState" type="text" value="${esc(own?.recorded_owner_state || own?.true_owner_state || '')}" placeholder="" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>`;
   html += '</div>';
@@ -7195,7 +7684,13 @@ function _udTabOwnership() {
   // recorded_owner_id / true_owner_id. This prevents "Mds Dv Victorville"
   // from appearing as both the current owner AND a 2015–2016 historical
   // owner. Earliest transfer_date and latest ownership_end win.
+  // OWN-T0: the DOMAIN stores are evidence now, not the answer. They stay --
+  // they carry sale price, cap rate, the NM badge and prospecting state that the
+  // reconciled chain does not -- but behind a disclosure, because rendering them
+  // beside the reconciled chain as an equal claim is what made the tab
+  // "conflicting" in the first place.
   const dedupedChain = _udDedupChain(chain, own);
+  html += '<details style="margin-bottom:16px"><summary style="cursor:pointer;font-size:12px;color:var(--text2);padding:6px 0">Source records \u2014 domain ownership history (' + dedupedChain.length + ')</summary>';
   html += '<div class="detail-section">';
   html += `<div class="detail-section-title">Ownership History <span style="font-size:11px;color:var(--text3);font-weight:400;margin-left:8px">${dedupedChain.length} records</span></div>`;
 
@@ -7309,175 +7804,41 @@ function _udTabOwnership() {
         if (h.ownership_type) html += `<div style="font-size:11px;color:var(--text3);margin-top:2px">Type: ${esc(h.ownership_type)}</div>`;
         if (h.ownership_source) html += `<div class="t-meta3">Source: ${esc(h.ownership_source)}</div>`;
         if (h._merged_count > 1) html += `<div style="margin-top:4px"><span class="detail-badge" style="background:var(--s3);color:var(--text2)">${h._merged_count} entries merged</span></div>`;
-        // CRM coverage bar — shows what intel we have on this owner
-        {
-          const checks = [];
-          checks.push({ label: 'Identified', ok: !!h.true_owner_id });
-          checks.push({ label: 'Salesforce', ok: !!h.salesforce_id });
-          checks.push({ label: 'Prospecting', ok: !!h.prospecting_status });
-          checks.push({ label: 'Contacted', ok: !!h.last_contact_date });
-          const covered = checks.filter(c => c.ok).length;
-          const pct = Math.round((covered / checks.length) * 100);
-          const barColor = pct >= 75 ? 'var(--green,#34d399)' : pct >= 50 ? 'var(--yellow,#fbbf24)' : pct >= 25 ? '#f59e0b' : 'var(--red,#ef4444)';
-          html += '<div style="margin-top:6px;padding-top:5px;border-top:1px solid var(--border,#2a2a2a)">';
-          html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">';
-          html += '<span style="font-size:10px;color:var(--text3);font-weight:600">CRM Coverage</span>';
-          html += `<span style="font-size:9px;color:${barColor};font-weight:700">${pct}%</span>`;
-          html += '</div>';
-          html += '<div style="display:flex;gap:1px;height:4px;border-radius:2px;overflow:hidden;background:var(--s3,#1a1a1a)">';
-          checks.forEach(c => {
-            html += `<div style="flex:1;background:${c.ok ? barColor : 'transparent'}" title="${esc(c.label)}: ${c.ok ? 'Yes' : 'Missing'}"></div>`;
-          });
-          html += '</div>';
-          html += '<div style="display:flex;gap:8px;margin-top:3px;flex-wrap:wrap">';
-          checks.forEach(c => {
-            html += `<span style="font-size:9px;color:${c.ok ? 'var(--text2)' : 'var(--text3,#555)'}">${c.ok ? '\u2713' : '\u2717'} ${c.label}</span>`;
-          });
-          html += '</div>';
-          // "Sync & Begin Prospecting" button when owner lacks SF link
-          if (!h.salesforce_id && h.true_owner_id) {
-            const ownerName = h.true_owner_name || h.recorded_owner_name || h.to_owner || 'this owner';
-            const escapedName = esc(ownerName).replace(/'/g, "\\'");
-            html += `<button onclick="_udOwnerBeginProspecting('${esc(h.true_owner_id)}', '${escapedName}')" style="margin-top:6px;padding:5px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid #a55eea;background:rgba(165,94,234,0.1);color:#a55eea;width:100%">\u2192 Sync &amp; Begin Prospecting</button>`;
-          }
-          html += '</div>';
-        }
+        // Redesign 2026-08-15 (§2.5.5): the per-row CRM-coverage bar and the
+        // "Sync & Begin Prospecting" button are OWNER-record actions and moved
+        // to the owner panel. The row's owner chip (the title above) is the route
+        // to them. What stays here is the asset-scoped transfer economics plus
+        // the read-only Current / prospecting-status badges on the date line.
         html += '</div>';
         html += '</div>';
       }
     });
     html += '</div>';
   }
-  html += '</div>';
+  html += '</div></details>';
 
-  // ── RECENT TOUCHPOINTS (loaded async) ─────────────────────────────
-  html += '<div id="udTouchpoints"><div style="text-align:center;padding:16px;color:var(--text3)"><span class="spinner"></span> Loading touchpoints...</div></div>';
+  // ══════════════════════════════════════════════════════════════════════
+  // MOVED TO THE OWNER PANEL — redesign 2026-08-15 §2.5 / §3.3
+  // ══════════════════════════════════════════════════════════════════════
+  // Removed from this tab (every destination already exists and is wired):
+  //   Recent Touchpoints        → owner panel · Activity tab timeline
+  //   Salesforce Activity Feed  → owner panel · Activity tab timeline (SF-badged)
+  //   Log Call / Activity form  → owner panel · header "☎ Log call" + Activity
+  //   Draft Email + templates   → owner panel · Activity cadence cockpit
+  //                               ("Draft touchpoint email" → _entityDraftAndLog,
+  //                                the closed loop that also logs SF + advances
+  //                                cadence — strictly better than the old form)
+  //   Research Notes            → property Overview · AI Research (asset evidence)
+  // A touchpoint is logged against a PARTY, not a building; logging it here
+  // attributed activity to whatever string the owner field happened to hold.
+  // The async loaders (_loadTouchpoints / _loadActivityFeed / _loadEmailTemplates)
+  // are intentionally NOT called — they were the only callers on this tab.
 
-  // ── SALESFORCE ACTIVITY FEED (loaded async) ────────────────────────
-  html += '<div id="udActivityFeed"><div style="text-align:center;padding:24px;color:var(--text3)"><span class="spinner"></span> Loading activity feed...</div></div>';
+  // ── HAND-OFF ──────────────────────────────────────────────────────────
+  // The single seam between the property ladder ("make this asset workable")
+  // and the owner ladder ("make this party contactable and touched").
+  html += _udOwnerHandoffCard(own, db);
 
-  // ── INLINE LOG CALL FORM ──────────────────────────────────────────────
-  html += '<div class="detail-section">';
-  html += '<div class="detail-section-title">Log Call / Activity</div>';
-
-  const sfCid = own?.salesforce_id || own?.sf_contact_id || '';
-  const sfCoId = own?.sf_company_id || '';
-  const ownerName = own?.true_owner_canonical || own?.true_owner || own?.recorded_owner_canonical || own?.recorded_owner || own?.contact_1_name || '';
-
-  html += '<div class="detail-form" id="udLogCallForm">';
-  html += `<div style="font-size:12px;color:var(--text2);margin-bottom:8px">Logging for: <strong>${esc(ownerName || 'Unknown')}</strong></div>`;
-
-  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
-  html += '<div>';
-  html += '<label>Activity Type</label>';
-  html += '<select id="udLogType">';
-  html += '<option value="Client Outreach">Client Outreach</option>';
-  html += '<option value="Introduction Call">Introduction Call</option>';
-  html += '<option value="Follow-up">Follow-up</option>';
-  html += '<option value="Property Discussion">Property Discussion</option>';
-  html += '<option value="Email Correspondence">Email Correspondence</option>';
-  html += '<option value="Market Update">Market Update</option>';
-  html += '</select>';
-  html += '</div>';
-
-  html += '<div>';
-  html += '<label>Outcome</label>';
-  html += '<select id="udLogOutcome">';
-  html += '<option value="connected">Connected</option>';
-  html += '<option value="voicemail">Voicemail</option>';
-  html += '<option value="no_answer">No Answer</option>';
-  html += '<option value="email_sent">Email Sent</option>';
-  html += '<option value="meeting_set">Meeting Set</option>';
-  html += '</select>';
-  html += '</div>';
-  html += '</div>';
-
-  html += '<label>Date</label>';
-  html += `<input type="date" id="udLogDate" value="${new Date().toISOString().split('T')[0]}">`;
-
-  html += '<label>Notes</label>';
-  html += '<textarea id="udLogNotes" placeholder="Call notes, key takeaways, next steps..." style="min-height:80px"></textarea>';
-
-  html += '<div style="display:flex;gap:8px;margin-top:12px">';
-  html += `<button class="act-btn primary" id="udLogSubmit" onclick="_udSubmitLogCall(decodeURIComponent('${encodeURIComponent(sfCid)}'),decodeURIComponent('${encodeURIComponent(sfCoId)}'))">&#x260E; Log Activity</button>`;
-  if (own?.contact_phone) html += `<a href="tel:${encodeURIComponent(own.contact_phone)}" class="act-btn">&#x1F4DE; Call</a>`;
-  if (own?.contact_email) html += `<a href="mailto:${encodeURIComponent(own.contact_email)}" class="act-btn">&#x2709; Quick Email</a>`;
-  html += '</div>';
-  html += '</div></div>';
-
-  // ── DRAFT EMAIL SECTION (LCC Template Engine) ──────────────────────
-  html += '<div class="detail-section">';
-  html += '<div class="detail-section-title">Draft Email</div>';
-  html += '<div class="detail-form">';
-
-  // Template selector + Draft button row
-  html += '<div style="display:flex;gap:8px;align-items:flex-end">';
-  html += '<div style="flex:1">';
-  html += '<label>Template</label>';
-  html += '<select id="udDraftTemplate">';
-  html += '<option value="auto">Auto-select best template</option>';
-  html += '<option value="T-001">First Touch (intro + report + BOV offer)</option>';
-  html += '<option value="T-002">Follow-Up (cadence touchpoint)</option>';
-  html += '<option value="T-003">Capital Markets Update (quarterly)</option>';
-  html += '<option value="T-013">GSA Lease Award Congratulations</option>';
-  html += '</select>';
-  html += '</div>';
-  html += '<button class="act-btn primary" id="udDraftBtn" onclick="_udGenerateDraft()" style="white-space:nowrap;height:36px">Draft Email</button>';
-  html += '</div>';
-
-  // Draft preview area (hidden until generated)
-  html += '<div id="udDraftPreview" style="display:none;margin-top:16px">';
-  html += '<label>Subject</label>';
-  html += '<input type="text" id="udDraftSubject" style="font-size:13px;width:100%;margin-bottom:8px">';
-  html += '<label>Body <span class="t-meta3">(editable — your changes will be tracked for template improvement)</span></label>';
-  html += '<textarea id="udDraftBody" style="font-size:12px;min-height:240px;line-height:1.6;font-family:inherit;width:100%"></textarea>';
-  html += '<div style="font-size:11px;color:var(--text3);margin-top:4px" id="udDraftMeta"></div>';
-  html += '<div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">';
-  if (own?.contact_email) {
-    html += `<button class="act-btn primary" onclick="_udSendDraft()">Open in Email Client</button>`;
-  }
-  html += '<button class="act-btn" onclick="_udActionBtnGuard(this, _udCopyDraft)">Copy to Clipboard</button>';
-  html += '<button class="act-btn" onclick="_udRecordDraftSend()" id="udRecordSendBtn" style="display:none">Log as Sent</button>';
-  html += '</div>';
-  html += '</div>';
-
-  // Legacy template fallback (hidden, loads from Dia DB)
-  html += '<div id="udLegacyTemplates" style="margin-top:16px;display:none">';
-  html += '<div style="font-size:11px;color:var(--text3);margin-bottom:4px">Legacy templates (Dialysis DB)</div>';
-  html += '<select id="udTemplateSelect" onchange="_udPreviewTemplate()" style="font-size:12px">';
-  html += '<option value="">— Select —</option>';
-  html += '</select>';
-  html += '<div id="udTemplatePreview" style="display:none;margin-top:8px">';
-  html += '<div id="udTemplateSubject" style="font-size:12px;padding:6px 10px;background:var(--s2);border-radius:6px;color:var(--text);margin-bottom:6px"></div>';
-  html += '<div id="udTemplateBody" style="font-size:11px;padding:10px;background:var(--s2);border-radius:6px;color:var(--text2);max-height:160px;overflow-y:auto;line-height:1.4"></div>';
-  html += '<div style="display:flex;gap:8px;margin-top:8px">';
-  html += '<button class="act-btn" style="font-size:11px" onclick="_udSendTemplate()">Open in Client</button>';
-  html += '<button class="act-btn" style="font-size:11px" onclick="_udActionBtnGuard(this, _udCopyTemplate)">Copy</button>';
-  html += '</div></div></div>';
-
-  html += '</div></div>';
-
-  // ── RESEARCH NOTES (moved from Intel tab) ────────────────────────────────
-  const _ownPropertyId = _udCache?.ids?.property_id || _udCache?.property?.property_id;
-  if (_ownPropertyId) {
-    html += '<div class="detail-section">';
-    html += '<div class="detail-section-title" style="cursor:pointer;user-select:none" onclick="var _el=this.parentElement.querySelector(\'.intel-notes\');if(_el)_el.style.display=_el.style.display===\'none\'?\'block\':\'none\'">Research Notes</div>';
-    html += '<div class="intel-notes" style="display:none">';
-    html += '<textarea id="intelResearchNotes" rows="4" placeholder="Free-form research notes..." style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);resize:vertical;font-family:inherit;box-sizing:border-box;margin-bottom:8px"></textarea>';
-    html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
-    html += '<div><label class="t-label">Source / Date</label>';
-    html += '<input id="intelResearchSource" type="text" placeholder="e.g., Website, Call, Loopnet" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
-    html += '<div><label class="t-label">Date Found</label>';
-    html += '<input id="intelResearchDate" type="date" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
-    html += '</div>';
-    html += '<button onclick="_udBtnGuard(this, _intelSaveNotes)" style="margin-top:10px;width:100%;padding:8px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer">Save Notes</button>';
-    html += '</div></div>';
-  }
-
-  // Async loads after DOM renders
-  _loadEmailTemplates(own);
-  _loadTouchpoints(own);
-  _loadActivityFeed(own);
 
   return html;
 }
@@ -7799,12 +8160,9 @@ function _udTabIntel() {
 
 // ─── SALES TAB ──────────────────────────────────────────────────────────────
 //
-// Canonical data source: property_sale_events
-//   - Sales tab, Ownership History, and Intel → Prior Sale summary all read
-//     from this table. sales_transactions remains as a legacy compat source
-//     that the backfill migration has already mirrored into
-//     property_sale_events. Going forward new writes land in the canonical
-//     table and a DB trigger marks any concurrent active listings Sold.
+// Canonical display source for transaction economics: sales_transactions live
+// rows plus available_listings. property_sale_events can omit cap-at-close and
+// firm-term-at-close, so the dossier/panel timeline reads the richer source.
 
 let _salesCache = null; // { property_id, db, transactions: [], listings: [] }
 let _salesFilter = 'all'; // 'all' | 'listings' | 'sales'
@@ -7829,33 +8187,17 @@ async function _udRenderSalesAsync(bodyEl) {
   if (propertyId) {
     try {
       const propId = encodeURIComponent(propertyId);
-      // Prefer the canonical property_sale_events table. If it isn't yet
-      // reachable (older environments), fall back to sales_transactions so
-      // the tab never goes empty during rollout.
-      const saleRes = await qFn('property_sale_events', '*', {
-        filter: `property_id=eq.${propId}`,
-        order: 'sale_date.desc.nullslast',
-        limit: 100
-      }).catch(() => null);
-      // diaQuery/govQuery swallow errors and return [], so .catch() above
-      // never fires and a nominally-present-but-empty response would suppress
-      // the sales_transactions fallback entirely. Gate the fallback on actual
-      // row presence, not just non-null.
-      const saleRows = Array.isArray(saleRes) ? saleRes : (saleRes?.data || null);
-      const hasSaleRows = Array.isArray(saleRows) && saleRows.length > 0;
       const [listRes, txnRes] = await Promise.all([
         qFn('available_listings', '*', {
           filter: `property_id=eq.${propId}`,
           order: 'listing_date.desc.nullslast',
           limit: 50
         }).catch(() => []),
-        hasSaleRows
-          ? Promise.resolve(saleRows)
-          : qFn('sales_transactions', '*', {
-              filter: `property_id=eq.${propId}`,
-              order: 'sale_date.desc',
-              limit: 100
-            }).catch(() => [])
+        qFn('sales_transactions', '*', {
+          filter: `property_id=eq.${propId}&transaction_state=eq.live`,
+          order: 'sale_date.desc.nullslast',
+          limit: 100
+        }).catch(() => [])
       ]);
       const rawListings = Array.isArray(listRes) ? listRes : (listRes?.data || []);
       // Round 76eg: drop rows the consolidation function has retired so
@@ -7890,6 +8232,9 @@ function _salesNormalizeSaleRow(r) {
     buyer_name: r.buyer_name || r.buyer || null,
     seller_name: r.seller_name || r.seller || null,
     broker_name: r.broker_name || r.listing_broker || null,
+    stated_cap_rate: r.stated_cap_rate != null ? r.stated_cap_rate : r.sold_cap_rate,
+    calculated_cap_rate: r.calculated_cap_rate != null ? r.calculated_cap_rate : (r.cap_rate_final != null ? r.cap_rate_final : r.cap_rate),
+    firm_term_years_at_sale: r.firm_term_years_at_sale != null ? r.firm_term_years_at_sale : r.firm_term_years,
   });
 }
 
@@ -8003,7 +8348,7 @@ function _udTabSales() {
 
 function _salesSetFilter(f) {
   _salesFilter = (f === 'listings' || f === 'sales') ? f : 'all';
-  const bodyEl = document.getElementById('detailBody');
+  const bodyEl = _udHost('body');
   if (bodyEl) bodyEl.innerHTML = _udTabSales();
 }
 
@@ -8018,8 +8363,39 @@ function _salesParseDate(d) {
 function _salesListingIsActive(l) {
   if (l.is_active === true) return true;
   if (l.is_active === false) return false;
+  const status = String(l.listing_status || l.status || '').toLowerCase();
+  if (['active', 'available', 'for sale', 'for_sale'].includes(status)) return true;
+  if (['sold', 'withdrawn', 'expired', 'inactive', 'off_market', 'off-market', 'superseded'].includes(status)) return false;
   // Fallback: active if no off_market_date
   return !l.off_market_date;
+}
+
+function _salesListingDate(l) {
+  return l && (l.on_market_date || l.listing_date || l.created_at || null);
+}
+
+function _salesListingAsk(l) {
+  return l && (l.asking_price != null ? l.asking_price : (l.initial_price != null ? l.initial_price : (l.ask_price != null ? l.ask_price : l.last_price)));
+}
+
+function _salesListingPsf(l) {
+  const stored = l && (l.asking_price_psf != null ? l.asking_price_psf : (l.price_per_sf != null ? l.price_per_sf : l.last_price_psf));
+  if (stored != null) return Number(stored);
+  const ask = Number(_salesListingAsk(l));
+  const sf = Number(_udCache?.property?.building_size || _udCache?.lease_data?.building_size || 0);
+  return Number.isFinite(ask) && ask > 0 && Number.isFinite(sf) && sf > 0 ? Math.round((ask / sf) * 100) / 100 : null;
+}
+
+function _salesListingIsPortfolio(l) {
+  if (!l) return false;
+  if (l.is_portfolio_listing === true || l.portfolio_listing === true || l.is_portfolio === true) return true;
+  const hay = [l.listing_type, l.deal_type, l.marketing_type, l.portfolio_name, l.portfolio_id, l.notes, l.source_notes].filter(Boolean).join(' ').toLowerCase();
+  if (/\bportfolio\b/.test(hay)) return true;
+  const ask = Number(_salesListingAsk(l));
+  const psf = Number(_salesListingPsf(l));
+  const sf = Number(_udCache?.property?.building_size || _udCache?.lease_data?.building_size || 0);
+  const implied = Number.isFinite(psf) && psf > 0 && Number.isFinite(sf) && sf > 0 ? psf * sf : null;
+  return Number.isFinite(ask) && implied != null && ask > implied * 2;
 }
 
 // Tier 6: notes-dedup state for the Deal History timeline. WeakMap keyed by
@@ -8073,7 +8449,7 @@ function _salesListingAutoClosedAgainstPriorSale(l) {
 }
 
 function _salesListingStatus(l, matchedSale) {
-  const raw = (l && l.status ? String(l.status) : '').toLowerCase();
+  const raw = (l && (l.listing_status || l.status) ? String(l.listing_status || l.status) : '').toLowerCase();
   if (matchedSale || raw === 'sold') return { label: 'Sold',      color: 'var(--green)' };
   if (raw === 'withdrawn')           return { label: 'Withdrawn', color: 'var(--yellow)' };
   if (raw === 'expired')             return { label: 'Expired',   color: 'var(--text3)' };
@@ -8094,6 +8470,8 @@ function _salesBuildTimeline(listings, txns) {
   // Mark excluded/duplicate sales so they are skipped during pairing
   saleArr.forEach((sale, i) => {
     if (sale.exclude_from_market_metrics === true) excludedSaleIdx.add(i);
+    const state = String(sale.transaction_state || '').toLowerCase();
+    if (state && state !== 'live') excludedSaleIdx.add(i);
   });
 
   listingArr.forEach(listing => {
@@ -8141,7 +8519,7 @@ function _salesBuildTimeline(listings, txns) {
       events.push({
         listing,
         sale: null,
-        sortKey: offMs || _salesParseDate(listing.listing_date) || 0
+        sortKey: offMs || _salesParseDate(_salesListingDate(listing)) || 0
       });
     }
   });
@@ -8231,7 +8609,8 @@ function _salesRenderListing(l) {
   // (date inversion), so label that field explicitly as the matched-sale date
   // rather than the listing's own off-market event.
   const dateBits = [];
-  if (l.listing_date) dateBits.push(`<span class="t-muted3">On Market:</span> <span class="t-body">${esc(_fmtDate(l.listing_date))}</span>`);
+  const marketDate = _salesListingDate(l);
+  if (marketDate) dateBits.push(`<span class="t-muted3">On Market:</span> <span class="t-body">${esc(_fmtDate(marketDate))}</span>`);
   if (l.off_market_date) {
     if (autoClosed) {
       dateBits.push(`<span class="t-muted3">Matched sale on:</span> <span class="t-body">${esc(_fmtDate(l.off_market_date))}</span>`);
@@ -8246,6 +8625,8 @@ function _salesRenderListing(l) {
   // Asking prices
   const initial = l.initial_price != null ? l.initial_price : l.asking_price;
   const last = l.last_price != null ? l.last_price : null;
+  const pricePsf = _salesListingPsf(l);
+  const listingCap = l.asking_cap_rate != null ? l.asking_cap_rate : (l.current_cap_rate != null ? l.current_cap_rate : l.cap_rate);
   if (initial != null || last != null) {
     html += '<div style="display:flex;gap:16px;margin-bottom:8px;flex-wrap:wrap">';
     if (initial != null) {
@@ -8254,11 +8635,31 @@ function _salesRenderListing(l) {
     if (last != null && Number(last) !== Number(initial)) {
       html += `<div><div class="t-cap">Last Price</div><div style="font-size:16px;font-weight:700;color:var(--accent)">${fmt(last)}</div></div>`;
     }
+    if (pricePsf != null) {
+      html += `<div><div class="t-cap">Price / SF</div><div style="font-size:14px;font-weight:600;color:var(--text)">$${Number(pricePsf).toFixed(0)}/SF</div></div>`;
+    }
+    if (listingCap != null && _fmtCapRate(listingCap)) {
+      html += `<div><div class="t-cap">Cap Rate</div><div style="font-size:14px;font-weight:600;color:var(--text)">${_fmtCapRate(listingCap)}</div></div>`;
+    }
+    if (_salesListingIsActive(l) && marketDate) {
+      const dom = Math.max(0, Math.round((Date.now() - new Date(marketDate).getTime()) / 86400000));
+      if (Number.isFinite(dom)) html += `<div><div class="t-cap">Days on Market</div><div style="font-size:14px;font-weight:600;color:var(--text)">${dom.toLocaleString()} days</div></div>`;
+    }
     html += '</div>';
   }
 
   if (l.listing_broker) {
     html += `<div style="font-size:12px;margin-bottom:2px"><span class="t-muted3">Broker:</span> <span class="t-body">${esc(l.listing_broker)}</span></div>`;
+  }
+  if (l.listing_firm || l.broker_firm || l.listing_broker_firm) {
+    html += `<div style="font-size:12px;margin-bottom:2px"><span class="t-muted3">Firm:</span> <span class="t-body">${esc(l.listing_firm || l.broker_firm || l.listing_broker_firm)}</span></div>`;
+  }
+
+  if (_salesListingIsPortfolio(l)) {
+    const ask = _salesListingAsk(l);
+    const sf = Number(_udCache?.property?.building_size || _udCache?.lease_data?.building_size || 0);
+    const implied = pricePsf != null && Number.isFinite(sf) && sf > 0 ? Number(pricePsf) * sf : null;
+    html += `<div style="font-size:11px;color:var(--yellow);margin-top:8px;border-top:1px solid var(--border);padding-top:6px;font-weight:600">Portfolio listing: ${ask != null ? esc(fmt(ask)) + " is the portfolio ask, not this property's asking." : "portfolio ask, not this property's asking."}${implied != null ? ' Derived single-asset implication: $' + Math.round(implied).toLocaleString() + ' from $/SF × building SF.' : ''}</div>`;
   }
 
   // OM artifact icon — surface the staged OM PDF on the property detail
@@ -8313,6 +8714,13 @@ function _salesRenderSale(s) {
   if (s.price_psf != null) metrics.push(`$${Number(s.price_psf).toFixed(0)}/SF`);
   if (metrics.length) {
     html += `<div style="font-size:13px;color:var(--text2);margin-bottom:8px">${esc(metrics.join(' · '))}</div>`;
+  }
+  const closeBits = [];
+  if (s.stated_cap_rate != null && _fmtCapRate(s.stated_cap_rate)) closeBits.push(`Stated cap ${_fmtCapRate(s.stated_cap_rate)}`);
+  if (s.calculated_cap_rate != null && _fmtCapRate(s.calculated_cap_rate)) closeBits.push(`Calculated cap ${_fmtCapRate(s.calculated_cap_rate)}`);
+  if (s.firm_term_years_at_sale != null) closeBits.push(`${Number(s.firm_term_years_at_sale).toFixed(1)} yr firm term at close`);
+  if (closeBits.length) {
+    html += `<div style="font-size:12px;color:var(--text2);margin-bottom:8px">${esc(closeBits.join(' · '))}</div>`;
   }
 
   const buyer = s.buyer_name || s.buyer;
@@ -8419,6 +8827,12 @@ function _salesRenderCombined(l, s) {
     const _capSrc2 = s.stated_cap_rate ? ' (stated)' : (s.calculated_cap_rate ? ' (calc)' : '');
     html += `<div><div class="t-cap">Cap Rate</div><div style="font-size:14px;font-weight:600;color:var(--text)">${_fmtCapRate(_bestCap2)}${_capSrc2 ? '<span style="font-size:9px;color:var(--text3)">' + _capSrc2 + '</span>' : ''}</div></div>`;
   }
+  if (s.calculated_cap_rate != null && s.stated_cap_rate != null && Number(s.calculated_cap_rate) !== Number(s.stated_cap_rate)) {
+    html += `<div><div class="t-cap">Calculated Cap</div><div style="font-size:14px;font-weight:600;color:var(--text)">${_fmtCapRate(s.calculated_cap_rate)}</div></div>`;
+  }
+  if (s.firm_term_years_at_sale != null) {
+    html += `<div><div class="t-cap">Firm Term at Close</div><div style="font-size:14px;font-weight:600;color:var(--text)">${Number(s.firm_term_years_at_sale).toFixed(1)} yrs</div></div>`;
+  }
   html += '</div>';
 
   // Dates row (on/off market). Suppress entirely for auto-closed listings —
@@ -8515,9 +8929,20 @@ async function _salesSaveTransaction() {
 
   const db = _udCache.db;
 
-  // Writes land in the canonical property_sale_events table. The DB trigger
+  // Writes land in property_sale_events, the CAPTURE surface. The DB trigger
   // then flips any concurrent active listings to status='Sold' automatically,
   // so the Sales tab filter chips and Ownership History stay in sync.
+  //
+  // ⚠️ property_sale_events is NOT the canonical comps store -- B6c-dup,
+  // 2026-08-29. sales_transactions is the canonical spine: 77 of 77 gov views
+  // that read a sale store read it, including ALL 30 cm_gov* Capital Markets
+  // views, and ZERO read property_sale_events. This comment used to claim the
+  // opposite, and that claim is what let the collision survive.
+  // A save here reaches the spine via the gov DB trigger
+  // trg_gov_pse_propagate_to_sale (dedup keyed on property + YEAR-MONTH +
+  // price-to-$1k, because sales_transactions.sale_date is month-truncated for
+  // its dominant source). DO NOT add a second client-side write to
+  // sales_transactions -- that trigger is the single owner of the transition.
   const payload = {
     property_id: String(propertyId),
     sale_date:  document.getElementById('salesFDate')?.value || null,
@@ -8545,12 +8970,12 @@ async function _salesSaveTransaction() {
 
   // Invalidate cache and reload
   _salesCache = null;
-  const bodyEl = document.getElementById('detailBody');
+  const bodyEl = _udHost('body');
   _udRenderSalesAsync(bodyEl);
 }
 
 // ─── DEAL HISTORY TAB ────────────────────────────────────────────────────────
-// Combines the legacy Sales timeline (property_sale_events + available_listings)
+// Combines the Sales timeline (property_sale_events + available_listings)
 // with the Ownership History chain (v_ownership_chain) into one chronological
 // ribbon. Each row links out to the Owner/Tenant/Broker drawer when relevant.
 
@@ -8568,18 +8993,13 @@ async function _udRenderDealHistoryAsync(bodyEl) {
       // Fetch by mimicking _udRenderSalesAsync's data calls, but without rendering Sales.
       const qFn = db === 'gov' ? govQuery : diaQuery;
       const propId = encodeURIComponent(propertyId || '');
-      const saleRes = propertyId ? await qFn('property_sale_events', '*', {
-        filter: `property_id=eq.${propId}`,
-        order: 'sale_date.desc.nullslast',
-        limit: 100
-      }).catch(() => null) : null;
       const [listRes, txnRes] = propertyId ? await Promise.all([
         qFn('available_listings', '*', { filter: `property_id=eq.${propId}`, order: 'listing_date.desc.nullslast', limit: 50 }).catch(() => []),
-        (Array.isArray(saleRes) && saleRes.length > 0) ? Promise.resolve(saleRes) : qFn('sales_transactions', '*', { filter: `property_id=eq.${propId}`, order: 'sale_date.desc.nullslast', limit: 50 }).catch(() => [])
+        qFn('sales_transactions', '*', { filter: `property_id=eq.${propId}&transaction_state=eq.live`, order: 'sale_date.desc.nullslast', limit: 50 }).catch(() => [])
       ]) : [[], []];
       const txnArr = Array.isArray(txnRes) ? txnRes : (txnRes && txnRes.data) || [];
       const listArr = Array.isArray(listRes) ? listRes : (listRes && listRes.data) || [];
-      _salesCache = { property_id: propertyId, db, transactions: txnArr, listings: listArr };
+      _salesCache = { property_id: propertyId, db, transactions: txnArr.map(_salesNormalizeSaleRow), listings: listArr };
     } catch (e) {
       console.warn('Deal History: sales fetch failed', e);
       _salesCache = { property_id: propertyId, db, transactions: [], listings: [] };
@@ -8792,7 +9212,7 @@ function _udTabDealHistory() {
 
 function _dealHistorySetFilter(f) {
   _salesFilter = (['all', 'listings', 'sales', 'ownership'].includes(f)) ? f : 'all';
-  const bodyEl = document.getElementById('detailBody');
+  const bodyEl = _udHost('body');
   if (bodyEl) {
     bodyEl.innerHTML = _udTabDealHistory();
     _intelRenderPriorSaleSummaryAsync(); // re-populate Prior Sale section
@@ -8930,6 +9350,49 @@ function _reEsc(s) { return String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&
 //   - v_ownership_chain         (ownership changes)
 //   - v_lease_extensions_summary (lease amendments)
 //   - (best-effort) CMS survey history via property_cms_link.last_survey_date
+
+// ─── Documents tab (+ client dossier builders) ───────────────────────────────
+// MOVED to detail-tab-documents.js (W6.5 Stage 2, Unit 2 — 2026-08-20):
+// _UD_DOC_SECTIONS, _udRenderDocumentsAsync, _udRenderDossiers,
+// _udRenderDocuments, _udBuildPropertyDossierHTML, _udOpenClientDossier.
+// Loaded as a classic script BEFORE this file, same global scope, unchanged.
+// ─────────────────────────────────────────────────────────────────────────────
+
+
+// Header "Dossier" button — generate (or reuse a fresh) grounded, stored dossier
+// via the server (LLM-authored Analysis + provenance + SharePoint push), open it
+// in a new tab. Falls back to the client-built data-only dossier if the server
+// call fails or the property isn't linked to an LCC entity.
+async function _udOpenPropertyDossier(btn){
+  const eid = _udCache.lccEntityId
+    || (_udCache.entityMeta && (_udCache.entityMeta.entity_id || _udCache.entityMeta.id))
+    || (_udCache.ownership && _udCache.ownership.owner_entity_id)
+    || null;
+  // Open the tab synchronously (before any await) so the browser doesn't block it.
+  const w = (typeof window !== 'undefined') ? window.open('', '_blank') : null;
+  if (!eid) { _udOpenClientDossier(w); return; }
+  const orig = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Building…'; }
+  try{
+    const fetchFn = (typeof LCC_AUTH !== 'undefined' && LCC_AUTH && LCC_AUTH.isAuthenticated) ? LCC_AUTH.apiFetch : fetch;
+    const res = await fetchFn('/api/entities?action=generate_dossier', {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, (typeof _entityApiHeaders==='function' ? _entityApiHeaders() : {})),
+      body: JSON.stringify({ entity_id: eid, kind: 'property' }),
+    });
+    const data = res && res.ok ? await res.json() : null;
+    if (data && data.ok && data.signed_url) {
+      if (w) w.location.href = data.signed_url; else window.open(data.signed_url, '_blank');
+    } else {
+      _udOpenClientDossier(w); // graceful fallback
+    }
+  }catch(e){
+    console.warn('server dossier failed, using client fallback', e);
+    _udOpenClientDossier(w);
+  }
+  if (btn) { btn.disabled = false; btn.textContent = orig; }
+}
+window._udOpenPropertyDossier = _udOpenPropertyDossier;
 
 async function _udRenderActivityLogAsync(bodyEl) {
   if (!bodyEl) return;
@@ -9925,26 +10388,53 @@ function _qlActionBtn(label, onclick, icon, color) {
 
 /** Research Quick Links — property-level research shortcuts */
 /** Action buttons for advancing records through the pipeline */
+/**
+ * Property research notes (free-form asset evidence + source/date).
+ * Relocated from the Ownership tab to Overview › AI Research (redesign §2.2) —
+ * extracted verbatim so the ids `intelResearchNotes` / `intelResearchSource` /
+ * `intelResearchDate` that `_intelSaveNotes` reads are unchanged.
+ */
+function _udResearchNotesSection() {
+  const pid = _udCache?.ids?.property_id || _udCache?.property?.property_id;
+  if (!pid) return '';
+  let html = '<div style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px">';
+  html += '<div class="t-label" style="margin-bottom:6px">Research Notes</div>';
+  html += '<textarea id="intelResearchNotes" rows="4" placeholder="Free-form research notes..." style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);resize:vertical;font-family:inherit;box-sizing:border-box;margin-bottom:8px"></textarea>';
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
+  html += '<div><label class="t-label">Source / Date</label>';
+  html += '<input id="intelResearchSource" type="text" placeholder="e.g., Website, Call, Loopnet" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+  html += '<div><label class="t-label">Date Found</label>';
+  html += '<input id="intelResearchDate" type="date" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--s2);color:var(--text);box-sizing:border-box"></div>';
+  html += '</div>';
+  html += '<button onclick="_udBtnGuard(this, _intelSaveNotes)" style="margin-top:10px;width:100%;padding:8px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer">Save Notes</button>';
+  html += '</div>';
+  return html;
+}
+
 function _udActionButtons() {
   if (!_udCache) return '';
   const db = _udCache.db;
   const fb = _udCache.fallback || {};
   const p = _udCache.property || {};
 
+  // Redesign 2026-08-15 (§2.2): "Log Touchpoint" REMOVED. A touchpoint is logged
+  // against a PARTY, not a building — here it attributed activity to whatever
+  // string the owner field happened to hold. It now lives on the owner panel
+  // (header "☎ Log call" + the Activity cadence cockpit), reachable from the
+  // Ownership tab's "Work this owner →".
   let html = '<div class="detail-section">';
   html += '<div class="detail-section-title">Actions</div>';
   html += '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">';
 
   if (db === 'gov') {
     html += `<button class="q-action primary" onclick="_udActionBtnGuard(this, _udAction, 'add_to_pipeline')" style="padding:8px 16px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">Add to Pipeline</button>`;
-    html += `<button class="q-action" onclick="_udActionBtnGuard(this, _udAction, 'log_touchpoint')" style="padding:8px 16px;border-radius:8px;font-size:12px;cursor:pointer">Log Touchpoint</button>`;
     html += `<button class="q-action" onclick="_udActionBtnGuard(this, _udAction, 'create_task')" style="padding:8px 16px;border-radius:8px;font-size:12px;cursor:pointer">Create Task</button>`;
   } else if (db === 'dia') {
     html += `<button class="q-action primary" onclick="_udActionBtnGuard(this, _udAction, 'mark_lead')" style="padding:8px 16px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">Mark as Lead</button>`;
     html += `<button class="q-action" onclick="_udActionBtnGuard(this, _udAction, 'add_to_pipeline')" style="padding:8px 16px;border-radius:8px;font-size:12px;cursor:pointer">Add to Pipeline</button>`;
-    html += `<button class="q-action" onclick="_udActionBtnGuard(this, _udAction, 'log_touchpoint')" style="padding:8px 16px;border-radius:8px;font-size:12px;cursor:pointer">Log Touchpoint</button>`;
     html += `<button class="q-action" onclick="_udActionBtnGuard(this, _udAction, 'create_task')" style="padding:8px 16px;border-radius:8px;font-size:12px;cursor:pointer">Create Task</button>`;
   }
+  html += `<button class="q-action" onclick="switchUnifiedTab('Ownership')" style="padding:8px 16px;border-radius:8px;font-size:12px;cursor:pointer" title="Owner, ownership chain, and the hand-off to the owner panel">Owner &amp; contacts &rarr;</button>`;
 
   html += '</div></div>';
   return html;
@@ -10143,7 +10633,22 @@ function _udResearchLinks() {
   return html;
 }
 
-function buildResearchAssistantPrompt(provider = 'chatgpt') {
+// ⚠️ RENAMED 2026-08-20 (W6.5 Stage 4). This was `buildResearchAssistantPrompt`,
+// the SAME top-level name ops.js uses at ~5777 for a completely different
+// function — `buildResearchAssistantPrompt(item)`, which builds a research-TASK
+// brief. ops.js loads AFTER detail.js in index.html, so in the shared global
+// scope OPS.JS SILENTLY WON and this implementation never ran.
+//
+// The symptom looked like success: exportResearchToAssistant passes a provider
+// STRING ('chatgpt'), ops.js's version treats it as an `item` object, every
+// field defaults, and it returns a NON-EMPTY 476-char prompt reading
+// "Title: Untitled / Domain: Unknown / Assignee: Unassigned" with no property
+// data at all. Non-empty means the `if (!prompt)` guard below never fired, so
+// all three entry points — the Export to ChatGPT/Claude button (~9664) and the
+// ChatGPT/Claude Brief quick-links (~10488/10489) — copied a useless generic
+// prompt to the clipboard, opened the assistant, and toasted "Research brief
+// copied." Same class as the _opsSparkline "no trend" bug fixed earlier today.
+function _udBuildResearchAssistantPrompt(provider = 'chatgpt') {
   if (!_udCache || !_udCache.property) return '';
 
   const p = _udCache.property || {};
@@ -10189,7 +10694,7 @@ function buildResearchAssistantPrompt(provider = 'chatgpt') {
 }
 
 async function exportResearchToAssistant(provider) {
-  const prompt = buildResearchAssistantPrompt(provider);
+  const prompt = _udBuildResearchAssistantPrompt(provider);
   if (!prompt) {
     showToast('No property loaded', 'error');
     return;
@@ -10475,11 +10980,16 @@ window.entityLink = function(text, type, id, db) {
     case 'property':
       if (!id) return esc(text);
       return '<span style="' + style + '" onclick="navToProperty(' + id + ',\'' + (db || 'dialysis') + '\')" title="View property details">' + esc(text) + '</span>';
+    // NOTE (2026-08-15): `esc(text).replace(/'/g, "\\'")` is a NO-OP — esc() has
+    // already turned ' into &#39;, which the HTML parser decodes back to a raw
+    // quote inside the onclick source, so every O'Brien / D'Angelo party chip
+    // in the app emitted a SyntaxError handler. Same defect as V-2 in
+    // panel-redesign-verification.md; `_jsStrArg` is the single safe encoder.
     case 'contact':
-      if (!id) return '<span style="' + style + '" onclick="openContactDetailByName(\'' + esc(text).replace(/'/g, "\\'") + '\')" title="View contact">' + esc(text) + '</span>';
+      if (!id) return '<span style="' + style + '" onclick="openContactDetailByName(' + _jsStrArg(text) + ')" title="View contact">' + esc(text) + '</span>';
       return '<span style="' + style + '" onclick="openContactDetail(' + JSON.stringify(String(id)) + ')" title="View contact details">' + esc(text) + '</span>';
     case 'entity':
-      if (!id) return '<span style="' + style + '" onclick="_openEntityByNameSmart(\'' + esc(text).replace(/'/g, "\\'") + '\')" title="View entity">' + esc(text) + '</span>';
+      if (!id) return '<span style="' + style + '" onclick="_openEntityByNameSmart(' + _jsStrArg(text) + ')" title="View entity">' + esc(text) + '</span>';
       return '<span style="' + style + '" onclick="_openEntitySmart(' + JSON.stringify(String(id)) + ')" title="View entity details">' + esc(text) + '</span>';
     case 'transaction':
       if (!id) return esc(text);
@@ -10499,9 +11009,9 @@ window.entityLink = function(text, type, id, db) {
     case 'buyer':
     case 'seller':
     case 'investor':
-      return '<span style="' + style + '" onclick="_openEntityByNameSmart(\'' + esc(text).replace(/'/g, "\\'") + '\')" title="View entity">' + esc(text) + '</span>';
+      return '<span style="' + style + '" onclick="_openEntityByNameSmart(' + _jsStrArg(text) + ')" title="View entity">' + esc(text) + '</span>';
     case 'state':
-      return '<span style="' + style + '" onclick="navToState(\'' + esc(text).replace(/'/g, "\\'") + '\')" title="View state properties">' + esc(text) + '</span>';
+      return '<span style="' + style + '" onclick="navToState(' + _jsStrArg(text) + ')" title="View state properties">' + esc(text) + '</span>';
     default:
       return esc(text);
   }
@@ -10582,8 +11092,6 @@ async function _udSubmitLogCall(sfContactId, sfCompanyId) {
     btn.textContent = '\u260E Log Activity';
     return;
   }
-
-  const API = 'https://zqzrriwuavgrquhisnoa.supabase.co/functions/v1/ai-copilot';
 
   try {
     // ── GENERIC SF PAYLOAD ──
@@ -11384,7 +11892,7 @@ function refreshDetailPanel() {
   const fallback = _udCache.fallback || _udCache;
   if (db && ids) {
     // Brief flash to signal data refresh
-    const body = document.getElementById('detailBody');
+    const body = _udHost('body');
     if (body) {
       body.style.opacity = '0.3';
       body.style.transition = 'opacity 0.15s ease-out';
@@ -11410,6 +11918,13 @@ async function _udSaveOwnership(options = {}) {
   const recordedOwner = document.getElementById('udOwnRecorded')?.value?.trim() || null;
   const trueOwner = document.getElementById('udOwnTrue')?.value?.trim() || null;
   const ownerType = document.getElementById('udOwnType')?.value || null;
+  // Redesign 2026-08-15 §2.5.4 removed these three inputs from the Ownership
+  // tab (contact data belongs to the party, not the asset). `_contactFormPresent`
+  // distinguishes "the field exists and the user cleared it" from "the field is
+  // not on this form at all" — WITHOUT it, `contactName` would read null on
+  // every save and the true_owners PATCH below would CLOBBER an existing
+  // `contact_1_name` to null. Never-clobber / fill-blanks doctrine.
+  const _contactFormPresent = !!document.getElementById('udOwnContact');
   const contactName = document.getElementById('udOwnContact')?.value?.trim() || null;
   const contactPhone = document.getElementById('udOwnPhone')?.value?.trim() || null;
   const contactEmail = document.getElementById('udOwnEmail')?.value?.trim() || null;
@@ -11516,9 +12031,12 @@ async function _udSaveOwnership(options = {}) {
       const trueOwnerPayload = {
         name: trueOwner,
         owner_type: ownerType || null,
-        contact_1_name: contactName || null,
         notes: notes || null
       };
+      // Only send contact_1_name when the contact form is actually rendered;
+      // otherwise omit the key entirely so the PATCH cannot null out a
+      // curated value (see _contactFormPresent above).
+      if (_contactFormPresent) trueOwnerPayload.contact_1_name = contactName || null;
 
       if (trueOwnerId) {
         // PATCH existing via mutation service
@@ -11665,9 +12183,13 @@ async function _udSaveOwnership(options = {}) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // Read-only summary of the most recent sale for this property. Renders into
-// the #intelPriorSaleSummary slot on the Intel tab. Data source is the
-// canonical property_sale_events table (falls back to v_property_latest_sale
-// if the row already got there via a view).
+// the #intelPriorSaleSummary slot on the Intel tab. Reads the capture surface
+// property_sale_events first because that is where this panel writes (falls
+// back to v_property_latest_sale if the row already got there via a view, and
+// then to sales_transactions below).
+// ⚠️ "canonical" here used to mean property_sale_events; it does not (B6c-dup).
+// sales_transactions is the canonical spine -- reading capture-first is a UI
+// freshness choice, not a statement about which store is authoritative.
 async function _intelRenderPriorSaleSummaryAsync() {
   const slot = document.getElementById('intelPriorSaleSummary');
   if (!slot) return;
@@ -11693,7 +12215,8 @@ async function _intelRenderPriorSaleSummaryAsync() {
     console.warn('Prior sale summary fetch error:', e);
   }
 
-  // Fall back to legacy sales_transactions when property_sale_events is empty.
+  // Fall back to the canonical spine, sales_transactions, when the capture
+  // surface property_sale_events is empty. (It is NOT "legacy" -- B6c-dup.)
   // Otherwise the Prior Sale banner reads "No sale recorded for this property
   // yet." while the Deal History timeline directly below it shows SALE cards
   // sourced from sales_transactions. Skip rows marked
@@ -11797,10 +12320,16 @@ async function _intelSavePriorSale(options = {}) {
   if (!_anySaleField) { showToast('Please fill in at least one sale field', 'info'); return; }
 
   try {
-    // Canonical target: property_sale_events. The legacy sales_transactions
-    // sink has been retired for write paths — the backfill migration mirrors
-    // old rows forward and new rows always land in property_sale_events so
-    // the DB trigger can mark concurrent listings Sold.
+    // Write target: property_sale_events, the capture surface -- the DB trigger
+    // there marks concurrent listings Sold.
+    //
+    // ⚠️ CORRECTED B6c-dup, 2026-08-29. This comment used to read "Canonical
+    // target: property_sale_events. The legacy sales_transactions sink has been
+    // retired for write paths." Both halves were false. sales_transactions is
+    // the canonical comps spine and was never retired: it is what the CM book,
+    // the comps engine and every cap-rate chart read. Operator sales now reach
+    // it through the gov trigger trg_gov_pse_propagate_to_sale, not through a
+    // second write from here.
     const payload = {
       property_id: String(propertyId),
       sale_date: saleDate || null,
@@ -12452,7 +12981,7 @@ async function _entityApiFetch(url) {
 // The union of every entity-detail tab (used only for the initial deep-link
 // validation before the role is known). The ACTUAL tab set is role-driven —
 // see _entityTabsForRole. Broker mode swaps Ownership→Deals and drops Contacts.
-const ENTITY_DETAIL_TABS = ['Overview', 'Ownership', 'Deals', 'History', 'Relationships', 'Activity', 'Engagement', 'ROE', 'Contacts'];
+const ENTITY_DETAIL_TABS = ['Overview', 'Property', 'Ownership', 'Deal', 'Deals', 'History', 'Relationships', 'Activity', 'Engagement', 'ROE', 'Contacts'];
 
 /**
  * Role-aware tab set. Owner/buyer get Ownership (their portfolio); a broker gets
@@ -12472,42 +13001,75 @@ function _entityTabsForRole(role, entityType) {
   return tabs;
 }
 
-async function openEntityDetail(entityId, initialTab) {
-  if (typeof _setPrimaryKind === 'function') _setPrimaryKind('entity');
-  _entityDetailCache = null;
-  // A fresh entity open resets any stale companion property dock (it's anchored
-  // to the previously-open contact/owner).
-  if (typeof closeCompanion === 'function') closeCompanion();
-  const panel = document.getElementById('detailPanel');
-  const overlay = document.getElementById('detailOverlay');
-  if (!panel || !overlay) return;
+/**
+ * Open the entity panel. `opts.mount === 'companion'` renders the SAME full
+ * tabbed panel into the companion dock instead of the primary slide-over.
+ *
+ * Scott, 2026-08-15: *"we want to see the full detail side-by-side instead of a
+ * placeholder that you can swap over to the primary."* The dock used to render a
+ * summary card with an "Open full detail ↗" button.
+ *
+ * Why this is a small change rather than the 80-call-site refactor the spec
+ * feared: the render captures `headerEl / tabsEl / bodyEl` into LOCALS once and
+ * writes through those, and `_renderEntityTab(tab)` is a pure string function.
+ * So a mount only has to swap three element references — no global mount state,
+ * and therefore no async-interleaving hazard when two panels load at once.
+ *
+ * The single-cache constraint is respected: `_entityDetailCache` is a module
+ * singleton, so only ONE entity panel may be open at a time. That is exactly the
+ * supported layout — property + owner, in either slot — never owner + owner.
+ * `openCompanionEntity` enforces it by refusing to dock an entity beside an
+ * entity primary.
+ */
+async function openEntityDetail(entityId, initialTab, opts) {
+  const inCompanion = !!(opts && opts.mount === 'companion');
 
-  panel.style.display = 'block';
-  overlay.classList.add('open');
+  // Panel chrome that belongs to the PRIMARY slide-over only. In companion mode
+  // we must not steal the primary kind, close ourselves, drive the overlay, or
+  // rewrite the hash/back-stack — the property in the primary slot still owns
+  // the route (`?d=` encodes exactly one subject).
+  if (!inCompanion) {
+    if (typeof _setPrimaryKind === 'function') _setPrimaryKind('entity');
+    _entityDetailCache = null;
+    // A fresh entity open resets any stale companion property dock (it's anchored
+    // to the previously-open contact/owner).
+    if (typeof closeCompanion === 'function') closeCompanion();
+    const panel = document.getElementById('detailPanel');
+    const overlay = document.getElementById('detailOverlay');
+    if (!panel || !overlay) return;
+    panel.style.display = 'block';
+    overlay.classList.add('open');
+  } else {
+    _entityDetailCache = null;
+  }
 
   const activeTab = ENTITY_DETAIL_TABS.includes(initialTab) ? initialTab : ENTITY_DETAIL_TABS[0];
 
-  // Client routing (UI Phase 1 + 4B): mirror the open entity + tab into the hash
-  // so a reload / deep-link re-opens this exact view. Loop-guarded.
-  if (typeof _routeSetDetailHash === 'function') {
-    _routeSetDetailHash({ kind: 'entity', id: entityId, tab: activeTab });
-  }
-  // UI Phase 4: reconcile the back-stack (entity is a first-class zoom level).
-  if (typeof _detailStackSync === 'function') {
-    _detailStackSync({ kind: 'entity', id: entityId, tab: activeTab });
+  if (!inCompanion) {
+    // Client routing (UI Phase 1 + 4B): mirror the open entity + tab into the hash
+    // so a reload / deep-link re-opens this exact view. Loop-guarded.
+    if (typeof _routeSetDetailHash === 'function') {
+      _routeSetDetailHash({ kind: 'entity', id: entityId, tab: activeTab });
+    }
+    // UI Phase 4: reconcile the back-stack (entity is a first-class zoom level).
+    if (typeof _detailStackSync === 'function') {
+      _detailStackSync({ kind: 'entity', id: entityId, tab: activeTab });
+    }
   }
 
-  const headerEl = document.getElementById('detailHeader');
-  const tabsEl = document.getElementById('detailTabs');
-  const bodyEl = document.getElementById('detailBody');
+  const headerEl = document.getElementById(inCompanion ? 'companionHeader' : 'detailHeader');
+  const tabsEl = document.getElementById(inCompanion ? 'companionTabs' : 'detailTabs');
+  const bodyEl = document.getElementById(inCompanion ? 'companionBody' : 'detailBody');
+  if (inCompanion && tabsEl) tabsEl.style.display = '';
 
   // Reset the shared rail / Next-Step / next-action chrome so a prior property's
-  // content never lingers under the entity panel while it loads.
-  _entityHideRailChrome();
+  // content never lingers under the entity panel while it loads. That chrome is
+  // primary-only; the dock has no rail.
+  if (!inCompanion) _entityHideRailChrome();
 
   // Loading state
   if (headerEl) headerEl.innerHTML = `
-    <button class="detail-back" onclick="detailBack()">&#x2190;<span>Back</span></button>
+    ${inCompanion ? '' : '<button class="detail-back" onclick="detailBack()">&#x2190;<span>Back</span></button>'}
     <div class="detail-header-info">
       <div style="flex:1;min-width:0">
         <div class="detail-title">Loading entity...</div>
@@ -12525,10 +13087,11 @@ async function openEntityDetail(entityId, initialTab) {
     // marketing signals, the SF-account owner, and the ROE verdict. The priority
     // band (Next-Step) + the contacts list load in the same parallel round (band
     // stays in its dedicated route; contacts drive the Contacts tab CTA).
-    const [c360, contactsData, band] = await Promise.all([
+    const [c360, contactsData, band, dealData] = await Promise.all([
       _entityApiFetch('/api/entities?action=contact360&id=' + encodeURIComponent(entityId)).catch(() => null),
       _entityApiFetch('/api/contacts?action=list&entity_id=' + encodeURIComponent(entityId) + '&limit=50').catch(() => null),
-      _entityApiFetch('/api/priority-band?entity_id=' + encodeURIComponent(entityId)).catch(() => null)
+      _entityApiFetch('/api/priority-band?entity_id=' + encodeURIComponent(entityId)).catch(() => null),
+      _entityApiFetch('/api/entities?action=deal_packet&id=' + encodeURIComponent(entityId)).catch(() => null)
     ]);
 
     const entity = c360?.entity || null;
@@ -12545,11 +13108,18 @@ async function openEntityDetail(entityId, initialTab) {
     // tabs render + whether the owner BD-queue chrome shows). From contact360.
     const role = (c360 && c360.role) || 'contact';
     const tabs = _entityTabsForRole(role, entity.entity_type);
+    const hasDealPacket = !!(dealData && dealData.ok && dealData.has_deal && dealData.packet);
+    if (hasDealPacket && !tabs.includes('Property')) tabs.splice(1, 0, 'Property');
+    if (hasDealPacket && !tabs.includes('Deal')) tabs.splice(Math.min(2, tabs.length), 0, 'Deal');
     // A person contact with direct/affiliated ownership gets an Ownership tab so
     // the person-level linked-properties section (Contact 360 refinement) is reachable.
     const _ownedP = (c360 && c360.owned_properties) || null;
     const _hasOwned = _ownedP && ((_ownedP.direct && _ownedP.direct.length) || (_ownedP.affiliated && _ownedP.affiliated.properties && _ownedP.affiliated.properties.length));
     if (_hasOwned && !tabs.includes('Ownership')) tabs.splice(1, 0, 'Ownership');
+    const _contactProps = (c360 && Array.isArray(c360.contact_properties)) ? c360.contact_properties : [];
+    const _contactDeals = (c360 && Array.isArray(c360.contact_deals)) ? c360.contact_deals : [];
+    if (_contactProps.length && !tabs.includes('Ownership')) tabs.splice(1, 0, 'Ownership');
+    if (_contactDeals.length && !tabs.includes('Deals')) tabs.splice(Math.min(2, tabs.length), 0, 'Deals');
     const effectiveTab = tabs.includes(activeTab) ? activeTab : tabs[0];
 
     _entityDetailCache = {
@@ -12570,6 +13140,13 @@ async function openEntityDetail(entityId, initialTab) {
       // Cadence / next-touch block (Scott ask #3) — drives the Activity cockpit
       // (next + suggested touchpoint) and the hero next-action resolver.
       cadence: (c360 && c360.cadence) || null,
+      contactProperties: _contactProps,
+      contactPropertiesByRole: (c360 && c360.contact_properties_by_role) || {},
+      contactDeals: _contactDeals,
+      contactDealsByStatus: (c360 && c360.contact_deals_by_status) || { active: [], closed: [] },
+      contactDealsByRole: (c360 && c360.contact_deals_by_role) || {},
+      dealPacket: hasDealPacket ? dealData.packet : null,
+      dealSignals: hasDealPacket ? (dealData.deal_signals || null) : null,
       // Back-compat: some render paths read `activities`; the unified timeline
       // supersedes it (LCC events are the source-'lcc' items).
       activities: (c360 && c360.timeline) || [],
@@ -12583,7 +13160,7 @@ async function openEntityDetail(entityId, initialTab) {
       _detailStackSetLabel({ kind: 'entity', id: entityId }, entity.name);
     }
     if (headerEl) headerEl.innerHTML = `
-      <button class="detail-back" onclick="detailBack()">&#x2190;<span>Back</span></button>
+      ${inCompanion ? '' : '<button class="detail-back" onclick="detailBack()">&#x2190;<span>Back</span></button>'}
       <div class="detail-header-info">
         <div style="flex:1;min-width:0">
           <div class="detail-title">${esc(entity.name)}</div>
@@ -12594,19 +13171,33 @@ async function openEntityDetail(entityId, initialTab) {
             <span style="font-size:10px;padding:2px 8px;border-radius:10px;color:${statusColor};border:1px solid ${statusColor}">${esc(entity.status || 'active')}</span>
           </div>
         </div>
+        <button class="detail-action-btn" title="Log a call on this deal (flows into the summary + next steps)"
+          onclick="openCallNote('${esc(entityId)}', decodeURIComponent('${encodeURIComponent(entity.name || '')}'))"
+          style="background:transparent;border:1px solid var(--border);color:var(--text2);padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;margin-right:8px">
+          &#x260E; Log call
+        </button>
+        <button class="detail-action-btn" title="Generate or open a dossier"
+          onclick="_entityOpenDossierMenu(this)"
+          style="background:transparent;border:1px solid var(--border);color:var(--text2);padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;margin-right:8px">
+          Dossier
+        </button>
         <span class="detail-badge" style="background:var(--accent);color:#fff">ENTITY</span>
       </div>
-      <button class="detail-close" onclick="closeDetail()">&times;</button>`;
+      ${typeof _panelHeaderControls === 'function' ? _panelHeaderControls(inCompanion ? 'companion' : 'primary') : '<button class="detail-close" onclick="closeDetail()">&times;</button>'}`;
+    if (typeof _panelSyncResizers === 'function') _panelSyncResizers();
 
-    // Render tabs (property-detail grammar) — role-driven set.
+    // Render tabs (property-detail grammar) — role-driven set. The mount rides
+    // in the handler so the companion's tab bar writes into the companion body.
+    const _mountArg = inCompanion ? ", 'companion'" : '';
     if (tabsEl) tabsEl.innerHTML = tabs.map(t =>
-      '<button class="detail-tab ' + (t === effectiveTab ? 'active' : '') + '" onclick="switchEntityTab(decodeURIComponent(\'' + encodeURIComponent(t) + '\'))">' + esc(t) + '</button>'
+      '<button class="detail-tab ' + (t === effectiveTab ? 'active' : '') + '" onclick="switchEntityTab(decodeURIComponent(\'' + encodeURIComponent(t) + '\')' + _mountArg + ')">' + esc(t) + '</button>'
     ).join('');
 
     // Shared rail + Next-Step are the OWNER BD-queue chrome (connection/portfolio
     // completeness + the priority-band next action) — only meaningful for
     // owner/buyer entities. A broker/plain contact leaves them hidden (item #5).
-    if (role === 'owner' || role === 'buyer') {
+    // Primary-only: that chrome lives in the primary slide-over's DOM.
+    if (!inCompanion && (role === 'owner' || role === 'buyer')) {
       _entityRenderCompletenessRail();
       _entityRenderNextStep();
     }
@@ -12619,234 +13210,33 @@ async function openEntityDetail(entityId, initialTab) {
 }
 window.openEntityDetail = openEntityDetail;
 
-// ── Contact 360 — the ONE reusable trigger (Deals cards, Contacts view, the
-// coming Marketing tab). Takes a contact/entity id and opens the canonical
-// Contact 360 panel. Works for any contact:
-//   • an owner ENTITY id (or opts.kind==='entity' / opts.entity_id) → opens directly
-//   • a unified_contacts row → resolve its entity_id, then open the entity panel
-//   • a plain person/broker contact with NO entity → fall back to the lighter
-//     openContactDetail drawer (contacts-ui.js) so a broker still resolves.
-async function openContact360(id, opts = {}) {
-  if (!id) return;
-  const tab = opts.tab || 'Overview';
-  // Caller already knows the entity id.
-  if (opts.entity_id) { openEntityDetail(opts.entity_id, tab); return; }
-  if (opts.kind === 'entity') { openEntityDetail(id, tab); return; }
+// ─── subject openers + the deal "Log call" modal ─────────────────────────────
+// MOVED to detail-openers.js (W6.5 Stage 2, Unit 7 — 2026-08-20): the call-note
+// modal, openContact360, openEntityDetailByName, openContactDetail,
+// openContactDetailByName. openEntityDetail + _entityApiFetch STAY here.
+// (The map called the target "detail-contact.js"; it holds an entity opener too,
+// so it is named for what it is. See w6-5-frontend-decomposition-map.md §2b.)
+// ─────────────────────────────────────────────────────────────────────────────
 
-  // Resolve a unified_contacts row → its owning/self person entity.
-  try {
-    const data = await _entityApiFetch('/api/contacts?action=get&id=' + encodeURIComponent(id)).catch(() => null);
-    const eid = data && data.contact && data.contact.entity_id;
-    if (eid) { openEntityDetail(eid, tab); return; }
-    // A real contact row with no linked entity → the lighter drawer resolves it.
-    if (data && data.contact && typeof openContactDetail === 'function') { openContactDetail(id); return; }
-  } catch (_) { /* fall through */ }
-
-  // Not a unified_contacts row (or lookup failed): the light drawer if present,
-  // else best-effort open as an entity.
-  if (typeof openContactDetail === 'function') { openContactDetail(id); return; }
-  openEntityDetail(id, tab);
-}
-window.openContact360 = openContact360;
-
-/** Open entity detail by name search (when only name is available) */
-async function openEntityDetailByName(name) {
-  if (!name) return;
-  const panel = document.getElementById('detailPanel');
-  const overlay = document.getElementById('detailOverlay');
-  if (!panel || !overlay) return;
-
-  panel.style.display = 'block';
-  overlay.classList.add('open');
-
-  const headerEl = document.getElementById('detailHeader');
-  const bodyEl = document.getElementById('detailBody');
-  const tabsEl = document.getElementById('detailTabs');
-
-  if (headerEl) headerEl.innerHTML = `
-    <button class="detail-back" onclick="closeDetail()">&#x2190;<span>Back</span></button>
-    <div class="detail-header-info">
-      <div style="flex:1;min-width:0">
-        <div class="detail-title">${esc(name)}</div>
-        <div class="detail-subtitle">Searching...</div>
-      </div>
-      <span class="detail-badge" style="background:var(--accent);color:#fff">ENTITY</span>
-    </div>
-    <button class="detail-close" onclick="closeDetail()">&times;</button>`;
-  if (bodyEl) bodyEl.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Looking up entity...</p></div>';
-  if (tabsEl) tabsEl.innerHTML = '';
-
-  try {
-    const data = await _entityApiFetch('/api/entities?action=search&q=' + encodeURIComponent(name));
-    const entities = data?.entities || [];
-
-    if (entities.length === 1) {
-      // Exact single match — open it
-      openEntityDetail(entities[0].id);
-      return;
-    }
-
-    if (entities.length > 1) {
-      // Multiple matches — show list to pick from
-      let html = '<div class="detail-section"><div class="detail-section-title">Multiple entities found for "' + esc(name) + '"</div>';
-      html += '<div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">';
-      for (const e of entities) {
-        const loc = (e.city || '') + (e.city && e.state ? ', ' : '') + (e.state || '');
-        html += '<div onclick="openEntityDetail(\'' + esc(e.id) + '\')" style="padding:10px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px;cursor:pointer;display:flex;gap:12px;align-items:center">';
-        html += '<div style="flex:1;min-width:0"><div style="font-weight:600;color:var(--text)">' + esc(e.name) + '</div>';
-        html += '<div style="font-size:11px;color:var(--text2)">' + esc(e.entity_type || '') + (loc ? ' · ' + esc(loc) : '') + '</div></div>';
-        html += '<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:var(--s3);color:var(--text2)">' + esc(e.entity_type || 'org') + '</span>';
-        html += '</div>';
-      }
-      html += '</div></div>';
-      if (bodyEl) bodyEl.innerHTML = html;
-      return;
-    }
-
-    // No matches — show not found with helpful message
-    if (bodyEl) bodyEl.innerHTML = '<div class="detail-empty">No entity found matching "' + esc(name) + '".<br><span class="t-meta3-sm">Try the Entities page to search or create one.</span></div>';
-  } catch (err) {
-    console.error('Entity lookup error:', err);
-    if (bodyEl) bodyEl.innerHTML = '<div class="detail-empty">Error searching entities: ' + esc(err.message) + '</div>';
-  }
-}
-
-/** Open contact detail panel by contact ID */
-async function openContactDetail(contactId) {
-  _entityDetailCache = null;
-  const panel = document.getElementById('detailPanel');
-  const overlay = document.getElementById('detailOverlay');
-  if (!panel || !overlay) return;
-
-  panel.style.display = 'block';
-  overlay.classList.add('open');
-
-  const headerEl = document.getElementById('detailHeader');
-  const tabsEl = document.getElementById('detailTabs');
-  const bodyEl = document.getElementById('detailBody');
-
-  if (headerEl) headerEl.innerHTML = `
-    <button class="detail-back" onclick="closeDetail()">&#x2190;<span>Back</span></button>
-    <div class="detail-header-info">
-      <div style="flex:1;min-width:0">
-        <div class="detail-title">Loading contact...</div>
-      </div>
-      <span class="detail-badge" style="background:var(--purple);color:#fff">CONTACT</span>
-    </div>
-    <button class="detail-close" onclick="closeDetail()">&times;</button>`;
-  if (bodyEl) bodyEl.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading contact details...</p></div>';
-
-  try {
-    const data = await _entityApiFetch('/api/contacts?action=get&id=' + encodeURIComponent(contactId));
-    const contact = data?.contact || null;
-    if (!contact) {
-      if (bodyEl) bodyEl.innerHTML = '<div class="detail-empty">Contact not found</div>';
-      return;
-    }
-
-    // Fetch activities if contact has a linked entity
-    let activities = [];
-    if (contact.entity_id) {
-      try {
-        const actData = await _entityApiFetch('/api/activities?entity_id=' + encodeURIComponent(contact.entity_id) + '&order=occurred_at.desc&limit=20');
-        activities = actData?.activities || [];
-      } catch (_) { /* ignore */ }
-    }
-
-    _entityDetailCache = { contact, activities, type: 'contact' };
-
-    // Render header
-    if (headerEl) headerEl.innerHTML = `
-      <div class="detail-header-info">
-        <div style="flex:1;min-width:0">
-          <div class="detail-title">${esc(contact.full_name || contact.display_name || 'Unknown')}</div>
-          <div class="detail-subtitle">${esc(contact.title || '')}${contact.title && contact.company_name ? ' at ' : ''}${esc(contact.company_name || '')}</div>
-        </div>
-        <span class="detail-badge" style="background:var(--purple);color:#fff">CONTACT</span>
-        <button class="detail-close" onclick="closeDetail()">&times;</button>
-      </div>`;
-
-    // Tabs for contacts
-    if (tabsEl) tabsEl.innerHTML = '<button class="detail-tab active" onclick="_switchContactTab(\'Details\')">Details</button><button class="detail-tab" onclick="_switchContactTab(\'Activity\')">Activity</button>';
-
-    if (bodyEl) bodyEl.innerHTML = _renderContactTab(contact);
-  } catch (err) {
-    console.error('Contact detail error:', err);
-    if (bodyEl) bodyEl.innerHTML = '<div class="detail-empty">Error loading contact: ' + esc(err.message) + '</div>';
-  }
-}
-
-/** Open contact detail by name search */
-async function openContactDetailByName(name) {
-  if (!name) return;
-  const panel = document.getElementById('detailPanel');
-  const overlay = document.getElementById('detailOverlay');
-  if (!panel || !overlay) return;
-
-  panel.style.display = 'block';
-  overlay.classList.add('open');
-
-  const headerEl = document.getElementById('detailHeader');
-  const bodyEl = document.getElementById('detailBody');
-  const tabsEl = document.getElementById('detailTabs');
-
-  if (headerEl) headerEl.innerHTML = `
-    <button class="detail-back" onclick="closeDetail()">&#x2190;<span>Back</span></button>
-    <div class="detail-header-info">
-      <div style="flex:1;min-width:0">
-        <div class="detail-title">${esc(name)}</div>
-        <div class="detail-subtitle">Searching...</div>
-      </div>
-      <span class="detail-badge" style="background:var(--purple);color:#fff">CONTACT</span>
-    </div>
-    <button class="detail-close" onclick="closeDetail()">&times;</button>`;
-  if (bodyEl) bodyEl.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Looking up contact...</p></div>';
-  if (tabsEl) tabsEl.innerHTML = '';
-
-  try {
-    const data = await _entityApiFetch('/api/contacts?action=list&q=' + encodeURIComponent(name) + '&limit=10');
-    const contacts = data?.contacts || [];
-
-    if (contacts.length === 1) {
-      openContactDetail(contacts[0].id);
-      return;
-    }
-
-    if (contacts.length > 1) {
-      let html = '<div class="detail-section"><div class="detail-section-title">Multiple contacts found for "' + esc(name) + '"</div>';
-      html += '<div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">';
-      for (const c of contacts) {
-        html += '<div onclick="openContactDetail(\'' + esc(c.id) + '\')" style="padding:10px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px;cursor:pointer">';
-        html += '<div style="font-weight:600;color:var(--text)">' + esc(c.full_name || c.display_name || 'Unknown') + '</div>';
-        html += '<div style="font-size:11px;color:var(--text2)">' + esc(c.title || '') + (c.company_name ? ' · ' + esc(c.company_name) : '') + '</div>';
-        html += '</div>';
-      }
-      html += '</div></div>';
-      if (bodyEl) bodyEl.innerHTML = html;
-      return;
-    }
-
-    if (bodyEl) bodyEl.innerHTML = '<div class="detail-empty">No contact found matching "' + esc(name) + '"</div>';
-  } catch (err) {
-    console.error('Contact lookup error:', err);
-    if (bodyEl) bodyEl.innerHTML = '<div class="detail-empty">Error searching contacts: ' + esc(err.message) + '</div>';
-  }
-}
 
 // ── Entity Tab Switching (UI Phase 4B — mirrors switchUnifiedTab) ──
-function switchEntityTab(tabName) {
+function switchEntityTab(tabName, mount) {
   if (!_entityDetailCache || _entityDetailCache.type !== 'entity') return;
+  const inCompanion = mount === 'companion';
   // Guard against a tab not in this entity's role-driven set (e.g. a legacy
   // deep-link to Ownership on a broker) — fall back to the first tab.
   const tabs = _entityDetailCache.tabs;
   if (Array.isArray(tabs) && tabs.length && !tabs.includes(tabName)) tabName = tabs[0];
   // Mirror the tab into the hash (replace, so reload keeps it / no history noise),
-  // exactly like the property detail's switchUnifiedTab.
-  if (typeof _routeUpdateTabHash === 'function') _routeUpdateTabHash(tabName);
-  document.querySelectorAll('#detailTabs .detail-tab').forEach(t => {
+  // exactly like the property detail's switchUnifiedTab. Companion-only: the
+  // route belongs to whatever is in the PRIMARY slot — `?d=` encodes one
+  // subject, so a dock tab change must not rewrite it.
+  if (!inCompanion && typeof _routeUpdateTabHash === 'function') _routeUpdateTabHash(tabName);
+  const tabSel = inCompanion ? '#companionTabs .detail-tab' : '#detailTabs .detail-tab';
+  document.querySelectorAll(tabSel).forEach(t => {
     t.classList.toggle('active', t.textContent.trim() === tabName);
   });
-  const bodyEl = document.getElementById('detailBody');
+  const bodyEl = document.getElementById(inCompanion ? 'companionBody' : 'detailBody');
   if (bodyEl) bodyEl.innerHTML = _renderEntityTab(tabName);
 }
 window.switchEntityTab = switchEntityTab;
@@ -12861,9 +13251,11 @@ function _renderEntityTab(tab) {
   let body;
   switch (tab) {
     case 'Overview': body = _entityTabOverview(); break;
+    case 'Property': body = _entityTabPropertyRef(); break;
+    case 'Deal': body = _entityTabDeal(); break;
     case 'Ownership': body = _entityTabPortfolio(); break;
     case 'Portfolio': body = _entityTabPortfolio(); break; // legacy alias
-    case 'Deals': body = _entityTabBrokerDeals(); break;
+    case 'Deals': body = (_entityDetailCache && _entityDetailCache.role === 'broker' && !((_entityDetailCache.contactDeals || []).length)) ? _entityTabBrokerDeals() : _entityTabContactDeals(); break;
     case 'Relationships': body = _entityTabRelationships(); break;
     case 'History': body = _entityTabHistory(); break;
     case 'Contacts': body = _entityTabContacts(); break;
@@ -12875,1192 +13267,38 @@ function _renderEntityTab(tab) {
   return banner + body;
 }
 
-// ── ROE verdict banner (shared across tabs) ──
-function _entityRoeColors(verdict) {
-  if (verdict === 'do_not_call') return { bg: 'rgba(239,68,68,0.12)', bd: 'var(--red,#ef4444)', fg: 'var(--red,#ef4444)', icon: '\u{1F6D1}' };
-  if (verdict === 'caution') return { bg: 'rgba(234,179,8,0.12)', bd: 'var(--yellow,#eab308)', fg: 'var(--yellow,#eab308)', icon: '\u{26A0}️' };
-  return { bg: 'rgba(34,197,94,0.10)', bd: 'var(--green,#22c55e)', fg: 'var(--green,#22c55e)', icon: '\u{2705}' };
-}
-function _entityRoeBanner() {
-  const roe = _entityDetailCache && _entityDetailCache.roe;
-  if (!roe) return '';
-  const col = _entityRoeColors(roe.verdict);
-  const clickable = 'onclick="switchEntityTab(&quot;ROE&quot;)" style="cursor:pointer;';
-  return '<div ' + clickable
-    + 'display:flex;align-items:center;gap:8px;margin:0 0 12px;padding:8px 12px;border-radius:8px;'
-    + 'background:' + col.bg + ';border:1px solid ' + col.bd + '">'
-    + '<span style="font-size:15px">' + col.icon + '</span>'
-    + '<div style="flex:1;min-width:0"><div style="font-weight:700;font-size:12px;color:' + col.fg + '">'
-    + esc(roe.headline || 'Rules of Engagement') + '</div>'
-    + (roe.reasons && roe.reasons.length
-        ? '<div style="font-size:11px;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(roe.reasons[0]) + '</div>'
-        : '')
-    + '</div><span style="font-size:10px;color:var(--text3)">details ›</span></div>';
-}
+// ─── Overview tab + its helper cluster ───────────────────────────────────────
+// MOVED to detail-entity-tabs.js (W6.5 Stage 2, Unit 6 — 2026-08-20): the ROE
+// banner, role meta, hero + next-action CTA, contact property/deal sections,
+// _entityTabOverview itself, the draft CTA and _entityFmtMoney. Moved as one
+// cluster because the tab and its builders are inseparable.
+// ─────────────────────────────────────────────────────────────────────────────
+
+
+// ─── panel shell: geometry, resizers, minimize tray, companion dock ──────────
+// MOVED to detail-panel-shell.js (W6.5 Stage 2, Unit 3 — 2026-08-20). Loaded as
+// a classic script BEFORE this file, same global scope. NOTE: the map filed this
+// under "detail-entity.js"; it is the SHELL, not entity-tab content — see the
+// CORRECTION in w6-5-frontend-decomposition-map.md §2b.
+// ─────────────────────────────────────────────────────────────────────────────
+
+
+// ─── entity tab BODIES ───────────────────────────────────────────────────────
+// MOVED to detail-entity-tabs.js (W6.5 Stage 2, Unit 4 — 2026-08-20):
+// Relationships / History / Activity / Engagement / ROE / Deal / PropertyRef
+// renderers + the _deal* formatter family. The DISPATCHER (_renderEntityTab,
+// switchEntityTab, openEntityDetail, ENTITY_DETAIL_TABS) stays here.
+// ─────────────────────────────────────────────────────────────────────────────
+
+
+// ─── entity tab bodies, part 2 ───────────────────────────────────────────────
+// MOVED to detail-entity-tabs.js (W6.5 Stage 2, Unit 5 — 2026-08-20):
+// _entityGenerateDossier, _entityOpenDossierMenu, _entityTabContactDeals,
+// _entityTabBrokerDeals, _entityTabPortfolio, _entityTabContacts.
+// The completeness-rail / Next-Step chrome below STAYS — it writes the same
+// persistent DOM nodes as the property panel, so it is shell, not tab content.
+// ─────────────────────────────────────────────────────────────────────────────
 
-// Plain-language label + colour for a detected BD role (item #1 — the panel
-// says what KIND of contact this is, prominently).
-const _ENTITY_ROLE_META = {
-  owner:   { label: 'Owner',   color: 'var(--accent)' },
-  broker:  { label: 'Broker',  color: 'var(--amber, #d98c00)' },
-  buyer:   { label: 'Buyer',   color: 'var(--purple)' },
-  contact: { label: 'Contact', color: 'var(--text3)' },
-};
-function _entityRoleMeta(role) { return _ENTITY_ROLE_META[role] || _ENTITY_ROLE_META.contact; }
-
-// ── Hero next-action (the "direct the user by design" element) ──
-// Deterministic ladder over the contact360 payload: picks the SINGLE highest-
-// priority next move for this party, first match wins. Role-agnostic; renders as
-// one primary CTA at the top of Overview. Pure function of the cache — no fetch,
-// documented + testable. Returns {key,tone,label,sub,cta,onclick} | null.
-function _nextActionForContact(c) {
-  if (!c) return null;
-  const e = c.entity || {};
-  const cad = c.cadence || null;
-  const emailRel = c.emailRel || null;
-  const email = (c.subject && c.subject.email) || e.email || (emailRel && emailRel.email) || null;
-  const phone = e.phone || null;
-  const sfIds = (c.subject && Array.isArray(c.subject.sf_contact_ids)) ? c.subject.sf_contact_ids : [];
-  const sfLinked = sfIds.length > 0 || (Array.isArray(e.external_identities) && e.external_identities.some(function(x){
-    return String(x.source_system || '').toLowerCase() === 'salesforce' && String(x.source_type || '').toLowerCase() === 'contact';
-  }));
-  const unsub = cad && cad.unsubscribe_status ? String(cad.unsubscribe_status).toLowerCase() : '';
-  const suppressed = unsub && unsub !== 'subscribed' && unsub !== 'none' && unsub !== 'active';
-  const recent = (emailRel && Array.isArray(emailRel.recent)) ? emailRel.recent : [];
-  const lastInboundUnanswered = recent.length > 0 && recent[0].dir !== 'out';
-
-  // 1. Suppressed — hard stop, no outreach CTA.
-  if (suppressed) return { key: 'suppressed', tone: 'stop', label: 'Do not contact',
-    sub: 'Marked ' + cad.unsubscribe_status + ' — suppressed from outreach.', cta: null, onclick: null };
-  // 2. No contact method on file — acquire one first.
-  if (!email && !phone) return { key: 'find_contact', tone: 'warn', label: 'Find a contact',
-    sub: 'No email or phone on file — acquire a reachable contact before outreach.', cta: 'Select contact →', onclick: '_entityAcquireContact()' };
-  // 3. Not linked in Salesforce — connect to log activity + mark ROE territory.
-  if (!sfLinked) return { key: 'connect_sf', tone: 'accent', label: 'Connect in Salesforce',
-    sub: 'Not linked to a CRM contact — link to log activity and mark territory (ROE).', cta: 'Select contact →', onclick: '_entityAcquireContact()' };
-  // 4. Cadence touch overdue — the due move, now.
-  if (cad && cad.overdue) return { key: 'log_overdue', tone: 'stop', label: 'Log the overdue ' + (cad.next_touch_type || 'touch'),
-    sub: (cad.next_touch_type || 'Touch') + ' was due ' + _fmtDate(cad.next_touch_due) + ' (' + Math.abs(Number(cad.days_until_due)) + 'd overdue).', cta: 'Draft touchpoint →', onclick: '_entityDraftAndLog(this)' };
-  // 5. Unanswered inbound — they emailed us last; reply.
-  if (lastInboundUnanswered) return { key: 'reply', tone: 'warn', label: 'Reply — they emailed last',
-    sub: 'Last message was inbound' + (recent[0].received_at ? ' (' + _fmtDate(recent[0].received_at) + ')' : '') + ' and awaits your reply.', cta: 'Draft reply →', onclick: '_entityDraftAndLog(this)' };
-  // 6. Cadence due (not yet overdue) — the suggested next touch.
-  if (cad && cad.on_cadence && cad.next_touch_due) return { key: 'touch_due', tone: 'accent', label: 'Next touch: ' + (cad.next_touch_type || 'touch'),
-    sub: 'Due ' + _fmtDate(cad.next_touch_due) + (cad.next_touch_template ? ' · suggested: ' + cad.next_touch_template : '') + '.', cta: 'Draft touchpoint →', onclick: '_entityDraftAndLog(this)' };
-  // 7. Default — start/continue the relationship.
-  return { key: 'log_touch', tone: 'go', label: 'Log a touchpoint',
-    sub: 'Start or continue the relationship with a logged touch.', cta: 'Draft & Log →', onclick: '_entityDraftAndLog(this)' };
-}
-window._nextActionForContact = _nextActionForContact;
-
-function _entityHeroHTML(c) {
-  const a = _nextActionForContact(c);
-  if (!a) return '';
-  const tones = { stop: 'var(--red,#ef4444)', warn: 'var(--amber,#d98c00)', accent: 'var(--accent)', go: 'var(--green,#22c55e)' };
-  const col = tones[a.tone] || 'var(--accent)';
-  let h = '<div class="detail-section"><div style="padding:14px 16px;border-radius:10px;background:var(--s2);border:1px solid var(--border);border-left:4px solid ' + col + '">';
-  h += '<div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:' + col + ';margin-bottom:4px">Next best action</div>';
-  h += '<div style="font-size:15px;font-weight:700;color:var(--text)">' + esc(a.label) + '</div>';
-  if (a.sub) h += '<div style="font-size:12px;color:var(--text2);margin-top:3px">' + esc(a.sub) + '</div>';
-  if (a.cta && a.onclick) h += '<button class="dns-cta" style="margin-top:10px" onclick="event.stopPropagation();' + a.onclick + '">' + esc(a.cta) + '</button>';
-  h += '</div></div>';
-  return h;
-}
-
-// ── Entity Overview Tab ──
-function _entityTabOverview() {
-  const c = _entityDetailCache;
-  const e = c.entity;
-  const role = c.role || 'contact';
-  const rm = _entityRoleMeta(role);
-  const contacts = c.contacts || [];
-  const rollup = c.rollup || null;
-  const propCount = rollup && rollup.total_property_count != null
-    ? Number(rollup.total_property_count) : (c.portfolio?.length || 0);
-
-  let html = '';
-
-  // Role banner — the panel is no longer owner-framed; it states the role.
-  html += '<div style="display:flex;align-items:center;gap:8px;margin:0 0 12px;padding:8px 12px;border-radius:8px;background:var(--s2);border-left:3px solid ' + rm.color + '">'
-    + '<span style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:' + rm.color + '">' + esc(rm.label) + '</span>';
-  if (role === 'broker' && c.brokerIntel) {
-    const bi = c.brokerIntel;
-    html += '<span style="font-size:11px;color:var(--text2)">' + Number(bi.total_deals || 0) + ' deal' + (Number(bi.total_deals) === 1 ? '' : 's') + ' brokered in our markets</span>';
-  } else if ((role === 'owner' || role === 'buyer') && propCount) {
-    html += '<span style="font-size:11px;color:var(--text2)">' + propCount + ' propert' + (propCount === 1 ? 'y' : 'ies') + ' in the BD portfolio</span>';
-  }
-  html += '</div>';
-
-  // Hero next-action (Scott: "direct the user by design") — the single highest-
-  // priority move, right below the role banner, above the reference detail.
-  html += _entityHeroHTML(c);
-
-  // Entity info section
-  html += '<div class="detail-section"><div class="detail-section-title">Entity Information</div><div class="detail-grid">';
-  html += _row('Name', e.name);
-  html += _row('Role', rm.label);
-  html += _row('Type', e.entity_type);
-  html += _row('Domain', e.domain);
-  html += _row('Org Type', e.org_type);
-  if (e.email) html += _rowLink('Email', e.email, 'mailto:' + e.email);
-  if (e.phone) html += _rowLink('Phone', e.phone, 'tel:' + e.phone);
-  if (e.address) html += _row('Address', e.address);
-  html += _row('City / State', (e.city || '') + (e.city && e.state ? ', ' : '') + (e.state || ''));
-  html += '</div></div>';
-
-  // External identities
-  const extIds = e.external_identities || [];
-  if (extIds.length) {
-    html += '<div class="detail-section"><div class="detail-section-title">Linked Systems</div>';
-    html += '<div style="display:flex;flex-wrap:wrap;gap:6px">';
-    for (const ext of extIds) {
-      html += '<span style="font-size:10px;padding:3px 8px;border-radius:6px;background:var(--s3);color:var(--text2);border:1px solid var(--border)">';
-      html += esc(ext.source_system || '') + (ext.source_type ? ' · ' + esc(ext.source_type) : '');
-      html += '</span>';
-    }
-    html += '</div></div>';
-  }
-
-  // Quick stats — role-aware. A broker shows deal-intelligence tiles (deals +
-  // buyers/sellers represented), NOT owner-portfolio + the 50 unrelated contacts.
-  const stat = (val, label, color, onclick) =>
-    '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px' + (onclick ? ';cursor:pointer' : '') + '"'
-    + (onclick ? ' onclick="' + onclick + '"' : '') + '>'
-    + '<div style="font-size:' + (String(val).length > 6 ? 16 : 20) + 'px;font-weight:700;color:' + color + '">' + val + '</div>'
-    + '<div class="t-meta3">' + label + '</div></div>';
-  const actTile = stat(c.timeline?.length || 0, 'Activities', 'var(--yellow, #eab308)', 'switchEntityTab(\'Activity\')');
-  html += '<div class="detail-section"><div class="detail-section-title">Summary</div>';
-  html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;margin-top:4px">';
-  if (role === 'broker') {
-    const bi = c.brokerIntel || {};
-    html += stat(Number(bi.total_deals || 0), 'Deals brokered', 'var(--accent)', 'switchEntityTab(\'Deals\')');
-    html += stat(Number(bi.represents_sellers || 0), 'Repr. sellers', 'var(--green)', 'switchEntityTab(\'Deals\')');
-    html += stat(Number(bi.represents_buyers || 0), 'Repr. buyers', 'var(--purple)', 'switchEntityTab(\'Deals\')');
-    html += actTile;
-  } else {
-    const rollupRent = rollup && rollup.current_annual_rent_total != null ? Number(rollup.current_annual_rent_total) : null;
-    html += stat(propCount, 'Properties', 'var(--accent)', 'switchEntityTab(\'Ownership\')');
-    html += stat(rollupRent ? _entityFmtMoney(rollupRent) : '—', 'Portfolio Rent', 'var(--green)', null);
-    // Contacts tile only when the Contacts tab exists (org entities).
-    if ((c.tabs || []).includes('Contacts')) html += stat(contacts.length, 'Contacts', 'var(--purple)', 'switchEntityTab(\'Contacts\')');
-    html += actTile;
-  }
-  html += '</div></div>';
-
-  // Open Tasks + Marketing follow-ups (Contact 360 refinement) — mirror the
-  // Pipeline card "Open Tasks (N)" pattern; each links to its detail tab. The
-  // linked deal/opportunity shows in the marketing follow-ups (deal_name).
-  const _openN = (c.openTasks || []).length;
-  const _mktN = (c.marketing || []).length;
-  if (_openN || _mktN) {
-    html += '<div class="detail-section"><div style="display:flex;gap:10px;flex-wrap:wrap">';
-    html += '<div onclick="switchEntityTab(\'Activity\')" style="flex:1;min-width:130px;cursor:pointer;padding:10px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px">'
-      + '<div style="font-size:16px;font-weight:700;color:var(--accent)">' + _openN + '</div>'
-      + '<div class="t-meta3">Open Tasks →</div></div>';
-    html += '<div onclick="switchEntityTab(\'Engagement\')" style="flex:1;min-width:130px;cursor:pointer;padding:10px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px">'
-      + '<div style="font-size:16px;font-weight:700;color:var(--purple)">' + _mktN + '</div>'
-      + '<div class="t-meta3">Marketing follow-ups →</div></div>';
-    html += '</div></div>';
-  }
-
-  // Row-level action — Draft & Log (Topic F engine: renders a draft to Outlook,
-  // logs a completed SF activity, advances the cadence — one call, honest status).
-  const em = (c.subject && c.subject.email) || e.email || '';
-  html += '<div class="detail-section"><div class="detail-section-title">Outreach</div>';
-  html += '<button class="dns-cta" onclick="_entityDraftAndLog(this)">\u{270D}️ Draft &amp; Log →</button>';
-  if (!em) html += '<div style="font-size:11px;color:var(--text3);margin-top:6px">No email on file — the draft opens without a recipient for you to fill.</div>';
-  html += '<div id="entityDraftHost" style="margin-top:10px"></div>';
-  html += '</div>';
-
-  return html;
-}
-
-// Row-level Draft & Log for the panel subject — the Topic F engine
-// (?action=draft_and_log), NOT the older _draftFromPipeline / log_to_sf split.
-async function _entityDraftAndLog(btn) {
-  const c = _entityDetailCache;
-  if (!c || !c.entityId) return;
-  const em = (c.subject && c.subject.email) || (c.entity && c.entity.email) || '';
-  const name = (c.entity && c.entity.name) || '';
-  const domain = (c.entity && c.entity.domain) || '';
-  if (btn) { btn.disabled = true; btn.textContent = 'Drafting & logging…'; }
-  const res = await _udApiPost('/api/operations?action=draft_and_log', {
-    template_id: 'T-001',
-    entity_id: c.entityId,
-    context: { contact: { name: name, full_name: name }, property: { domain: domain }, domain: domain },
-    domain: domain || null,
-    name: name || null,
-    to: em || null,
-    mode: 'bd'
-  });
-  if (btn) { btn.disabled = false; btn.textContent = '\u{270D}️ Draft & Log →'; }
-  const host = document.getElementById('entityDraftHost');
-  if (!res || res.ok === false || !res.ok && res.error) {
-    if (host) host.innerHTML = '<div style="color:var(--red,#ef4444);font-size:12px">Draft & Log failed: ' + esc((res && res.error) || 'unknown') + '</div>';
-    return;
-  }
-  const d = res.draft || {};
-  const sf = res.sf || {};
-  const subject = d.subject || '';
-  const bodyText = d.body || '';
-  const status = [];
-  if (d.created) status.push('✓ Draft in Outlook');
-  else if (d.reason === 'no_recipient') status.push('⚠ add a recipient to draft in Outlook');
-  else status.push('Draft ready — copy/paste below');
-  if (sf.logged) status.push('✓ logged to Salesforce');
-  else if (sf.reason === 'no_sf_contact') status.push('no SF contact — SF log skipped');
-  else if (sf.reason === 'sf_not_configured') status.push('SF logging not configured yet');
-  else status.push('SF log pending');
-  if (res.cadence && res.cadence.advanced) status.push('cadence advanced');
-  const mailto = 'mailto:' + encodeURIComponent(em) + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(bodyText);
-  const openDraftBtn = d.web_link ? '<a class="dns-cta" href="' + esc(d.web_link) + '" target="_blank" rel="noopener">Open Outlook draft</a>' : '';
-  if (host) host.innerHTML =
-    (em ? '<div style="font-size:12px;margin-bottom:4px"><b>To:</b> ' + esc(em) + '</div>' : '')
-    + '<div style="font-size:12px;margin-bottom:4px"><b>Subject:</b> ' + esc(subject) + '</div>'
-    + '<textarea rows="8" style="width:100%;margin:4px 0;font-size:12px" id="entityDraftBody">' + esc(bodyText) + '</textarea>'
-    + '<div style="display:flex;gap:8px;flex-wrap:wrap">'
-    + '<button class="dns-cta" onclick="_entityCopyDraft()">Copy</button>'
-    + '<a class="dns-cta" href="' + esc(mailto) + '" target="_blank" rel="noopener">Open in mail</a>'
-    + openDraftBtn + '</div>'
-    + '<div style="font-size:11px;color:var(--text3);margin-top:6px">' + esc(status.join(' · ')) + '</div>';
-}
-window._entityDraftAndLog = _entityDraftAndLog;
-
-function _entityCopyDraft() {
-  const ta = document.getElementById('entityDraftBody');
-  if (ta && navigator.clipboard) navigator.clipboard.writeText(ta.value).then(() => {
-    if (typeof showToast === 'function') showToast('Draft copied', 'success');
-  }).catch(() => {});
-}
-window._entityCopyDraft = _entityCopyDraft;
-
-// Compact $ formatter for the entity rollup figures.
-function _entityFmtMoney(n) {
-  const v = Number(n);
-  if (!Number.isFinite(v) || v === 0) return '—';
-  if (v >= 1e9) return '$' + (v / 1e9).toFixed(1) + 'B';
-  if (v >= 1e6) return '$' + (v / 1e6).toFixed(v >= 10e6 ? 0 : 1) + 'M';
-  if (v >= 1e3) return '$' + Math.round(v / 1e3) + 'K';
-  return '$' + Math.round(v);
-}
-
-// ── Companion property dock (dual-panel, item #6) ─────────────────────────────
-// Opens a focused property card BESIDE the contact/owner panel so both are
-// visible at once. The row summary is looked up from the entity cache by index
-// (no re-fetch, no escaping-in-onclick, no failure mode). "Open full ↗" promotes
-// it to the main detail panel (the existing zoom path). On screens too narrow for
-// two panels it falls back to the full single-panel open (existing behavior).
-const DUAL_DOCK_MIN_WIDTH = 980;
-let _companionState = null;
-
-function _dualCapable() {
-  return typeof window !== 'undefined' && window.innerWidth >= DUAL_DOCK_MIN_WIDTH;
-}
-
-// Drill a property clicked INSIDE a contact/owner panel. `source` selects the
-// cache array (portfolio | developed | deal), `idx` the row. Dual-docks beside
-// the contact when there's room; else the full single-panel open.
-function _entityDrillProperty(db, propertyId, source, idx) {
-  const c = _entityDetailCache || {};
-  let row = {};
-  if (source === 'portfolio') row = (c.portfolio || [])[idx] || {};
-  else if (source === 'developed') row = (c.developed || [])[idx] || {};
-  const summary = {
-    address: row.address || row.name || null,
-    city: row.city || null,
-    state: row.state || null,
-    tenant: row.tenant || null,
-    rent: row.annual_rent != null ? _entityFmtMoney(row.annual_rent) : null,
-    is_current: row.is_current,
-  };
-  if (_dualCapable()) { openCompanionProperty(db, propertyId, summary); return; }
-  if (typeof openUnifiedDetail === 'function') openUnifiedDetail(db, { property_id: propertyId });
-}
-window._entityDrillProperty = _entityDrillProperty;
-
-function openCompanionProperty(db, propertyId, summary = {}) {
-  db = (db === 'gov' || db === 'government') ? 'gov' : 'dia';
-  const panel = document.getElementById('companionPanel');
-  const header = document.getElementById('companionHeader');
-  const body = document.getElementById('companionBody');
-  const minTab = document.getElementById('companionMin');
-  if (!panel || !header || !body) { if (typeof openUnifiedDetail === 'function') openUnifiedDetail(db, { property_id: propertyId }); return; }
-  if (minTab) minTab.classList.remove('open');
-  panel.classList.add('open');
-  panel.style.display = 'block';
-  _companionState = { db, propertyId };
-
-  const addr = summary.address || '(property)';
-  const loc = (summary.city || '') + (summary.city && summary.state ? ', ' : '') + (summary.state || '');
-  const badge = db.toUpperCase();
-  header.innerHTML =
-    '<div class="detail-header-info" style="width:100%">'
-    + '<div style="flex:1;min-width:0"><div class="detail-title" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(addr) + '</div>'
-    + '<div class="detail-subtitle">' + esc(loc) + '</div></div>'
-    + '<span class="detail-badge" style="background:' + (db === 'gov' ? 'var(--gov-green)' : 'var(--purple)') + ';color:#fff">' + esc(badge) + '</span>'
-    + '<button class="detail-close" title="Minimize" onclick="minimizeCompanion()" style="margin:0 2px">&#8211;</button>'
-    + '<button class="detail-close" title="Close" onclick="closeCompanion()">&times;</button>'
-    + '</div>';
-
-  const rows = [];
-  const addRow = (l, v) => { if (v != null && v !== '') rows.push('<div style="display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)"><span class="t-meta3">' + l + '</span><span style="font-size:12px;color:var(--text);text-align:right">' + esc(String(v)) + '</span></div>'); };
-  addRow('Address', summary.address);
-  addRow('City / State', loc);
-  addRow(db === 'gov' ? 'Agency / Tenant' : 'Tenant', summary.tenant);
-  addRow('Annual rent', summary.rent);
-  if (summary.is_current === false) addRow('Status', 'Former');
-
-  body.innerHTML =
-    '<div class="detail-section"><div class="detail-section-title">Property</div>' + (rows.join('') || '<div class="detail-empty">No details.</div>') + '</div>'
-    + '<div class="detail-section"><button class="dns-cta" onclick="_companionOpenFull()">Open full detail ↗</button>'
-    + '<div style="font-size:11px;color:var(--text3);margin-top:6px">Full property panel — replaces this dock.</div></div>';
-}
-window.openCompanionProperty = openCompanionProperty;
-
-function _companionOpenFull() {
-  const s = _companionState;
-  if (!s) return;
-  closeCompanion();
-  if (typeof openUnifiedDetail === 'function') openUnifiedDetail(s.db, { property_id: s.propertyId });
-}
-window._companionOpenFull = _companionOpenFull;
-
-function minimizeCompanion() {
-  const panel = document.getElementById('companionPanel');
-  const minTab = document.getElementById('companionMin');
-  if (panel) panel.classList.remove('open');
-  if (minTab && _companionState) minTab.classList.add('open');
-}
-window.minimizeCompanion = minimizeCompanion;
-
-function restoreCompanion() {
-  const panel = document.getElementById('companionPanel');
-  const minTab = document.getElementById('companionMin');
-  if (minTab) minTab.classList.remove('open');
-  if (panel && _companionState) { panel.classList.add('open'); panel.style.display = 'block'; }
-}
-window.restoreCompanion = restoreCompanion;
-
-function closeCompanion() {
-  const panel = document.getElementById('companionPanel');
-  const minTab = document.getElementById('companionMin');
-  if (panel) { panel.classList.remove('open'); panel.style.display = 'none'; }
-  if (minTab) minTab.classList.remove('open');
-  _companionState = null;
-}
-window.closeCompanion = closeCompanion;
-
-// ── Companion ENTITY (owner beside property) — Scott: clicking an owner from the
-// property tab should open it BESIDE the property (both visible), with close /
-// minimize / enlarge, not replace the property. Reuses the companion dock that
-// already docks a property inside an owner panel — same element, other direction.
-let _activePrimaryKind = null; // 'property' | 'entity' — which panel is primary
-window._activePrimaryKind = null;
-function _setPrimaryKind(k) { _activePrimaryKind = k; try { window._activePrimaryKind = k; } catch (_e) {} }
-
-// Router: an entity chip clicked FROM a property panel docks the entity as a
-// companion (when there's room); otherwise the normal full-panel open.
-function _openEntitySmart(id) {
-  if (!id) return;
-  if (_dualCapable() && _activePrimaryKind === 'property') { openCompanionEntity(String(id)); return; }
-  openEntityDetail(String(id));
-}
-window._openEntitySmart = _openEntitySmart;
-
-async function _openEntityByNameSmart(name) {
-  if (!name) return;
-  if (_dualCapable() && _activePrimaryKind === 'property') {
-    try {
-      const data = await _entityApiFetch('/api/entities?action=search&q=' + encodeURIComponent(name));
-      const hit = (data && Array.isArray(data.entities) && data.entities[0]) || null;
-      if (hit && hit.id) { openCompanionEntity(String(hit.id)); return; }
-    } catch (_e) { /* fall through */ }
-  }
-  openEntityDetailByName(name);
-}
-window._openEntityByNameSmart = _openEntityByNameSmart;
-
-// Open an owner/contact ENTITY in the companion dock beside the property.
-function openCompanionEntity(entityId) {
-  if (!entityId) return;
-  const panel = document.getElementById('companionPanel');
-  const header = document.getElementById('companionHeader');
-  const body = document.getElementById('companionBody');
-  const minTab = document.getElementById('companionMin');
-  // No dock element or not enough room → fall back to the full panel.
-  if (!panel || !header || !body || !_dualCapable()) { openEntityDetail(entityId); return; }
-  if (minTab) minTab.classList.remove('open');
-  panel.classList.add('open');
-  panel.style.display = 'block';
-  _companionState = { kind: 'entity', entityId };
-  header.innerHTML =
-    '<div class="detail-header-info" style="width:100%">'
-    + '<div style="flex:1;min-width:0"><div class="detail-title">Loading…</div></div>'
-    + '<button class="detail-close" title="Minimize" onclick="minimizeCompanion()" style="margin:0 2px">&#8211;</button>'
-    + '<button class="detail-close" title="Close" onclick="closeCompanion()">&times;</button>'
-    + '</div>';
-  body.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text3)"><span class="spinner"></span></div>';
-  _entityApiFetch('/api/entities?action=contact360&id=' + encodeURIComponent(entityId))
-    .then(function(c360) {
-      if (!_companionState || _companionState.entityId !== entityId) return; // user moved on
-      _renderCompanionEntity(c360, entityId);
-    })
-    .catch(function() { if (body) body.innerHTML = '<div class="detail-empty">Could not load this contact.</div>'; });
-}
-window.openCompanionEntity = openCompanionEntity;
-
-function _companionEnlargeEntity() {
-  const s = _companionState;
-  if (!s || !s.entityId) return;
-  const id = s.entityId;
-  closeCompanion();
-  openEntityDetail(id);
-}
-window._companionEnlargeEntity = _companionEnlargeEntity;
-
-function _renderCompanionEntity(c360, entityId) {
-  const header = document.getElementById('companionHeader');
-  const body = document.getElementById('companionBody');
-  if (!header || !body) return;
-  const e = (c360 && c360.entity) || {};
-  const role = (c360 && c360.role) || 'contact';
-  const rm = (typeof _entityRoleMeta === 'function') ? _entityRoleMeta(role) : { label: role, color: 'var(--accent)' };
-  const nm = e.name || '(contact)';
-  const loc = (e.city || '') + (e.city && e.state ? ', ' : '') + (e.state || '');
-  header.innerHTML =
-    '<div class="detail-header-info" style="width:100%">'
-    + '<div style="flex:1;min-width:0"><div class="detail-title" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(nm) + '</div>'
-    + (loc ? '<div class="detail-subtitle">' + esc(loc) + '</div>' : '')
-    + '</div>'
-    + '<span class="detail-badge" style="background:' + rm.color + ';color:#fff">' + esc(rm.label) + '</span>'
-    + '<button class="detail-close" title="Enlarge to full panel" onclick="_companionEnlargeEntity()" style="margin:0 2px">&#8599;</button>'
-    + '<button class="detail-close" title="Minimize" onclick="minimizeCompanion()" style="margin:0 2px">&#8211;</button>'
-    + '<button class="detail-close" title="Close" onclick="closeCompanion()">&times;</button>'
-    + '</div>';
-
-  let html = '';
-  // Next best action (reuse the deterministic hero resolver on the c360 payload).
-  if (typeof _nextActionForContact === 'function') {
-    const cacheLike = { entity: e, cadence: c360.cadence || null, emailRel: c360.email_relationship || null, subject: c360.subject || null };
-    const a = _nextActionForContact(cacheLike);
-    if (a) {
-      const tones = { stop: 'var(--red,#ef4444)', warn: 'var(--amber,#d98c00)', accent: 'var(--accent)', go: 'var(--green,#22c55e)' };
-      const col = tones[a.tone] || 'var(--accent)';
-      html += '<div class="detail-section"><div style="padding:11px 13px;border-radius:9px;background:var(--s2);border:1px solid var(--border);border-left:4px solid ' + col + '">'
-        + '<div style="font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:' + col + '">Next best action</div>'
-        + '<div style="font-size:13px;font-weight:700;color:var(--text);margin-top:2px">' + esc(a.label) + '</div>'
-        + (a.sub ? '<div style="font-size:11px;color:var(--text2);margin-top:2px">' + esc(a.sub) + '</div>' : '')
-        + '</div></div>';
-    }
-  }
-  // Standing: ROE + cadence next touch.
-  const roe = c360 && c360.roe;
-  const cad = c360 && c360.cadence;
-  if (roe || cad) {
-    html += '<div class="detail-section"><div class="detail-section-title">Standing</div>';
-    if (roe && roe.headline) html += '<div style="font-size:12px;color:var(--text);margin-bottom:4px">' + esc(roe.headline) + '</div>';
-    if (cad && cad.next_touch_due) html += '<div style="font-size:11px;color:var(--text3)">Next touch: ' + esc(cad.next_touch_type || 'touch') + ' · ' + esc(_fmtDate(cad.next_touch_due)) + (cad.overdue ? ' (overdue)' : '') + '</div>';
-    html += '</div>';
-  }
-  // Portfolio one-liner.
-  const roll = c360 && c360.portfolio && c360.portfolio.rollup;
-  if (roll && roll.total_property_count != null) {
-    html += '<div class="detail-section"><div style="font-size:12px;color:var(--text2)">Owns ' + Number(roll.total_property_count) + ' propert' + (Number(roll.total_property_count) === 1 ? 'y' : 'ies') + '</div></div>';
-  }
-  // Contact methods.
-  const email = (c360 && c360.subject && c360.subject.email) || e.email || null;
-  const phone = e.phone || null;
-  if (email || phone) {
-    html += '<div class="detail-section"><div class="detail-section-title">Contact</div>';
-    if (email) html += '<div style="font-size:12px"><a href="mailto:' + esc(email) + '" style="color:var(--accent)">' + esc(email) + '</a></div>';
-    if (phone) html += '<div style="font-size:12px;margin-top:3px"><a href="tel:' + esc(phone) + '" style="color:var(--accent)">' + esc(phone) + '</a></div>';
-    html += '</div>';
-  }
-  html += '<div class="detail-section"><button class="dns-cta" onclick="_companionEnlargeEntity()">Open full detail ↗</button>'
-    + '<div style="font-size:11px;color:var(--text3);margin-top:6px">Full contact panel with all tabs — replaces this dock.</div></div>';
-  body.innerHTML = html;
-}
-
-// ── Entity Relationships Tab (Scott ask #2) ──
-// Working-relationship intelligence from lcc_party_relationships: the party's
-// counterparties across shared assets, grouped (buyers sold-to / sellers
-// bought-from / co-brokers / lenders), REIT/institution-flagged. Lazy-loaded
-// (heavy graph rollup) and cached on the panel cache after first open.
-const _ENTITY_REL_SECTIONS = [
-  { key: 'sold_to',        title: 'Buyers they’ve sold to',        note: 'principals this party sold assets to' },
-  { key: 'bought_from',    title: 'Sellers they’ve bought from',    note: 'principals this party acquired assets from' },
-  { key: 'co_broker',      title: 'Co-brokers',                         note: 'brokers on the same deals' },
-  { key: 'brokered_for',   title: 'Brokerage clients',                  note: 'principals this party brokered for' },
-  { key: 'broker_on_deal', title: 'Brokers on their deals',             note: 'brokers who worked this party’s assets' },
-  { key: 'financed_by',    title: 'Lenders',                            note: 'financed this party’s assets' },
-  { key: 'lent_to',        title: 'Borrowers',                          note: 'this party financed their assets' },
-  { key: 'co_owner',       title: 'Co-owners',                          note: 'shared ownership on the same assets' },
-];
-
-function _entityTabRelationships() {
-  const c = _entityDetailCache || {};
-  if (c.relationships) return _entityRenderRelationships(c.relationships);
-  const eid = c.entityId || (c.entity && c.entity.id) || '';
-  if (!eid) return '<div class="detail-empty">No entity for relationship lookup.</div>';
-  // Kick the async load; the sync return is a spinner host.
-  setTimeout(function(){ _entityLoadRelationships(eid); }, 0);
-  return '<div id="entityRelHost"><div style="text-align:center;padding:40px;color:var(--text3)"><span class="spinner"></span><p style="margin-top:10px">Loading working relationships…</p></div></div>';
-}
-
-async function _entityLoadRelationships(eid) {
-  let data = null;
-  try {
-    data = await _entityApiFetch('/api/entities?action=relationships&id=' + encodeURIComponent(eid) + '&limit=60');
-  } catch (_e) { data = null; }
-  // Guard: the panel may have moved on to another entity while we loaded.
-  const c = _entityDetailCache || {};
-  const stillHere = (c.entityId || (c.entity && c.entity.id)) === eid;
-  if (stillHere) c.relationships = data || { rows: [], groups: {} };
-  const host = document.getElementById('entityRelHost');
-  if (host && stillHere) host.innerHTML = _entityRenderRelationships(c.relationships);
-}
-
-function _entityRenderRelationships(data) {
-  const groups = (data && data.groups) || {};
-  const total = (data && data.count) || 0;
-  if (!total) {
-    return '<div class="detail-empty">No working relationships found in the ownership/transaction graph for this party.</div>';
-  }
-  let html = '<div style="font-size:11px;color:var(--text3);margin:0 0 10px">' + total + ' counterpart' + (total === 1 ? 'y' : 'ies') + ' across shared assets · ranked by deals in common.</div>';
-  for (const sec of _ENTITY_REL_SECTIONS) {
-    const rows = groups[sec.key];
-    if (!rows || !rows.length) continue;
-    html += '<div class="detail-section"><div class="detail-section-title">' + esc(sec.title) + ' (' + rows.length + ')</div>';
-    html += '<div style="font-size:10px;color:var(--text3);margin:-2px 0 8px">' + esc(sec.note) + '</div>';
-    html += '<div style="display:flex;flex-direction:column;gap:6px">';
-    for (const r of rows) {
-      const nm = r.counterparty_name || '(unknown)';
-      const inst = !!r.is_institution;
-      const onclick = r.counterparty_id ? 'openContact360(\'' + esc(String(r.counterparty_id)) + '\', {kind:\'entity\'})' : '';
-      html += '<div style="padding:9px 11px;background:var(--s2);border:1px solid var(--border);border-radius:8px' + (onclick ? ';cursor:pointer' : '') + '"' + (onclick ? ' onclick="' + onclick + '"' : '') + '>';
-      html += '<div style="display:flex;justify-content:space-between;gap:8px;align-items:center">';
-      html += '<div style="font-weight:600;font-size:13px;color:var(--text);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(nm);
-      if (inst) html += ' <span style="font-size:9px;padding:1px 6px;border-radius:9px;background:rgba(99,102,241,0.14);color:var(--purple,#6366f1);border:1px solid rgba(99,102,241,0.3);font-weight:700;margin-left:4px">REIT / INSTITUTION</span>';
-      html += '</div>';
-      html += '<div style="font-size:11px;color:var(--text3);white-space:nowrap;flex-shrink:0">' + Number(r.shared_assets || 0) + ' deal' + (Number(r.shared_assets) === 1 ? '' : 's') + '</div>';
-      html += '</div>';
-      if (r.last_date) html += '<div style="font-size:10px;color:var(--text3);margin-top:3px">last: ' + esc(_fmtDate(r.last_date)) + '</div>';
-      html += '</div>';
-    }
-    html += '</div></div>';
-  }
-  return html;
-}
-
-// ── Entity History Tab (Scott ask #1: Portfolio & History) ──
-// Every role the party has played on every asset over time (owner / buyer /
-// seller / broker / lender / developer), current-first, via lcc_party_history.
-// Complements the economics-rich Ownership tab (this is the all-roles timeline).
-const _ENTITY_HISTORY_SECTIONS = [
-  { key: 'owns',       title: 'As owner',      note: 'current & prior ownership' },
-  { key: 'purchases',  title: 'As buyer',      note: 'assets acquired' },
-  { key: 'sells',      title: 'As seller',     note: 'assets sold' },
-  { key: 'brokers',    title: 'As broker',     note: 'listings & sales brokered' },
-  { key: 'finances',   title: 'As lender',     note: 'assets financed' },
-  { key: 'developed',  title: 'As developer',  note: 'assets developed' },
-];
-
-function _entityTabHistory() {
-  const c = _entityDetailCache || {};
-  if (c.history) return _entityRenderHistory(c.history);
-  const eid = c.entityId || (c.entity && c.entity.id) || '';
-  if (!eid) return '<div class="detail-empty">No entity for history lookup.</div>';
-  setTimeout(function(){ _entityLoadHistory(eid); }, 0);
-  return '<div id="entityHistHost"><div style="text-align:center;padding:40px;color:var(--text3)"><span class="spinner"></span><p style="margin-top:10px">Loading portfolio & history…</p></div></div>';
-}
-
-async function _entityLoadHistory(eid) {
-  let data = null;
-  try {
-    data = await _entityApiFetch('/api/entities?action=history&id=' + encodeURIComponent(eid) + '&per_role=25');
-  } catch (_e) { data = null; }
-  const c = _entityDetailCache || {};
-  const stillHere = (c.entityId || (c.entity && c.entity.id)) === eid;
-  if (stillHere) c.history = data || { rows: [], groups: {}, totals: {} };
-  const host = document.getElementById('entityHistHost');
-  if (host && stillHere) host.innerHTML = _entityRenderHistory(c.history);
-}
-
-function _entityRenderHistory(data) {
-  const groups = (data && data.groups) || {};
-  const totals = (data && data.totals) || {};
-  const total = (data && data.count) || 0;
-  if (!total) {
-    return '<div class="detail-empty">No ownership/transaction history in the graph for this party.</div>';
-  }
-  let html = '';
-  for (const sec of _ENTITY_HISTORY_SECTIONS) {
-    const rows = groups[sec.key];
-    if (!rows || !rows.length) continue;
-    const roleTotal = totals[sec.key] != null ? Number(totals[sec.key]) : rows.length;
-    let hdr = esc(sec.title) + ' (' + roleTotal + ')';
-    html += '<div class="detail-section"><div class="detail-section-title">' + hdr + '</div>';
-    html += '<div style="font-size:10px;color:var(--text3);margin:-2px 0 8px">' + esc(sec.note) + '</div>';
-    html += '<div style="display:flex;flex-direction:column;gap:6px">';
-    for (const r of rows) {
-      const nm = r.asset_name || '(asset)';
-      const loc = (r.city || '') + (r.city && r.state ? ', ' : '') + (r.state || '');
-      const cur = !!r.is_current;
-      const onclick = r.asset_id ? 'openContact360(\'' + esc(String(r.asset_id)) + '\', {kind:\'entity\'})' : '';
-      html += '<div style="padding:9px 11px;background:var(--s2);border:1px solid var(--border);border-radius:8px' + (onclick ? ';cursor:pointer' : '') + '"' + (onclick ? ' onclick="' + onclick + '"' : '') + '>';
-      html += '<div style="display:flex;justify-content:space-between;gap:8px;align-items:center">';
-      html += '<div style="font-weight:600;font-size:13px;color:var(--text);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(nm) + '</div>';
-      html += '<div style="flex-shrink:0"><span style="font-size:9px;padding:1px 7px;border-radius:9px;font-weight:700;' + (cur ? 'background:rgba(34,197,94,0.12);color:var(--green,#22c55e);border:1px solid rgba(34,197,94,0.3)' : 'background:var(--s3);color:var(--text3);border:1px solid var(--border)') + '">' + (cur ? 'CURRENT' : 'PRIOR') + '</span></div>';
-      html += '</div>';
-      const meta = [];
-      if (loc) meta.push(loc);
-      if (r.sub_role && r.sub_role !== sec.key && String(r.sub_role).replace(/_/g,' ') !== sec.title.replace(/^As /,'')) meta.push(String(r.sub_role).replace(/_/g, ' '));
-      if (r.effective_from) meta.push(esc(_fmtDate(r.effective_from)));
-      if (r.effective_to) meta.push('ended ' + esc(_fmtDate(r.effective_to)));
-      if (meta.length) html += '<div style="font-size:10px;color:var(--text3);margin-top:3px;display:flex;gap:8px;flex-wrap:wrap">' + meta.map(function(m){return '<span>' + m + '</span>';}).join('') + '</div>';
-      html += '</div>';
-    }
-    if (roleTotal > rows.length) html += '<div style="font-size:10px;color:var(--text3);margin-top:6px">showing ' + rows.length + ' of ' + roleTotal + '</div>';
-    html += '</div></div>';
-  }
-  return html;
-}
-
-// ── Entity Activity Tab ──
-// Cadence cockpit (Scott ask #3): the NEXT scheduled touchpoint + the SUGGESTED
-// touchpoint, above the call/email history, with a one-click Draft touchpoint
-// email that runs the existing draft_and_log closed loop (draft, log SF, advance
-// cadence). Renders only when the contact is on a cadence.
-function _entityCadenceCockpit(cad) {
-  if (!cad || !cad.on_cadence) return '';
-  const overdue = !!cad.overdue;
-  const dueTxt = cad.next_touch_due ? _fmtDate(cad.next_touch_due) : null;
-  const nType = (cad.next_touch_type || 'touch');
-  const dcolor = overdue ? 'var(--red,#ef4444)' : 'var(--accent)';
-  let whenTxt;
-  if (dueTxt == null) whenTxt = 'unscheduled';
-  else if (cad.days_until_due === 0) whenTxt = 'due today';
-  else if (overdue) whenTxt = Math.abs(cad.days_until_due) + 'd overdue · ' + dueTxt;
-  else whenTxt = 'in ' + cad.days_until_due + 'd · ' + dueTxt;
-
-  let html = '<div class="detail-section">';
-  html += '<div class="detail-section-title">\u{1F4C5} Next touchpoint</div>';
-  html += '<div style="padding:12px 14px;background:var(--s2);border:1px solid var(--border);border-left:3px solid ' + dcolor + ';border-radius:8px">';
-  html += '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">';
-  html += '<div style="font-weight:700;font-size:13px;color:var(--text);text-transform:capitalize">' + esc(nType) + '</div>';
-  html += '<div style="font-size:12px;font-weight:600;color:' + dcolor + '">' + esc(whenTxt) + '</div>';
-  html += '</div>';
-  const bits = [];
-  if (cad.phase) bits.push('Phase: ' + String(cad.phase).replace(/_/g, ' '));
-  if (cad.priority_tier) bits.push('Tier ' + cad.priority_tier);
-  if (cad.current_touch != null) bits.push('Touch #' + cad.current_touch);
-  if (cad.next_touch_template) bits.push('Suggested: ' + cad.next_touch_template);
-  if (bits.length) html += '<div style="font-size:11px;color:var(--text3);margin-top:6px;display:flex;gap:10px;flex-wrap:wrap">' + bits.map(function(b){return '<span>' + esc(b) + '</span>';}).join('') + '</div>';
-  const eng = [];
-  if (cad.emails_sent != null) eng.push(cad.emails_sent + ' sent');
-  if (cad.emails_replied != null) eng.push(cad.emails_replied + ' replied');
-  if (cad.calls_connected != null) eng.push(cad.calls_connected + ' calls');
-  if (eng.length) html += '<div style="font-size:11px;color:var(--text3);margin-top:4px">' + esc(eng.join(' · ')) + '</div>';
-  const unsub = String(cad.unsubscribe_status || '').toLowerCase();
-  if (unsub && unsub !== 'subscribed' && unsub !== 'none' && unsub !== 'active') {
-    html += '<div style="font-size:11px;color:var(--red,#ef4444);margin-top:6px;font-weight:600">⚠️ ' + esc(cad.unsubscribe_status) + ' — do not email</div>';
-  } else {
-    html += '<button class="dns-cta" style="margin-top:10px" onclick="_entityDraftAndLog(this)">✍️ Draft touchpoint email →</button>';
-    html += '<div id="entityDraftHost" style="margin-top:10px"></div>';
-  }
-  html += '</div></div>';
-  return html;
-}
-
-function _entityTabActivity() {
-  const cache = _entityDetailCache || {};
-  const timeline = cache.timeline || cache.activities || [];
-  const activities = timeline;
-  const entityId = cache.entityId || (cache.entity && cache.entity.id) || '';
-  const _cockpit = _entityCadenceCockpit(cache.cadence);
-
-  // Cortex W3 \u2014 unified relationship: email summary + recent thread sits ABOVE the
-  // structured activity_events timeline (which carries calls/SF/meetings/etc.).
-  let html = _cockpit + _renderEmailRelationshipCard(cache.emailRel, entityId);
-
-  // Open Tasks (non-completed SF tasks) \u2014 Contact 360 refinement. dia carries no
-  // WhatId, so the account (company_name) is the link; the opportunity/deal shows
-  // under Marketing follow-ups (Engagement tab).
-  const openTasks = cache.openTasks || [];
-  if (openTasks.length) {
-    html += '<div class="detail-section"><div class="detail-section-title">\u{1F4CC} Open Tasks (' + openTasks.length + ')</div>';
-    html += '<div style="display:flex;flex-direction:column;gap:6px;margin-top:6px">';
-    for (const t of openTasks) {
-      html += '<div style="padding:8px 10px;background:var(--s2);border:1px solid var(--border);border-radius:8px">';
-      html += '<div style="display:flex;justify-content:space-between;gap:8px"><div style="font-weight:600;font-size:12px;color:var(--text)">' + esc(t.subject || '(task)') + '</div><div style="font-size:10px;color:var(--text3)">' + esc(_fmtDate(t.date)) + '</div></div>';
-      html += '<div style="font-size:10px;color:var(--text3);margin-top:3px;display:flex;gap:8px;flex-wrap:wrap">';
-      if (t.status) html += '<span style="padding:1px 6px;border-radius:8px;background:var(--s3)">' + esc(t.status) + '</span>';
-      if (t.account) html += '<span>Account: ' + esc(t.account) + '</span>';
-      if (t.assigned_to) html += '<span>' + esc(t.assigned_to) + '</span>';
-      html += '</div></div>';
-    }
-    html += '</div></div>';
-  }
-
-  if (!activities.length) {
-    // Broker mode: a broker outside our firm often has no logged LCC/SF touch \u2014
-    // surface their brokered-deal intelligence as the activity (item #4).
-    if (cache.role === 'broker' && cache.brokerIntel && Number(cache.brokerIntel.total_deals)) {
-      const bi = cache.brokerIntel;
-      html += '<div class="detail-section"><div class="detail-section-title">Brokered-deal activity</div>';
-      html += '<div style="font-size:12px;color:var(--text2);margin:4px 0 8px">No logged LCC / Salesforce touches \u2014 this broker\u2019s activity in our markets is the '
-        + Number(bi.total_deals) + ' deal' + (Number(bi.total_deals) === 1 ? '' : 's') + ' they brokered ('
-        + Number(bi.represents_sellers || 0) + ' seller-side \u00b7 ' + Number(bi.represents_buyers || 0) + ' buyer-side).</div>';
-      html += '<button class="dns-cta" onclick="switchEntityTab(\'Deals\')">See brokered deals \u2192</button></div>';
-      return html;
-    }
-    html += '<div class="detail-empty">No activity yet \u2014 LCC or Salesforce.</div>';
-    return html;
-  }
-
-  const catIcon = { call: '\u{1F4DE}', email: '\u{1F4E7}', meeting: '\u{1F4C5}', note: '\u{1F4DD}', status_change: '\u{1F504}', assignment: '\u{1F464}', sync: '\u{1F500}', research: '\u{1F50D}', system: '\u{2699}\uFE0F' };
-
-  html += '<div class="detail-section"><div class="detail-section-title">Activity Timeline (' + activities.length + ')</div>';
-  html += '<div style="display:flex;flex-direction:column;gap:2px;margin-top:4px">';
-
-  for (const a of activities) {
-    // Unified rows carry {source,ts,category,title,body,broker,via,status}; a
-    // legacy activity_events row (fallback) carries {occurred_at,category,users,source_type}.
-    const date = _fmtDate(a.ts || a.occurred_at || a.created_at);
-    const cat = a.category || '';
-    const icon = catIcon[cat] || '\u{1F4CB}';
-    const isSf = a.source === 'sf';
-    const srcColor = isSf ? 'var(--purple)' : 'var(--accent)';
-    const catLabel = cat ? cat.replace(/_/g, ' ') : '';
-    const broker = a.broker || a.users?.display_name || '';
-    // Highlight non-Team-Briggs (other NM broker) activity in amber \u2014 the ROE tell.
-    const isTeam = /\b(briggs|sjc)\b/i.test(broker);
-    const brokerColor = broker ? (isTeam ? 'var(--green)' : 'var(--amber, #d98c00)') : '';
-    const via = a.via || a.source_type || '';
-
-    html += '<div style="padding:10px 12px;border-left:3px solid ' + srcColor + ';margin-left:8px;position:relative">';
-    html += '<div style="position:absolute;left:-10px;top:12px;width:14px;height:14px;border-radius:50%;background:var(--s1);border:2px solid ' + srcColor + ';font-size:8px;display:flex;align-items:center;justify-content:center">' + icon + '</div>';
-    html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">';
-    html += '<div style="flex:1;min-width:0">';
-    html += '<div style="font-weight:600;font-size:13px;color:var(--text)">' + esc(a.title || '(untitled)') + '</div>';
-    if (a.body) html += '<div style="font-size:12px;color:var(--text2);margin-top:2px;white-space:pre-wrap;max-height:80px;overflow:hidden">' + esc(a.body) + '</div>';
-    html += '<div style="font-size:10px;color:var(--text3);margin-top:4px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">';
-    html += '<span style="padding:1px 6px;border-radius:8px;background:' + (isSf ? 'rgba(150,90,220,.16)' : 'var(--s3)') + ';font-weight:600">' + (isSf ? 'SF' : 'LCC') + '</span>';
-    if (catLabel) html += '<span style="padding:1px 6px;border-radius:8px;background:var(--s3);text-transform:capitalize">' + esc(catLabel) + '</span>';
-    if (broker) html += '<span style="padding:1px 6px;border-radius:8px;background:' + (isTeam ? 'rgba(60,170,90,.16)' : 'rgba(217,140,0,.16)') + ';color:' + brokerColor + ';font-weight:600">' + esc(broker) + '</span>';
-    if (a.status) html += '<span>' + esc(a.status) + '</span>';
-    if (via && via !== 'manual') html += '<span>via ' + esc(via) + '</span>';
-    html += '</div></div>';
-    html += '<div style="flex-shrink:0;font-size:11px;color:var(--text3);white-space:nowrap">' + esc(date) + '</div>';
-    html += '</div></div>';
-  }
-
-  html += '</div></div>';
-  return html;
-}
-
-// \u2500\u2500 Entity Engagement Tab (Contact 360) \u2500\u2500
-// unified_contacts engagement summary + this contact's marketing_leads signals
-// (aggregated onto the entity). marketing_leads has no viewed/clicked columns \u2014
-// we surface source / activity_type / touchpoint_count / status honestly.
-function _entityTabEngagement() {
-  const c = _entityDetailCache || {};
-  const eng = c.engagement || null;
-  const marketing = c.marketing || [];
-
-  let html = '';
-
-  if (eng) {
-    const score = eng.score != null ? Number(eng.score) : (eng.engagement_score != null ? Number(eng.engagement_score) : null);
-    const touches = eng.total_touches != null ? Number(eng.total_touches) : (eng.total_touchpoints != null ? Number(eng.total_touchpoints) : null);
-    const lastAct = eng.last_activity || eng.last_activity_at || eng.last_email || eng.last_call || null;
-    const txns = eng.total_transactions != null ? Number(eng.total_transactions) : null;
-    const vol = eng.total_volume != null ? Number(eng.total_volume) : null;
-    html += '<div class="detail-section"><div class="detail-section-title">\u{1F4CA} Engagement</div>';
-    html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin:8px 0">';
-    html += '<div style="text-align:center;padding:10px;background:var(--s2);border-radius:8px"><div style="font-size:18px;font-weight:700;color:var(--accent)">' + (score != null ? score : '\u2014') + '</div><div class="t-meta3">Score</div></div>';
-    html += '<div style="text-align:center;padding:10px;background:var(--s2);border-radius:8px"><div style="font-size:18px;font-weight:700;color:var(--text)">' + (touches != null ? touches : '\u2014') + '</div><div class="t-meta3">Touchpoints</div></div>';
-    html += '<div style="text-align:center;padding:10px;background:var(--s2);border-radius:8px"><div style="font-size:13px;font-weight:600;color:var(--text)">' + (lastAct ? esc(_fmtDate(lastAct)) : '\u2014') + '</div><div class="t-meta3">Last activity</div></div>';
-    html += '</div>';
-    if (txns != null || vol != null) {
-      html += '<div style="display:flex;gap:16px;font-size:11px;color:var(--text3)">';
-      if (txns != null) html += '<span>Transactions: <strong style="color:var(--text2)">' + txns + '</strong></span>';
-      if (vol != null) html += '<span>Volume: <strong style="color:var(--text2)">' + _entityFmtMoney(vol) + '</strong></span>';
-      html += '</div>';
-    }
-    html += '</div>';
-  }
-
-  html += '<div class="detail-section"><div class="detail-section-title">\u{1F4E3} Marketing signals (' + marketing.length + ')</div>';
-  if (!marketing.length) {
-    html += '<div class="detail-empty" style="margin-top:6px">No marketing_leads signals on this contact.</div>';
-  } else {
-    html += '<div style="display:flex;flex-direction:column;gap:6px;margin-top:6px">';
-    for (const m of marketing) {
-      html += '<div style="padding:8px 10px;background:var(--s2);border-radius:8px">';
-      html += '<div style="display:flex;justify-content:space-between;gap:8px"><div style="font-weight:600;font-size:12px;color:var(--text)">' + esc(m.deal_name || m.activity_type || m.source || '(signal)') + '</div><div style="font-size:10px;color:var(--text3)">' + esc(_fmtDate(m.lead_date)) + '</div></div>';
-      html += '<div style="font-size:10px;color:var(--text3);margin-top:3px;display:flex;gap:8px;flex-wrap:wrap">';
-      if (m.source) html += '<span style="padding:1px 6px;border-radius:8px;background:var(--s3)">' + esc(m.source) + '</span>';
-      if (m.activity_type) html += '<span style="padding:1px 6px;border-radius:8px;background:var(--s3)">' + esc(m.activity_type) + '</span>';
-      if (m.status) html += '<span>' + esc(m.status) + '</span>';
-      if (m.touchpoint_count != null) html += '<span>' + Number(m.touchpoint_count) + ' touches</span>';
-      if (m.assigned_to) html += '<span>' + esc(m.assigned_to) + '</span>';
-      html += '</div>';
-      if (m.activity_detail) html += '<div style="font-size:11px;color:var(--text2);margin-top:3px;max-height:40px;overflow:hidden">' + esc(m.activity_detail) + '</div>';
-      html += '</div>';
-    }
-    html += '</div>';
-  }
-  html += '</div>';
-  return html;
-}
-
-// \u2500\u2500 Entity Rules-of-Engagement Tab (Contact 360, Slice 2) \u2500\u2500
-// The full ROE verdict + the assessment grid + the "why" reasons, from the
-// contact360 endpoint's roe block (computed in api/_shared/roe.js).
-function _entityTabRoe() {
-  const c = _entityDetailCache || {};
-  const roe = c.roe || null;
-
-  if (!roe) {
-    return '<div class="detail-empty">Rules of Engagement not available for this contact.</div>';
-  }
-
-  const col = _entityRoeColors(roe.verdict);
-  let html = '';
-
-  // The headline banner (same colours as the top-of-panel ROE banner).
-  html += '<div class="detail-section">';
-  html += '<div style="padding:14px 16px;border-radius:10px;background:' + col.bg + ';border:1px solid ' + col.bd + '">';
-  html += '<div style="font-size:16px;font-weight:800;color:' + col.fg + '">' + esc(roe.headline || '') + '</div>';
-  if (roe.assigned_broker) html += '<div style="font-size:12px;color:var(--text2);margin-top:4px">Assigned broker: <strong>' + esc(roe.assigned_broker) + '</strong>' + (roe.assigned_broker_source ? ' <span style="color:var(--text3)">(' + esc(roe.assigned_broker_source) + ')</span>' : '') + '</div>';
-  html += '</div></div>';
-
-  // Assessment grid.
-  html += '<div class="detail-section"><div class="detail-section-title">Assessment</div>';
-  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px">';
-  const cell = (label, val) => '<div style="padding:10px;background:var(--s2);border-radius:8px"><div class="t-meta3">' + label + '</div><div style="font-size:13px;font-weight:600;color:var(--text);margin-top:2px">' + (val ? esc(val) : '\u2014') + '</div></div>';
-  html += cell('Verdict', roe.verdict);
-  html += cell('Account status', roe.account_status);
-  html += cell('Assigned broker', roe.assigned_broker);
-  html += cell('Broker class', roe.assigned_broker_class);
-  if (roe.last_firm_touch) {
-    const lt = roe.last_firm_touch;
-    html += cell('Most recent firm touch', (lt.broker ? lt.broker + ' \u00B7 ' : '') + (lt.date ? _fmtDate(lt.date) : ''));
-  }
-  html += '</div></div>';
-
-  // The "why" reasons.
-  if (Array.isArray(roe.reasons) && roe.reasons.length) {
-    html += '<div class="detail-section"><div class="detail-section-title">Why</div>';
-    html += '<ul style="margin:6px 0 0 0;padding-left:18px;color:var(--text2);font-size:12px;line-height:1.7">';
-    for (const r of roe.reasons) html += '<li>' + esc(r) + '</li>';
-    html += '</ul></div>';
-  }
-
-  // Honest tip when there is no captured SF OwnerId (verdict rests on the
-  // inferred deal-level / classifier signal, not a hard account assignment).
-  if (roe.assigned_broker_source !== 'sf_owner') {
-    html += '<div class="detail-section"><div style="font-size:11px;color:var(--text3);padding:8px 10px;background:var(--s2);border-radius:8px">No Salesforce account OwnerId on file for this contact yet \u2014 the verdict is inferred from deal-level activity. It sharpens once OwnerId is captured on the SF sync.</div></div>';
-  }
-
-  return html;
-}
-
-// ── Cortex W3 — Email Relationship card (corrected direction + recent thread) ──
-function _renderEmailRelationshipCard(rel, entityId) {
-  if (!rel || !rel.email) return '';  // no email on file → nothing to show
-  const s = rel.summary || {};
-  const total = Number(s.total || 0);
-  const sent = Number(s.sent || 0);
-  const received = Number(s.received || 0);
-  const span = (s.first_at && s.last_at)
-    ? _fmtDate(s.first_at) + ' → ' + _fmtDate(s.last_at) : '';
-
-  let html = '<div class="detail-section"><div class="detail-section-title">\u{1F4E7} Email Relationship</div>';
-
-  if (total > 0) {
-    html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin:8px 0">';
-    html += '<div style="text-align:center;padding:10px;background:var(--s2);border-radius:8px"><div style="font-size:18px;font-weight:700;color:var(--accent)">' + total + '</div><div class="t-meta3">Total</div></div>';
-    html += '<div style="text-align:center;padding:10px;background:var(--s2);border-radius:8px"><div style="font-size:18px;font-weight:700;color:var(--green)">' + sent + '</div><div class="t-meta3">You sent</div></div>';
-    html += '<div style="text-align:center;padding:10px;background:var(--s2);border-radius:8px"><div style="font-size:18px;font-weight:700;color:var(--purple)">' + received + '</div><div class="t-meta3">Received</div></div>';
-    html += '</div>';
-    if (span) html += '<div style="font-size:11px;color:var(--text3);margin-bottom:8px">' + esc(rel.email) + ' · ' + esc(span) + '</div>';
-  } else {
-    html += '<div style="font-size:12px;color:var(--text2);margin:6px 0">No email history pulled yet for ' + esc(rel.email) + '.</div>';
-  }
-
-  html += '<button id="cortexPullBtn" onclick="_cortexPullHistory(\'' + esc(entityId) + '\')" style="font-size:11px;padding:6px 12px;border-radius:8px;border:1px solid var(--accent);background:transparent;color:var(--accent);cursor:pointer;font-weight:600">\u{1F50D} Pull more from Outlook</button>';
-
-  const recent = rel.recent || [];
-  if (recent.length) {
-    html += '<div style="display:flex;flex-direction:column;gap:1px;margin-top:10px">';
-    for (const m of recent) {
-      const out = m.dir === 'out';
-      const arrow = out ? '<span style="color:var(--green)">↗ sent</span>' : '<span style="color:var(--purple)">↙ recv</span>';
-      html += '<div style="padding:8px 10px;border-left:3px solid ' + (out ? 'var(--green)' : 'var(--purple)') + ';margin-left:6px">';
-      html += '<div style="display:flex;justify-content:space-between;gap:8px"><div style="font-weight:600;font-size:12px;color:var(--text);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(m.subject || '(no subject)') + '</div><div style="font-size:10px;color:var(--text3);white-space:nowrap">' + esc(_fmtDate(m.received_at)) + '</div></div>';
-      html += '<div style="font-size:10px;color:var(--text3);margin-top:2px">' + arrow + (m.from_name ? ' · ' + esc(m.from_name) : '') + '</div>';
-      if (m.preview) html += '<div style="font-size:11px;color:var(--text2);margin-top:3px;max-height:34px;overflow:hidden">' + esc(m.preview) + '</div>';
-      html += '</div>';
-    }
-    html += '</div>';
-  }
-
-  html += '</div>';
-  return html;
-}
-
-async function _cortexPullHistory(entityId) {
-  const btn = document.getElementById('cortexPullBtn');
-  if (btn) { btn.disabled = true; btn.textContent = 'Queuing…'; }
-  try {
-    const fetchFn = (typeof LCC_AUTH !== 'undefined' && LCC_AUTH.isAuthenticated) ? LCC_AUTH.apiFetch : fetch;
-    const res = await fetchFn('/api/email-relationship?entity_id=' + encodeURIComponent(entityId), { method: 'POST', headers: _entityApiHeaders() });
-    const d = await res.json().catch(() => ({}));
-    if (btn) btn.textContent = d.queued ? '✓ Queued — pulls on next sync' : (d.error || 'Unable to queue');
-  } catch (e) {
-    if (btn) { btn.textContent = 'Error — try again'; btn.disabled = false; }
-  }
-}
-window._cortexPullHistory = _cortexPullHistory;
-
-// ── Entity Deals Tab (Broker mode) ──
-// Replaces owner-portfolio for a broker: how many deals brokered in our target
-// markets + who they represent (SELLERS via listing_broker / BUYERS via
-// buyer_broker — the signal is on the LCC `brokers` edge, no cross-DB name-match).
-function _entityTabBrokerDeals() {
-  const c = _entityDetailCache || {};
-  const bi = c.brokerIntel || null;
-  if (!bi || !Number(bi.total_deals)) {
-    return '<div class="detail-empty">No brokered deals linked to this broker in our target markets yet.</div>';
-  }
-
-  let html = '';
-
-  // Headline tiles: total deals + representation split.
-  html += '<div class="detail-section"><div class="detail-section-title">Deals brokered — our markets</div>';
-  html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-top:4px">';
-  const tile = (v, l, col) => '<div style="text-align:center;padding:12px;background:var(--s2);border-radius:8px"><div style="font-size:20px;font-weight:700;color:' + col + '">' + v + '</div><div class="t-meta3">' + l + '</div></div>';
-  html += tile(Number(bi.total_deals || 0), 'Deals', 'var(--accent)');
-  html += tile(Number(bi.represents_sellers || 0), 'Represents sellers', 'var(--green)');
-  html += tile(Number(bi.represents_buyers || 0), 'Represents buyers', 'var(--purple)');
-  html += '</div>';
-  if (Number(bi.represents_unknown)) {
-    html += '<div style="font-size:11px;color:var(--text3);margin-top:6px">' + Number(bi.represents_unknown) + ' deal(s) with unrecorded side.</div>';
-  }
-  html += '</div>';
-
-  // Target markets (states of the brokered assets).
-  const markets = Array.isArray(bi.markets) ? bi.markets : [];
-  if (markets.length) {
-    html += '<div class="detail-section"><div class="detail-section-title">Target markets</div>';
-    html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">';
-    for (const m of markets) {
-      html += '<span style="font-size:11px;padding:3px 9px;border-radius:8px;background:var(--s3);color:var(--text2);border:1px solid var(--border)">'
-        + esc(m.state) + ' <strong style="color:var(--text)">' + Number(m.count) + '</strong></span>';
-    }
-    html += '</div></div>';
-  }
-
-  // Recent brokered deals.
-  const recent = Array.isArray(bi.recent_deals) ? bi.recent_deals : [];
-  if (recent.length) {
-    html += '<div class="detail-section"><div class="detail-section-title">Recent deals (' + recent.length + ')</div>';
-    html += '<div style="display:flex;flex-direction:column;gap:6px;margin-top:4px">';
-    for (const d of recent) {
-      const loc = (d.city || '') + (d.city && d.state ? ', ' : '') + (d.state || '');
-      const sideColor = d.role === 'seller' ? 'var(--green)' : d.role === 'buyer' ? 'var(--purple)' : 'var(--text3)';
-      const sideLabel = d.role === 'seller' ? 'listing (seller)' : d.role === 'buyer' ? 'procuring (buyer)' : 'side n/a';
-      html += '<div style="padding:9px 11px;background:var(--s2);border:1px solid var(--border);border-radius:8px">';
-      html += '<div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">';
-      html += '<div style="flex:1;min-width:0"><div style="font-weight:600;font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(d.name || '(property)') + '</div>';
-      if (loc) html += '<div style="font-size:11px;color:var(--text2)">' + esc(loc) + '</div>';
-      html += '</div>';
-      html += '<span style="font-size:10px;padding:1px 7px;border-radius:8px;background:var(--s3);color:' + sideColor + ';font-weight:600;white-space:nowrap">' + esc(sideLabel) + '</span>';
-      html += '</div></div>';
-    }
-    html += '</div></div>';
-  }
-
-  return html;
-}
-
-// ── Entity Portfolio Tab (UI Phase 4B — authoritative BD-spine portfolio) ──
-// Sourced from lcc_entity_portfolio_facts ⋈ lcc_property_attributes (via
-// /api/entities?action=portfolio), NOT a fuzzy v_ownership_current name-match.
-// A rollup header (count / Σ rent / domains) over a per-property list where each
-// row is a 4A zoom target — openUnifiedDetail PUSHes onto the back-stack.
-function _entityTabPortfolio() {
-  const c = _entityDetailCache;
-  const portfolio = c?.portfolio || [];
-  const rollup = c?.rollup || null;
-
-  let html = '';
-
-  // Rollup header (matches the queue/P-BUYER rollup the owner ranks on).
-  if (rollup) {
-    const total = rollup.total_property_count != null ? Number(rollup.total_property_count) : portfolio.length;
-    const current = rollup.current_property_count != null ? Number(rollup.current_property_count) : null;
-    const rent = rollup.current_annual_rent_total != null ? Number(rollup.current_annual_rent_total) : null;
-    const domains = [];
-    if (rollup.dia_property_count) domains.push(Number(rollup.dia_property_count) + ' DIA');
-    if (rollup.gov_property_count) domains.push(Number(rollup.gov_property_count) + ' GOV');
-    html += '<div class="detail-section"><div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">';
-    html += '<div style="text-align:center;padding:10px;background:var(--s2);border-radius:8px"><div style="font-size:18px;font-weight:700;color:var(--accent)">' + total + '</div><div class="t-meta3">Properties' + (current != null && current !== total ? ' (' + current + ' current)' : '') + '</div></div>';
-    html += '<div style="text-align:center;padding:10px;background:var(--s2);border-radius:8px"><div style="font-size:16px;font-weight:700;color:var(--green)">' + _entityFmtMoney(rent) + '</div><div class="t-meta3">Annual Rent</div></div>';
-    html += '<div style="text-align:center;padding:10px;background:var(--s2);border-radius:8px"><div style="font-size:13px;font-weight:600;color:var(--text)">' + (domains.length ? esc(domains.join(' · ')) : '—') + '</div><div class="t-meta3">Mix</div></div>';
-    html += '</div></div>';
-  }
-
-  // Developed section (Contact 360) — properties this owner is recorded as having
-  // DEVELOPED (the `developed` relationship / ownership-chain / owner_parent),
-  // resolved to names by the contact360 endpoint. Distinct from current ownership.
-  const developed = c?.developed || [];
-  if (developed.length) {
-    html += '<div class="detail-section"><div class="detail-section-title">\u{1F3D7}️ Developed (' + developed.length + ')</div>';
-    html += '<div style="display:flex;flex-direction:column;gap:6px;margin-top:6px">';
-    for (let di = 0; di < developed.length; di++) {
-      const d = developed[di];
-      const db = (d.source_domain === 'gov' || d.source_domain === 'government') ? 'gov' : (d.source_domain === 'dia' || d.source_domain === 'dialysis' ? 'dia' : '');
-      const pid = d.property_id != null ? d.property_id : d.source_property_id;
-      const nm = d.name || d.address || d.label || '(property)';
-      // Prefer opening the linked entity (developed edges resolve to entities);
-      // fall back to a companion property dock when a property id is present.
-      let onclick = '';
-      if (d.entity_id) onclick = 'openContact360(\'' + esc(String(d.entity_id)) + '\', {kind:\'entity\'})';
-      else if (db && pid != null) onclick = '_entityDrillProperty(\'' + esc(db) + '\', \'' + esc(String(pid)) + '\', \'developed\', ' + di + ')';
-      const clickable = !!onclick;
-      html += '<div style="padding:8px 10px;background:var(--s2);border:1px solid var(--border);border-radius:8px;' + (clickable ? 'cursor:pointer' : '') + '"';
-      if (clickable) html += ' onclick="' + onclick + '"';
-      html += '>';
-      html += '<div style="font-weight:600;font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(nm) + '</div>';
-      if (d.city || d.state) html += '<div style="font-size:11px;color:var(--text2)">' + esc((d.city || '') + (d.city && d.state ? ', ' : '') + (d.state || '')) + '</div>';
-      html += '</div>';
-    }
-    html += '</div></div>';
-  }
-
-  // Person-level ownership / linked properties (Contact 360 refinement) — a person
-  // usually owns via their affiliated org, not directly. Show direct owner edges +
-  // the affiliated org's BD portfolio (resolved by the contact360 endpoint).
-  const owned = c?.ownedProperties || null;
-  if (owned && ((owned.direct && owned.direct.length) || (owned.affiliated && owned.affiliated.properties && owned.affiliated.properties.length))) {
-    if (owned.direct && owned.direct.length) {
-      html += '<div class="detail-section"><div class="detail-section-title">\u{1F511} Owns directly (' + owned.direct.length + ')</div>';
-      html += '<div style="display:flex;flex-direction:column;gap:6px;margin-top:6px">';
-      for (const d of owned.direct) {
-        const onclick = d.entity_id ? 'openContact360(\'' + esc(String(d.entity_id)) + '\', {kind:\'entity\'})' : '';
-        html += '<div style="padding:8px 10px;background:var(--s2);border:1px solid var(--border);border-radius:8px' + (onclick ? ';cursor:pointer' : '') + '"' + (onclick ? ' onclick="' + onclick + '"' : '') + '>';
-        html += '<div style="font-weight:600;font-size:12px;color:var(--text)">' + esc(d.name || '(property)') + '</div>';
-        if (d.city || d.state) html += '<div style="font-size:11px;color:var(--text2)">' + esc((d.city || '') + (d.city && d.state ? ', ' : '') + (d.state || '')) + '</div>';
-        html += '</div>';
-      }
-      html += '</div></div>';
-    }
-    const aff = owned.affiliated;
-    if (aff && aff.properties && aff.properties.length) {
-      const orgClick = aff.org_entity_id ? ' onclick="openContact360(\'' + esc(String(aff.org_entity_id)) + '\', {kind:\'entity\'})" style="cursor:pointer"' : '';
-      html += '<div class="detail-section"><div class="detail-section-title"' + orgClick + '>\u{1F3E2} Via ' + esc(aff.org_name || 'affiliated company') + ' (' + aff.properties.length + ')</div>';
-      html += '<div style="display:flex;flex-direction:column;gap:6px;margin-top:6px">';
-      for (const p of aff.properties) {
-        const db = (p.source_domain === 'gov' || p.source_domain === 'government') ? 'gov' : 'dia';
-        const pid = p.source_property_id;
-        const nm = p.address || p.tenant_label || p.tenant_short || '(property)';
-        const onclick = pid != null ? 'openUnifiedDetail(\'' + db + '\', {property_id:\'' + esc(String(pid)) + '\'})' : '';
-        html += '<div style="padding:8px 10px;background:var(--s2);border:1px solid var(--border);border-radius:8px' + (onclick ? ';cursor:pointer' : '') + '"' + (onclick ? ' onclick="' + onclick + '"' : '') + '>';
-        html += '<div style="font-weight:600;font-size:12px;color:var(--text)">' + esc(nm) + '</div>';
-        if (p.city || p.state) html += '<div style="font-size:11px;color:var(--text2)">' + esc((p.city || '') + (p.city && p.state ? ', ' : '') + (p.state || '')) + '</div>';
-        html += '</div>';
-      }
-      html += '</div></div>';
-    }
-  }
-
-  if (!portfolio.length) {
-    // A person with no BD-portfolio rollup still shows their direct/affiliated
-    // ownership above; only show the empty note when there's truly nothing.
-    if (!owned || (!(owned.direct && owned.direct.length) && !(owned.affiliated && owned.affiliated.properties && owned.affiliated.properties.length))) {
-      html += '<div class="detail-empty">No properties in the BD portfolio yet.</div>';
-    }
-    return html;
-  }
-
-  html += '<div class="detail-section"><div class="detail-section-title">Properties (' + portfolio.length + ')</div>';
-  html += '<div style="display:flex;flex-direction:column;gap:6px">';
-
-  for (let pi = 0; pi < portfolio.length; pi++) {
-    const p = portfolio[pi];
-    const addr = p.address || '(No address)';
-    const loc = (p.city || '') + (p.city && p.state ? ', ' : '') + (p.state || '');
-    const db = (p.source_domain === 'gov' || p.source_domain === 'government') ? 'gov' : 'dia';
-    const pid = p.source_property_id;
-    const tenant = p.tenant || '';
-    const rent = p.annual_rent != null ? _entityFmtMoney(p.annual_rent) : '';
-    const badge = db.toUpperCase();
-    const dim = p.is_current === false ? 'opacity:0.6;' : '';
-
-    html += '<div style="padding:10px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px;' + dim + (pid != null ? 'cursor:pointer' : '') + '"';
-    // Dual-dock the property BESIDE this contact panel (item #6); narrow screens
-    // fall back to the full single-panel open inside _entityDrillProperty.
-    if (pid != null) html += ' onclick="_entityDrillProperty(\'' + esc(db) + '\', \'' + esc(String(pid)) + '\', \'portfolio\', ' + pi + ')"';
-    html += '>';
-    html += '<div style="display:flex;gap:12px;align-items:flex-start">';
-    html += '<div style="flex:1;min-width:0">';
-    html += '<div style="font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(addr) + '</div>';
-    html += '<div style="font-size:11px;color:var(--text2)">' + esc(loc) + (tenant ? ' · ' + esc(tenant) : '') + (p.is_current === false ? ' · former' : '') + '</div>';
-    html += '</div>';
-    html += '<div style="text-align:right;font-size:11px;flex-shrink:0">';
-    html += '<div><span style="font-size:9px;padding:1px 6px;border-radius:8px;background:' + (db === 'gov' ? 'var(--gov-green)' : 'var(--purple)') + ';color:#fff">' + badge + '</span></div>';
-    if (rent) html += '<div style="color:var(--green);margin-top:3px">' + rent + '</div>';
-    html += '</div></div></div>';
-  }
-
-  html += '</div></div>';
-  return html;
-}
-
-// ── Entity Contacts Tab (UI Phase 4B) ──
-// Lists the people at this owner; when there are none, surfaces the
-// acquire-contact CTA that reuses the P-CONTACT / buyer picker endpoints
-// (?action=buyer_contacts → select_prospecting_contact). This is where Phase 5's
-// "owner missing a contact" gets resolved.
-function _entityTabContacts() {
-  const c = _entityDetailCache;
-  const contacts = c?.contacts || [];
-
-  let html = '';
-  if (contacts.length) {
-    html += '<div class="detail-section"><div class="detail-section-title">Contacts (' + contacts.length + ')</div>';
-    html += '<div style="display:flex;flex-direction:column;gap:8px">';
-    for (const ct of contacts) {
-      html += '<div style="padding:10px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px;cursor:pointer" onclick="openContact360(\'' + esc(ct.id) + '\')">';
-      html += '<div style="display:flex;align-items:center;gap:8px">';
-      html += '<div style="width:32px;height:32px;border-radius:50%;background:var(--purple);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600">';
-      html += esc((ct.full_name || ct.display_name || '?')[0].toUpperCase());
-      html += '</div>';
-      html += '<div style="flex:1;min-width:0">';
-      html += '<div style="font-weight:600;color:var(--text)">' + esc(ct.full_name || ct.display_name || 'Unknown') + '</div>';
-      html += '<div style="font-size:11px;color:var(--text2)">' + esc(ct.title || '') + '</div>';
-      html += '</div>';
-      html += '<div style="text-align:right;font-size:11px;color:var(--text3)">';
-      if (ct.email) html += '<div>' + esc(ct.email) + '</div>';
-      if (ct.phone) html += '<div>' + esc(ct.phone) + '</div>';
-      html += '</div></div></div>';
-    }
-    html += '</div>';
-    html += '<div style="margin-top:10px"><button class="dns-cta" onclick="_entityAcquireContact()">+ Add / acquire contact →</button></div>';
-    html += '</div>';
-  } else {
-    html += '<div class="detail-section"><div class="detail-section-title">Contacts</div>';
-    html += '<div style="color:var(--text3);font-size:12px;padding:8px 0 12px">No contacts linked to this owner yet — acquire one to make outreach actionable.</div>';
-    html += '<button class="dns-cta" onclick="_entityAcquireContact()">Select / acquire contact →</button>';
-    html += '</div>';
-  }
-  // Host for the inline picker (rendered by _entityAcquireContact).
-  html += '<div id="entityContactPickerHost"></div>';
-  return html;
-}
 
 // ============================================================================
 // UI Phase 4B — owner-level completeness rail + Next-Step (shared chrome)
@@ -14104,7 +13342,10 @@ function _entityRenderCompletenessRail() {
   parts.push('<div class="cr-chips">');
   parts.push(chip('Salesforce account', hasSf, null));
   parts.push(chip('Contact', hasContact, 'switchEntityTab(&quot;Contacts&quot;)'));
-  parts.push(chip('Portfolio value', hasValue, 'switchEntityTab(&quot;Portfolio&quot;)'));
+  // O-1 (redesign 2026-08-15 §3.1): was 'Portfolio' — a tab name that is not in
+  // any role set since the rename, so switchEntityTab's guard bounced the click
+  // to tab 0. The live tab is 'Ownership' (Portfolio remains a render alias).
+  parts.push(chip('Portfolio value', hasValue, 'switchEntityTab(&quot;Ownership&quot;)'));
   parts.push('</div>');
   rail.innerHTML = parts.join('');
   rail.style.display = '';
@@ -14185,6 +13426,18 @@ function _entityBandLabel(reason) {
   if (map[r]) return map[r];
   return r ? r.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : 'BD priority';
 }
+
+// ── Prompt 114 Unit 2 — open the linked person the owner is reachable THROUGH ──
+// The hero's "Reach via <name>" CTA. Zooms to that person's own entity panel
+// (openEntityDetail pushes a detail-stack level, so in-panel Back returns here),
+// which is where their email/phone, cadence and SF linkage actually live.
+function _entityOpenReachableVia() {
+  const c = _entityDetailCache;
+  const via = c && c.subject && c.subject.reachable_via;
+  if (!via || !via.person_id) return;
+  if (typeof openEntityDetail === 'function') openEntityDetail(via.person_id);
+}
+window._entityOpenReachableVia = _entityOpenReachableVia;
 
 // ── Entity contact acquire (reuses the P-CONTACT / buyer picker endpoints) ──
 async function _entityAcquireContact() {
@@ -14354,7 +13607,7 @@ function _renderContactTab(contact) {
 // ── Contact Tab Switching ──
 function _switchContactTab(tabName) {
   if (!_entityDetailCache || _entityDetailCache.type !== 'contact') return;
-  document.querySelectorAll('#detailTabs .detail-tab').forEach(t => {
+  (_udHost('tabs') || document).querySelectorAll('.detail-tab').forEach(t => {
     t.classList.toggle('active', t.textContent.trim() === tabName);
   });
   const bodyEl = document.getElementById('detailBody');
@@ -14460,32 +13713,56 @@ document.addEventListener('click', function (e) {
   if (!el) return;
   e.preventDefault();
   e.stopPropagation();
-  try {
-    const raw = decodeURIComponent(el.getAttribute('data-owner-ctx') || '');
-    if (!raw) return;
-    // When a PROPERTY is primary and there's room, dock the owner BESIDE the
-    // property (companion) instead of replacing the property panel (Scott: keep
-    // both open). Falls back to the full owner drawer otherwise.
-    if (typeof _dualCapable === 'function' && _dualCapable() && _activePrimaryKind === 'property') {
-      let nm = null;
-      try { nm = (JSON.parse(raw) || {}).name || null; } catch (_e2) {}
-      if (nm && typeof _openEntityByNameSmart === 'function') { _openEntityByNameSmart(nm); return; }
-    }
-    openOwnerDrawer(raw);
-  } catch (err) {
-    console.warn('owner-link click: bad payload', err);
-  }
+  _openOwnerChip(el.getAttribute('data-owner-ctx'));
 });
 document.addEventListener('keydown', function (e) {
   if (e.key !== 'Enter' && e.key !== ' ') return;
   const el = e.target && e.target.closest && e.target.closest('.owner-link[data-owner-ctx]');
   if (!el) return;
   e.preventDefault();
-  try {
-    const raw = decodeURIComponent(el.getAttribute('data-owner-ctx') || '');
-    if (raw) openOwnerDrawer(raw);
-  } catch (err) { /* ignore */ }
+  _openOwnerChip(el.getAttribute('data-owner-ctx'));
 });
+
+/**
+ * UI-2 (manual run 2026-08-15: "Ownership panel does not open from this view but
+ * … was able to open it elsewhere").
+ *
+ * ONE router for every owner chip. Before this there were four divergent paths:
+ *   1. `.owner-link` CLICK   → dock, else `openOwnerDrawer`
+ *   2. `.owner-link` KEYDOWN → **always** `openOwnerDrawer` (never docked)
+ *   3. `entityLink(…,'entity',id)` → `_openEntitySmart`
+ *   4. `entityLink(…,'owner'|'buyer'|…)` → `_openEntityByNameSmart`
+ * …so which surface you got depended on where the chip was rendered and how you
+ * activated it. That is precisely the "sometimes it opens" behaviour reported.
+ *
+ * The dock decision also consulted `_activePrimaryKind`, which is SET but never
+ * CLEARED — so after closing the property panel it still read 'property' and
+ * could dock a lone companion beside nothing. `_panelPrimaryOpen()` closes that.
+ */
+function _openOwnerChip(rawAttr) {
+  let raw = '';
+  try { raw = decodeURIComponent(rawAttr || ''); } catch (_e) { raw = ''; }
+  if (!raw) return;
+  let ctx = null;
+  try { ctx = JSON.parse(raw); } catch (_e) { ctx = null; }
+  const id = ctx && (ctx.entity_id || ctx.owner_entity_id || ctx.id);
+  const nm = ctx && ctx.name;
+
+  // Dock beside the property only when a property panel is genuinely on screen
+  // and there is room for two.
+  const canDock = typeof _dualCapable === 'function' && _dualCapable()
+    && typeof _panelPrimaryOpen === 'function' && _panelPrimaryOpen()
+    && _activePrimaryKind === 'property';
+
+  if (canDock) {
+    if (id && typeof openCompanionEntity === 'function') { openCompanionEntity(String(id)); return; }
+    if (nm && typeof _openEntityByNameSmart === 'function') { _openEntityByNameSmart(nm); return; }
+  }
+  if (id && typeof openEntityDetail === 'function') { openEntityDetail(String(id)); return; }
+  // No resolved entity id — the owner drawer resolves by context/name.
+  try { openOwnerDrawer(raw); } catch (err) { console.warn('owner-chip: bad payload', err); }
+}
+window._openOwnerChip = _openOwnerChip;
 
 /**
  * Build an owner context object from a v_ownership_chain row.
@@ -14511,11 +13788,19 @@ function _ownerCtxFromChain(h, db) {
 }
 
 /** Build owner context from a v_ownership_current row (own object). */
+// UI-5b (found live on dia:31857, 2026-08-17): the ladder LABELS an owner with
+// `*_canonical || *` but this ctx sent the RAW name, so the chip read
+// "Netstreit Inc" and docked "NETSTREIT Corp" — the visible label and the
+// navigation target were different strings, which is exactly the kind of quiet
+// mismatch that makes the panel untrustworthy. `name` is the display/search
+// string, so it must be the SAME one the user just read. The raw value is not
+// lost: it stays on `recorded_owner_name` / `true_owner_name`, and id-based
+// resolution (recorded_owner_id / true_owner_id) is unaffected and still wins.
 function _ownerCtxFromCurrent(own, db, which) {
   if (!own) return null;
   if (which === 'true' && own.true_owner) {
     return {
-      name: own.true_owner,
+      name: own.true_owner_canonical || own.true_owner,
       recorded_owner_name: null,
       recorded_owner_id: null,
       true_owner_name: own.true_owner,
@@ -14531,7 +13816,8 @@ function _ownerCtxFromCurrent(own, db, which) {
     };
   }
   return {
-    name: own.recorded_owner || own.true_owner,
+    name: own.recorded_owner_canonical || own.recorded_owner
+      || own.true_owner_canonical || own.true_owner,
     recorded_owner_name: own.recorded_owner,
     recorded_owner_id: own.recorded_owner_id || null,
     true_owner_name: own.true_owner || null,
@@ -14967,17 +14253,17 @@ async function _ownerDrawerBeginProspecting() {
     showToast('Could not create SF task: ' + e.message, 'error');
   }
 
+  // The old follow-up scrolled to `#udLogCallForm` on the property Ownership
+  // tab. That form moved to the owner panel (redesign 2026-08-15 \u00a72.5), so the
+  // flow would silently dead-end. Land the user on the OWNER panel instead \u2014
+  // that is where the activity now gets logged.
   closeDetail();
+  const _ownerEntityId = c.entity_id || c.owner_entity_id || null;
+  const _ownerName = c.parent_account_name || c.name || null;
   setTimeout(function() {
-    const logForm = document.getElementById('udLogCallForm');
-    if (logForm) {
-      logForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      const notes = document.getElementById('udLogNotes');
-      if (notes) {
-        notes.value = 'Prospecting ' + (c.parent_account_name || c.name) + ' \u2014 ';
-        notes.focus();
-      }
-    }
+    if (_ownerEntityId && typeof openEntityDetail === 'function') openEntityDetail(String(_ownerEntityId));
+    else if (_ownerName && typeof openEntityDetailByName === 'function') openEntityDetailByName(_ownerName);
+    else showToast('Prospecting opened \u2014 log the touch on the owner panel.', 'info');
   }, 250);
 }
 

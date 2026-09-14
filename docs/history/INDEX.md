@@ -5,14 +5,29 @@ records, and fix lists** that were moved out of the repo root during the
 2026-07 root cleanup. They are historical artifacts — retained for provenance
 and reference, **not** living documentation. Living/reference docs (setup
 guides, specs, plans, strategies, blueprints, policies, and the canon such as
-`CLAUDE.md`, `AGENTS.md`, `LCC-OS.md`, `INFRASTRUCTURE.md`, `RUNBOOK.md`,
+`CLAUDE.md`, `AGENTS.md`, `LCC-OS.md`,
 `ROLLOUT.md`) stay at the repo root or under `docs/`.
 
 > Note: some archived docs contain in-prose cross-references to files that
-> remain at the repo root (e.g. `../../GAPS_AND_FINDINGS_REGISTER.md`). Those
+> remain at the repo root. ⚠️ **UPDATED 2026-08-28:** `INFRASTRUCTURE.md`, `RUNBOOK.md` and `GAPS_AND_FINDINGS_REGISTER.md` are **no longer at the root** — see the infra/hosting/monitoring cluster entry below. Those
 > historical mentions were left as-authored and are not clickable links.
 
 Grouped by topic (document type), each sorted by date.
+
+---
+
+## Status / worklog archives (the "opens with current state" splits)
+
+Living status files are trimmed forward; the tail lands here **verbatim**, never summarised.
+
+| Document | What it holds | Split on |
+| --- | --- | --- |
+| [STATUS_claude-code_2026-08-03_to_2026-08-12.md](STATUS_claude-code_2026-08-03_to_2026-08-12.md) | The tail of `docs/claude-code/STATUS.md`: comps arc prompts 19–60, Wave 8 hygiene, Wave 9 connectedness, ChatGPT/Copilot surface rollout, the 2026-08-03 security + deploy-pending notes | 2026-08-26 (Prompt 141) |
+| [STATUS_claude-code_2026-08-20_to_2026-08-21.md](STATUS_claude-code_2026-08-20_to_2026-08-21.md) | `STATUS.md` entries 2026-08-20 → 08-21 (the W6.5 decomposition, P119–P121 mailbox mirror, P124/P125 draft-assist), verbatim | 2026-09-02 (first cut) |
+| [STATUS_claude-code_2026-08-20_to_2026-08-28_cowork-block.md](STATUS_claude-code_2026-08-20_to_2026-08-28_cowork-block.md) | The contiguous `STATUS.md` block at former lines 6605–9212: the 2026-08-26/27 Cowork entries (Tier 0 P186–P198, A1–A5c, C1, B1), two 08-28 Cowork entries, and the P121–P130 draft-assist entries, verbatim. ⚠️ Chosen as a contiguous span — `STATUS.md` is not date-sorted | 2026-09-02 (second cut) |
+| [CLAUDE_full_2026-07.md](CLAUDE_full_2026-07.md) | The full per-round worklog R5→R64 split out of `CLAUDE.md` | 2026-07 |
+| [AGENTS_full_2026-07.md](AGENTS_full_2026-07.md) | The `AGENTS.md` counterpart | 2026-07 |
+| [DOCS_CONSOLIDATION_2026-08-26.md](DOCS_CONSOLIDATION_2026-08-26.md) | What the 2026-08-26 consolidation moved and where, plus the full **preservation manifest** (every contemplated feature carried forward) | 2026-08-26 |
 
 ---
 

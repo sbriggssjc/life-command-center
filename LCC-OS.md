@@ -2,6 +2,10 @@
 
 **Start here:** [`docs/os/README.md`](docs/os/README.md)
 
+**Where are we / what's left:** [`docs/os/CURRENT-STATE.md`](docs/os/CURRENT-STATE.md) (LIVE ·
+flag-gated OFF and why · canonical-doc map) and
+[`docs/os/PLANNED-BACKLOG.md`](docs/os/PLANNED-BACKLOG.md) (every unbuilt-but-intended item).
+
 This repo runs on one brain (LCC engines + data), one memory (Cortex), one instruction/policy **canon**
 (`docs/os/canon/`), and one knowledge set (BRIGGS-*). Every surface — Copilot, Claude Personal, Claude Cowork,
 Northmarq Claude, ChatGPT — is a front door that binds to the same canon so outputs match everywhere.

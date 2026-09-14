@@ -45,8 +45,13 @@ for (const [id, s] of Object.entries(manifest.surfaces)) {
     const t = readFileSync(p, 'utf8');
     if (s.markerBegin && t.includes(s.markerBegin) && t.includes(s.markerEnd)) {
       const region = t.slice(t.indexOf(s.markerBegin), t.indexOf(s.markerEnd));
-      const good = region.includes(`v${version}`) && s.blocks.every(bid => region.includes(blocks[bid]));
-      if (good) log('✓', `${id}: live artifact migrated & current`);
+      // liveMode 'pointer': the region intentionally holds a versioned pointer to a
+      // Knowledge file, not the block bodies — so validate the pointer, not the text.
+      const good = s.liveMode === 'pointer'
+        ? region.includes(`v${version}`) && !!s.knowledgeLocation && region.includes(s.knowledgeLocation)
+        : region.includes(`v${version}`) && s.blocks.every(bid => region.includes(blocks[bid]));
+      if (good) log('✓', `${id}: live artifact migrated & current`
+        + (s.liveMode === 'pointer' ? ` (pointer → ${s.knowledgeLocation}; upload surfaces/${id}.canon.md there)` : ''));
       else { log('✗', `${id}: live managed region STALE — run render --write-live & republish`); fail++; }
     } else { log('⚠', `${id}: live artifact not yet migrated (no CANON markers) — bootstrap per RENDER-AND-PARITY.md`); warn++; }
   } else if (s.external) {

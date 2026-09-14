@@ -75,8 +75,14 @@ blended cap + per-asset breakdown.
   **response strategy** + call, noting the expiration → **Tulsa signature block**.
 - **Recipients:** To = resolved seller contact; **BCC Sarah Martin**; **CC James Gibson only on DaVita/Genesis-owned
   deals** (not universal — confirm by owner).
-- **Signature:** Northmarq · Scott Briggs · Senior Vice President · Commercial Investment Sales · D (918) 794-9787 ·
-  sabriggs@northmarq.com · 6120 S. Yale Ave., Ste. 300, Tulsa, OK 74136 · service-line tagline · northmarq.com.
+- **Signature:** the **full new-email block** — `docs/os/voice/signatures/signature-full.html` (the canonical
+  stored asset; P126). Northmarq · Scott Briggs · Senior Vice President · Commercial Investment Sales ·
+  D (918) 794-9787 · sabriggs@northmarq.com · 6120 S. Yale Ave., Ste. 300, Tulsa, OK 74136 · **service-line
+  tagline = "Commercial Real Estate | Debt + Equity | Investment Sales | Loan Servicing | Fund Management"**
+  (measured 2026-08-25 off his sent mail — this line previously read "service-line tagline", a placeholder
+  that resolved to no literal anywhere) · northmarq.com. ⚠️ This is the FULL block, correct for an offer
+  submission (a new thread). His **reply** block is the compact one and carries **no address** — do not apply
+  this description to a reply.
 
 ### 8. Deliver as a DRAFT — never auto-send
 Save to the **Drafts folder** (via `LCC Create Outlook Draft`): branded HTML body, resolved recipient, BCC Sarah,

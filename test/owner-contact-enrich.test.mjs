@@ -7,6 +7,11 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { isOwnerNameRestated } from '../api/_shared/entity-link.js';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 import { processOwnerEnrichmentRow, classifyEnrichRow, normalizePersonName, summarizeResolution } from '../api/_handlers/owner-contact-enrich.js';
 
 function recordingDeps(overrides = {}) {
@@ -317,5 +322,178 @@ describe('ORE Build 2 — reconcile-on-write + address-dimension adapter feed', 
       { ...ownerBase, active_contact_name: null, active_contact_entity_id: null, enrichment_action: 'address_reverse_lookup' }, deps);
     assert.equal(sawRow.notice_address, undefined);   // never sourced → adapter no-ops
     assert.notEqual(out.outcome, 'attached');
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+describe('P163 — a phantom contact is not a link', () => {
+  // The owner's own name minted as a person, no email, no phone. Measured live
+  // 2026-08-21: 168 such owners holding $242.7M of annual rent, headed by LCC's
+  // single largest owner (Boyd Watterson Asset Management, 198 assets, $179.8M),
+  // whose "decision-maker" was a person entity named "Boyd Watterson".
+  const linked = { entity_id: 'e1', owner_name: 'Acme Holdings LLC',
+    active_contact_name: 'Jane Real', active_contact_entity_id: 'p1' };
+  const phantom = { entity_id: 'e2', owner_name: 'Boyd Watterson Asset Management, LLC',
+    active_contact_name: 'Boyd Watterson', active_contact_entity_id: 'p2',
+    active_contact_is_phantom: true };
+
+  it('a genuine link still short-circuits to already_linked', async () => {
+    const out = await processOwnerEnrichmentRow(linked, {});
+    assert.equal(out.outcome, 'already_linked');
+  });
+
+  it('a PHANTOM link does NOT short-circuit — it goes on to be worked', async () => {
+    // It must get past the guard. What it resolves to depends on injected deps;
+    // the assertion is only that it is no longer dismissed as already-linked.
+    let out;
+    try { out = await processOwnerEnrichmentRow(phantom, {}); }
+    catch (e) { out = { outcome: 'threw:' + (e && e.message) }; }
+    assert.notEqual(out.outcome, 'already_linked',
+      'a phantom must not be reported as already linked — that is what hid $242.7M');
+  });
+
+  it('classifyEnrichRow mirrors the same rule (dry-run must not disagree)', () => {
+    assert.equal(classifyEnrichRow(linked), 'already_linked');
+    assert.notEqual(classifyEnrichRow(phantom), 'already_linked');
+  });
+
+  it('the flag is FETCHED, not assumed — COLS selects it and the null-filter is gone', async () => {
+    // ⚠️ THE INERT-FIX TRAP THIS UNIT NEARLY SHIPPED. The batch path filtered
+    // `&active_contact_entity_id=is.null` at query time, so phantoms (which HAVE
+    // a contact id) were never fetched at all — the guard above would have been
+    // correct and completely unreachable, while measuring as shipped. The view
+    // now owns that predicate, so the handler must NOT repeat it, and must select
+    // the phantom column or the guard reads undefined.
+    const src = readFileSync(join(root, 'api/_handlers/owner-contact-enrich.js'), 'utf8');
+    assert.match(src, /active_contact_is_phantom'/, 'COLS must select active_contact_is_phantom');
+    assert.doesNotMatch(src, /'&active_contact_entity_id=is\.null'/,
+      'the handler must not re-exclude phantoms; v_owner_contact_enrich_queue owns that rule');
+    // Both single-owner paths stamp the flag, since the pivot TABLE lacks it.
+    assert.match(src, /const stampPhantom = async \(row\) =>/, 'stampPhantom is defined once');
+    assert.equal((src.match(/await stampPhantom\(/g) || []).length, 2,
+      'stampPhantom must be applied on BOTH single-owner paths (GET preview and POST run) — '
+      + 'stamping only one leaves the phantom gate live on one path and dead on the other');
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+describe('P163 — a phantom must not be re-attached to itself', () => {
+  // ⚠️ THE LOOP THIS ALMOST SHIPPED. Getting a phantom PAST the already_linked
+  // guard is only half the job. The phantom's name IS the company's own name and
+  // is shaped like a person ("Boyd Watterson"), so looksLikePersonName says yes
+  // and the ATTACH branch would re-link the same phantom, PATCH
+  // active_contact_entity_id back to the same id, and return `attached` — a
+  // fabricated success and a self-healing loop that would make P162+P163 look
+  // like they worked while changing nothing.
+  const phantom = {
+    entity_id: 'e9', owner_name: 'Boyd Watterson Asset Management, LLC',
+    active_contact_name: 'Boyd Watterson', active_contact_entity_id: 'p9',
+    active_contact_is_phantom: true, active_authority_level: 1,
+  };
+
+  it('never routes a phantom to the ATTACH branch', async () => {
+    let attachCalled = false;
+    const deps = {
+      looksLikePersonName: () => true,        // the phantom DOES look like a person
+      normalizePersonName: (n) => n,
+      ensureEntityLink: async () => { attachCalled = true; return { entity_id: 'p9' }; },
+      runExternalEnrichment: async () => ({ outcome: 'external_attempted' }),
+    };
+    try { await processOwnerEnrichmentRow(phantom, deps); } catch (_e) { /* deps are partial */ }
+    assert.equal(attachCalled, false,
+      'attachPersonToOwner must never be reached for a phantom — that is the re-attach loop');
+  });
+
+  it('never routes a phantom to the MANAGER-DRILL branch either', () => {
+    // authority_level 1 satisfies the drill condition, so only the explicit
+    // phantom check keeps it out. Drilling would mint the owner's OWN name as a
+    // manager org.
+    const src = readFileSync(join(root, 'api/_handlers/owner-contact-enrich.js'), 'utf8');
+    // Format-tolerant (see the note on the isPerson assertion above): P164
+    // inserted `&& !restatesOwner` between these two anchors and broke the
+    // original strict-whitespace regex.
+    assert.match(src, /!row\.active_contact_is_phantom[\s\S]{0,120}?&& Number\(row\.active_authority_level\)/,
+      'the manager-drill branch must exclude phantoms');
+    // Format-tolerant on purpose: this assertion originally pinned the exact
+    // single-line shape of the isPerson expression and broke the moment P164
+    // split it across three lines — the same "assert the relationship, not the
+    // address" lesson, here applied to source shape rather than file location.
+    assert.match(src, /const isPerson =[\s\S]{0,200}?!row\.active_contact_is_phantom/,
+      'the isPerson test must exclude phantoms');
+  });
+});
+
+
+// ───────────────────────────────────────────────────────────────────────────
+describe('P164 — never mint the owner\'s own name as its decision-maker', () => {
+  // The PRODUCER-side fix. P163b stopped existing phantoms re-attaching; the
+  // hourly tick was still minting ~5 NEW ones per hour (measured live: pivot
+  // updated_at 19:25:13-19:25:30 on 2026-08-21), so clearing the 168 historical
+  // phantoms without this would have regrown the population at ~120/day.
+  it('blocks a contact whose every token is already in the owner name', () => {
+    for (const [person, owner] of [
+      ['Boyd Watterson', 'Boyd Watterson Asset Management, LLC'], // LCC's largest owner, $179.8M
+      ['Rem Management', 'Rem Management Holdings LLC'],
+    ]) {
+      assert.equal(isOwnerNameRestated(person, owner), true, `${person} @ ${owner} must be blocked`);
+    }
+  });
+
+  it('⚠️ NEVER blocks an INDIVIDUAL owning in their own name', () => {
+    // The mis-classification that reached live data on 2026-08-21 and was
+    // reverted in full: 103 owners ($199.4M) are individuals whose contact name
+    // legitimately equals their owner name. Scott's doctrine is explicit that a
+    // person can BE the owner. Containment alone cannot see this; the owner
+    // having a FIRM SUFFIX is what distinguishes a restated company.
+    for (const [person, owner] of [
+      ['Alonso Cantu', 'Alonso Cantu'],
+      ['Ruth Malone', 'Ruth Malone'],
+      ['Thomas H. Yates', 'Thomas H. Yates'],
+      ['Peter Hansen', 'Peter Hansen LLC'],   // single-member LLC = that principal
+    ]) {
+      assert.equal(isOwnerNameRestated(person, owner), false, `${person} @ ${owner} must NOT be blocked`);
+    }
+  });
+
+  it('STATED LIMITATION: an owner with no firm suffix is not blocked (fails safe)', () => {
+    // "Sterling Bay" is a real developer, "Trammell Crow Co" reduces to the same
+    // two tokens as its restated contact. Both are structurally identical to a
+    // single-member LLC named after its principal, so they are NOT blocked.
+    // Missing a phantom costs one row a human rejects; blocking a real
+    // individual owner deletes a decision-maker on a live prospect.
+    assert.equal(isOwnerNameRestated('Sterling Bay', 'Sterling Bay'), false);
+    assert.equal(isOwnerNameRestated('Trammell Crow', 'Trammell Crow Co'), false);
+  });
+
+  it('⚠️ does NOT block a real principal at a founder-named firm', () => {
+    // The destructive false positive. These are REAL contacts on live owners —
+    // blocking them would delete exactly the people worth the most. A genuine
+    // principal almost always carries a given name the firm does not.
+    for (const [person, owner] of [
+      ['Sadiki Cole', 'Cole Capital Partners'],
+      ['Cole Abdie', 'Velocity Capital'],
+      ['Robert Parsekian', 'Parsada Ventures'],
+      ['Sam Zell', 'Zell Group'],
+      ['John Smith', 'Smith Properties LLC'],
+    ]) {
+      assert.equal(isOwnerNameRestated(person, owner), false, `${person} @ ${owner} must NOT be blocked`);
+    }
+  });
+
+  it('requires real material on both sides — a single token is not evidence', () => {
+    assert.equal(isOwnerNameRestated('Watterson', 'Boyd Watterson LLC'), false);
+    assert.equal(isOwnerNameRestated('Boyd Watterson', 'LLC'), false);
+    assert.equal(isOwnerNameRestated('', 'Anything LLC'), false);
+    assert.equal(isOwnerNameRestated(null, null), false);
+  });
+
+  it('is wired into BOTH name-shaped branches of the worker', () => {
+    // Attach would mint the phantom; manager-drill would mint the owner's own
+    // name as a manager org. Same defect, two hats.
+    const src = readFileSync(join(root, 'api/_handlers/owner-contact-enrich.js'), 'utf8');
+    assert.match(src, /const restatesOwner = /, 'the guard is evaluated');
+    assert.match(src, /&& !restatesOwner;/, 'the ATTACH branch excludes it');
+    assert.match(src, /!row\.active_contact_is_phantom && !restatesOwner/, 'the DRILL branch excludes it');
+    assert.match(src, /isOwnerNameRestated/, 'imported from the shared guard module, not re-implemented');
   });
 });

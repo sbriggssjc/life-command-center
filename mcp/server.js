@@ -12,7 +12,7 @@ import {
   assemblePropertyPacketViaApi,
   resolveContextPacket,
 } from "./context-assemble.js";
-import { makeCompsTools, makeCompsHttpRoutes } from "./comps-tools.js";
+import { makeCompsTools, makeCompsHttpRoutes, runGenerateCompsFromRequest } from "./comps-tools.js";
 import { makeDealDossierTools, makeDealDossierHttpRoutes } from "./deal-dossier-tools.js";
 import { makeSfWritebackRoutes } from "./sf-writeback.js";
 import { makeOpportunitySyncRoute } from "./opportunity-sync.js";
@@ -21,11 +21,13 @@ import { makeCadenceScanRoute } from "./cadence-scan.js";
 import { makeEntityReconcileRoute } from "./entity-reconcile.js";
 import { makeOfferContextRoute, makeOfferLogRoute } from "./offer-context.js";
 import { makeDealEmailMatcherRoute } from "./deal-email-matcher.js";
-import { boundHttpToolResult, jsonLen } from "./http-response-bound.js";
+import { boundHttpToolResult, enforceHttpResponseSize, jsonLen } from "./http-response-bound.js";
+import { resolveSubject } from "./subject-resolver.js";
 
 // ── Environment ──────────────────────────────────────────────────────────────
 
 const PORT = parseInt(process.env.PORT || "3100", 10);
+const MCP_MIN_PROTOCOL_VERSION = "2025-03-26";
 const LCC_API_KEY = process.env.LCC_API_KEY || "";
 
 // Base URL of the main Express app (the tranquil-delight service). Used to
@@ -99,6 +101,13 @@ function enc(v) {
   return encodeURIComponent(String(v));
 }
 
+function normPropertyDomain(v) {
+  const d = String(v || "").toLowerCase().trim();
+  if (d === "dia" || d === "dialysis") return "dia";
+  if (d === "gov" || d === "government") return "gov";
+  return null;
+}
+
 // ── DIA domain (optional — Unit 4 dia address fallback) ──────────────────────
 // The MCP server historically configured only OPS + GOV. The gov property
 // fallback (Unit 4) is the live-verified path; the dia leg engages only when a
@@ -134,6 +143,22 @@ function domainForms(domain) {
   if (domain === 'government' || domain === 'gov') return ['gov', 'government'];
   if (domain === 'dialysis' || domain === 'dia') return ['dia', 'dialysis'];
   return [domain];
+}
+
+// Prompt 58 — robust free-text argument extraction. The various connector
+// surfaces (personal Claude, ChatGPT, Copilot) don't always send the arg under
+// the exact inputSchema key: a plain "1050 Old Camp Rd" or "DaVita" arrives as
+// { query }, { q }, { request }, { text }, or even a bare string instead of the
+// documented { address } / { query }. Reading only the one canonical key made
+// get_property_context resolve nothing (raw_ref {}) and made search_entities
+// crash on `undefined.replace`. Pull the first non-empty string across the
+// common aliases so a missing/renamed key can never strand or crash a tool.
+export function firstNonEmptyString(...vals) {
+  for (const v of vals) {
+    if (typeof v === 'string' && v.trim() !== '') return v.trim();
+    if (typeof v === 'number' && Number.isFinite(v)) return String(v);
+  }
+  return null;
 }
 
 // Lightweight street-address normalizer (mirror of api/_shared/entity-link.js
@@ -231,16 +256,62 @@ async function chooseBestEntity(rows) {
 // gov/dia get_property_context fallback when no LCC asset entity exists yet.
 async function findDomainProperty(q, raw, extraSelect = '') {
   const sel = `property_id,address,city,state${extraSelect ? ',' + extraSelect : ''}`;
-  let r = await q('GET', `properties?address=ilike.*${enc(raw)}*&select=${sel}&limit=1`)
+  let r = await q('GET', `properties?address=ilike.*${enc(raw)}*&select=${sel}&limit=25`)
     .catch(() => ({ data: [] }));
-  if (r.data && r.data[0]) return r.data[0];
+  let hits = [...new Map((r.data || []).filter((p) => p?.property_id != null).map((p) => [p.property_id, p])).values()];
+  if (hits.length === 1) return hits[0];
+  if (hits.length > 1) return null;
   const norm = normalizeAddressLite(raw);
   if (norm && norm !== String(raw).toLowerCase()) {
-    r = await q('GET', `properties?address=ilike.*${enc(norm)}*&select=${sel}&limit=1`)
+    r = await q('GET', `properties?address=ilike.*${enc(norm)}*&select=${sel}&limit=25`)
       .catch(() => ({ data: [] }));
-    if (r.data && r.data[0]) return r.data[0];
+    hits = [...new Map((r.data || []).filter((p) => p?.property_id != null).map((p) => [p.property_id, p])).values()];
+    if (hits.length === 1) return hits[0];
   }
   return null;
+}
+
+async function resolveEntityByPropertyIdentity({ domain, propertyId }) {
+  if (propertyId === null || propertyId === undefined || String(propertyId).trim() === "") return null;
+  const domains = normPropertyDomain(domain) ? [normPropertyDomain(domain)] : ["dia", "gov"];
+  const matches = [];
+  for (const dom of domains) {
+    const idRes = await opsQuery(
+      "GET",
+      `external_identities?source_system=eq.${enc(dom)}&source_type=eq.asset` +
+        `&external_id=eq.${enc(propertyId)}&select=entity_id`
+    ).catch(() => ({ data: [] }));
+    const entityIds = [...new Set((idRes.data || []).map((r) => r.entity_id).filter(Boolean))];
+    for (const entityId of entityIds) {
+      const entRes = await opsQuery(
+        "GET",
+        `entities?id=eq.${enc(entityId)}&entity_type=eq.asset&select=*,external_identities(*),entity_relationships!entity_relationships_from_entity_id_fkey(*)&limit=1`
+      ).catch(() => ({ data: [] }));
+      if (entRes.data?.[0]) matches.push(entRes.data[0]);
+    }
+  }
+  const unique = [...new Map(matches.map((e) => [e.id, e])).values()];
+  return unique.length === 1 ? unique[0] : null;
+}
+
+async function resolveEntityByAddressPropertyIdentity(address) {
+  const matches = [];
+  if (DIA_SUPABASE_URL && DIA_SUPABASE_KEY) {
+    const hit = await findDomainProperty(diaQuery, address, 'tenant,operator,chain_canonical');
+    if (hit?.property_id != null) {
+      const entity = await resolveEntityByPropertyIdentity({ domain: "dia", propertyId: hit.property_id });
+      if (entity) matches.push(entity);
+    }
+  }
+  if (GOV_SUPABASE_URL && GOV_SUPABASE_KEY) {
+    const hit = await findDomainProperty(govQuery, address, 'agency');
+    if (hit?.property_id != null) {
+      const entity = await resolveEntityByPropertyIdentity({ domain: "gov", propertyId: hit.property_id });
+      if (entity) matches.push(entity);
+    }
+  }
+  const unique = [...new Map(matches.map((e) => [e.id, e])).values()];
+  return unique.length === 1 ? unique[0] : null;
 }
 
 // Unit 4: resolve a property by address straight from the domain DBs when no
@@ -354,6 +425,22 @@ function textResult(data) {
   };
 }
 
+// Compact one-line provenance summary for a rent-timeline row (get_property_rent_timeline).
+function summarizeRentProvenance(r) {
+  const p = r.provenance || {};
+  const a = r.assumptions || {};
+  if (p.evidence === true) {
+    const tbl = p.table || 'evidence';
+    return p.corroborated_by ? `${tbl} (corroborated by ${p.corroborated_by})` : `${tbl} evidence`;
+  }
+  if (p.shell === true) return `convention shell (${p.intercept_source || 'intercept'})`;
+  if (p.projected_from) {
+    const src = a.convention_source ? ` via ${a.convention_source}` : '';
+    return `projected from ${p.projected_from}${src}`;
+  }
+  return 'modeled';
+}
+
 // ── Tool definitions for direct JSON-RPC dispatch ─────────────────────────
 const TOOL_DEFINITIONS = {
   get_daily_briefing: {
@@ -386,7 +473,37 @@ const TOOL_DEFINITIONS = {
       type: 'object',
       properties: {
         entity_id: { type: 'string', description: 'LCC entity UUID' },
-        address: { type: 'string', description: 'Property address (alternative to entity_id)' }
+        property_id: { type: 'string', description: 'Domain properties.property_id; pair with domain when known' },
+        domain: { type: 'string', enum: ['dia', 'dialysis', 'gov', 'government'], description: 'Domain for property_id identity resolution' },
+        address: { type: 'string', description: 'Property address (alternative to entity_id)' },
+        query: { type: 'string', description: 'Free-text property reference (address, name, or "domain:id") — resolved the same as address' }
+      }
+    }
+  },
+  get_capmarkets_packet: {
+    name: 'get_capmarkets_packet',
+    description: 'Freeze-or-fetch the Capital Markets report packet for a vertical and quarter. Returns the same frozen packet used by the LCC app tab and Excel export.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        vertical: { type: 'string', enum: ['dialysis', 'dia', 'gov', 'government'], description: 'Report vertical.' },
+        quarter: { type: 'string', description: 'Fiscal quarter label, e.g. Q2-2026.' },
+        as_of: { type: 'string', description: 'Optional quarter-end date YYYY-MM-DD.' }
+      },
+      required: ['vertical']
+    }
+  },
+  get_property_rent_timeline: {
+    name: 'get_property_rent_timeline',
+    description: "Rent Intelligence Engine: the versioned, provenance-tracked rent-by-year timeline for a dialysis property. Returns per-year rent_annual, rent_psf, lease_phase, basis (contract|stated|projected|convention), confidence, and a compact provenance summary. Prefer this over ad-hoc rent_at_sale lookups for rent anchoring in cap-rate / BOV work. Current (unsuperseded) version by default; pass include_superseded for the full version history (audit).",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        property_id: { type: 'string', description: 'dia properties.property_id (preferred)' },
+        address: { type: 'string', description: 'Property address (resolved to a dia property when property_id is absent)' },
+        query: { type: 'string', description: 'Free-text property reference (address or "dia:id")' },
+        year_range: { type: 'string', description: 'Optional "YYYY-YYYY" filter, e.g. "2011-2026"' },
+        include_superseded: { type: 'boolean', description: 'Include prior forked versions for audit (default false = current only)' }
       }
     }
   },
@@ -470,6 +587,29 @@ const TOOL_DEFINITIONS = {
       required: ['summary']
     }
   },
+  log_operator_note: {
+    name: 'log_operator_note',
+    description: 'File a note into the LCC operator funnel (spec: EXEC-BRIEFS-SPEC.md §6) — a bug, data gap, idea, UX friction, or question about the LCC app/data. Every channel (in-app Note button, Outlook, Teams, MCP, Cowork/Claude Code) writes the SAME queue; a separate triage tick classifies, dedupes, and routes it to an owner thread. Use this for something a human should eventually see and act on — not for durable cross-session facts (use log_memory for those).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        raw_text: { type: 'string', description: 'The note itself, in plain language (required)' },
+        context: { type: 'object', description: 'Whatever the calling surface already has for free — session id, repo/PR reference, the prompt that produced the note, an error message, a route/entity id. Optional.' },
+        channel: { type: 'string', enum: ['mcp', 'cowork'], description: "Defaults to 'mcp'; pass 'cowork' when the calling harness is Cowork/Claude Code rather than a chat surface." }
+      },
+      required: ['raw_text']
+    }
+  },
+  get_operator_inbox: {
+    name: 'get_operator_inbox',
+    description: 'Read the one operator to-do list (spec: EXEC-BRIEFS-SPEC.md §6) — every open/routed/in-progress operator note across every channel, grouped by owner thread and severity. Call this at the start of a session alongside recalling memory, so work already flagged is not silently missed. Optionally filter to one thread.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        thread: { type: 'string', description: "Optional owner thread to filter to, e.g. 'automation', 'data-coherence', 'comps'. Omit for the full inbox." }
+      }
+    }
+  },
   generate_bov: {
     name: 'generate_bov',
     description: "Generate a Briggs CRE BOV Excel workbook (10 tabs, all formulas recalculated) and return a short-lived download link to the finished .xlsx. TWO ways to call: (1) PREFERRED for a known LCC property — pass ONLY `property_lookup` (an address like '207 Fob James Dr, Valley, AL') or `cre_property_id`; the server loads that property's reviewed lease/financial record and builds the identical workbook every team member would get. (2) For a brand-new deal not yet in LCC — hand-author asset_type + property + tenants + underwriting + client. You may also pass property_lookup/cre_property_id AND override specific fields (e.g. client) — posted fields win over the loaded record.",
@@ -538,11 +678,14 @@ const TOOL_DEFINITIONS = {
   },
   generate_comps: {
     name: 'generate_comps',
-    description: "Populate a Briggs CRE comps workbook (sales or lease) from structured comp rows and return a short-lived download link. You map the raw CoStar/Salesforce export → rows using the Briggs column mapping + normalization; this shared engine writes them into the template's INPUT columns and leaves the formula-protected columns (RENT/SF, all $/SF, all CAP, TERM, BPS, PRICE ADJ, DOM, EFF. RENT/SF, #) to calculate — so the output is identical no matter which team member prepared the rows. Row keys are the Briggs column names lowercased with underscores. SALES: address, city, state (alias st), rba (alias rba_sf), tenant, lease_type, exp (lease expiration), annual_noi, initial_price (alias init_price), cur_price, on_market (list/on-market date), last_price, sale_price, sale_date, bumps, options (renewal_options; emitted canonical as \"(N) M-yr\"), built (alias yr_built), notes. LEASE: property_type, source, suite_space, sf_leased, annual_rent, lease_comm, execution_date, ti_sf, free_rent_mos, rent_bumps, renovated. DIALYSIS comps: set vertical:'dialysis' — selects the dialysis sales template which adds CHAIRS and PATIENTS input columns immediately after RBA; pass most-recent counts as row keys `chairs` and `patients`. buyer / seller / financing are OPT-IN only — omit them unless the user explicitly asks for buyer/seller/financing in the comps (they are not part of the default column set and are otherwise left out). Omit any field you don't have — never guess. Dates 'YYYY-MM-DD'; rents/NOI annual.",
+    description: "Generate a Briggs CRE comps workbook and return only a short-lived download link plus compact counts. DEFAULT for appraisal/workbook requests: pass `request` with Scott's original text; the server runs synthesize_comps and builds the Team Briggs workbook server-side, so comp rows never round-trip through the model or connector. Legacy small-pull mode remains: pass structured rows with comp_type:'sales' or 'lease'. The shared engine writes template INPUT columns and leaves formula-protected columns (RENT/SF, all $/SF, all CAP, TERM, BPS, PRICE ADJ, DOM, EFF. RENT/SF, #) to calculate. DIALYSIS row mode: set vertical:'dialysis' and include `chairs` and `patients`. buyer / seller / financing are OPT-IN only. Omit fields you don't have.",
     inputSchema: {
       type: 'object',
-      required: ['comp_type'],
       properties: {
+        request: { type: 'string', description: 'One-shot workbook mode. Pass the comp/appraisal request verbatim; the server synthesizes rows and returns only the workbook link.' },
+        limit: { type: 'number', description: 'One-shot mode row target. Default 25, max 50.' },
+        include_unreliable_noi: { type: 'boolean', description: 'One-shot mode: include modeled/estimated NOI rows. Appraisal mode defaults true.' },
+        include_on_market: { type: 'boolean', description: 'One-shot mode: include active listings. Appraisal mode defaults true.' },
         comp_type: { type: 'string', enum: ['sales', 'lease'], description: 'sales = On Market + Sold sheets | lease = Lease Comps sheet' },
         vertical: { type: 'string', description: "Set to 'dialysis' for dialysis comps — selects the dialysis sales template with CHAIRS + PATIENTS columns after RBA. Omit otherwise." },
         on_market: { type: 'array', description: 'Sales: active listings (each an object keyed by Briggs column name; dialysis: include chairs, patients).', items: { type: 'object', additionalProperties: true } },
@@ -555,49 +698,105 @@ const TOOL_DEFINITIONS = {
   },
 };
 
+async function postCompsWorkbook(payload) {
+  if (!BOV_SERVICE_URL || !BOV_API_KEY) {
+    throw new Error("Comps service not configured — set BOV_SERVICE_URL and BOV_API_KEY on the MCP service.");
+  }
+  const url = BOV_SERVICE_URL + "/generate-comps";
+  let resp, text;
+  try {
+    resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-API-Key": BOV_API_KEY },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(180000),
+    });
+    text = await resp.text();
+  } catch (e) {
+    throw new Error("Could not reach comps service: " + e.message);
+  }
+  if (!resp.ok) {
+    throw new Error("Comps service returned HTTP " + resp.status + ": " + text.slice(0, 500));
+  }
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error("Comps service returned non-JSON: " + text.slice(0, 300));
+  }
+  const { file_base64, ...rest } = data;
+  return rest;
+}
+
+function compactCompsWorkbookResult(data) {
+  const recalc = data.recalc_result || {};
+  const mins = Math.round((data.expires_in_seconds || 3600) / 60);
+  return {
+    status: data.status,
+    filename: data.filename,
+    download_url: data.download_url,
+    comp_type: data.comp_type,
+    rows_by_sheet: data.rows_by_sheet,
+    skipped_formula_keys: data.skipped_formula_keys,
+    unknown_keys: data.unknown_keys,
+    recalc_errors: recalc.total_errors || 0,
+    message: "Comps workbook generated: " + data.filename + ". Download it here (link expires in " + mins + " min): " + data.download_url,
+  };
+}
+
 // ── Tool handlers ─────────────────────────────────────────────────────────
 // These are the exact same async functions from the former s.tool() calls.
-const TOOL_HANDLERS = {
+export const TOOL_HANDLERS = {
+  get_capmarkets_packet: async (args = {}) => {
+    return withTiming("get_capmarkets_packet", async () => {
+      if (!LCC_API_BASE) {
+        return textResult({ error: "LCC_API_BASE is not configured on the MCP service." });
+      }
+      const params = new URLSearchParams();
+      params.set("action", "packet");
+      params.set("vertical", args.vertical || "dialysis");
+      if (args.quarter) params.set("quarter", args.quarter);
+      if (args.as_of) params.set("as_of", args.as_of);
+      const resp = await fetch(`${LCC_API_BASE.replace(/\/+$/, "")}/api/capital-markets?${params.toString()}`, {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+          ...(LCC_API_KEY ? { "X-LCC-Key": LCC_API_KEY } : {}),
+          "x-lcc-workspace": PRIMARY_WORKSPACE_ID,
+        },
+        signal: AbortSignal.timeout(120000),
+      });
+      const text = await resp.text();
+      let data;
+      try { data = JSON.parse(text); } catch { data = { raw: text.slice(0, 1000) }; }
+      if (!resp.ok) return textResult({ error: `LCC packet API returned HTTP ${resp.status}`, detail: data });
+      const packet = data.packet || {};
+      return textResult({
+        ok: true,
+        snapshot_id: data.snapshot_id || null,
+        frozen_at: data.frozen_at || null,
+        vertical: data.vertical,
+        quarter: data.quarter,
+        period_end: data.period_end,
+        flags: packet.flags || [],
+        chart_count: Array.isArray(packet.charts) ? packet.charts.length : 0,
+        packet,
+      });
+    });
+  },
   generate_comps: async (args) => {
     return withTiming("generate_comps", async () => {
-      if (!BOV_SERVICE_URL || !BOV_API_KEY) {
-        return textResult({ error: "Comps service not configured — set BOV_SERVICE_URL and BOV_API_KEY on the MCP service." });
+      const payload = args || {};
+      if (String(payload.request || '').trim()) {
+        const result = await runGenerateCompsFromRequest(payload, { govQuery, diaQuery }, postCompsWorkbook);
+        return textResult(result);
       }
-      const ct = args && String(args.comp_type || '').toLowerCase();
+      const ct = String(payload.comp_type || '').toLowerCase();
       if (ct !== 'sales' && ct !== 'lease') {
-        return textResult({ error: "generate_comps requires comp_type 'sales' or 'lease', plus rows (sales: on_market/sold; lease: comps)." });
+        return textResult({ error: "generate_comps requires either `request` for one-shot workbook mode, or comp_type 'sales'/'lease' plus rows." });
       }
-      const url = BOV_SERVICE_URL + "/generate-comps";
-      let resp, text;
-      try {
-        resp = await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-API-Key": BOV_API_KEY },
-          body: JSON.stringify(args),
-          signal: AbortSignal.timeout(180000),
-        });
-        text = await resp.text();
-      } catch (e) {
-        return textResult({ error: "Could not reach comps service: " + e.message });
-      }
-      if (!resp.ok) {
-        return textResult({ error: "Comps service returned HTTP " + resp.status, detail: text.slice(0, 500) });
-      }
-      let data;
-      try { data = JSON.parse(text); } catch (e) { return textResult({ error: "Comps service returned non-JSON", raw: text.slice(0, 300) }); }
-      const recalc = data.recalc_result || {};
-      const mins = Math.round((data.expires_in_seconds || 3600) / 60);
-      return textResult({
-        status: data.status,
-        filename: data.filename,
-        download_url: data.download_url,
-        comp_type: data.comp_type,
-        rows_by_sheet: data.rows_by_sheet,
-        skipped_formula_keys: data.skipped_formula_keys,
-        unknown_keys: data.unknown_keys,
-        recalc_errors: recalc.total_errors || 0,
-        message: "Comps workbook generated: " + data.filename + ". Download it here (link expires in " + mins + " min): " + data.download_url,
-      });
+      const data = await postCompsWorkbook(payload);
+      return textResult(compactCompsWorkbookResult(data));
     });
   },
   generate_bov: async (args) => {
@@ -677,6 +876,67 @@ const TOOL_HANDLERS = {
       return textResult({ ok: r.ok !== false, logged: summary });
     });
   },
+  log_operator_note: async ({ raw_text, context, channel }) => {
+    return withTiming("log_operator_note", async () => {
+      if (!OPS_SUPABASE_URL || !OPS_SUPABASE_KEY) {
+        return textResult({ error: "OPS database not configured" });
+      }
+      const text = String(raw_text || "").trim();
+      if (!text) return textResult({ error: "raw_text is required" });
+      const validChannel = channel === "cowork" ? "cowork" : "mcp";
+      const row = {
+        channel: validChannel,
+        raw_text: text.slice(0, 20000),
+        attachments: [],
+        context: context && typeof context === "object" ? context : {},
+        received_from: null,
+        disposition: "open",
+      };
+      const r = await opsQuery("POST", "operator_notes", row, "return=representation");
+      const inserted = Array.isArray(r.data) ? r.data[0] : r.data;
+      if (r.ok === false || !inserted) {
+        return textResult({ ok: false, error: r?.data?.message || r?.data?.error || "insert failed" });
+      }
+      return textResult({ id: inserted.id, disposition: inserted.disposition || "open" });
+    });
+  },
+  get_operator_inbox: async ({ thread }) => {
+    return withTiming("get_operator_inbox", async () => {
+      if (!OPS_SUPABASE_URL || !OPS_SUPABASE_KEY) {
+        return textResult({ error: "OPS database not configured" });
+      }
+      let path = "operator_notes?disposition=in.(open,routed,in_progress)"
+        + "&select=id,channel,raw_text,note_type,lane,severity,routed_to,disposition,dedupe_of,metadata,received_at,received_from"
+        + "&order=received_at.desc&limit=500";
+      if (thread) path += `&routed_to=eq.${enc(thread)}`;
+      const r = await opsQuery("GET", path);
+      const notes = Array.isArray(r.data) ? r.data : [];
+      // Group by thread + severity, mirroring api/_shared/operator-inbox.js
+      // (kept as a small inline mirror here rather than importing across the
+      // MCP/API module boundary — the SQL/data shape is the shared contract,
+      // not the grouping code, and the fields read are identical).
+      const rank = { high: 0, medium: 1, low: 2 };
+      const groups = new Map();
+      for (const n of notes) {
+        const t = n.routed_to || "(unrouted)";
+        if (!groups.has(t)) groups.set(t, []);
+        groups.get(t).push(n);
+      }
+      for (const list of groups.values()) {
+        list.sort((a, b) => (rank[a.severity] ?? 3) - (rank[b.severity] ?? 3)
+          || new Date(b.received_at || 0) - new Date(a.received_at || 0));
+      }
+      const threads = [...groups.keys()].sort((a, b) => {
+        if (a === "(unrouted)") return 1;
+        if (b === "(unrouted)") return -1;
+        return a.localeCompare(b);
+      });
+      return textResult({
+        count: notes.length,
+        threads: threads.map((t) => ({ thread: t, notes: groups.get(t) })),
+      });
+    });
+  },
   get_daily_briefing: async ({ workspace_id }) => {
     return withTiming("get_daily_briefing", async () => {
       if (!OPS_SUPABASE_URL || !OPS_SUPABASE_KEY) {
@@ -754,13 +1014,27 @@ const TOOL_HANDLERS = {
     });
   },
 
-  search_entities: async ({ query, entity_type, domain, limit }) => {
+  search_entities: async (args = {}) => {
     return withTiming("search_entities", async () => {
       if (!OPS_SUPABASE_URL || !OPS_SUPABASE_KEY) {
         return textResult({ error: "OPS database not configured" });
       }
 
-      const searchTerm = query.replace(/[%_]/g, "").trim();
+      // Accept the search string from the documented `query` key OR any of the
+      // aliases a connector may send it under (or a bare string). Null-safe so a
+      // missing key returns a clean error instead of crashing on `.replace`.
+      const rawQuery = typeof args === 'string'
+        ? args
+        : firstNonEmptyString(
+            args.query, args.q, args.search, args.request,
+            args.text, args.term, args.name, args.keyword
+          );
+      const { entity_type, domain, limit } = (typeof args === 'object' && args) || {};
+      if (!rawQuery) {
+        return textResult({ error: "Search term is required (pass `query`)" });
+      }
+
+      const searchTerm = rawQuery.replace(/[%_]/g, "").trim();
       if (searchTerm.length < 2) {
         return textResult({ error: "Search term must be at least 2 characters" });
       }
@@ -902,38 +1176,53 @@ const TOOL_HANDLERS = {
     });
   },
 
-  get_property_context: async ({ entity_id, address }) => {
+  get_property_context: async (args = {}) => {
     return withTiming("get_property_context", async () => {
       if (!OPS_SUPABASE_URL || !OPS_SUPABASE_KEY) {
         return textResult({ error: "OPS database not configured" });
       }
 
-      // Resolve entity
-      let entity = null;
-      if (entity_id) {
-        const res = await opsQuery(
-          "GET",
-          `entities?id=eq.${enc(entity_id)}&entity_type=eq.asset&select=*,external_identities(*),entity_relationships!entity_relationships_from_entity_id_fkey(*)`
-        );
-        entity = res.data?.[0] || null;
-      } else if (address) {
-        const res = await opsQuery(
-          "GET",
-          `entities?entity_type=eq.asset&or=(address.ilike.*${enc(address)}*,name.ilike.*${enc(address)}*)&select=*,external_identities(*),entity_relationships!entity_relationships_from_entity_id_fkey(*)&limit=1`
-        );
-        entity = res.data?.[0] || null;
+      // A bare string, or the property reference sent under an alias key
+      // (query/q/ref/request/text/property/name), must resolve exactly like the
+      // documented { address }. Pull the canonical keys first, then fall back to
+      // a generic free-text ref that the resolver's own q-parsing routes to
+      // address / property_id / entity_id. This is why raw_ref used to come back
+      // {} — the free text arrived under a key this handler didn't read.
+      const a = typeof args === 'string' ? { q: args } : (args || {});
+      const entity_id = a.entity_id || a.entityId || null;
+      let property_id = a.property_id || a.propertyId || null;
+      const domain = a.domain || null;
+      const address = a.address || null;
+      const freeText = firstNonEmptyString(
+        address, a.query, a.q, a.ref, a.request, a.text, a.property, a.name
+      );
+
+      const resolution = await resolveSubject(
+        { entity_id, address, property_id, domain, q: freeText },
+        {
+          type: 'property',
+          tool: 'get_property_context',
+          surface: 'mcp',
+          opsQuery,
+          diaQuery,
+          govQuery,
+          domainAvailable: (dom) => dom === 'dia'
+            ? !!(DIA_SUPABASE_URL && DIA_SUPABASE_KEY)
+            : !!(GOV_SUPABASE_URL && GOV_SUPABASE_KEY),
+        }
+      );
+
+      if (resolution.status === 'ambiguous') return textResult(resolution);
+      if (resolution.status === 'not_on_file') {
+        return textResult({ ...resolution, error: "Property not found", entity_id, property_id, domain, address });
+      }
+      if (!resolution.entity && resolution.domain_property) {
+        const fb = await assembleDomainPropertyFallback(resolution.domain_property);
+        if (fb) return textResult({ ...fb, resolution });
       }
 
-      if (!entity) {
-        // Unit 4: no LCC asset entity — fall back to resolving the address
-        // directly against the gov (and dia, if configured) domain DBs, the way
-        // the operator console surfaces gov properties that have no entity yet.
-        if (address) {
-          const fb = await resolvePropertyByAddressFromDomains(address);
-          if (fb) return textResult(fb);
-        }
-        return textResult({ error: "Property not found", entity_id, address });
-      }
+      const entity = resolution.entity;
+      if (!entity) return textResult({ ...resolution, error: "Property not found", entity_id, property_id, domain, address });
 
       const eid = entity.id;
 
@@ -1030,6 +1319,13 @@ const TOOL_HANDLERS = {
       });
 
       const result = {
+        resolution: {
+          status: resolution.status,
+          type: resolution.type,
+          confidence: resolution.confidence,
+          resolved_via: resolution.resolved_via,
+          candidates: resolution.candidates,
+        },
         entity,
         active_tasks: actionsRes.data || [],
         context_packet,
@@ -1049,63 +1345,97 @@ const TOOL_HANDLERS = {
     });
   },
 
+  get_property_rent_timeline: async (args = {}) => {
+    return withTiming("get_property_rent_timeline", async () => {
+      if (!DIA_SUPABASE_URL || !DIA_SUPABASE_KEY) {
+        return textResult({ error: "DIA database not configured" });
+      }
+      const a = typeof args === 'string' ? { q: args } : (args || {});
+      let propertyId = a.property_id || a.propertyId || null;
+      const freeText = firstNonEmptyString(a.address, a.query, a.q, a.ref, a.text, a.property, a.name);
+
+      // Resolve the dia property_id when only an address/free-text ref is given.
+      if (!propertyId && freeText) {
+        const resolution = await resolveSubject(
+          { address: a.address || null, q: freeText, domain: 'dia' },
+          { type: 'property', tool: 'get_property_rent_timeline', surface: 'mcp',
+            opsQuery, diaQuery, govQuery,
+            domainAvailable: (dom) => dom === 'dia' ? !!(DIA_SUPABASE_URL && DIA_SUPABASE_KEY) : !!(GOV_SUPABASE_URL && GOV_SUPABASE_KEY) }
+        );
+        if (resolution.status === 'ambiguous') return textResult(resolution);
+        propertyId = resolution.domain_property?.property_id
+          || (resolution.entity?.external_identities || [])
+              .filter((x) => ["dia","dia_db","dia_supabase","dialysis"].includes(x.source_system))
+              .map((x) => x.external_id)[0]
+          || null;
+      }
+      if (!propertyId) {
+        return textResult({ error: "Property not resolved", property_id: a.property_id || null, address: a.address || null });
+      }
+
+      // year_range "YYYY-YYYY"
+      let yrLo = null, yrHi = null;
+      if (typeof a.year_range === 'string') {
+        const m = a.year_range.match(/(\d{4})\s*-\s*(\d{4})/);
+        if (m) { yrLo = Number(m[1]); yrHi = Number(m[2]); }
+      }
+
+      const includeSuperseded = a.include_superseded === true || a.include_superseded === 'true';
+      const src = includeSuperseded ? 'property_rent_timeline' : 'v_property_rent_current';
+      let path = `${src}?property_id=eq.${enc(propertyId)}` +
+        `&select=year,version,rent_annual,rent_psf,rba_sf,lease_phase,basis,confidence,provenance,assumptions` +
+        (includeSuperseded ? ',superseded_at' : '') +
+        `&order=year.asc` + (includeSuperseded ? ',version.asc' : '');
+      if (yrLo != null) path += `&year=gte.${yrLo}`;
+      if (yrHi != null) path += `&year=lte.${yrHi}`;
+
+      const res = await diaQuery("GET", path);
+      if (!res.ok) return textResult({ error: "rent timeline query failed", status: res.status, property_id: propertyId });
+      const rows = Array.isArray(res.data) ? res.data : [];
+      if (!rows.length) {
+        return textResult({ property_id: propertyId, rows: [], note: "No rent timeline on file (property may be in the research backlog)." });
+      }
+
+      // Compact provenance summary per year + a roll-up.
+      const compact = rows.map((r) => ({
+        year: r.year,
+        ...(includeSuperseded ? { version: r.version, superseded: r.superseded_at != null } : {}),
+        rent_annual: r.rent_annual,
+        rent_psf: r.rent_psf,
+        lease_phase: r.lease_phase,
+        basis: r.basis,
+        confidence: r.confidence,
+        provenance: summarizeRentProvenance(r),
+      }));
+      const currentRows = includeSuperseded ? rows.filter((r) => r.superseded_at == null) : rows;
+      const basisMix = currentRows.reduce((m, r) => { m[r.basis] = (m[r.basis] || 0) + 1; return m; }, {});
+      return textResult({
+        property_id: propertyId,
+        current_version: currentRows[0]?.version ?? null,
+        year_span: currentRows.length ? [currentRows[0].year, currentRows[currentRows.length - 1].year] : null,
+        rba_sf: currentRows[0]?.rba_sf ?? null,
+        basis_mix: basisMix,
+        include_superseded: includeSuperseded,
+        rows: compact,
+      });
+    });
+  },
+
   get_contact_context: async ({ entity_id, name, email }) => {
     return withTiming("get_contact_context", async () => {
       if (!OPS_SUPABASE_URL || !OPS_SUPABASE_KEY) {
         return textResult({ error: "OPS database not configured" });
       }
 
-      // Resolve entity. R30: stop landing on junk/fragment stubs — exclude
-      // junk-flagged rows, prefer the registered canonical buyer-parent, and
-      // among remaining candidates pick the highest-value real entity.
-      let entity = null;
-      let canonicalResolution = null;
-      if (entity_id) {
-        // An id is an id — don't force entity_type=person (a buyer parent is an
-        // organization).
-        const res = await opsQuery(
-          "GET",
-          `entities?id=eq.${enc(entity_id)}&select=*,metadata,external_identities(*)`
-        );
-        entity = res.data?.[0] || null;
-      } else if (email) {
-        const res = await opsQuery(
-          "GET",
-          `entities?entity_type=eq.person&email=eq.${enc(email)}&select=*,metadata,external_identities(*)&limit=10`
-        );
-        entity = await chooseBestEntity(res.data);
-      } else if (name) {
-        // 1) Canonical buyer-parent (R5/R6): "Boyd Watterson" → Boyd Watterson
-        //    Global, never "boyd watterson by cbre".
-        const canonical = await resolveCanonicalParentId(name);
-        if (canonical && canonical.id) {
-          const cr = await opsQuery(
-            "GET",
-            `entities?id=eq.${enc(canonical.id)}&select=*,metadata,external_identities(*)`
-          ).catch(() => ({ data: [] }));
-          if (cr.data && cr.data[0]) {
-            entity = cr.data[0];
-            canonicalResolution = { resolved_to_parent: canonical.name || entity.name };
-          }
-        }
-        // 2) Otherwise, the best non-junk candidate by value (person OR org).
-        if (!entity) {
-          const res = await opsQuery(
-            "GET",
-            `entities?or=(name.ilike.*${enc(name)}*,canonical_name.ilike.*${enc(name.toLowerCase())}*)&select=*,metadata,external_identities(*)&limit=25`
-          );
-          entity = await chooseBestEntity(res.data);
-        }
+      const resolution = await resolveSubject(
+        { entity_id, name, email },
+        { type: 'contact', tool: 'get_contact_context', surface: 'mcp', opsQuery }
+      );
+      if (resolution.status === 'ambiguous') return textResult(resolution);
+      if (resolution.status === 'not_on_file' || !resolution.entity) {
+        return textResult({ ...resolution, error: "Contact not found", entity_id, name, email });
       }
-
-      if (!entity) {
-        return textResult({
-          error: "Contact not found",
-          entity_id,
-          name,
-          email,
-        });
-      }
+      const entity = resolution.entity;
       if (entity.metadata) delete entity.metadata;
 
       const eid = entity.id;
@@ -1161,7 +1491,16 @@ const TOOL_HANDLERS = {
 
       return textResult({
         entity,
-        canonical_resolution: canonicalResolution,
+        resolution: {
+          status: resolution.status,
+          type: resolution.type,
+          confidence: resolution.confidence,
+          resolved_via: resolution.resolved_via,
+          candidates: resolution.candidates,
+        },
+        canonical_resolution: resolution.resolved_via === 'canonical_buyer_parent'
+          ? { resolved_to_parent: resolution.candidates?.[0]?.canonical_parent_name || entity.name }
+          : null,
         salesforce_id: sfIdentity?.external_id || null,
         last_touch_date: lastTouch,
         touchpoint_count: touchpoints,
@@ -1382,18 +1721,65 @@ function summarizePipelineRuns(res, recommendations, label) {
 
 // ── Express HTTP Transport ──────────────────────────────────────────────────
 
-const app = express();
+export function negotiateProtocolVersion(requestedVersion) {
+  const requested = String(requestedVersion || "");
+  return requested >= MCP_MIN_PROTOCOL_VERSION ? requested : MCP_MIN_PROTOCOL_VERSION;
+}
 
-app.use(
-  cors({
-    origin: true,
-    methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "Accept"],
-    credentials: true,
-  })
-);
-app.use(express.json({ limit: '30mb' }));   // batch opportunity sync posts the whole SF Get-records array
-app.use(express.urlencoded({ extended: true }));
+async function assembleDomainPropertyFallback(domainProperty) {
+  const dom = normPropertyDomain(domainProperty?.domain);
+  if (!dom || !domainProperty?.property_id) return null;
+  if (dom === 'gov') {
+    const pid = domainProperty.property_id;
+    const [leases, owners, lead] = await Promise.all([
+      govQuery('GET', `gsa_leases?property_id=eq.${enc(pid)}&select=*&limit=5`).catch(() => ({ data: [] })),
+      govQuery('GET', `ownership_history?property_id=eq.${enc(pid)}&select=*&order=transfer_date.desc&limit=10`).catch(() => ({ data: [] })),
+      govQuery('GET', `prospect_leads?property_id=eq.${enc(pid)}&select=*&limit=1`).catch(() => ({ data: [] })),
+    ]);
+    return {
+      resolved_via: 'gov_property_fallback',
+      note: 'No LCC asset entity for this property yet — resolved directly from the government domain by address.',
+      property: { ...domainProperty, domain: 'gov' },
+      entity: null,
+      context_packet: null,
+      gov_data: {
+        gsa_leases: leases.data || [],
+        ownership_history: owners.data || [],
+        prospect_lead: (lead.data && lead.data[0]) || null,
+      },
+    };
+  }
+  if (dom === 'dia') {
+    const leases = await diaQuery('GET', `leases?property_id=eq.${enc(domainProperty.property_id)}&select=*&limit=5`)
+      .catch(() => ({ data: [] }));
+    return {
+      resolved_via: 'dia_property_fallback',
+      note: 'No LCC asset entity for this property yet — resolved directly from the dialysis domain by address.',
+      property: { ...domainProperty, domain: 'dia' },
+      entity: null,
+      context_packet: null,
+      dia_data: { leases: leases.data || [] },
+    };
+  }
+  return null;
+}
+
+export function mountLccMcp(app, { installMiddleware = false, apiPrefix = "" } = {}) {
+  const prefixed = (path) => `${apiPrefix}${path}`;
+  const publicBase = (req) => process.env.MCP_BASE_URL || `${req.protocol}://${req.get('host')}`;
+  const publicUrl = (req, path) => `${publicBase(req)}${prefixed(path)}`;
+  if (installMiddleware) {
+    app.use(
+      cors({
+        origin: true,
+        methods: ["GET", "POST", "OPTIONS"],
+        allowedHeaders: ["Content-Type", "Authorization", "Accept"],
+        credentials: true,
+      })
+    );
+    app.use(express.json({ limit: '30mb' }));   // batch opportunity sync posts the whole SF Get-records array
+    app.use(express.urlencoded({ extended: true }));
+  }
 // ── Auth middleware ───────────────────────────────────────────────────────────
 
 function authenticate(req, res, next) {
@@ -1408,6 +1794,17 @@ function authenticate(req, res, next) {
     : "";
 
   if (!token || token !== LCC_API_KEY) {
+    // RFC 9728 §5.1 / MCP Authorization spec: an unauthenticated request to the
+    // resource MUST advertise where to begin OAuth via a WWW-Authenticate header
+    // pointing at the protected-resource metadata. MCP clients (Claude/Cowork)
+    // read `resource_metadata` here to bootstrap discovery; without it a strict
+    // client cannot start the OAuth flow and reports "error connecting".
+    const base = process.env.MCP_BASE_URL
+      || `${req.protocol}://${req.get('host')}`;
+    res.set(
+      'WWW-Authenticate',
+      `Bearer resource_metadata="${base}/.well-known/oauth-protected-resource"`,
+    );
     return res.status(401).json({ error: "Unauthorized — invalid or missing Bearer token" });
   }
 
@@ -1435,6 +1832,7 @@ const READ_ONLY_HTTP_TOOLS = new Set([
   "get_queue_summary",
   "get_pipeline_health",
   "recall_memory",
+  "get_operator_inbox",
 ]);
 
 // MCP tools return { content: [{ type: 'text', text: <JSON string> }] } (and
@@ -1479,12 +1877,12 @@ function makeReadHttpRoute(toolName) {
 }
 
 // ── Auth middleware for /mcp ─────────────────────────────────────────────
-app.use('/mcp', authenticate);
+app.use(prefixed('/mcp'), authenticate);
 
 // ── MCP JSON-RPC endpoint ────────────────────────────────────────────────
 // Implements the MCP protocol directly over HTTP JSON-RPC.
 // No SDK transport layer — maximum compatibility with Claude.ai.
-app.post('/mcp', async (req, res) => {
+app.post(prefixed('/mcp'), async (req, res) => {
   const body = req.body;
 
   console.log('[MCP] Request method:', body?.method, 'id:', body?.id);
@@ -1510,7 +1908,7 @@ app.post('/mcp', async (req, res) => {
         return res.json({
           jsonrpc: '2.0', id,
           result: {
-            protocolVersion: '2024-11-05',
+            protocolVersion: negotiateProtocolVersion(params?.protocolVersion),
             capabilities: { tools: {} },
             serverInfo: { name: 'LCC MCP Server', version: '1.0.0' }
           }
@@ -1586,10 +1984,10 @@ app.post('/mcp', async (req, res) => {
 });
 
 // DELETE /mcp — session cleanup (Streamable HTTP spec requirement)
-app.delete('/mcp', (req, res) => res.status(200).end());
+app.delete(prefixed('/mcp'), (req, res) => res.status(200).end());
 
 // GET /mcp — not supported (no server-push needed for these tools)
-app.get('/mcp', (req, res) => {
+app.get(prefixed('/mcp'), (req, res) => {
   res.status(405).json({ error: 'Use POST for MCP requests' });
 });
 
@@ -1624,24 +2022,36 @@ const crypto = globalThis.crypto;
 // ── OAuth Protected Resource Metadata (RFC 9396 / MCP OAuth June 2025) ──
 // Required by Claude.ai to discover the authorization server for /mcp.
 // Without this, Claude.ai cannot find OAuth endpoints and reports auth failure.
-app.get('/.well-known/oauth-protected-resource', (req, res) => {
-  const base = process.env.MCP_BASE_URL ||
-    `${req.protocol}://${req.get('host')}`;
+// RFC 9728 §3.1: for a protected resource whose id has a path component
+// (`/mcp`), the metadata lives at the PATH-SUFFIXED well-known URL
+// (`/.well-known/oauth-protected-resource/mcp`). Spec-compliant MCP clients
+// (Claude/Cowork, 2025-06-18) request that suffixed URL — without this route it
+// falls through to the SPA catch-all and returns index.html (200 text/html),
+// which the connector fails to parse as JSON → "error connecting to the server".
+// Serve BOTH the suffixed and the bare path so every client generation resolves.
+app.get([
+  prefixed('/.well-known/oauth-protected-resource'),
+  prefixed('/.well-known/oauth-protected-resource/mcp'),
+], (req, res) => {
   res.json({
-    resource: `${base}/mcp`,
-    authorization_servers: [base],
+    resource: publicUrl(req, '/mcp'),
+    authorization_servers: [publicBase(req)],
   });
 });
 
 // ── OAuth discovery metadata ──────────────────────────────────────────────
-app.get('/.well-known/oauth-authorization-server', (req, res) => {
-  const base = process.env.MCP_BASE_URL ||
-    `${req.protocol}://${req.get('host')}`;
+// Serve the auth-server metadata at the bare path (issuer has no path
+// component) AND at the `/mcp`-suffixed path that some clients derive from the
+// resource id — same JSON, same SPA-fallthrough guard as above.
+app.get([
+  prefixed('/.well-known/oauth-authorization-server'),
+  prefixed('/.well-known/oauth-authorization-server/mcp'),
+], (req, res) => {
   res.json({
-    issuer: base,
-    authorization_endpoint: `${base}/authorize`,
-    token_endpoint: `${base}/oauth/token`,
-    registration_endpoint: `${base}/register`,
+    issuer: publicBase(req),
+    authorization_endpoint: publicUrl(req, '/authorize'),
+    token_endpoint: publicUrl(req, '/oauth/token'),
+    registration_endpoint: publicUrl(req, '/register'),
     grant_types_supported: ['authorization_code'],
     response_types_supported: ['code'],
     token_endpoint_auth_methods_supported: ['client_secret_post', 'none'],
@@ -1653,7 +2063,7 @@ app.get('/.well-known/oauth-authorization-server', (req, res) => {
 // ── Dynamic Client Registration (RFC 7591) ────────────────────────────────
 // Claude.ai may attempt to register before the OAuth flow.
 // We accept any registration and return LCC_API_KEY as the client_secret.
-app.post('/register', (req, res) => {
+app.post(prefixed('/register'), (req, res) => {
   const apiKey = LCC_API_KEY;
   if (!apiKey) {
     return res.status(500).json({ error: 'server_error' });
@@ -1674,7 +2084,7 @@ app.post('/register', (req, res) => {
 // ── Step 1: Authorization endpoint ───────────────────────────────────────
 // Claude.ai redirects the user here. We auto-approve and redirect back
 // immediately — no login page needed for an internal personal tool.
-app.get('/authorize', (req, res) => {
+app.get(prefixed('/authorize'), (req, res) => {
   const {
     response_type, client_id, redirect_uri, state,
     code_challenge, code_challenge_method,
@@ -1721,7 +2131,7 @@ app.get('/authorize', (req, res) => {
 // ── Step 2: Token endpoint ────────────────────────────────────────────────
 // Claude.ai exchanges the authorization code for an access token.
 // Handles both application/x-www-form-urlencoded and application/json.
-app.post('/oauth/token', async (req, res) => {
+app.post(prefixed('/oauth/token'), async (req, res) => {
   const {
     grant_type,
     code,
@@ -1846,7 +2256,7 @@ app.get("/health", (_req, res) => {
     // are Object.assign'd onto TOOL_DEFINITIONS at startup).
     tools: Object.keys(TOOL_DEFINITIONS),
     http_read_routes: Object.keys(READ_HTTP_ROUTES),
-    http_comps_routes: ["/api/query-comps", "/api/synthesize-comps"],
+    http_comps_routes: ["/api/query-comps", "/api/synthesize-comps", "/api/comps"],
     ops_configured: !!(OPS_SUPABASE_URL && OPS_SUPABASE_KEY),
     gov_configured: !!(GOV_SUPABASE_URL && GOV_SUPABASE_KEY),
   });
@@ -1875,14 +2285,35 @@ app.get("/", (_req, res) => {
   // Shared REST surface — same engine as the MCP tools above, for Copilot Studio
   // custom connector + ChatGPT GPT Actions. Bearer-authenticated via `authenticate`.
   const __compsRoutes = makeCompsHttpRoutes({ govQuery, diaQuery });
-  app.post("/api/query-comps", authenticate, __compsRoutes.queryComps);
-  app.post("/api/synthesize-comps", authenticate, __compsRoutes.synthesizeComps);
+  app.post(prefixed("/api/query-comps"), authenticate, __compsRoutes.queryComps);
+  app.post(prefixed("/api/synthesize-comps"), authenticate, __compsRoutes.synthesizeComps);
+  app.post(prefixed("/api/comps"), authenticate, async (req, res) => {
+    // Prompt 71 — instrument the engine /api/comps handler so the failing hop is visible in logs.
+    const __t0 = Date.now();
+    try {
+      const payload = req.body || {};
+      const hasRequest = !!String(payload.request || '').trim();
+      const hasRows = Array.isArray(payload.sold) || Array.isArray(payload.on_market) || Array.isArray(payload.comps);
+      console.log('[api/comps] hit; hasRequest=' + hasRequest + ' hasRows=' + hasRows);
+      if (hasRequest) {
+        const result = await runGenerateCompsFromRequest(payload, { govQuery, diaQuery }, postCompsWorkbook);
+        console.log('[api/comps] one-shot ok in ' + (Date.now() - __t0) + 'ms; error=' + !!result.error);
+        res.status(result.error ? 400 : 200).json(enforceHttpResponseSize(result));
+        return;
+      }
+      const data = await postCompsWorkbook(payload);
+      res.json(enforceHttpResponseSize(compactCompsWorkbookResult(data)));
+    } catch (e) {
+      console.error('[api/comps] one-shot threw after ' + (Date.now() - __t0) + 'ms: ' + (e?.message || e));
+      res.status(502).json({ error: String(e?.message || e) });
+    }
+  });
   // W3.4: the comp-review DRAIN — list + resolve the flagged-comp queues. GET
   // lists open reviews across dia+gov; POST records a disposition. Same engine
   // the Decision-Center comp-review lane (ops.js) proxies to via /api/comp-reviews.
-  app.get("/api/comp-reviews", authenticate, __compsRoutes.listCompReviews);
-  app.post("/api/comp-reviews/resolve", authenticate, __compsRoutes.resolveCompReview);
-  console.log("[MCP] Registered comps HTTP routes: /api/query-comps, /api/synthesize-comps, /api/comp-reviews[, /resolve]");
+  app.get(prefixed("/api/comp-reviews"), authenticate, __compsRoutes.listCompReviews);
+  app.post(prefixed("/api/comp-reviews/resolve"), authenticate, __compsRoutes.resolveCompReview);
+  console.log("[MCP] Registered comps HTTP routes: /api/query-comps, /api/synthesize-comps, /api/comps, /api/comp-reviews[, /resolve]");
 }
 
 // ── Property metadata-backfill worklist (W3.4, audit 3.4 item 4) ─────────────
@@ -1893,7 +2324,7 @@ app.get("/", (_req, res) => {
 {
   const MB_SELECT_GOV = 'queue_id,property_id,missing_fields,priority,status,attempts,last_attempt_at,address,city,state,agency_full,most_recent_sale_date,most_recent_sold_price,costar_search_url';
   const MB_SELECT_DIA = 'queue_id,property_id,missing_fields,priority,status,attempts,last_attempt_at,address,city,state,tenant,parcel_number,most_recent_sale_date,most_recent_sold_price,costar_search_url';
-  app.get("/api/metadata-backfill", authenticate, async (req, res) => {
+  app.get(prefixed("/api/metadata-backfill"), authenticate, async (req, res) => {
     const limit = Math.min(Math.max(Number(req.query.limit) || 200, 1), 500);
     const only = String(req.query.domain || '').toLowerCase();
     const wantGov = !only || only === 'gov' || only === 'government';
@@ -1936,47 +2367,47 @@ app.get("/", (_req, res) => {
 
   // REST surface (POST + JSON body) — the root proxy forwards POST, so these are POST.
   const __ddRoutes = makeDealDossierHttpRoutes({ opsQuery, enc });
-  app.post("/api/deal/dossier",     authenticate, __ddRoutes.getDossier);
-  app.post("/api/deal/checkpoints", authenticate, __ddRoutes.listCheckpoints);
+  app.post(prefixed("/api/deal/dossier"),     authenticate, __ddRoutes.getDossier);
+  app.post(prefixed("/api/deal/checkpoints"), authenticate, __ddRoutes.listCheckpoints);
 
   // Salesforce write-back — enqueue into sf_sync_queue (confirmation-gated in the module).
   const __sfRoutes = makeSfWritebackRoutes({ opsQuery, enc, logMemory, WORKSPACE_ID: PRIMARY_WORKSPACE_ID });
-  app.post("/api/sf/log-activity",       authenticate, __sfRoutes.logActivity);
-  app.post("/api/sf/create-task",        authenticate, __sfRoutes.createTask);
-  app.post("/api/sf/update-opportunity", authenticate, __sfRoutes.updateOpportunity);
+  app.post(prefixed("/api/sf/log-activity"),       authenticate, __sfRoutes.logActivity);
+  app.post(prefixed("/api/sf/create-task"),        authenticate, __sfRoutes.createTask);
+  app.post(prefixed("/api/sf/update-opportunity"), authenticate, __sfRoutes.updateOpportunity);
 
   // Inbound SF Opportunity -> LCC deal backbone (BUILD 01) — idempotent on (workspace_id, sf_opp_id).
   const __oppSync = makeOpportunitySyncRoute({ opsQuery, enc, WORKSPACE_ID: PRIMARY_WORKSPACE_ID });
-  app.post("/api/pipeline/ingest-opportunity",   authenticate, __oppSync.ingest);       // single deal
-  app.post("/api/pipeline/ingest-opportunities", authenticate, __oppSync.ingestBatch);  // batch (PA sends whole array)
+  app.post(prefixed("/api/pipeline/ingest-opportunity"),   authenticate, __oppSync.ingest);       // single deal
+  app.post(prefixed("/api/pipeline/ingest-opportunities"), authenticate, __oppSync.ingestBatch);  // batch (PA sends whole array)
 
   // Deal Roster (BUILD 02, Slice A) — Team Briggs deal-team edges for owned/partnership scope.
   const __roster = makeDealRosterRoute({ opsQuery, enc, WORKSPACE_ID: PRIMARY_WORKSPACE_ID });
-  app.post("/api/pipeline/ingest-deal-parties",  authenticate, __roster.ingestParties);       // team members
-  app.post("/api/pipeline/ingest-deal-contacts", authenticate, __roster.ingestContactRoles);   // external contact roles
+  app.post(prefixed("/api/pipeline/ingest-deal-parties"),  authenticate, __roster.ingestParties);       // team members
+  app.post(prefixed("/api/pipeline/ingest-deal-contacts"), authenticate, __roster.ingestContactRoles);   // external contact roles
 
   // Cadence Engine (BUILD 03) — read-only "what needs a touch" scan over in-scope open deals.
   const __cadence = makeCadenceScanRoute({ opsQuery, enc, WORKSPACE_ID: PRIMARY_WORKSPACE_ID });
-  app.get("/api/pipeline/cadence-scan",  authenticate, __cadence.scan);
-  app.post("/api/pipeline/cadence-scan", authenticate, __cadence.scan);
-  app.get("/api/pipeline/weekly-digest",  authenticate, __cadence.weeklyDigest);   // engine-composed email
-  app.post("/api/pipeline/weekly-digest", authenticate, __cadence.weeklyDigest);
+  app.get(prefixed("/api/pipeline/cadence-scan"),  authenticate, __cadence.scan);
+  app.post(prefixed("/api/pipeline/cadence-scan"), authenticate, __cadence.scan);
+  app.get(prefixed("/api/pipeline/weekly-digest"),  authenticate, __cadence.weeklyDigest);   // engine-composed email
+  app.post(prefixed("/api/pipeline/weekly-digest"), authenticate, __cadence.weeklyDigest);
   // A1 entity reconciliation — review flagged deals + merge a placeholder onto a canonical asset.
   const __reconcile = makeEntityReconcileRoute({ opsQuery });
-  app.get("/api/pipeline/flagged-deals",     authenticate, __reconcile.list);
-  app.post("/api/pipeline/flagged-deals",    authenticate, __reconcile.list);
-  app.post("/api/pipeline/reconcile-entity", authenticate, __reconcile.reconcile);
+  app.get(prefixed("/api/pipeline/flagged-deals"),     authenticate, __reconcile.list);
+  app.post(prefixed("/api/pipeline/flagged-deals"),    authenticate, __reconcile.list);
+  app.post(prefixed("/api/pipeline/reconcile-entity"), authenticate, __reconcile.reconcile);
 
   // Offer-submission (BUILD 05) — assemble context + log an inbound offer (LCC + generic SF).
   const __offerCtx = makeOfferContextRoute({ opsQuery });
   const __offerLog = makeOfferLogRoute({ opsQuery });
-  app.get ("/api/pipeline/offer-context", authenticate, __offerCtx.get);
-  app.post("/api/pipeline/offer-context", authenticate, __offerCtx.get);
-  app.post("/api/pipeline/offer-log",     authenticate, __offerLog.post);
+  app.get (prefixed("/api/pipeline/offer-context"), authenticate, __offerCtx.get);
+  app.post(prefixed("/api/pipeline/offer-context"), authenticate, __offerCtx.get);
+  app.post(prefixed("/api/pipeline/offer-log"),     authenticate, __offerLog.post);
 
   // Deal-Email Matcher (BUILD 04) — attribute Outlook emails to deals by tenant+city; self-builds roster.
   const __matcher = makeDealEmailMatcherRoute({ opsQuery, enc, WORKSPACE_ID: PRIMARY_WORKSPACE_ID });
-  app.post("/api/pipeline/match-deal-emails", authenticate, __matcher.match);
+  app.post(prefixed("/api/pipeline/match-deal-emails"), authenticate, __matcher.match);
   console.log("[MCP] Registered deal-dossier + SF write-back + opportunity-sync HTTP routes");
 }
 
@@ -1992,20 +2423,27 @@ const READ_HTTP_ROUTES = {
   "/api/queue-summary": "get_queue_summary",
   "/api/pipeline-health": "get_pipeline_health",
   "/api/recall-memory": "recall_memory",
+  "/api/operator-inbox": "get_operator_inbox",
 };
 for (const [routePath, toolName] of Object.entries(READ_HTTP_ROUTES)) {
-  app.post(routePath, authenticate, makeReadHttpRoute(toolName));
+  app.post(prefixed(routePath), authenticate, makeReadHttpRoute(toolName));
 }
 console.log("[MCP] Registered read HTTP routes:", Object.keys(READ_HTTP_ROUTES).join(", "));
+}
 
 // ── Start ────────────────────────────────────────────────────────────────────
 
-app.listen(PORT, () => {
-  console.log(`[MCP] Life Command Center MCP server running on port ${PORT}`);
-  console.log(`[MCP] MCP endpoint: http://localhost:${PORT}/mcp`);
-  console.log(`[MCP] Health check: http://localhost:${PORT}/health`);
-  console.log(`[MCP] Auth: ${LCC_API_KEY ? "ENABLED" : "DISABLED (dev mode)"}`);
-  console.log(`[MCP] OPS DB: ${OPS_SUPABASE_URL ? "configured" : "NOT configured"}`);
-  console.log(`[MCP] GOV DB: ${GOV_SUPABASE_URL ? "configured" : "NOT configured"}`);
-  console.log(`[MCP] Assemble-on-miss: ${LCC_API_BASE ? `via ${LCC_API_BASE}` : "DISABLED (LCC_API_BASE not set — cache-only)"}`);
-});
+const isStandalone = process.argv[1] && import.meta.url === new URL(process.argv[1], "file:").href;
+if (isStandalone) {
+  const app = express();
+  mountLccMcp(app, { installMiddleware: true });
+  app.listen(PORT, () => {
+    console.log(`[MCP] Life Command Center MCP server running on port ${PORT}`);
+    console.log(`[MCP] MCP endpoint: http://localhost:${PORT}/mcp`);
+    console.log(`[MCP] Health check: http://localhost:${PORT}/health`);
+    console.log(`[MCP] Auth: ${LCC_API_KEY ? "ENABLED" : "DISABLED (dev mode)"}`);
+    console.log(`[MCP] OPS DB: ${OPS_SUPABASE_URL ? "configured" : "NOT configured"}`);
+    console.log(`[MCP] GOV DB: ${GOV_SUPABASE_URL ? "configured" : "NOT configured"}`);
+    console.log(`[MCP] Assemble-on-miss: ${LCC_API_BASE ? `via ${LCC_API_BASE}` : "DISABLED (LCC_API_BASE not set — cache-only)"}`);
+  });
+}

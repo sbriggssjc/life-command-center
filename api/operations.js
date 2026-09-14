@@ -57,9 +57,10 @@
 // ============================================================================
 
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
+import { isTrueOwnerOperator, trueOwnerOperatorSelectFields } from './_shared/true-owner-operator-guard.js';
 import { opsQuery, pgFilterVal, requireOps, withErrorHandler, insertEntityRelationship } from './_shared/ops-db.js';
 import { closeResearchLoop } from './_shared/research-loop.js';
-import { ensureEntityLink, normalizeCanonicalName, refreshPlaceholderEntityNameById, looksLikePersonName } from './_shared/entity-link.js';
+import { ensureEntityLink, normalizeCanonicalName, refreshPlaceholderEntityNameById, looksLikePersonName, recordContactFieldWrites } from './_shared/entity-link.js';
 import { invokeChatProvider } from './_shared/ai.js';
 import { generateDraft, generateBatchDrafts, listActiveTemplates, loadTemplate, recordTemplateSend, computeEditDistance, chooseBestTemplate } from './_shared/templates.js';
 import { runListingBdPipeline, runListingBdDraftConsumer } from './_shared/listing-bd.js';
@@ -72,7 +73,7 @@ import { writeSignal } from './_shared/signals.js';
 import { sendTeamsAlert } from './_shared/teams-alert.js';
 import { createOutlookDraftViaPA } from './_shared/outlook-draft.js';
 import { logSalesforceActivity, resolveDraftLogMode, createSalesforceTask } from './_shared/salesforce.js';
-import { ACTION_SCHEMAS, generateOpenApiSpec, generateSwagger2Spec, generatePluginManifest } from './_shared/action-schemas.js';
+import { ACTION_SCHEMAS, generateOpenApiSpec, generateSwagger2Spec, generatePluginManifest, generateChatGptSpec } from './_shared/action-schemas.js';
 import { validateActionInput } from './_shared/schema-validator.js';
 import { ingestPdfWorker } from './intake.js';
 import {
@@ -80,6 +81,10 @@ import {
   buildTransitionActivity, ACTION_TYPES, PRIORITIES, VISIBILITY_SCOPES, isValidEnum
 } from './_shared/lifecycle.js';
 import { diaSupabaseKey, govSupabaseKey } from './_shared/supabase-keys.js';
+import { logManualCallNote } from './_shared/intake-correspondence.js';
+import { resolveDealByQuery, decideCommTagOutcome } from './_shared/deal-resolve.js';
+import { appendActivityEvent } from './_shared/activity-events.js';
+import { assembleTodaySections, TODAY_SECTION_LIMIT } from './_shared/today-sections.js';
 
 // ============================================================================
 // EDGE FUNCTION PROXY — forwards requests to Supabase Edge Functions
@@ -192,6 +197,14 @@ export default withErrorHandler(async function handler(req, res) {
     return handleContactAcquisitionTick(req, res);
   }
 
+  // W9.1 (Prompt 98) — contact-acquisition ENGINE (Stage 1: internal sources).
+  // Proposal-only tick; distinct from the R16 SF worker above. GET=dry-run
+  // (?score=1&n= inline sample) / POST=apply (flag-gated W9_1_CONTACT_ACQUISITION).
+  if (req.query._route === 'contact-acquisition-engine-tick') {
+    const { handleContactAcquisitionEngineTick } = await import('./_handlers/contact-acquisition-engine.js');
+    return handleContactAcquisitionEngineTick(req, res);
+  }
+
   // CONNECTIVITY #3 — Salesforce link-store reconcile (via vercel.json
   // _route=sf-link-reconcile-tick). GET=dry-run / POST=drain. Mirrors domain
   // owner SF Account links onto the bridged entity; surfaces conflicts/
@@ -232,6 +245,17 @@ export default withErrorHandler(async function handler(req, res) {
   if (req.query._route === 'owner-contact-enrich-tick') {
     const { handleOwnerContactEnrichTick } = await import('./_handlers/owner-contact-enrich.js');
     return handleOwnerContactEnrichTick(req, res);
+  }
+
+  // BREAK-1 (Prompt 111) — owner-contact PROPAGATION worker. Fill-blanks the
+  // owner entity's email/phone from an OWNER-BOUND, NAME-MATCHED dia/gov
+  // contacts row so the redesigned owner panel's hand-off stops dead-ending on
+  // "Find a contact". GET = dry-run (default) / POST = apply. Authenticates
+  // internally. Sibling of, not a replacement for, owner-contact-enrich-tick.
+  // ⚠ SUBROUTE-DISPATCH GUARD — see test/operations-subroutes.test.mjs; do NOT remove.
+  if (req.query._route === 'owner-contact-propagate-tick') {
+    const { handleOwnerContactPropagateTick } = await import('./_handlers/owner-contact-propagate.js');
+    return handleOwnerContactPropagateTick(req, res);
   }
 
   // ORE Phase B B1 / Tier A / reconcile-engine workers (via vercel.json /
@@ -378,11 +402,12 @@ export default withErrorHandler(async function handler(req, res) {
       case 'property_geo': return await getPropertyGeo(req, res, user, workspaceId);
       case 'property_signals': return await getPropertySignals(req, res, user, workspaceId);
       case 'bd_worklist': return await getBdWorklist(req, res, user, workspaceId);
+      case 'today_sections': return await getTodaySections(req, res, user, workspaceId);
       case 'activation_review': return await getActivationReview(req, res, user, workspaceId);
       case 'marketing_listings': return await getMarketingListings(req, res, user, workspaceId);
       case 'marketing_engagement': return await getMarketingEngagement(req, res, user, workspaceId);
       case 'marketing_bd': return await getMarketingBd(req, res, user, workspaceId);
-      default: return res.status(400).json({ error: 'Invalid GET action. Use: oversight, unassigned, watchers, buyer_contacts, cadence_dashboard, next_best_touchpoint, contact_qualify_worklist, property_geo, property_signals, bd_worklist, activation_review, marketing_listings, marketing_engagement, marketing_bd' });
+      default: return res.status(400).json({ error: 'Invalid GET action. Use: oversight, unassigned, watchers, buyer_contacts, cadence_dashboard, next_best_touchpoint, contact_qualify_worklist, property_geo, property_signals, bd_worklist, today_sections, activation_review, marketing_listings, marketing_engagement, marketing_bd' });
     }
   }
 
@@ -779,6 +804,13 @@ async function bridgeSetContactEmail(req, res, user, workspaceId) {
     `entities?id=eq.${pgFilterVal(entityId)}&workspace_id=eq.${pgFilterVal(workspaceId)}`,
     { email, updated_at: new Date().toISOString() });
   if (!r.ok) return res.status(r.status || 500).json({ error: 'Failed to save email', detail: r.data });
+  // CONTACT1b — an operator-typed email in the draft flow. Audit-only.
+  await recordContactFieldWrites({
+    recordPk: entityId,
+    source: 'manual',
+    workspaceId,
+    fields: { email },
+  });
   return res.status(200).json({ ok: true, entity_id: entityId, email });
 }
 
@@ -1149,6 +1181,16 @@ async function bridgeUpdateEntity(req, res, user, workspaceId) {
   if (!result.ok) {
     return res.status(result.status || 500).json({ error: 'Failed to update entity' });
   }
+
+  // CONTACT1b — this PATCH runs unconditionally on the ALLOWED-FIELDS list
+  // (overwrites, not fill-blank), so it is the generic bridge writer of
+  // entities.email/phone. Audit-only.
+  await recordContactFieldWrites({
+    recordPk: entityId,
+    source: source_system,
+    workspaceId,
+    fields: updates,
+  });
 
   return res.status(200).json({
     updated: true,
@@ -1746,7 +1788,11 @@ export function assembleBdWorklist(sources = {}) {
       what: r.what,
       who: r.who || null,
       rank_value: num(r.rank_value),
-      is_distressed: false,
+      // UX-T1a-debt: the LCC view now SETS this (loan_maturity arm, gov
+      // loan_status='defaulted'). It was hard-coded false, so the renderer's
+      // ⚠ "Distressed loan" badge could never fire on an LCC row — C10's class
+      // one field over: a renderer reading a key no producer sets.
+      is_distressed: !!r.is_distressed,
       city: r.city || null,
       state: r.state || null,
       detail: r.detail || {},
@@ -1825,13 +1871,35 @@ export function assembleBdWorklist(sources = {}) {
   addConflict('gov', sources.owner_conflict?.gov);
   addConflict('dia', sources.owner_conflict?.dia);
 
-  // Dedup one row per (signal_type, domain, property_id|entity_id), keep the
-  // highest-value occurrence.
+  // Dedup one row per (signal_type, domain, property_id|entity_id).
+  //
+  // ⚠ UX-T1a-debt (2026-09-03): `loan_maturity` now has TWO producers for the same
+  // property — the domain `v_loan_maturity_watch` fan-out below, and the new
+  // owner-attributed LCC arm in `v_lcc_bd_worklist`. They collapse to one row here,
+  // and on rank_value ALONE the domain row can win, which SILENTLY DROPS the
+  // entity_id: the domain arm emits `entity_id: null` (it cannot resolve an LCC
+  // owner), so the card loses its owner deep-link and the operator is told a loan
+  // matures with nobody to call. That is likeliest exactly where it hurts most —
+  // the LCC arm reports rank_value NULL (→ 0 here) for the 39 unpriced assets,
+  // so it would lose every one of those ties.
+  //
+  // So attribution wins BEFORE value: a row that names an owner entity beats one
+  // that does not, and value only breaks ties within the same attribution class.
+  // This cannot affect the other signal types — contact_writeback and
+  // ownership_chain rows all carry entity_id, suspected_sale and
+  // owner_source_conflict rows all carry null, so within any one key the class is
+  // uniform and the comparison falls through to rank_value as before.
   const seen = new Map();
+  const betterThan = (r, prev) => {
+    const ra = r.entity_id ? 1 : 0;
+    const pa = prev.entity_id ? 1 : 0;
+    if (ra !== pa) return ra > pa;
+    return r.rank_value > prev.rank_value;
+  };
   for (const r of out) {
     const key = r.signal_type + ':' + (r.domain || '') + ':' + (r.property_id || r.entity_id || '');
     const prev = seen.get(key);
-    if (!prev || r.rank_value > prev.rank_value) seen.set(key, r);
+    if (!prev || betterThan(r, prev)) seen.set(key, r);
   }
   const deduped = [...seen.values()];
 
@@ -1882,6 +1950,14 @@ async function getBdWorklist(req, res, user, workspaceId) {
     const [cwC, chC, lmGovC, lmDiaC, ssGovC, ocGovC, ocDiaC] = await Promise.all([
       want('contact_writeback') ? opsQuery('GET', lccSel + '&signal_type=eq.contact_writeback&limit=1', null, { countMode: 'exact' }) : Promise.resolve({ count: 0 }),
       want('ownership_chain') ? opsQuery('GET', lccSel + '&signal_type=eq.ownership_chain&limit=1', null, { countMode: 'exact' }) : Promise.resolve({ count: 0 }),
+      // ⚠ UX-T1a-debt: this badge counts the DOMAIN watch views only, while the list
+      // below merges those with the LCC loan_maturity arm. Measured 2026-09-03, the
+      // LCC arm's properties are a strict SUBSET of the domain views on gov (106 of
+      // 178, 0 outside) but NOT on dia (16, of which 2 are absent from dia's
+      // v_loan_maturity_watch), so this badge UNDERCOUNTS by exactly 2 against the
+      // deduped list (250 vs 252). Stated rather than silently inconsistent; an exact
+      // union needs the merged list, which this count-only path deliberately avoids
+      // fetching. Backlog: UX-T1a-debt-badge.
       want('loan_maturity') ? domainSelectCount('gov', 'v_loan_maturity_watch?select=property_id') : Promise.resolve({ count: 0 }),
       want('loan_maturity') ? domainSelectCount('dia', 'v_loan_maturity_watch?select=property_id') : Promise.resolve({ count: 0 }),
       want('suspected_sale') ? domainSelectCount('gov', 'v_suspected_sale?select=property_id') : Promise.resolve({ count: 0 }),
@@ -1899,11 +1975,20 @@ async function getBdWorklist(req, res, user, workspaceId) {
     return res.status(200).json({ ok: true, summary: true, total, by_signal_type });
   }
 
-  const lccTypes = ['contact_writeback', 'ownership_chain'].filter(want);
-  const lccFilter = lccTypes.length === 2 ? '' : `&signal_type=eq.${lccTypes[0] || 'none'}`;
+  // ⚠ UX-T1a-debt: `loan_maturity` MUST be listed here. This array is the only thing
+  // that decides which signal types are fetched from the LCC view, so the new
+  // owner-attributed loan_maturity arm added to `v_lcc_bd_worklist` would have been
+  // fetched by nothing and been invisible on every surface — a producer with no
+  // consumer, one layer above the gap this round exists to close.
+  const LCC_SIGNAL_TYPES = ['contact_writeback', 'ownership_chain', 'loan_maturity'];
+  const lccTypes = LCC_SIGNAL_TYPES.filter(want);
+  // Length-keyed on the array, not a literal: a hard-coded `=== 2` silently becomes a
+  // per-type filter the moment a fourth arm is added, serving one type under a chip
+  // that claims all of them.
+  const lccFilter = lccTypes.length === LCC_SIGNAL_TYPES.length ? '' : `&signal_type=eq.${lccTypes[0] || 'none'}`;
   const [lccRes, lmGov, lmDia, ssGov, ocGov, ocDia] = await Promise.all([
     lccTypes.length
-      ? opsQuery('GET', `v_lcc_bd_worklist?select=signal_type,source_domain,property_id,entity_id,what,who,rank_value,rank_property_count,city,state,detail${lccFilter}&order=rank_value.desc.nullslast&limit=${CAP}`, null, { countMode: 'none' })
+      ? opsQuery('GET', `v_lcc_bd_worklist?select=signal_type,source_domain,property_id,entity_id,what,who,rank_value,rank_property_count,address,city,state,detail,is_distressed${lccFilter}&order=rank_value.desc.nullslast&limit=${CAP}`, null, { countMode: 'none' })
       : Promise.resolve({ ok: true, data: [] }),
     want('loan_maturity') ? domainSelect('gov', `v_loan_maturity_watch?select=property_id,owner_name,annual_rent,maturity_date,months_to_maturity,maturity_band,is_distressed,distress_reason,loan_balance,city,state&order=is_distressed.desc,annual_rent.desc.nullslast&limit=${CAP}`) : Promise.resolve({ ok: true, data: [] }),
     want('loan_maturity') ? domainSelect('dia', `v_loan_maturity_watch?select=property_id,owner_name,annual_rent,maturity_date,months_to_maturity,maturity_band,is_distressed,distress_reason,loan_balance,city,state&order=is_distressed.desc,annual_rent.desc.nullslast&limit=${CAP}`) : Promise.resolve({ ok: true, data: [] }),
@@ -1925,6 +2010,201 @@ async function getBdWorklist(req, res, user, workspaceId) {
     type_filter: typeFilter,
     worklist,
   });
+}
+
+// ============================================================================
+// GET ?action=today_sections — UX-T1a-today (2026-09-03)
+//
+// Recuts Today into the canon's three sections (docs/os/canon/blocks/
+// operator-doctrine.md 1.8.0): Significant (new-client research, first
+// outreach, follow-ups — pays in 5yr), Important (BOVs/ELAs/working buyers/
+// marketing live listings — pays within a year), Urgent (pipeline management,
+// deal correspondence — pays in ~90 days). Each section's `count` equals the
+// rows it returns; `total_open` is the full population for the "See all →"
+// link. `named_gaps` lists canon examples with no producer today (P131's rule
+// — a coverage gap is filed, never faked with a heuristic).
+//
+// Sources (measured 2026-09-03, see docs/claude-code/responses/
+// UX-T1a-today.response.md for the full census):
+//   Significant — v_lcc_seller_prospect_queue (UX-T1a-queue), unfiltered: every
+//     row in that view is, by its own gates, an owner not yet reached.
+//   Important   — bd_opportunities open rows (the one real recorded producer
+//     for "a touch that generates a BOV or a working buyer"; no BOV-generation
+//     or marketing-live-listing producer exists — named gap).
+//   Urgent      — action_items open/in_progress rows tied to a deal (deal
+//     correspondence) UNIONED with domain owner_source_conflict(auto_fixable)
+//     rows (a data-integrity block on the deal moving). v_lcc_bd_worklist's
+//     contact_writeback is CRM plumbing, not deal work (HP1-P2f-urgent,
+//     2026-09-12) — it is EXCLUDED from the union and surfaced instead as
+//     `urgent.pointer` (true, uncapped count + a link to the BD worklist's
+//     own contact_writeback chip). loan_maturity and ownership_chain are
+//     deliberately excluded too (see today-sections.js header for why).
+// ============================================================================
+// HP1 Finding 1 (P0, 2026-09-12) — settle a Promise that may REJECT (opsQuery's
+// fetchWithTimeout throws on abort; it does not resolve {ok:false}) into the
+// same {ok,status,data} shape domainSelect already fails soft into. Without
+// this, one slow source (the seller-prospect view crossing its timeout on a
+// cold shared-buffer cache) rejects the whole `Promise.all` and 500s all THREE
+// Today lanes at once — the exact symptom Scott reported (one endpoint, drawn
+// three times). `Promise.allSettled` + this mapper means a thrown source
+// degrades ONLY its own lane; every other source is untouched.
+function settledQueryResult(settled, label) {
+  if (settled.status === 'fulfilled') return settled.value;
+  const reason = settled.reason;
+  const msg = (reason && reason.message) ? String(reason.message).slice(0, 200) : String(reason || 'unknown error');
+  console.error(`[today_sections] source "${label}" threw:`, reason && reason.stack || reason);
+  return { ok: false, status: 0, data: null, error: msg };
+}
+
+export async function getTodaySections(req, res, user, workspaceId) {
+  const limit = (() => {
+    const n = Number(req.query.limit);
+    return (Number.isFinite(n) && n > 0 && n <= 25) ? Math.floor(n) : TODAY_SECTION_LIMIT;
+  })();
+
+  // 1c (superseded by HP1-badge, 2026-09-12): `.count` from the row-fetch
+  // calls is still never read — `total_open` must NOT come from a header
+  // count riding the SAME request as the row fetch, because that is exactly
+  // the ~750ms-per-request cost measured and removed here (docs/HP1 Finding
+  // 1). The row-fetch reads stay `countMode: 'estimated'` for that reason.
+  // HP1-badge instead runs the true count as a SEPARATE, PARALLEL, narrow
+  // (single-column, `limit=1`) probe per lane, `Prefer: count=exact` (the
+  // same idiom `getBdWorklist`'s summary path already uses for
+  // `v_lcc_bd_worklist`). Paying the DB's real COUNT(*) cost once, in
+  // parallel with the row fetches rather than serially inside one of them,
+  // is what keeps this off the row-fetch's own critical path — see the
+  // measured latency in the HP1-badge writeup before touching this shape.
+  // 1a: the seller-prospect view is the one measured to cross the OLD 8s
+  // default on a cold cache (EXPLAIN ANALYZE ~1.6s warm; several-fold longer
+  // cold) — it gets the most headroom. The other three are lighter aggregates
+  // but get real headroom too rather than a bare guess. The count probes get
+  // the SAME headroom as their row-fetch siblings, since a view's COUNT(*)
+  // can cost as much as materialising it.
+  const [
+    sellerQS, bdOppQS, actionItemsQS, lccUrgentQS, ocGovR, ocDiaR,
+    sellerCountQS, bdOppCountQS, actionItemsCountQS, lccUrgentCountQS, ocGovCountR, ocDiaCountR,
+  ] = await Promise.allSettled([
+    opsQuery('GET', 'v_lcc_seller_prospect_queue?select=*&order=rank_value.desc.nullslast,years_into_term.asc.nullslast&limit=200', null, { countMode: 'estimated', timeoutMs: 20000 }),
+    opsQuery('GET', 'bd_opportunities?select=id,entity_id,type,stage,amount,expected_close_date,opened_at&is_open=eq.true&order=amount.desc.nullslast&limit=200', null, { countMode: 'estimated', timeoutMs: 12000 }),
+    opsQuery('GET', "action_items?select=id,entity_id,action_type,title,priority,due_date,status&status=in.(open,in_progress)&order=due_date.asc.nullslast&limit=200", null, { countMode: 'estimated', timeoutMs: 12000 }),
+    opsQuery('GET', 'v_lcc_bd_worklist?select=signal_type,source_domain,property_id,entity_id,what,who,rank_value,city,state&signal_type=eq.contact_writeback&order=rank_value.desc.nullslast&limit=200', null, { countMode: 'estimated', timeoutMs: 12000 }),
+    domainSelect('gov', 'v_owner_source_conflict?auto_fixable=eq.true&select=property_id,recorded_owner_name,latest_deed_grantee,conflict_kind,annual_rent,city,state&order=annual_rent.desc.nullslast&limit=100'),
+    domainSelect('dia', 'v_owner_source_conflict?auto_fixable=eq.true&select=property_id,recorded_owner_name,latest_deed_grantee,conflict_kind,annual_rent,city,state&order=annual_rent.desc.nullslast&limit=100'),
+    opsQuery('GET', 'v_lcc_seller_prospect_queue?select=entity_id&limit=1', null, { countMode: 'exact', timeoutMs: 20000 }),
+    opsQuery('GET', 'bd_opportunities?select=id&is_open=eq.true&limit=1', null, { countMode: 'exact', timeoutMs: 12000 }),
+    opsQuery('GET', "action_items?select=id&status=in.(open,in_progress)&limit=1", null, { countMode: 'exact', timeoutMs: 12000 }),
+    opsQuery('GET', 'v_lcc_bd_worklist?select=signal_type&signal_type=eq.contact_writeback&limit=1', null, { countMode: 'exact', timeoutMs: 12000 }),
+    domainSelectCount('gov', 'v_owner_source_conflict?auto_fixable=eq.true&select=property_id'),
+    domainSelectCount('dia', 'v_owner_source_conflict?auto_fixable=eq.true&select=property_id'),
+  ]);
+
+  const sellerQR = settledQueryResult(sellerQS, 'v_lcc_seller_prospect_queue (significant)');
+  const bdOppR = settledQueryResult(bdOppQS, 'bd_opportunities (important)');
+  const actionItemsR = settledQueryResult(actionItemsQS, 'action_items (urgent: deal correspondence)');
+  const lccUrgentR = settledQueryResult(lccUrgentQS, 'v_lcc_bd_worklist (urgent: pipeline hygiene)');
+  // domainSelect already fails soft internally (try/catch around its own
+  // fetch) — Promise.allSettled never sees a rejection from these two, but
+  // routing them through the same settler keeps one shape for every source.
+  const ocGov = settledQueryResult(ocGovR, 'gov v_owner_source_conflict');
+  const ocDia = settledQueryResult(ocDiaR, 'dia v_owner_source_conflict');
+
+  // HP1-badge: each true-count probe resolves to a NUMBER only when it
+  // actually succeeded with a real Content-Range total; anything else
+  // (thrown, non-2xx, missing/garbled header) is `null` — "unknown", never
+  // "0" and never a silent fallback to the capped page length (P180).
+  const exactCountOrNull = (settled, label) => {
+    const r = settledQueryResult(settled, label);
+    return (r && r.ok && Number.isFinite(r.count)) ? r.count : null;
+  };
+  const significantTrueCount = exactCountOrNull(sellerCountQS, 'v_lcc_seller_prospect_queue count (significant)');
+  const importantTrueCount = exactCountOrNull(bdOppCountQS, 'bd_opportunities count (important)');
+  const actionItemsTrueCount = exactCountOrNull(actionItemsCountQS, 'action_items count (urgent)');
+  const contactWritebackTrueCount = exactCountOrNull(lccUrgentCountQS, 'v_lcc_bd_worklist count (urgent)');
+  // domainSelectCount fails soft to {ok:false,count:0} internally and never
+  // throws, so settledQueryResult only ever sees 'fulfilled' here — routed
+  // through it anyway for one shape, and its own ok:false still reads as
+  // unknown (never the 0 it happens to carry).
+  const ocGovTrueCount = exactCountOrNull(ocGovCountR, 'gov v_owner_source_conflict count (urgent)');
+  const ocDiaTrueCount = exactCountOrNull(ocDiaCountR, 'dia v_owner_source_conflict count (urgent)');
+  // HP1-P2f-urgent: contact_writeback no longer feeds Urgent's union (it is
+  // CRM plumbing, surfaced instead as a `pointer` — see today-sections.js),
+  // so it is dropped from this sum. Urgent's total_open now has THREE
+  // independent producers; summing them is only honest when every one
+  // actually resolved — a partial sum both under-reports (a failed leg
+  // silently contributes 0) and would be indistinguishable from a genuinely
+  // small population, so ANY unresolved leg makes the whole Urgent total
+  // "unknown" rather than a guess.
+  const urgentTrueCount = (
+    actionItemsTrueCount !== null && ocGovTrueCount !== null && ocDiaTrueCount !== null
+  ) ? (actionItemsTrueCount + ocGovTrueCount + ocDiaTrueCount) : null;
+
+  const significantRows = sellerQR.ok ? (sellerQR.data || []) : [];
+  const bdOppRows = bdOppR.ok ? (bdOppR.data || []) : [];
+  const actionItems = actionItemsR.ok ? (actionItemsR.data || []) : [];
+  const lccUrgentRows = lccUrgentR.ok ? (lccUrgentR.data || []) : [];
+
+  // 1b: a source that failed THIS request is named, never silently rendered
+  // as an empty-but-healthy lane (which would read as a false all-clear on a
+  // seller-prospect/pipeline-hygiene queue). Each string is short + honest —
+  // the HTTP status or the caught error, never the raw stack.
+  const describeFailure = (r, fallback) => {
+    if (r.ok) return null;
+    if (r.error) return r.error;
+    if (r.status) return `HTTP ${r.status}`;
+    return fallback;
+  };
+  const sourceErrors = {
+    significant: describeFailure(sellerQR, 'seller-prospect queue unavailable'),
+    important: describeFailure(bdOppR, 'bd_opportunities unavailable'),
+    actionItems: describeFailure(actionItemsR, 'action_items unavailable'),
+    // The bd_worklist half of Urgent is fed by THREE sources (lcc + gov + dia
+    // owner-conflict); name it degraded if the LCC leg failed — a failed
+    // domain leg alone just thins the rows (P131: never fabricate, never
+    // escalate a partial thinning to a full-lane failure).
+    bdWorklist: describeFailure(lccUrgentR, 'v_lcc_bd_worklist unavailable'),
+  };
+
+  // The Urgent bd_worklist half reuses the SAME normalize+dedup+rank pure
+  // function the full worklist uses (assembleBdWorklist) — never a second,
+  // divergent shape for the same signal types.
+  const bdWorklistRows = assembleBdWorklist({
+    lcc: lccUrgentRows,
+    owner_conflict: {
+      gov: ocGov.ok ? ocGov.data : [],
+      dia: ocDia.ok ? ocDia.data : [],
+    },
+  });
+
+  // entity name lookup — bd_opportunities/action_items carry no FK for
+  // PostgREST to embed (P132: never trust an unhinted embed), so resolve
+  // names with one bounded fetch instead of N+1s. Guarded the same way as the
+  // six sources above: a thrown lookup degrades to "no names resolved" (the
+  // caller already falls back to the raw entity_id), never a 500 for the
+  // whole endpoint.
+  const entityIds = [...new Set([
+    ...bdOppRows.map((r) => r.entity_id),
+    ...actionItems.map((r) => r.entity_id),
+  ].filter(Boolean))];
+  const entityById = new Map();
+  if (entityIds.length) {
+    try {
+      const idsFilter = entityIds.map((id) => encodeURIComponent(id)).join(',');
+      const enR = await opsQuery('GET', `entities?select=id,name&id=in.(${idsFilter})`, null, { countMode: 'none' });
+      if (enR.ok) for (const e of (enR.data || [])) entityById.set(e.id, e.name);
+    } catch (e) {
+      console.error('[today_sections] entity name lookup threw:', e && e.stack || e);
+    }
+  }
+
+  const sections = assembleTodaySections({
+    significantRows, bdOppRows, actionItems, bdWorklistRows, entityById,
+    contactWritebackCount: contactWritebackTrueCount,
+  }, {
+    limit, sourceErrors,
+    trueTotalOpen: { significant: significantTrueCount, important: importantTrueCount, urgent: urgentTrueCount },
+  });
+
+  return res.status(200).json({ ok: true, ...sections });
 }
 
 // ============================================================================
@@ -2557,7 +2837,11 @@ async function bridgeSelectBuyerContact(req, res, user, workspaceId) {
 
   // Create a new person entity when requested.
   if (!contactEntityId && !sfContactId && newName) {
-    const canon = (typeof normalizeCanonicalName === 'function') ? normalizeCanonicalName(newName) : newName.toLowerCase();
+    // N15c: the `typeof` guard's fallback (`newName.toLowerCase()`) was a TWELFTH
+    // normalization of this column — it would have written a key no lookup
+    // could reproduce. normalizeCanonicalName is a static import at the top of
+    // this file, so the guard was dead code protecting nothing.
+    const canon = normalizeCanonicalName(newName);
     const ins = await opsQuery('POST', 'entities',
       { workspace_id: workspaceId, entity_type: 'person', name: newName, canonical_name: canon, domain: 'lcc' });
     const row = (ins.ok && Array.isArray(ins.data)) ? ins.data[0] : null;
@@ -2782,7 +3066,11 @@ async function bridgeSelectProspectingContact(req, res, user, workspaceId) {
 
   // Create a new person entity when requested.
   if (!contactEntityId && !sfContactId && newName) {
-    const canon = (typeof normalizeCanonicalName === 'function') ? normalizeCanonicalName(newName) : newName.toLowerCase();
+    // N15c: the `typeof` guard's fallback (`newName.toLowerCase()`) was a TWELFTH
+    // normalization of this column — it would have written a key no lookup
+    // could reproduce. normalizeCanonicalName is a static import at the top of
+    // this file, so the guard was dead code protecting nothing.
+    const canon = normalizeCanonicalName(newName);
     const ins = await opsQuery('POST', 'entities',
       { workspace_id: workspaceId, entity_type: 'person', name: newName, canonical_name: canon, domain: 'lcc' });
     const row = (ins.ok && Array.isArray(ins.data)) ? ins.data[0] : null;
@@ -3176,6 +3464,10 @@ const ACTION_REGISTRY = {
   // Tier 2: Microsoft To Do task creation (Wave 2)
   create_todo_task:            { tier: 2, handler: 'create_todo_task', confirm: 'explicit' },
 
+  // Tier 1: W7.3 — capture calls + tag comms "from Microsoft as we send/work"
+  log_call_note:               { tier: 1, handler: 'log_call_note', confirm: 'lightweight' },
+  tag_comm_to_deal:            { tier: 1, handler: 'tag_comm_to_deal', confirm: 'lightweight' },
+
   // Tier 0: Template engine (Wave 2)
   list_email_templates:          { method: 'GET', path: 'draft', tier: 0, alias: 'operations?_route=draft' },
   get_email_template:            { method: 'GET', path: 'draft&template_id=', tier: 0, alias: 'operations?_route=draft&template_id=' },
@@ -3321,6 +3613,8 @@ async function dispatchAction(actionName, params, user, workspaceId, req) {
       case 'draft_seller_update':     result = await handleDraftSellerUpdate(params, user, workspaceId); break;
       case 'draft_reply_from_inbox': result = await handleDraftReplyFromInbox(params, user, workspaceId); break;
       case 'create_todo_task':        result = await createTodoTask(params, user, workspaceId); break;
+      case 'log_call_note':           result = await handleLogCallNote(params, user, workspaceId); break;
+      case 'tag_comm_to_deal':        result = await handleTagCommToDeal(params, user, workspaceId); break;
       case 'listing_pursuit_dossier': result = await handleListingPursuitDossier(params, user, workspaceId); break;
       case 'teams_card':              result = await generateTeamsCard(params); break;
       case 'relationship_context':    result = await handleRelationshipContext(params, user, workspaceId); break;
@@ -3815,6 +4109,151 @@ async function handleSearchDeals(params) {
     count: results.length,
     results,
     query: { q, status: statusFilter, entity_id: entityId }
+  };
+}
+
+// ---------------------------------------------------------------------------
+// W7.3 — Copilot: log a call note (path B action 1)
+// "from Copilot as we send/work" — inputs: deal_or_contact_query, direction,
+// notes, occurred_at?. Resolution NEVER guesses: ambiguous → return the top
+// candidates for the user to pick and WRITE NOTHING; unique/exact → log the
+// same call_note activity as the in-app quick-log via logManualCallNote, so it
+// flows through W7.2. risk_tier 1.
+// ---------------------------------------------------------------------------
+async function handleLogCallNote(params, user, workspaceId) {
+  const p = params || {};
+  const notes = String(p.notes || p.body || '').trim();
+  const query = String(p.deal_or_contact_query || p.query || p.deal || p.contact || '').trim();
+  if (!notes) return { ok: false, error: 'notes (the call notes) is required.' };
+
+  const ws = workspaceId || user?.memberships?.[0]?.workspace_id || process.env.LCC_DEFAULT_WORKSPACE_ID;
+
+  // Resolve the deal — conservatively. No query → log on the relationship only.
+  let dealEntityId = null, dealName = null;
+  if (query) {
+    const r = await resolveDealByQuery(query, { opsQuery }).catch(() => null);
+    if (r && r.matched === 'ambiguous') {
+      return {
+        ok: true, requires_pick: true, wrote: false,
+        message: `More than one open deal matches "${query}". Pick one and resend log_call_note with that deal name.`,
+        candidates: r.candidates,
+      };
+    }
+    if (r && (r.matched === 'exact' || r.matched === 'unique')) {
+      dealEntityId = r.deal_entity_id; dealName = r.deal_name;
+    } else {
+      return {
+        ok: true, requires_pick: true, wrote: false,
+        message: `No open deal matched "${query}". Search the deal name and resend, or log without a deal to attach it to the relationship.`,
+        candidates: [],
+      };
+    }
+  }
+
+  const r = await logManualCallNote({
+    workspaceId: ws,
+    actorId:      user?.id || user?.user_id,
+    dealEntityId,
+    direction:    p.direction || null,
+    notes,
+    contactName:  p.contact_name || p.name || null,
+    occurredAt:   p.occurred_at || p.occurredAt || null,
+    source:       'copilot',
+    structure:    p.structure !== false,
+  });
+  if (!r.ok) return { ok: false, error: r.skipped || 'log_failed' };
+
+  return {
+    ok: true, wrote: !!r.inserted, duplicate: r.ok && !r.inserted,
+    activity_id: r.id, deal_entity_id: dealEntityId, deal_name: dealName,
+    message: dealEntityId
+      ? `Logged the call on ${dealName || 'the deal'} — its summary and next steps update within the hour.`
+      : 'Logged the call on the relationship (no deal specified).',
+  };
+}
+
+// ---------------------------------------------------------------------------
+// W7.3 — Copilot: tag an existing comm to a deal (path B action 2)
+// The manual override lane. Inputs: deal_or_contact_query + a message hint
+// (subject/sender/approx time) OR internet_message_id. Finds the matching
+// activity row and stamps deal_entity_id — IDEMPOTENT; REFUSES if already
+// stamped to a DIFFERENT deal (surfaces the conflict). risk_tier 1.
+// ---------------------------------------------------------------------------
+async function handleTagCommToDeal(params, user, workspaceId) {
+  const p = params || {};
+  const query = String(p.deal_or_contact_query || p.query || p.deal || '').trim();
+  if (!query) return { ok: false, error: 'deal_or_contact_query is required.' };
+
+  const ws = workspaceId || user?.memberships?.[0]?.workspace_id || process.env.LCC_DEFAULT_WORKSPACE_ID;
+  if (!ws) return { ok: false, error: 'No workspace context.' };
+
+  // Resolve the target deal (conservative — never guess).
+  const rd = await resolveDealByQuery(query, { opsQuery }).catch(() => null);
+  if (!rd || rd.matched === 'none') {
+    return { ok: true, requires_pick: true, wrote: false, message: `No open deal matched "${query}".`, candidates: [] };
+  }
+  if (rd.matched === 'ambiguous') {
+    return { ok: true, requires_pick: true, wrote: false, message: `More than one deal matches "${query}". Pick one.`, candidates: rd.candidates };
+  }
+  const dealEntityId = rd.deal_entity_id, dealName = rd.deal_name;
+
+  // Find the matching comm row — by internet_message_id, else a subject/sender/time hint.
+  const internetMsgId = String(p.internet_message_id || p.message_id || '').trim();
+  let row = null;
+  if (internetMsgId) {
+    const r = await opsQuery('GET',
+      `activity_events?workspace_id=eq.${pgFilterVal(ws)}&external_id=eq.${encodeURIComponent(internetMsgId)}` +
+      `&select=id,entity_id,external_id,title,metadata&limit=1`);
+    row = r?.data?.[0] || null;
+  }
+  if (!row) {
+    const subj = String(p.subject || p.message_hint || '').trim();
+    const sender = String(p.sender || p.from || '').trim();
+    const clauses = [];
+    if (subj)   clauses.push(`title.ilike.*${encodeURIComponent(subj.replace(/[*()]/g, ''))}*`);
+    if (sender) clauses.push(`metadata->>from.ilike.*${encodeURIComponent(sender.replace(/[*()]/g, ''))}*`);
+    if (clauses.length) {
+      const r = await opsQuery('GET',
+        `activity_events?workspace_id=eq.${pgFilterVal(ws)}&category=in.(email,call)&or=(${clauses.join(',')})` +
+        `&select=id,entity_id,external_id,title,metadata&order=occurred_at.desc&limit=5`);
+      const rows = r?.data || [];
+      if (rows.length > 1) {
+        return {
+          ok: true, requires_pick: true, wrote: false,
+          message: 'Multiple messages match that hint — provide the internet_message_id to disambiguate.',
+          matches: rows.map((x) => ({ activity_id: x.id, title: x.title, from: x.metadata?.from || null })),
+        };
+      }
+      row = rows[0] || null;
+    }
+  }
+  if (!row) return { ok: false, error: 'No matching message found. Provide the internet_message_id or a clearer subject/sender hint.' };
+
+  // Idempotency + cross-deal conflict guard (decision extracted for testability).
+  const current = row.entity_id || row.metadata?.deal_entity_id || null;
+  const outcome = decideCommTagOutcome(current, dealEntityId);
+  if (outcome === 'already') {
+    return { ok: true, wrote: false, already: true, activity_id: row.id, deal_entity_id: dealEntityId,
+      message: `Already tagged to ${dealName || 'that deal'} — nothing to do.` };
+  }
+  if (outcome === 'conflict') {
+    return { ok: false, conflict: true, activity_id: row.id,
+      current_deal_entity_id: current, requested_deal_entity_id: dealEntityId,
+      message: 'That message is already stamped to a DIFFERENT deal. Refusing to re-stamp — resolve the conflict first.' };
+  }
+
+  // Stamp the deal (fill-blank only, per the conflict guard above).
+  const newMeta = { ...(row.metadata || {}), deal_entity_id: dealEntityId, tagged_via: 'copilot_tag_comm', tagged_by: user?.id || null };
+  const upd = await opsQuery('PATCH',
+    `activity_events?id=eq.${encodeURIComponent(row.id)}`,
+    { entity_id: dealEntityId, metadata: newMeta },
+    { headers: { Prefer: 'return=representation' } });
+  const ok = upd?.ok && Array.isArray(upd.data) && upd.data.length > 0;
+  if (!ok) return { ok: false, error: 'Failed to stamp the deal on the message.' };
+
+  return {
+    ok: true, wrote: true, activity_id: row.id, deal_entity_id: dealEntityId, deal_name: dealName,
+    message: `Tagged to ${dealName || 'the deal'} — its summary and next steps update within the hour.`,
   };
 }
 
@@ -4614,17 +5053,62 @@ async function handleProspectingBrief(params, user, workspaceId) {
   const limit = Math.min(parseInt(params?.limit) || 10, 25);
   const domainFilter = params?.domain || null;
 
-  // BD-target gate: require a classified owner_role for ALL contacts.
-  // Brokers and unclassified intermediaries have owner_role='unknown' and
-  // must be excluded regardless of domain. The previous implementation queried
-  // unified_contacts (GOV Supabase) which has no owner_role classification —
-  // it returned brokers alongside property owners, polluting the call sheet.
-  // This version queries v_bd_cadence_dashboard (LCC production) which joins
-  // entities (owner_role, domain) with touchpoint_cadence (rank_value, days_overdue).
+  // BD-target gate: keep brokers and unclassified intermediaries off the call
+  // sheet. The previous implementation queried unified_contacts (GOV Supabase)
+  // which has no owner_role classification — it returned brokers alongside
+  // property owners, polluting the sheet. This version queries
+  // v_bd_cadence_dashboard (LCC production), which joins entities (owner_role,
+  // domain) with touchpoint_cadence (rank_value, days_overdue).
+  //
+  // C8 (2026-08-31) — THE INTENT ABOVE IS RIGHT; `owner_role` ALONE WAS THE
+  // WRONG INSTRUMENT FOR IT. `unknown` covers 93.9% of entities and is not in
+  // the vocabulary at all, so the role list excluded the book to exclude the
+  // brokers. Measured live over the 311 eligible cadence rows: the role gate
+  // showed 80 ($442.8M) and hid 231, of which 47 are RESOLVED PROPERTY OWNERS
+  // carrying $515.2M — more rank value than everything it showed — against 3
+  // brokerages. Easterly Gov Properties ($114.9M / 85 properties), NGP Capital,
+  // USAA Real Estate, US Fed Properties Trust and Trammell Crow were all off
+  // the sheet. Audit: docs/audits/C8_PROSPECTING_BRIEF_EXCLUDES_THE_BOOK_2026-08-29.md
+  //
+  // The rule is C6's, on a second surface: admit on the PER-ASSET FACT the
+  // system already holds, not on the party-level label —
+  //   (a classified owner_role) OR (a resolved owner in lcc_property_owner)
+  //   AND NOT a brokerage, on BOTH arms.
+  // The brokerage guard is now EXPLICIT rather than a side effect of the role
+  // label, which is what the comment always intended: it removes one row the
+  // role arm was admitting today (Stan Johnson Co, owner_role='buyer').
+  //
+  // Both new predicates are COLUMNS on the view (migration 20260831120000) so
+  // the gate stays in the SELECTION and `order=rank_value.desc&limit=N` stays
+  // server-side. Filtering after the read would leave the ranked head full of
+  // rows nobody can work, which is the failure this is fixing.
+  //
+  // ⚠️ `user_owner` and `seller_flipper` have NEVER been written to any entity
+  // (0 rows each) — they are inert tokens kept here deliberately so this change
+  // moves exactly one thing. Removing them is a literal no-op (backlog C4b).
+  // Whether an owner should leave `unknown` at all is C4a, not this gate.
   const BD_OWNER_ROLES = 'developer,user_owner,buyer,seller_flipper,operator';
-  const bdGate = domainFilter
-    ? `&domain=eq.${pgFilterVal(domainFilter)}&owner_role=in.(${BD_OWNER_ROLES})`
-    : `&owner_role=in.(${BD_OWNER_ROLES})`;
+
+  // ⚠️ The role arm is spelled as one `owner_role.eq.<role>` alternative per
+  // role, NOT as `owner_role.in.(a,b,c)` nested inside the `or=` group. The two
+  // are semantically identical (asserted on this population: both select the
+  // same 80 rows), but the `in.(...)` form puts a comma-separated list inside a
+  // group whose own separator is a comma. PostgREST parses that correctly, and
+  // NOTHING IN THIS REPO EXERCISES IT — there is not one `or=(...in.(...))` on
+  // the whole API surface, whereas `or=(a.eq.x,b.eq.y[,and(...)])` is used in a
+  // dozen places (see api/queue.js). A 400 here would not raise: the handler
+  // treats `!queueResult.ok` as "queue empty" and falls through to the dead
+  // fallback branch below, so a mis-parsed filter would surface as the
+  // perfectly calm sentence "No BD contacts found." Given the endpoint could
+  // not be probed from the build sandbox (Supabase egress is blocked by network
+  // policy, 403 CONNECT), use the construct that is already proven in
+  // production over the one that would be taken on faith.
+  const roleArm = BD_OWNER_ROLES.split(',')
+    .map(r => `owner_role.eq.${r}`)
+    .join(',');
+  const bdGate = (domainFilter ? `&domain=eq.${pgFilterVal(domainFilter)}` : '')
+    + `&or=(${roleArm},is_resolved_owner.is.true)`
+    + `&is_brokerage=is.false`;
 
   // Primary: LCC queue ranked by portfolio value (rank_value) and urgency (days_overdue)
   const queueResult = await opsQuery('GET',
@@ -4635,21 +5119,92 @@ async function handleProspectingBrief(params, user, workspaceId) {
   let source = 'lcc_queue';
 
   if (queueResult.ok && (queueResult.data || []).length > 0) {
+    // C10 (2026-08-31) — MAP ONTO THE COLUMNS THE VIEW ACTUALLY SUPPLIES.
+    // Four of the six meaningful fields were read under names
+    // `v_bd_cadence_dashboard` has never had, so every row on the call sheet
+    // rendered `Unknown - unknown [mixed] ... rent unknown ... Signal: none`.
+    // The view supplies `entity_name` (not `name`/`contact_name`) and
+    // `rank_value` (not `annual_rent`); it has no company column and no
+    // `priority_signal` column at all. Nothing errored -- PostgREST returns the
+    // 37 columns it has and JS reads `undefined` off the rest.
+    //
+    // This mattered more than a cosmetic defect: C8 had just put Easterly
+    // ($114.9M / 85 properties), NGP Capital and USAA Real Estate onto this
+    // sheet, and every one of them rendered as "Unknown". A sheet where every
+    // line is anonymous is not a sheet anyone works, which is plausibly why the
+    // role gate C8 fixed survived unexamined for so long -- two defects, each
+    // making the other harder to see.
+    //
+    // Audit: docs/audits/C8_PROSPECTING_BRIEF_EXCLUDES_THE_BOOK_2026-08-29.md
+    // Dead-End playbook Class 24.
+    //
+    // ⚠️ RENDERING ONLY. The gate, the ordering and the limit are untouched --
+    // if the row count moves, something is wrong.
     contacts = queueResult.data.map(c => ({
       contact_id:      c.contact_id || null,
-      name:            c.name || c.contact_name || 'Unknown',
-      company:         c.company_name || c.org_name || '',
-      email:           c.contact_email || c.email || '',
+      name:            c.entity_name || 'Unknown',
+      email:           c.contact_email || '',
       domain:          c.domain || '',
       owner_role:      c.owner_role || '',
-      annual_rent:     c.annual_rent || null,
-      rank_value:      c.rank_value || null,
+      // ⚠️ `rank_value` is COALESCE(NULLIF(current_annual_rent_total,0),
+      // connected_property_value) -- for a substantial minority of rows it is
+      // RELATIONSHIP-DERIVED value, not owned annual rent (backlog C9a). It is
+      // named and rendered as portfolio value, never as rent, and carries no
+      // `/yr` suffix, because a connected-property value is not an annual
+      // figure. PostgREST returns numeric as a string; coerce once here so the
+      // renderer can tell a real 0 from an absent value (P180).
+      rank_value:      c.rank_value == null ? null : Number(c.rank_value),
+      property_count:  c.rank_property_count == null ? null : Number(c.rank_property_count),
       days_overdue:    c.days_overdue || 0,
-      priority_signal: c.priority_signal || '',
-      phase:           c.phase || ''
+      // Replaces the invented `priority_signal`. Both of these are real columns.
+      // `review_flag` is R34 Unit 3's staleness guard (an active cadence silently
+      // >90 days overdue) -- 7 of the 126 eligible rows carry it.
+      next_touch_type: c.next_touch_type || '',
+      review_flag:     c.review_flag === true,
+      phase:           c.phase || '',
+      // C11 (2026-08-31) -- WHY IS THIS PERSON THE CONTACT? C10 made the sheet
+      // legible; it did not make the contact justified. The sheet gave the
+      // operator a name and a dollar figure and no basis for either, and now
+      // that it is legible it will confidently name a person at the wrong firm.
+      //
+      // The basis is already recorded and was simply never read: 121 of the 126
+      // eligible rows carry an owner->contact `entity_relationships` edge whose
+      // role is on file. Both fields are real view columns (migration
+      // 20260831140000). Audit: docs/audits/C11_CALL_SHEET_CONTACT_BASIS_2026-08-31.md
+      //
+      // NULL means "no relationship on file" -- a DIFFERENT fact from a weak
+      // role, and it is carried as null rather than '' so the renderer can say
+      // so. An empty string here would read as "no role" (P180).
+      contact_basis:   c.contact_owner_role == null ? null : String(c.contact_owner_role),
+      // P197 employer corroboration. ADDITIVE POSITIVE ONLY, and this is not a
+      // style choice: P188 established on named rows that a real employee can
+      // use a personal address -- Easterly's own confirmed contact sits on
+      // @centurytel.net. `false` means "we hold no corroboration", NEVER "wrong
+      // person". Nothing may filter, rank or demote on it.
+      domain_confirms: c.contact_domain_confirms_owner === true
     }));
   } else {
-    // Fallback: Outlook/Salesforce engagement scores when LCC queue is empty
+    // Fallback: Outlook/Salesforce engagement scores when LCC queue is empty.
+    //
+    // ⚠️ C8 checked this branch for the A1 `V2_MAP` failure — a gate fixed in
+    // one branch that silently stops filtering in the other. It is NOT a second
+    // implementation of the BD-target gate; it is a different source that has
+    // never carried one, and structurally cannot carry this one:
+    // `unified_contacts` has no `owner_role`, no link to `lcc_property_owner`,
+    // and lives on the GOV project (govContactQuery -> GOV_URL), not the hub
+    // that `CONTACTS_HUB=ops` made live. Re-implementing the brokerage guard
+    // here in JS would be the normaliser drift this codebase keeps paying for.
+    //
+    // ⚠️ AND THE BRANCH IS STRUCTURALLY DEAD, MEASURED 2026-08-31:
+    // `engagement_score` is 0 on ALL 30,714 gov `unified_contacts` rows (max 0,
+    // 0 non-null above zero), so `engagement_score=gt.0` returns nothing and
+    // this path can only ever fall through to the "No BD contacts found"
+    // return below. It is ungated AND inert — the fail-open is latent, not
+    // live. It goes live the day anyone backfills that column, or repoints
+    // this query at the live hub. Filed as C8a; deliberately not restructured
+    // here, because rewiring it is a behaviour change nobody has graded and
+    // would reintroduce exactly the broker pollution the comment above
+    // describes.
     source = 'outlook_engagement';
     const hotResult = await govContactQuery(
       `unified_contacts?contact_class=eq.business&engagement_score=gt.0&order=engagement_score.desc&limit=${limit}&select=unified_id,full_name,email,phone,company_name,title,engagement_score,last_call_date,last_email_date,last_meeting_date,total_calls,total_emails_sent`
@@ -4684,15 +5239,55 @@ async function handleProspectingBrief(params, user, workspaceId) {
 
   const contactList = source === 'lcc_queue'
     ? contacts.map((c, i) => {
-        const rent = c.annual_rent ? `$${Math.round(c.annual_rent).toLocaleString()}/yr` : 'rent unknown';
-        return `${i + 1}. ${c.name}${c.company ? ` (${c.company})` : ''} — ${c.owner_role} [${c.domain || 'mixed'}]\n   Email: ${c.email || 'no email on file'}\n   Portfolio value: ${rent} | Days overdue: ${c.days_overdue}\n   Signal: ${c.priority_signal || 'none'} | Phase: ${c.phase}`;
+        // C10: every token below comes from a column the view actually has.
+        // A null is stated as "not on file", never rendered as a measured
+        // value -- `[mixed]` for a null domain asserted the owner spans
+        // verticals (it is null on 93 of 126 eligible rows), and `Signal: none`
+        // asserted a measured absence of a field that never existed. Both are
+        // the P180 NULL-is-not-zero failure in prose.
+        const value = Number.isFinite(c.rank_value)
+          ? `$${Math.round(c.rank_value).toLocaleString()}`
+          : 'not on file';
+        const assets = Number.isFinite(c.property_count) && c.property_count > 0
+          ? ` across ${c.property_count} propert${c.property_count === 1 ? 'y' : 'ies'}`
+          : '';
+        // R34 Unit 3 staleness guard -- surfaced, never auto-expired.
+        const stale = c.review_flag ? ' | ⚠ cadence stale >90d, review' : '';
+        // C11: state the BASIS on which this person is the contact for this
+        // owner. Three cases, and they are three different facts:
+        //   * a recorded role  -> print it VERBATIM. The vocabulary is NOT
+        //     closed (`MGR`, `broker_of_record`, `economic_owner_contact` all
+        //     occur fleet-wide), so nothing here may assume a fixed set -- an
+        //     unexpected token reaching the operator is honest, and a
+        //     `broker_of_record` showing up IS the signal.
+        //   * `works_at`       -> the SALESFORCE ORG EDGE P161 MEASURED AND
+        //     DISQUALIFIED as evidence of control. It proves association, never
+        //     authority, and must not read like `decision_maker`. It is not a
+        //     corner case: 12 of the 126 rows, carrying $130.7M -- more rank
+        //     value than the 35 `institution_decision_maker` rows -- and 3 of
+        //     the current top 10 (USAA Real Estate, Gba Associates, Beacon
+        //     Capital Partners).
+        //   * no edge          -> say "no relationship on file". NOT an empty
+        //     string, which reads as "no role" when the truth is that no
+        //     relationship is recorded at all (P180).
+        const WEAK_ASSOCIATION_ROLE = 'works_at';
+        const basis = c.contact_basis == null
+          ? 'no relationship on file'
+          : (c.contact_basis === WEAK_ASSOCIATION_ROLE
+              ? `${c.contact_basis} — ⚠ association only (Salesforce org edge), not evidence of authority`
+              : c.contact_basis);
+        // Additive positive only -- printed when true, ABSENT otherwise. Never
+        // rendered as a negative: a missing corroboration is not evidence the
+        // person is at the wrong firm (P188).
+        const corroborated = c.domain_confirms ? ' · employer corroborated by email domain' : '';
+        return `${i + 1}. ${c.name} — ${c.owner_role || 'role not on file'} [${c.domain || 'domain not on file'}]\n   Email: ${c.email || 'no email on file'}\n   Contact basis: ${basis}${corroborated}\n   Portfolio value: ${value}${assets} | Days overdue: ${c.days_overdue}\n   Next touch: ${c.next_touch_type || 'not scheduled'}${stale} | Phase: ${c.phase}`;
       }).join('\n\n')
     : contacts.map((c, i) =>
         `${i + 1}. ${c.name} (${c.company}) — ${c.heat} (score: ${c.score})\n   Title: ${c.title}\n   Last call: ${c.last_call} | Last email: ${c.last_email}\n   Calls: ${c.total_calls} | Emails: ${c.total_emails}\n   Phone: ${c.phone} | Email: ${c.email}`
       ).join('\n\n');
 
   const prompt = source === 'lcc_queue'
-    ? `Generate a concise daily BD prospecting call sheet for ${today}.\n\nThese are the top investment sales targets ranked by portfolio value and days overdue. All are property owners — not brokers or intermediaries:\n\n${contactList}\n\nFor each contact provide:\n1. A one-line call prep note (owner role, why to call now based on days overdue)\n2. A domain-specific talking point (government net-lease, dialysis net-lease, etc.)\n3. Priority: call today / this week / nurture\n\nThis is for an investment sales professional (SVP, Investment Sales) at Northmarq. Keep each entry tight — 2-3 lines.`
+    ? `Generate a concise daily BD prospecting call sheet for ${today}.\n\nThese are the top investment sales targets ranked by portfolio value and days overdue. All are property owners — not brokers or intermediaries:\n\n${contactList}\n\nFor each contact provide:\n1. A one-line call prep note (owner role, why to call now based on days overdue)\n2. A talking point. Use the domain for a sector-specific angle (government net-lease, dialysis net-lease) ONLY when a domain is given; where it reads "domain not on file", keep the talking point generic and do NOT assume a sector.\n3. Priority: call today / this week / nurture\n\nGround rules: "Portfolio value" is the relationship value we hold for that owner — annual rent where known, otherwise connected-property value. Do NOT describe it as annual rent or as a valuation. Never restate a field shown as "not on file" as though it were known, and do not invent a company, sector or figure that is not above.\n\n"Contact basis" is the relationship we have on file between the owner and this person, and it bounds what you may claim about them. Where it reads "association only", say only that the person is associated with the owner — do NOT call them a decision-maker, principal, or anyone with authority, and treat confirming who actually holds the decision as part of the call. Where it reads "no relationship on file", say the link is unverified rather than describing a role. "employer corroborated by email domain" is a plus when present; its ABSENCE means we hold no corroboration and never that the person is at the wrong firm, so do not cast doubt on a contact for lacking it.\n\nThis is for an investment sales professional (SVP, Investment Sales) at Northmarq. Keep each entry tight — 2-3 lines.`
     : `Generate a concise daily prospecting call sheet for ${today}.\n\nHere are the top contacts ranked by engagement:\n\n${contactList}\n\nFor each contact, provide:\n1. A one-line call prep note (why to call based on engagement pattern)\n2. A suggested talking point or reason to reach out\n3. Priority level (call today / this week / nurture)\n\nFocus on contacts who haven't been called recently but have high engagement. Flag any that are overdue for a touchpoint.`;
 
   const result = await invokeChatProvider({
@@ -6865,6 +7460,13 @@ async function handleChatRoute(req, res) {
     const host = req.headers?.host || fallbackHost;
     const baseUrl = `${proto}://${host}`;
 
+    // Curated ChatGPT GPT-Action spec (Prompt 59). ChatGPT caps a GPT Action at
+    // 30 operations, so it gets the ~15-op user-facing subset, NOT the full
+    // ACTION_REGISTRY dispatch spec. Reached via /api/gpt-spec or
+    // /api/copilot-spec?surface=chatgpt. No auth on the GET (import-time fetch).
+    if (req.query.copilot_spec === 'chatgpt' || req.query.surface === 'chatgpt') {
+      return res.status(200).json(generateChatGptSpec(baseUrl));
+    }
     if (req.query.copilot_spec === 'manifest') {
       return res.status(200).json(generatePluginManifest(baseUrl));
     }
@@ -7469,7 +8071,7 @@ async function getOversight(req, res, user, workspaceId) {
   const overview = await opsQuery('GET', `v_manager_overview?workspace_id=eq.${workspaceId}&order=display_name`);
   const unassigned = await opsQuery('GET', `v_unassigned_work?workspace_id=eq.${workspaceId}&limit=50&order=created_at.desc`);
   const escalations = await opsQuery('GET',
-    `escalations?workspace_id=eq.${workspaceId}&resolved_at=is.null&select=*,action_items(title,status,priority),users!escalations_escalated_by_fkey(display_name),users!escalations_escalated_to_fkey(display_name)&order=created_at.desc&limit=25`
+    `escalations?workspace_id=eq.${workspaceId}&resolved_at=is.null&select=*,action_items(title,status,priority),escalated_by_user:users!escalations_escalated_by_fkey(display_name),escalated_to_user:users!escalations_escalated_to_fkey(display_name)&order=created_at.desc&limit=25`
   );
 
   return res.status(200).json({
@@ -8324,7 +8926,20 @@ export async function assemblePropertyPacket(entityId, workspaceId, deps = {}) {
     if (listRes.ok) listings = listRes.data || [];
 
     // ownership — recorded/true owner names (domain) + related people/orgs (LCC graph).
-    ownership = { recorded_owner_name: null, true_owner_name: null, related_entities: [] };
+    // PDR2 (2026-09-14): the true_owner may be the TENANT/OPERATOR, not the landlord (P113 —
+    // 7,937 dia properties resolve true_owner_id to an operator-flagged row). Never return an
+    // operator-flagged true_owner as ownership.true_owner_name; surface it explicitly instead
+    // via true_owner_is_operator + operator_name (the same field names
+    // entities-handler.js::assemblePropertyDossier §1.6 already reads/produces), and leave
+    // recorded_owner_name as the owner of record. gov's true_owners has no
+    // is_operator_not_owner/owner_type column — trueOwnerOperatorSelectFields degrades the
+    // select per domain so this never 400s there, and isTrueOwnerOperator never throws on a
+    // row missing those keys.
+    ownership = {
+      recorded_owner_name: null, true_owner_name: null,
+      true_owner_is_operator: false, operator_name: null,
+      related_entities: []
+    };
     if (leaseData && (leaseData.recorded_owner_id != null || leaseData.true_owner_id != null)) {
       const ownerCalls = [];
       if (leaseData.recorded_owner_id != null) {
@@ -8333,14 +8948,20 @@ export async function assemblePropertyPacket(entityId, workspaceId, deps = {}) {
           .then(r => ({ kind: 'recorded', r })));
       }
       if (leaseData.true_owner_id != null) {
+        const toSelect = `true_owner_id,name,${trueOwnerOperatorSelectFields(domain)}`;
         ownerCalls.push(_domainGet(domain,
-          `true_owners?true_owner_id=eq.${encodeURIComponent(leaseData.true_owner_id)}&select=true_owner_id,name&limit=1`)
+          `true_owners?true_owner_id=eq.${encodeURIComponent(leaseData.true_owner_id)}&select=${toSelect}&limit=1`)
           .then(r => ({ kind: 'true', r })));
       }
       for (const { kind, r } of await Promise.all(ownerCalls)) {
-        if (r.ok && r.data?.[0]?.name) {
-          if (kind === 'recorded') ownership.recorded_owner_name = r.data[0].name;
-          else ownership.true_owner_name = r.data[0].name;
+        if (!(r.ok && r.data?.[0]?.name)) continue;
+        if (kind === 'recorded') {
+          ownership.recorded_owner_name = r.data[0].name;
+        } else if (isTrueOwnerOperator(r.data[0])) {
+          ownership.true_owner_is_operator = true;
+          ownership.operator_name = r.data[0].name;
+        } else {
+          ownership.true_owner_name = r.data[0].name;
         }
       }
     }
@@ -8373,7 +8994,11 @@ export async function assemblePropertyPacket(entityId, workspaceId, deps = {}) {
   } else {
     // No domain linkage — these sections are unavailable, not errors.
     fieldsMissing.push('lease_data', 'documents', 'transactions', 'ownership', 'investment');
-    ownership = { recorded_owner_name: null, true_owner_name: null, related_entities: [] };
+    ownership = {
+      recorded_owner_name: null, true_owner_name: null,
+      true_owner_is_operator: false, operator_name: null,
+      related_entities: []
+    };
   }
 
   // Related people/orgs from the LCC graph — resolve the "other" entity's name.

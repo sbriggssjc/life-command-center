@@ -1,7 +1,166 @@
 import { opsQuery, pgFilterVal, insertEntityRelationship } from './ops-db.js';
 import { syncSalesforceForEntity } from './salesforce-sync.js';
+import { recordFieldWrites, provenanceTargetDatabase } from './field-priority-guard.js';
 
+// ============================================================================
+// CONTACT1a (2026-09-04) — repoint the LIVE entities.email/phone writer at
+// field_provenance.
+//
+// CONTACT1 measured that `entities.email`/`phone` carry a ten-rung
+// field_source_priority ladder (manual_edit/manual_resolution@1 →
+// salesforce@20 → domain_owner_contact@55 → costar_sidebar@60, all
+// enforce_mode='record_only') that had governed almost nothing: `email` had
+// NEVER been recorded once, `phone` exactly 4 times (one manual tick).
+// `bridge-handlers-salesforce.js::insertEntity` WAS instrumented under
+// PR5c-entities-b — and it is dead code. `salesforce.contact.upsert` /
+// `salesforce.account.upsert` are handler entries in `api/bridges.js`'
+// `HANDLERS` map with ZERO producers anywhere in this repo that ever enqueue
+// that `job_type` into `enrichment_jobs` (grepped; the only hits are the
+// module's own header comment and the map itself). It has run zero times.
+//
+// The REAL writer is `ensureEntityLink()` below — an AST census of its 30+
+// live call sites found exactly ONE place `entities.email`/`phone` are ever
+// written: the CREATE payload a few hundred lines down. `ensureEntityLink`
+// never PATCHes email/phone onto an EXISTING entity (seedFields is discarded
+// once `resolvedEntity` resolves to a pre-existing row — a "fill" only
+// happens at mint time), so wiring this ONE site covers every caller that
+// ever passes an email/phone, present and future, with no per-caller change.
+//
+// Same audit-only shape as the dead PR5c-entities-b block it replaces as the
+// live implementation, and for the SAME structural reason: a CREATE has no
+// prior value to protect (lcc_merge_field's "current value" comes from
+// field_provenance, which is empty for a row that doesn't exist yet — gating
+// on it would be theatre), and both rungs are `record_only` today anyway (a
+// `skip` still allows the write). So `recordFieldWrites` runs AFTER the
+// INSERT; `shouldWriteField` is deliberately NOT called pre-write here.
+// Flipping `enforce_mode` is backlog PR5c-enforce, NOT this change.
+// ============================================================================
+// Exported (CONTACT1b) so the OTHER live writer of these columns —
+// sidebar-pipeline.js's fill-blank PATCH on an EXISTING entity — can record
+// under the identical (targetDb, targetTable, source-mapping) rather than a
+// second copy that could drift from this one's registered rung spellings.
+export const CONTACT1A_TARGET_DB = provenanceTargetDatabase('lcc_opps');
+export const CONTACT1A_TARGET_TABLE = 'entities';
+export const CONTACT1A_FIELDS = ['email', 'phone'];
+
+// The registry's spelling must match byte-for-byte or lcc_merge_field takes
+// the UNREGISTERED branch (still records a row — PR5 — just without a rung).
+// Map the handful of source-system spellings this codebase actually uses for
+// email/phone-bearing calls onto the registered rung names; anything else
+// rides through verbatim so the write is still recorded (unregistered, never
+// silently dropped — PR5's "unregistered is a different branch, not a low
+// rung"). This is deliberately NOT `canonicalIdentitySystem()` — that
+// function canonicalizes DOMAIN-DB spellings (dia/gov), a different
+// vocabulary from `field_source_priority.source`.
+export function contact1aProvenanceSource(sourceSystem) {
+  const s = String(sourceSystem == null ? '' : sourceSystem).trim().toLowerCase();
+  if (s === 'salesforce') return 'salesforce';
+  if (s === 'costar' || s === 'costar_sidebar') return 'costar_sidebar';
+  return sourceSystem || 'unspecified';
+}
+
+// CONTACT1b (2026-09-05) — the ONE call any of the other 13 census'd
+// entities.email/phone write sites should make, instead of re-deriving the
+// (targetDb, targetTable, source-mapping, non-null-only) shape inline. Audit
+// only, same as CONTACT1a: never call shouldWriteField / never gate the
+// write on it. Silently no-ops when `fields` carries nothing worth
+// recording (a caller need not pre-filter).
+export async function recordContactFieldWrites({ recordPk, source, workspaceId, fields, confidence = 1.0 }) {
+  const filtered = {};
+  for (const f of CONTACT1A_FIELDS) {
+    const v = fields ? fields[f] : undefined;
+    if (v != null && String(v).trim() !== '') filtered[f] = v;
+  }
+  if (!Object.keys(filtered).length) return { recorded: 0, failed: 0 };
+  try {
+    return await recordFieldWrites({
+      targetDb:    CONTACT1A_TARGET_DB,
+      targetTable: CONTACT1A_TARGET_TABLE,
+      recordPk,
+      source:      contact1aProvenanceSource(source),
+      workspaceId,
+      confidence,
+      fields:      filtered,
+    });
+  } catch (err) {
+    console.warn('[recordContactFieldWrites] provenance record failed (entity written):', err?.message);
+    return { recorded: 0, failed: Object.keys(filtered).length };
+  }
+}
+
+/**
+ * N15c — THE token rule for entity name identity.
+ *
+ * ⚠️ This is the JS mirror of SQL `lcc_entity_name_tokens`. The BEFORE trigger
+ * on `entities` writes `lcc_entity_canonical_key(name)`; `ensureEntityLink`
+ * looks the row up by `normalizeCanonicalName(name)`. If the two disagree by a
+ * single character the lookup misses and mints a duplicate — which is exactly
+ * the failure N15b measured (10,336 of 62,368 live entities invisible to this
+ * function). `test/entity-canonical-key.test.mjs` pins them together.
+ *
+ * The rule (Scott, 2026-08-27): strip ONLY pure legal-entity forms; keep every
+ * semantic token (`group`, `partners`, `company`, `capital`, `holdings`,
+ * `properties`, `realty`). A DST, its Trust and its LLC are ONE entity — the
+ * true owner — so `trust|dst|reit` are stripped deliberately.
+ *   ⚠️ Individual investors holding FRACTIONAL positions in a DST/TIC/JV are
+ *   backlog N17 and must NOT be modelled by splitting this key. Fractional
+ *   interest is a relationship, not an identity split.
+ */
+const CANONICAL_LEGAL_FORM_TOKENS = new Set([
+  'llc', 'llp', 'lp', 'inc', 'incorporated', 'corp', 'corporation',
+  'ltd', 'limited', 'trust', 'reit', 'dst', 'lllp', 'lc', 'pllc',
+]);
+
+export function entityNameTokens(name) {
+  const flat = String(name == null ? '' : name)
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (flat === '') return [];
+  const parts = flat.split(' ');
+  const out = [];
+  for (let i = 0; i < parts.length; i++) {
+    const tok = parts[i];
+    if (tok === '') continue;
+    // Leading article only — 'of'/'and' are kept inline, matching the SQL
+    // `not (ord = 1 and tok = 'the')`.
+    if (i === 0 && tok === 'the') continue;
+    if (CANONICAL_LEGAL_FORM_TOKENS.has(tok)) continue;
+    out.push(tok);
+  }
+  return out;
+}
+
+/**
+ * The value of `entities.canonical_name`. Mirrors SQL `lcc_entity_canonical_key`.
+ *
+ * ⚠️ SPACE-joined, never bare-concatenated. The no-separator join used by the
+ * Tier 0 domain comparator yields 115 FEWER distinct keys over the live
+ * organizations and every one of those is a false collision (`Gate Way` ==
+ * `Gateway`, verified on the named row).
+ *
+ * The empty case: 98 live entities are named only with legal forms ("--",
+ * "Llc", "Corporation", "The", "Trust"). An empty key would dedup all of them
+ * into one entity, so they get a `dc:`-namespaced fallback — provably disjoint
+ * from every real key, because a real key is [a-z0-9 ]+ and can never contain a
+ * colon. Same device and prefix as `v_lcc_merge_candidates_normalizer_blind`.
+ * Never returns null or ''.
+ */
 export function normalizeCanonicalName(name) {
+  const toks = entityNameTokens(name);
+  if (toks.length > 0) return toks.join(' ');
+  return 'dc:' + String(name == null ? '' : name).toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+/**
+ * The PRE-N15c key, retained ONLY so `ensureEntityLink` can find rows that have
+ * not been backfilled yet (and the 537 deliberately held back — see N15c §"what
+ * needs Scott"). Read-only: nothing writes this. Delete once the backfill has
+ * run and `v_lcc_canonical_name_drift` reads 0 for a sustained window.
+ */
+export function legacyCanonicalName(name) {
   return String(name || '')
     .trim()
     .toLowerCase()
@@ -526,6 +685,81 @@ const DEAL_STRING_RE =
 
 // True only for a plausible human name: a first + last (+ optional middle/
 // initial/suffix), all alpha tokens, no digits, no firm/deal tokens.
+/**
+ * TRUE when `personName` is just the OWNER'S OWN NAME restated — the company
+ * wearing a person's shape.
+ *
+ * ⚠️ THIS IS THE PRODUCER-SIDE FIX FOR THE PHANTOM-CONTACT DEFECT (P164).
+ * Measured 2026-08-21: 372 owners had their "decision-maker" recorded as their
+ * own company name, 306 of them minted as PERSON entities, 169 with no email —
+ * headed by LCC's largest owner by rent, Boyd Watterson Asset Management
+ * ($179.8M, 198 assets), whose contact was a person entity named
+ * "Boyd Watterson". `looksLikePersonName` cannot catch this: "Boyd Watterson"
+ * IS shaped exactly like a person. The tell is not the shape of the name, it is
+ * that every token of it already appears in the owner's name.
+ *
+ * The old population was cleared reversibly, but the enrich tick was still
+ * MINTING ~5 NEW ONES PER HOUR, so clearing alone would have regrown it. This
+ * guard closes the tap.
+ *
+ * DIRECTION OF FAILURE IS DELIBERATE. A rejected candidate is routed to
+ * research, never written — so a false positive costs one research task, while
+ * a false negative writes a fake decision-maker onto a live prospect. It
+ * therefore only fires on the unambiguous case: EVERY token of the person name
+ * present in the owner name, after stripping legal forms.
+ *
+ * ⚠️ It must NOT fire on a founder-named firm where the person is real:
+ *   "Sam Zell"        @ "Zell Group"            -> {sam,zell} ⊄ {zell,group}    OK
+ *   "John Smith"      @ "Smith Properties"      -> {john,smith} ⊄ {smith}       OK
+ *   "Boyd Watterson"  @ "Boyd Watterson Asset Management, LLC" -> subset -> BLOCKED
+ * A genuine principal almost always carries a given name the firm does not.
+ */
+const _OWNER_LEGAL_FORMS = new Set([
+  'llc', 'l', 'c', 'inc', 'incorporated', 'corp', 'corporation', 'ltd', 'limited',
+  'lp', 'llp', 'lllp', 'plc', 'pllc', 'pc', 'pa', 'trust', 'trustee', 'dst', 'reit',
+  'company', 'co', 'the', 'and', 'of',
+]);
+
+function _ownerNameTokens(v) {
+  return String(v || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((t) => t && !_OWNER_LEGAL_FORMS.has(t));
+}
+
+export function isOwnerNameRestated(personName, ownerName) {
+  // ⚠️ CORRECTION 2026-08-21, SAME DAY, AFTER A LIVE MIS-CLASSIFICATION.
+  // The first version of this guard tested ONLY token containment, and that
+  // swept up 103 owners ($199.4M) who are INDIVIDUALS OWNING IN THEIR OWN NAME —
+  // Alonso Cantu, Bashar Hamami, Ruth Malone, Praveen Gupta, Thomas H. Yates.
+  // For those, contact-name == owner-name is CORRECT, not a phantom. Scott's
+  // standing doctrine says so explicitly: "a person can be an owner in the LCC
+  // if they are the individual in control of the ownership of the LLC or SPE. We
+  // often have true companies and true contacts that are the same name and name
+  // of an individual." A clear batch built on the old rule was reverted in full.
+  //
+  // THE OWNER MUST LOOK LIKE AN ORGANISATION for containment to mean anything.
+  // "Boyd Watterson" inside "Boyd Watterson Asset Management, LLC" is the
+  // company restated; "Alonso Cantu" inside "Alonso Cantu" is the owner himself.
+  // Containment alone cannot tell those apart — the firm suffix can.
+  //
+  // Fails SAFE: an org without any firm-suffix word ("Sterling Bay") is NOT
+  // blocked. Missing a phantom costs one bad row a human can reject; blocking a
+  // real individual owner deletes a decision-maker on a live prospect.
+  if (!hasFirmSuffix(ownerName)) return false;
+  const person = _ownerNameTokens(personName);
+  const owner = new Set(_ownerNameTokens(ownerName));
+  // Need real material on both sides; a one-token "person" is not evidence
+  // either way and is handled by the other guards.
+  if (person.length < 2 || owner.size < 2) return false;
+  // And the owner must carry something BEYOND the person's name — otherwise
+  // "Peter Hansen LLC" vs "Peter Hansen" is a single-member LLC whose principal
+  // is exactly that person, which is a real contact, not a phantom.
+  if (owner.size <= person.length) return false;
+  return person.every((t) => owner.has(t));
+}
+
 export function looksLikePersonName(name) {
   if (typeof name !== 'string') return false;
   const t = name.trim();
@@ -946,11 +1180,59 @@ export async function ensureEntityLink({
   }
 
   if (!resolvedEntity && canonicalName) {
-    let path = `entities?workspace_id=eq.${workspaceId}&canonical_name=eq.${encodeURIComponent(canonicalName)}&select=*&limit=5`;
-    if (domain) path += `&domain=eq.${pgFilterVal(domain)}`;
+    // N15c DUAL-READ. The BEFORE trigger on `entities` writes the N15c key, but
+    // rows minted before it — and the 537 stale rows deliberately held back from
+    // the backfill — still carry the pre-N15c key. Reading BOTH is what makes the
+    // JS deploy and the DB migration safe in EITHER order: a single-key read
+    // would miss every not-yet-backfilled row and mint a duplicate for it, which
+    // is the exact failure this round exists to close.
+    // Remove `legacy` once the backfill has run and the drift view holds at 0.
+    const legacy = legacyCanonicalName(candidateName);
+    const keys = (legacy && legacy !== canonicalName) ? [canonicalName, legacy] : [canonicalName];
+    // `in.(...)` with double-quoted values — a canonical key contains spaces, and
+    // an unquoted PostgREST list would split on a comma inside one.
+    const inList = keys.map(k => '"' + String(k).replace(/(["\\])/g, '\\$1') + '"').join(',');
+    // PR5c-entities-b-dupes: `domain` is a PROVENANCE TAG, not part of identity.
+    // It was a hard filter here, so a party already held under `gov` (or with a
+    // NULL domain) was INVISIBLE when the same party arrived tagged `lcc`, and
+    // this tier minted a duplicate on the very key N15c exists to make unique.
+    // Measured live: 5 of the 7 same-email duplicate mints in the 30 days to
+    // 2026-09-02 had new.domain <> old.domain (lcc vs gov/dia/NULL) — the filter
+    // excluded the exact row it was looking for. `entities.domain` legitimately
+    // carries `lcc` and `cre` beside `dia`/`gov`, and one person is reachable
+    // from more than one book of business, so the key cannot be domain-scoped.
+    //
+    // Domain becomes a RANKING PREFERENCE. A CROSS-domain hit (including
+    // NULL-vs-set) additionally requires the email to agree, because a shared
+    // canonical_name alone is NOT identity for a common person name: measured
+    // over live shared-email person groups, 44 of 75 carry DIFFERENT names
+    // (`colt.neal@nmrk.com` holds two different real brokers), and two distinct
+    // "Frank Johnson"s exist here under different domains. Same-domain
+    // behaviour is byte-identical to before this change.
+    let path = `entities?workspace_id=eq.${workspaceId}`
+      + `&canonical_name=in.(${encodeURIComponent(inList)})&select=*&limit=10`;
     const match = await opsQuery('GET', path);
     if (match.ok && match.data?.length) {
-      resolvedEntity = match.data.find(e => e.entity_type === entityType) || match.data[0];
+      const seedEmail = normalizeEmail(seedFields.email);
+      const sameDomain = (e) => (e.domain || null) === (domain || null);
+      // Corroboration for a cross-domain attach: a real, non-generic email that
+      // matches exactly. Never a name-similarity test — fuzzy name matching is
+      // banned for identity everywhere in this codebase.
+      const emailAgrees = (e) =>
+        !!seedEmail && !isGenericInboxEmail(seedEmail) && normalizeEmail(e.email) === seedEmail;
+      const eligible = domain
+        ? match.data.filter((e) => sameDomain(e) || emailAgrees(e))
+        : match.data;
+      if (eligible.length) {
+        // Prefer an exact hit on the CURRENT key over a legacy-key hit, and within
+        // each, one whose entity_type agrees. A legacy hit is still a real match —
+        // it is the same party under the outgoing normalization. Same-domain
+        // outranks a cross-domain hit so today's winner is unchanged when both exist.
+        const rank = (e) => (sameDomain(e) ? 0 : 4)
+          + (e.canonical_name === canonicalName ? 0 : 2)
+          + (e.entity_type === entityType ? 0 : 1);
+        resolvedEntity = eligible.slice().sort((a, b) => rank(a) - rank(b))[0];
+      }
     }
   }
 
@@ -1040,6 +1322,36 @@ export async function ensureEntityLink({
     }
     resolvedEntity = Array.isArray(created.data) ? created.data[0] : created.data;
     createdEntity = true;
+
+    // CONTACT1a — record the ladder-governed fields THIS create established
+    // (see the block comment at the top of this file). Only fields carrying a
+    // real value are recorded: a null here would assert "the source says this
+    // contact has no email", which the payload never claimed.
+    const contact1aFields = {};
+    for (const f of CONTACT1A_FIELDS) {
+      const v = createPayload[f];
+      if (v != null && String(v).trim() !== '') contact1aFields[f] = v;
+    }
+    if (Object.keys(contact1aFields).length) {
+      try {
+        await recordFieldWrites({
+          targetDb:    CONTACT1A_TARGET_DB,
+          targetTable: CONTACT1A_TARGET_TABLE,
+          recordPk:    resolvedEntity.id,
+          source:      contact1aProvenanceSource(sourceSystem),
+          workspaceId,
+          // Copied verbatim out of the caller's seed payload — no match or
+          // inference step, so there is nothing to be less than certain
+          // about. NOT a claim the source is right (that's the rung's
+          // priority) — a claim about what the source SAID.
+          confidence:  1.0,
+          fields:      contact1aFields,
+        });
+      } catch (err) {
+        // Belt and braces: recordFieldWrites already swallows per-field failures.
+        console.warn('[ensureEntityLink] CONTACT1a provenance record failed (entity written):', err?.message);
+      }
+    }
   }
 
   // If we matched an EXISTING entity that still carries the synthetic

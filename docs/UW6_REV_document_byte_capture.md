@@ -1,3 +1,8 @@
+> 📍 **CANONICAL ENTRY POINT: [`docs/architecture/document-capture-ocr-and-deeds.md`](architecture/document-capture-ocr-and-deeds.md).**
+> **This file is the DESIGN for byte-capture-at-ingest and is still the best statement of WHY**
+> (the CoStar CDN token problem, the bucket key scheme, the rejected alternatives). ✅ **It was BUILT
+> and merged — PR #1703 + #1707 — and is live.** Read the canonical page for what that produced.
+
 # UW#6-REV — capture document bytes at sidebar time
 
 ## Why (the BLOCKED finding that killed the original UW#6)

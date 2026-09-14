@@ -111,6 +111,63 @@ function normalizeBaseUrl(url) {
   return (url || '').replace(/\/+$/, '');
 }
 
+// ---------------------------------------------------------------------------
+// Ollama surface gating + misconfiguration guard (W5.3 / Prompt 61)
+// ---------------------------------------------------------------------------
+// Historically the local-Ollama extraction primary was gated on a single global
+// switch (`process.env.OLLAMA_URL`), so reverting ONE surface (e.g. intake OM
+// extraction) to cloud-primary would also revert every narrative surface that
+// shares invokeExtractionAI (W7.2 summaries, W7.4 roles, W7.5 narrations,
+// next-step). Per-surface gating adds a knob so intake can run cloud-primary
+// while the narrative lanes stay local.
+//
+//   OLLAMA_SURFACES  — comma list of surfaces allowed to use the local model.
+//                      UNSET  ⇒ every surface uses Ollama (preserves the prior
+//                               global behavior; the default).
+//                      SET    ⇒ only listed surfaces use Ollama; the rest run
+//                               the cloud chain. e.g.
+//                               OLLAMA_SURFACES=summaries,roles,narrations,next_step
+//                               keeps the narrative lanes local while intake
+//                               (surface 'intake') runs cloud-primary.
+export function isFlagOn(value, fallback = false) {
+  if (value == null || value === '') return fallback;
+  const s = String(value).trim().toLowerCase();
+  return s === '1' || s === 'true' || s === 'yes' || s === 'on';
+}
+
+export function ollamaEnabledForSurface(surface) {
+  if (!String(process.env.OLLAMA_URL || '').trim()) return false;
+  const raw = String(process.env.OLLAMA_SURFACES || '').trim();
+  if (!raw) return true; // unset ⇒ all surfaces (prior global behavior)
+  const allow = new Set(
+    raw.toLowerCase().split(',').map((s) => s.trim()).filter(Boolean)
+  );
+  return allow.has(String(surface || 'default').toLowerCase());
+}
+
+// Loud one-time warn when the process is CONFIGURED to prefer the local model
+// (OLLAMA_EXTRACTION flag on) but cannot reach it (OLLAMA_URL unset in THIS
+// process). This is the exact failure the W5.3 grading found: 17/50 attributed
+// artifacts went cloud-first (chain started at `edge`) because OLLAMA_URL was
+// not set in the executing Railway service. Returns true when misconfigured so
+// it is unit-testable without capturing console output.
+let _warnedOllamaMisconfig = false;
+export function warnIfOllamaMisconfigured() {
+  const flagOn = isFlagOn(process.env.OLLAMA_EXTRACTION);
+  const urlMissing = !String(process.env.OLLAMA_URL || '').trim();
+  if (!(flagOn && urlMissing)) return false;
+  if (!_warnedOllamaMisconfig) {
+    _warnedOllamaMisconfig = true;
+    console.warn(
+      '[ai] ⚠️ OLLAMA_EXTRACTION is ON but OLLAMA_URL is UNSET in this process — ' +
+      'extraction is running CLOUD-ONLY (local GaryBuilt is bypassed). Set OLLAMA_URL ' +
+      '(+ OLLAMA_MODEL / CF_ACCESS_* as needed) in THIS Railway service to route ' +
+      'extraction to the local model. See docs/setup/garybuilt-local-model.md.'
+    );
+  }
+  return true;
+}
+
 function parseJsonEnv(value, fallback) {
   if (!value) return fallback;
   try {
@@ -568,6 +625,15 @@ async function invokeOllamaExtraction({ prompt }) {
         messages: [{ role: 'user', content: String(prompt || '') }],
         temperature: 0.1,
         stream: false,
+        // Native structured output (Prompt 61): qwen2.5:14b under-complies with
+        // the in-prompt JSON schema (measured drift — sale-comp keys on OMs,
+        // missing lease-responsibility keys). Ollama's OpenAI-compatible endpoint
+        // honors response_format:json_object, which reliably forces a single JSON
+        // object. Gated on OLLAMA_JSON_FORMAT (default ON); flip to 0 to fall back
+        // to prompt-only if a model degrades under forced JSON.
+        ...(isFlagOn(process.env.OLLAMA_JSON_FORMAT, true)
+          ? { response_format: { type: 'json_object' } }
+          : {}),
       }),
       signal: controller.signal,
     });
@@ -588,14 +654,118 @@ async function invokeOllamaExtraction({ prompt }) {
   }
 }
 
-export async function invokeExtractionAI({ prompt }) {
+/**
+ * ON-PREM-ONLY generation (W10 Stage 2 — draft-assist, Prompt 107).
+ *
+ * Unlike invokeExtractionAI, this has NO cloud fallback: it talks to the local
+ * GaryBuilt Ollama (OLLAMA_URL) and, on any missing-config / failure / timeout,
+ * FAILS CLOSED with an honest error. Scott's writing corpus + deal facts must
+ * NEVER egress to a cloud model, so the draft-assist generate pass uses this
+ * seam instead of invokeExtractionAI's local-primary-then-cloud chain.
+ *
+ * Returns { ok, status, provider:'ollama', text, error? }.
+ * @param {object}  o
+ * @param {string}  o.prompt              the full generation prompt
+ * @param {number} [o.temperature=0.4]    prose wants a touch more variety than extraction
+ * @param {boolean}[o.json=false]         force response_format json_object (off for prose)
+ */
+export async function invokeOnPremGeneration({ prompt, temperature = 0.4, json = false } = {}) {
+  const base = String(process.env.OLLAMA_URL || '').trim().replace(/\/+$/, '');
+  if (!base) {
+    return { ok: false, status: 503, provider: 'ollama', text: '', error: 'OLLAMA_URL unset — on-prem generation unavailable (fail-closed, no cloud fallback for this surface).' };
+  }
+  const model = String(process.env.OLLAMA_MODEL || 'qwen2.5:14b').trim();
+  const timeoutMs = Number(process.env.OLLAMA_TIMEOUT_MS || 45_000);
+  const controller = new AbortController();
+  const to = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(process.env.OLLAMA_API_KEY ? { Authorization: `Bearer ${process.env.OLLAMA_API_KEY}` } : {}),
+        ...(process.env.CF_ACCESS_CLIENT_ID && process.env.CF_ACCESS_CLIENT_SECRET
+          ? { 'CF-Access-Client-Id': process.env.CF_ACCESS_CLIENT_ID, 'CF-Access-Client-Secret': process.env.CF_ACCESS_CLIENT_SECRET }
+          : {}),
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: String(prompt || '') }],
+        temperature,
+        stream: false,
+        ...(json ? { response_format: { type: 'json_object' } } : {}),
+      }),
+      signal: controller.signal,
+    });
+    let data = null;
+    try { data = await res.json(); } catch { data = { error: 'Invalid Ollama response' }; }
+    const text = data?.choices?.[0]?.message?.content || '';
+    if (!res.ok) {
+      return { ok: false, status: res.status, provider: 'ollama', text: '', error: `Ollama returned ${res.status}`, model };
+    }
+    return { ok: true, status: 200, provider: 'ollama', text, model };
+  } catch (err) {
+    const aborted = err && err.name === 'AbortError';
+    return { ok: false, status: 0, provider: 'ollama', text: '', error: aborted ? 'Ollama timed out' : ('Ollama request failed: ' + (err?.message || String(err))) };
+  } finally {
+    clearTimeout(to);
+  }
+}
+
+/**
+ * ON-PREM embedding (W10 Stage 2 — optional RAG retrieval upgrade).
+ * Best-effort: returns null on any missing-config / failure so callers fall
+ * back to the deterministic ranker. Never egresses to a cloud model.
+ * @param {string[]} texts
+ * @returns {Promise<number[][]|null>} one vector per input text, or null.
+ */
+export async function invokeOnPremEmbeddings(texts = []) {
+  const base = String(process.env.OLLAMA_URL || '').trim().replace(/\/+$/, '');
+  if (!base) return null;
+  const list = (Array.isArray(texts) ? texts : [texts]).map((t) => String(t || ''));
+  if (list.length === 0) return [];
+  const model = String(process.env.DRAFT_ASSIST_EMBED_MODEL || 'nomic-embed-text').trim();
+  const timeoutMs = Number(process.env.OLLAMA_TIMEOUT_MS || 45_000);
+  const controller = new AbortController();
+  const to = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    // Ollama native embeddings endpoint accepts a batch via `input`.
+    const res = await fetch(`${base}/api/embed`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(process.env.OLLAMA_API_KEY ? { Authorization: `Bearer ${process.env.OLLAMA_API_KEY}` } : {}),
+        ...(process.env.CF_ACCESS_CLIENT_ID && process.env.CF_ACCESS_CLIENT_SECRET
+          ? { 'CF-Access-Client-Id': process.env.CF_ACCESS_CLIENT_ID, 'CF-Access-Client-Secret': process.env.CF_ACCESS_CLIENT_SECRET }
+          : {}),
+      },
+      body: JSON.stringify({ model, input: list }),
+      signal: controller.signal,
+    });
+    if (!res.ok) return null;
+    const data = await res.json().catch(() => null);
+    const vecs = data?.embeddings;
+    if (!Array.isArray(vecs) || vecs.length !== list.length) return null;
+    return vecs;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(to);
+  }
+}
+
+export async function invokeExtractionAI({ prompt, surface } = {}) {
   const cfg = getAiConfig();
   const tried = [];
 
-  // Step 0: local Ollama primary (only when OLLAMA_URL is set). On any failure or
-  // timeout we fall through to the cloud edge primary + fallback chain below, so the
+  // Surface a loud warn if this process is meant to use the local model but can't.
+  warnIfOllamaMisconfigured();
+
+  // Step 0: local Ollama primary — gated per-surface (OLLAMA_SURFACES) so one
+  // surface can revert to cloud without dragging the others. On any failure or
+  // timeout we fall through to the cloud primary + fallback chain below, so the
   // local box is a cost-saving fast-path, never a single point of failure.
-  if (process.env.OLLAMA_URL) {
+  if (ollamaEnabledForSurface(surface)) {
     const local = await invokeOllamaExtraction({ prompt });
     tried.push({ stage: 'local', provider: 'ollama', status: local.status });
     if (local.ok && !isRateLimitOrTransient(local)) {
@@ -604,15 +774,37 @@ export async function invokeExtractionAI({ prompt }) {
     // else: fall through to cloud (fallback net).
   }
 
-  // Step 1: primary
-  const primary = await invokeChatProvider({
-    message: prompt,
-    attachments: [],
-    context: null,
-    history: [],
-    user: { id: 'system' },
-    workspaceId: null,
-  });
+  // Step 1: cloud primary.
+  //
+  // ⚠️ Root-cause note (Prompt 61, #4): the default cloud primary routes through
+  // invokeChatProvider → the ai-copilot `/chat` edge function, which is built for
+  // short sales-strategy chat: it injects a Copilot SALES system prompt (biasing
+  // structured JSON output) and caps output at max_tokens=1500 (truncates large
+  // OM extractions). It 400s on every extraction call in production (measured). The
+  // extraction fallback chain (OpenAI, self-contained prompt) then rescues it, so
+  // the OUTPUT is fine but every cloud extraction wastes a 400 round-trip and any
+  // Claude-primary output is copilot-biased.
+  //
+  // Fix (config, reversible; default preserves prior behavior):
+  //   AI_EXTRACTION_PRIMARY=openai  → skip the copilot edge; make the self-contained
+  //                                    OpenAI extraction the primary (no 400, no bias).
+  //   AI_EXTRACTION_PRIMARY=edge    → prior behavior (copilot /chat edge primary).
+  //   (unset)                       → 'edge' (unchanged default).
+  const primaryMode = String(process.env.AI_EXTRACTION_PRIMARY || 'edge').toLowerCase();
+  let primary;
+  if (primaryMode === 'openai' && cfg.openaiApiKey) {
+    const primaryModel = process.env.AI_EXTRACTION_PRIMARY_MODEL || 'gpt-4o-mini';
+    primary = await invokeOpenAIExtraction({ prompt, model: primaryModel, cfg });
+  } else {
+    primary = await invokeChatProvider({
+      message: prompt,
+      attachments: [],
+      context: null,
+      history: [],
+      user: { id: 'system' },
+      workspaceId: null,
+    });
+  }
   tried.push({ stage: 'primary', provider: primary.provider, status: primary.status });
   if (primary.ok && !isRateLimitOrTransient(primary)) {
     return { ...primary, tried };
@@ -634,8 +826,13 @@ export async function invokeExtractionAI({ prompt }) {
     }
   }
 
-  // Step 3: backoff + retry primary once
-  for (let i = 0; i < MAX_RETRY_AFTER_FALLBACK; i++) {
+  // Step 3: backoff + retry primary once.
+  // TEST-NET-LEAK: under the hermetic seam the edge route is deterministically
+  // disabled (see hermeticTestsActive()), so retrying it can only fail again —
+  // skip the 35s backoff sleep entirely rather than paying it for a foregone
+  // conclusion (this is a timing optimization only; hermeticTestsActive()
+  // itself is what keeps the retry off the network).
+  for (let i = 0; i < MAX_RETRY_AFTER_FALLBACK && !hermeticTestsActive(); i++) {
     await new Promise(r => setTimeout(r, RATE_LIMIT_BACKOFF_MS));
     const retry = await invokeChatProvider({
       message: prompt,
@@ -713,11 +910,26 @@ export async function invokeVisionExtractionAI({ prompt, base64, mediaType, file
   }
 }
 
+// TEST-NET-LEAK (2026-09-09): the edge route below needs NO key — it just
+// POSTs straight to the live Supabase edge function — so a test that expects
+// "no AI key in the test env → the extractor throws" was silently reaching
+// production 14x/run (see test/_helpers/net-guard.mjs). Under `npm test`
+// (node's own `NODE_TEST_CONTEXT`, or the explicit `LCC_HERMETIC_TESTS` flag)
+// invokeChatProvider refuses BEFORE any fetch, in the exact shape a real
+// provider failure returns, so callers' error handling is exercised
+// identically — only the network round trip is skipped.
+function hermeticTestsActive() {
+  return Boolean(process.env.NODE_TEST_CONTEXT || process.env.LCC_HERMETIC_TESTS);
+}
+
 export async function invokeChatProvider({ message, context, history, attachments, user, workspaceId }) {
   const cfg = getAiConfig();
   const route = resolveAiRoute(cfg, context);
   if (route.provider === 'disabled' || route.provider === 'none') {
     return { ok: false, status: 503, data: { error: 'AI chat provider is disabled' }, provider: route.provider };
+  }
+  if (route.provider === 'edge' && hermeticTestsActive()) {
+    return { ok: false, status: 400, data: { error: 'edge route disabled in test' }, provider: route.provider };
   }
 
   if (route.provider === 'openai') {

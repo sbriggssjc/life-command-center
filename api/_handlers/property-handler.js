@@ -30,9 +30,80 @@
 import { opsQuery } from '../_shared/ops-db.js';
 import { domainQuery, getDomainCredentials } from '../_shared/domain-db.js';
 import { assembleSinglePacket } from '../operations.js';
+import { resolveSubject, resolutionHttpStatus } from '../../mcp/subject-resolver.js';
 
 function enc(v) {
   return encodeURIComponent(String(v));
+}
+
+function normDomain(v) {
+  const d = String(v || '').toLowerCase().trim();
+  if (d === 'dia' || d === 'dialysis') return 'dia';
+  if (d === 'gov' || d === 'government') return 'gov';
+  return null;
+}
+
+const PROPERTY_ENTITY_SELECT = 'select=*,external_identities(*),entity_relationships!entity_relationships_from_entity_id_fkey(*)';
+
+export async function resolveEntityByPropertyIdentity({ domain, propertyId, ops = opsQuery }) {
+  if (propertyId === null || propertyId === undefined || String(propertyId).trim() === '') return null;
+  const domains = normDomain(domain) ? [normDomain(domain)] : ['dia', 'gov'];
+  const matches = [];
+  for (const dom of domains) {
+    const idRes = await ops(
+      'GET',
+      `external_identities?source_system=eq.${enc(dom)}&source_type=eq.asset` +
+        `&external_id=eq.${enc(propertyId)}&select=entity_id`
+    );
+    const entityIds = [...new Set((idRes.data || []).map((r) => r.entity_id).filter(Boolean))];
+    for (const entityId of entityIds) {
+      const entRes = await ops(
+        'GET',
+        `entities?id=eq.${enc(entityId)}&entity_type=eq.asset&${PROPERTY_ENTITY_SELECT}&limit=1`
+      );
+      const entity = entRes.data?.[0] || null;
+      if (entity) matches.push(entity);
+    }
+  }
+  const unique = [...new Map(matches.map((e) => [e.id, e])).values()];
+  return unique.length === 1 ? unique[0] : null;
+}
+
+async function findDomainPropertyByAddress(domain, address) {
+  const longDomain = domain === 'gov' ? 'government' : 'dialysis';
+  if (!getDomainCredentials(longDomain)) return null;
+  const extra = domain === 'gov' ? ',agency' : ',tenant,operator,chain_canonical';
+  const variants = [...new Set([address, expandAddress(address), contractAddress(address)])];
+  for (const variant of variants) {
+    const r = await domainQuery(
+      longDomain,
+      'GET',
+      `properties?address=ilike.*${enc(variant)}*&select=property_id,address,city,state${extra}&limit=25`
+    ).catch(() => ({ data: [] }));
+    const hits = [...new Map((r.data || []).filter((p) => p?.property_id != null).map((p) => [p.property_id, p])).values()];
+    if (hits.length === 1) return { domain, property: hits[0] };
+    if (hits.length > 1) return null;
+  }
+  return null;
+}
+
+export async function resolveEntityByAddressPropertyIdentity({
+  address,
+  ops = opsQuery,
+  findDomainProperty = findDomainPropertyByAddress,
+}) {
+  if (!address) return null;
+  for (const dom of ['dia', 'gov']) {
+    const hit = await findDomainProperty(dom, address);
+    if (!hit) continue;
+    const entity = await resolveEntityByPropertyIdentity({
+      domain: hit.domain,
+      propertyId: hit.property.property_id,
+      ops,
+    });
+    if (entity) return entity;
+  }
+  return null;
 }
 
 /**
@@ -155,13 +226,18 @@ export async function propertyHandler(req, res) {
     return;
   }
 
-  let { address, entity_id, q } = req.query;
+  let { address, entity_id, property_id, domain, q } = req.query;
 
-  // Resolve q → entity_id or address when the dedicated params are absent
+  // Resolve q -> property_id, entity_id, or address when dedicated params are absent.
   if (!address && !entity_id && q) {
     const trimmed = q.trim();
-    // UUIDs (8-4-4-4-12) or prefixed IDs like "gov:11136"
-    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed)
+    const domainProperty = trimmed.match(/^(dia|dialysis|gov|government):(.+)$/i);
+    if (domainProperty) {
+      domain = domainProperty[1];
+      property_id = domainProperty[2];
+    } else if (/^\d+$/.test(trimmed)) {
+      property_id = trimmed;
+    } else if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed)
         || /^[a-z]+:/i.test(trimmed)) {
       entity_id = trimmed;
     } else {
@@ -169,8 +245,8 @@ export async function propertyHandler(req, res) {
     }
   }
 
-  if (!address && !entity_id) {
-    res.status(400).json({ error: 'One of q, address, or entity_id query parameter is required' });
+  if (!address && !entity_id && !property_id) {
+    res.status(400).json({ error: 'One of q, address, entity_id, or property_id query parameter is required' });
     return;
   }
 
@@ -180,46 +256,41 @@ export async function propertyHandler(req, res) {
   }
 
   // ── Resolve entity ────────────────────────────────────────────────────────
-  let entity = null;
-  if (entity_id) {
-    const r = await opsQuery(
-      'GET',
-      `entities?id=eq.${enc(entity_id)}&entity_type=eq.asset&select=*,external_identities(*),entity_relationships!entity_relationships_from_entity_id_fkey(*)`
-    );
-    entity = r.data?.[0] || null;
-  } else if (address) {
-    const selectClause = `select=*,external_identities(*),entity_relationships!entity_relationships_from_entity_id_fkey(*)`;
-
-    const expanded = expandAddress(address);
-
-    // Try original address first (case-insensitive partial match)
-    const r1 = await opsQuery(
-      'GET',
-      `entities?entity_type=eq.asset&or=(address.ilike.*${enc(address)}*,name.ilike.*${enc(address)}*)&${selectClause}&limit=1`
-    );
-    entity = r1.data?.[0] || null;
-
-    // If not found, try with abbreviations expanded / contracted
-    if (!entity) {
-      const contracted = contractAddress(address);
-      // Build a set of unique variants (skip duplicates of original)
-      const variants = [...new Set([expanded, contracted])].filter(v => v !== address);
-
-      for (const variant of variants) {
-        const r2 = await opsQuery(
-          'GET',
-          `entities?entity_type=eq.asset&or=(address.ilike.*${enc(variant)}*,name.ilike.*${enc(variant)}*)&${selectClause}&limit=1`
-        );
-        entity = r2.data?.[0] || null;
-        if (entity) break;
-      }
+  const resolution = await resolveSubject(
+    { entity_id, address, property_id, domain },
+    {
+      type: 'property',
+      tool: 'get_property_context',
+      surface: 'http',
+      opsQuery,
+      domainQuery,
+      getDomainCredentials,
     }
+  );
 
-    console.log(`[property] address lookup: "${address}" → "${expanded}" result: ${entity ? 'found' : 'not-found'}`);
+  if (resolution.status !== 'resolved') {
+    res.status(resolutionHttpStatus(resolution)).json({
+      ...resolution,
+      error: resolution.error || 'Property not found',
+      entity_id: entity_id || null,
+      property_id: property_id || null,
+      domain: domain || null,
+      address: address || null,
+    });
+    return;
   }
 
+  if (!resolution.entity && resolution.domain_property) {
+    const direct = await assembleDomainPropertyFallback(resolution.domain_property);
+    if (direct) {
+      res.status(200).json({ ...direct, resolution });
+      return;
+    }
+  }
+
+  const entity = resolution.entity;
   if (!entity) {
-    res.status(404).json({ error: 'Property not found', entity_id: entity_id || null, address: address || null });
+    res.status(404).json({ ...resolution, error: 'Property not found', entity_id, property_id, domain, address });
     return;
   }
 
@@ -279,6 +350,13 @@ export async function propertyHandler(req, res) {
   });
 
   const result = {
+    resolution: {
+      status: resolution.status,
+      type: resolution.type,
+      confidence: resolution.confidence,
+      resolved_via: resolution.resolved_via,
+      candidates: resolution.candidates,
+    },
     entity,
     active_tasks: actionsRes?.data || [],
     context_packet,
@@ -294,4 +372,39 @@ export async function propertyHandler(req, res) {
   }
 
   res.status(200).json(result);
+}
+
+async function assembleDomainPropertyFallback(domainProperty) {
+  const dom = normDomain(domainProperty?.domain);
+  if (!dom || !domainProperty?.property_id) return null;
+  if (dom === 'gov') {
+    const pid = domainProperty.property_id;
+    const [leases, owners, lead] = await Promise.all([
+      domainQuery('government', 'GET', `gsa_leases?property_id=eq.${enc(pid)}&select=*&limit=5`).catch(() => ({ data: [] })),
+      domainQuery('government', 'GET', `ownership_history?property_id=eq.${enc(pid)}&select=*&order=recorded_date.desc&limit=10`).catch(() => ({ data: [] })),
+      domainQuery('government', 'GET', `prospect_leads?property_id=eq.${enc(pid)}&select=*&limit=1`).catch(() => ({ data: [] })),
+    ]);
+    return {
+      resolved_via: 'gov_property_fallback',
+      note: 'No LCC asset entity for this property yet — resolved directly from the government domain by address.',
+      property: { ...domainProperty, domain: 'gov' },
+      entity: null,
+      context_packet: null,
+      gov_data: {
+        gsa_leases: leases.data || [],
+        ownership_history: owners.data || [],
+        prospect_lead: lead.data?.[0] || null,
+      },
+    };
+  }
+  const leases = await domainQuery('dialysis', 'GET', `leases?property_id=eq.${enc(domainProperty.property_id)}&select=*&limit=5`)
+    .catch(() => ({ data: [] }));
+  return {
+    resolved_via: 'dia_property_fallback',
+    note: 'No LCC asset entity for this property yet — resolved directly from the dialysis domain by address.',
+    property: { ...domainProperty, domain: 'dia' },
+    entity: null,
+    context_packet: null,
+    dia_data: { leases: leases.data || [] },
+  };
 }

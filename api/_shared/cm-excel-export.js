@@ -23,7 +23,7 @@
 
 import ExcelJS from 'exceljs';
 import { summaryColumnHeaders, buildInlineSummary } from './cm-summary-table.js';
-import { NATIVE_CHART_TEMPLATES, buildInjectionSpec } from './cm-native-chart-injector.js';
+import { NATIVE_CHART_TEMPLATES, buildInjectionSpec, scanSpecPalette, assertCalloutCoverage } from './cm-native-chart-injector.js';
 
 // Round 3d — Inline summary blocks under selected chart tabs.
 // Each entry maps a chart_template_id to a metrics array; the worksheet
@@ -84,6 +84,13 @@ const FMT = {
   currency_billions:    '"$"#,##0.0,,,"B"',
   currency_per_sf:      '"$"#,##0.00',
   percent_basis_points: '0.00%',
+  // Prompt 119 item A — the dia inventory-snapshot KPI view emits this token
+  // for its two Price Change % tiles. It was NEVER in this map, so
+  // `FMT[t.primary_format] || ''` resolved to '' and the tiles shipped with
+  // Excel's General format (0.1505 instead of 15.1%). Mapped honestly to its
+  // name; `resolveKpiTileFormat` below is the belt-and-braces guard for the
+  // next unmapped percent token.
+  percent_zero_decimal: '0%',
   // R70 A2 — true basis points (value already ×10000 by the pace composer).
   basis_points:         '0 "bps";-0 "bps"',
   percent_one_decimal:  '0.0%',
@@ -99,6 +106,224 @@ const FMT = {
   // Term Remaining in 'x.x Years'."
   years_one_decimal:    '0.0" Years"',
 };
+
+// ============================================================================
+// Prompt 119 item A — KPI tile number-format inference
+// ============================================================================
+//
+// KPI-block views (cm_{vertical}_{value_prop,whatsnew,trend_watch,
+// inventory_snapshot}_kpis) carry an explicit per-tile `primary_format` token.
+// That metadata IS the contract and is honored first. The defect marketing hit
+// (2Q-2026 book) was the FALLBACK: an unrecognized token silently resolved to
+// '' and Excel rendered the raw ratio (0.1505 rather than 15.1%). A percent
+// tile rendering as a bare decimal is worse than a slightly-off precision, so
+// an unmapped token is inferred rather than dropped:
+//
+//   1. token present AND mapped  -> use it (the metadata path, always wins)
+//   2. token present but UNMAPPED and percent-shaped by name -> 0.0%
+//   3. no/unknown token, label reads percent-natured AND the value is on the
+//      ratio scale (|v| < 1)                                  -> 0.0%
+//   4. otherwise -> '' (General, the prior behavior)
+//
+// Rule 3 deliberately requires ratio scale so a dollar/count tile with a
+// stray label word can never be mangled into a percent.
+const KPI_PERCENT_TOKEN_RE = /^percent|_pct$|^pct_|percentage/i;
+const KPI_PERCENT_LABEL_RE = /%|\bcap\b|\bchange\b|\byoy\b|\btrend\b|\bshare\b|\bmargin\b|\brate\b/i;
+
+export function resolveKpiTileFormat(tile) {
+  const token = tile && tile.primary_format ? String(tile.primary_format) : '';
+  if (token && FMT[token]) return FMT[token];
+  if (token && KPI_PERCENT_TOKEN_RE.test(token)) return FMT.percent_one_decimal;
+  const label = String((tile && (tile.tile_label || tile.tile_id)) || '');
+  const v = Number(tile && tile.primary_value);
+  if (KPI_PERCENT_LABEL_RE.test(label) && Number.isFinite(v) && Math.abs(v) < 1) {
+    return FMT.percent_one_decimal;
+  }
+  return '';
+}
+
+// ============================================================================
+// Prompt 119 item F — derived Value-Proposition tiles
+// ============================================================================
+//
+// Marketing hand-computed these two every quarter off the NM / Non-NM average
+// sales-price split already on the tile block. Derive them at export time so
+// the number in the book is the number in the workbook:
+//
+//   Additional Proceeds ($) = NM avg price - Non-NM avg price
+//   Additional Value (%)    = Additional Proceeds / Non-NM avg price
+//
+// Null-safe: a missing/zero input emits "Not on file", never a fabricated
+// value (never-fabricate doctrine — a blank input is not a $0 delta).
+export function deriveValuePropTiles(tiles) {
+  const list = Array.isArray(tiles) ? tiles : [];
+  const price = list.find((t) => t && t.tile_id === 'avg_sales_price');
+  // `Number(null)` is 0, not NaN — a blank input must NOT read as a $0 side of
+  // the comparison (that would manufacture a -$4.9M "additional proceeds").
+  const asNum = (v) => (v == null || v === '' ? NaN : Number(v));
+  const nm    = asNum(price && price.nm_value);
+  const non   = asNum(price && price.non_nm_value);
+  const ok    = Number.isFinite(nm) && Number.isFinite(non) && non !== 0;
+  const delta = ok ? nm - non : null;
+  const maxSort = list.reduce((m, t) => Math.max(m, Number(t && t.sort_order) || 0), 0);
+  return [
+    {
+      tile_id: 'additional_proceeds',
+      tile_label: 'Additional Proceeds ($)',
+      primary_value: delta,
+      primary_format: 'currency_dollars',
+      null_display: 'Not on file',
+      derived: true,
+      sort_order: maxSort + 1,
+    },
+    {
+      tile_id: 'additional_value_pct',
+      tile_label: 'Additional Value (%)',
+      primary_value: ok ? delta / non : null,
+      primary_format: 'percent_one_decimal',
+      null_display: 'Not on file',
+      derived: true,
+      sort_order: maxSort + 2,
+    },
+  ];
+}
+
+// ============================================================================
+// Prompt 119 item D — short operator display names
+// ============================================================================
+//
+// The operator-benchmark bar chart is a horizontal bar whose category axis is
+// the operator name; the full legal-ish names ("American Renal Associates",
+// "Fresenius Medical Care") are unreadable at book size. Map to the marketing
+// short form at EXPORT time — the source views keep their canonical names, and
+// the native chart's category axis binds to these cells so the data tab and
+// the chart stay in lockstep by construction.
+//
+// Keys are lowercase/whitespace-normalized so both the current view spellings
+// and the older long-form ones resolve. An unmapped operator passes through
+// unchanged (never guess at a truncation).
+export const OPERATOR_DISPLAY_NAMES = {
+  'american renal associates': 'American Renal',
+  'american renal':            'American Renal',
+  'davita':                    'DaVita',
+  'davita inc.':               'DaVita',
+  'davita kidney care':        'DaVita',
+  'fresenius medical care':    'Fresenius',
+  'fresenius':                 'Fresenius',
+  'us renal care':             'US Renal',
+  'u.s. renal care':           'US Renal',
+  'us renal':                  'US Renal',
+  'independent / unknown':     'Independent',
+  'other / independent':       'Other',
+  'satellite healthcare':      'Satellite',
+  'satellite':                 'Satellite',
+};
+
+export function shortOperatorName(value) {
+  if (value == null) return value;
+  const key = String(value).trim().replace(/\s+/g, ' ').toLowerCase();
+  return Object.prototype.hasOwnProperty.call(OPERATOR_DISPLAY_NAMES, key)
+    ? OPERATOR_DISPLAY_NAMES[key]
+    : value;
+}
+
+// Column-level display transforms, referenced by the string token on a
+// CHART_COLUMNS entry (`display: 'short_operator'`) so the schema stays plain
+// serializable data for the export-bundle audit hook.
+const DISPLAY_TRANSFORMS = {
+  short_operator: shortOperatorName,
+};
+
+// ============================================================================
+// Prompt 119 items B + C — cross-tab consistency guard
+// ============================================================================
+//
+// The 2Q-2026 book shipped with a KPI tile and its sibling data tab quoting
+// two different numbers for the same metric (What's-New Cap Rate 7.41% vs
+// Data_Cap_Avg 7.06%; KPI 10+ Days on Market 398.9 vs Data_On_Market_Snapshot
+// 421.1). Both are now sourced from ONE view, so the tabs agree by
+// construction — this guard is the tripwire that catches a future view edit
+// that re-splits them, AT EXPORT TIME rather than by eye in the book.
+//
+// Pure: takes the packet's charts array, returns warning strings (empty when
+// consistent). Charts that aren't in the packet are skipped, not failed.
+const KPI_CONSISTENCY_EPS = 1e-9;
+
+function chartById(charts, id) {
+  return (Array.isArray(charts) ? charts : []).find((c) => c && c.chart_template_id === id) || null;
+}
+
+export function checkKpiSeriesConsistency(charts) {
+  const warnings = [];
+
+  // B — What's-New "Cap Rate (TTM)" must be the cap-TTM series at the same
+  // period (i.e. the last plotted point on Data_Cap_Avg for the tile's period).
+  const whatsNew = chartById(charts, 'whatsnew_quarter_kpis');
+  const capChart = chartById(charts, 'cap_rate_ttm_by_quarter');
+  const capRows  = (capChart && Array.isArray(capChart.rows)) ? capChart.rows : [];
+  const kpiRows  = (whatsNew && Array.isArray(whatsNew.rows)) ? whatsNew.rows : [];
+  const capTile  = kpiRows
+    .filter((r) => r && r.tile_id === 'cap_ttm' && r.primary_value != null)
+    .sort((a, b) => String(b.period_end).localeCompare(String(a.period_end)))[0];
+  if (capTile && capRows.length > 0) {
+    const match = capRows.find((r) => r && String(r.period_end) === String(capTile.period_end));
+    const seriesVal = Number(match && match.ttm_weighted_cap_rate);
+    const tileVal   = Number(capTile.primary_value);
+    if (Number.isFinite(seriesVal) && Number.isFinite(tileVal)
+        && Math.abs(seriesVal - tileVal) > KPI_CONSISTENCY_EPS) {
+      warnings.push(
+        `[cm-export] KPI_Whats_New Cap Rate (TTM) ${tileVal} != Data_Cap_Avg ` +
+        `${seriesVal} at ${capTile.period_end} — the tile and the cap-TTM series ` +
+        `have diverged (they must read cm_{vertical}_cap_ttm_m)`
+      );
+    }
+  }
+
+  // C — every inventory-snapshot KPI tile must equal its On-Market Snapshot
+  // counterpart for the same (period_end, cohort).
+  const invKpis = chartById(charts, 'inventory_snapshot_kpis');
+  const snapshot = chartById(charts, 'on_market_snapshot');
+  const snapRows = (snapshot && Array.isArray(snapshot.rows)) ? snapshot.rows : [];
+  const invRows  = (invKpis && Array.isArray(invKpis.rows)) ? invKpis.rows : [];
+  if (invRows.length > 0 && snapRows.length > 0) {
+    // tile_id -> the snapshot view's column carrying the same number.
+    const TILE_TO_SNAPSHOT_KEY = {
+      count_active:       'count_available',
+      avg_price:          'avg_price',
+      avg_cap:            'avg_cap',
+      upper_quartile_cap: 'upper_q_cap',
+      lower_quartile_cap: 'lower_q_cap',
+      median_cap:         'median_cap',
+      avg_dom:            'avg_dom',
+      pct_price_change:   'pct_price_change',
+    };
+    const snapBy = new Map(
+      snapRows.filter(Boolean).map((r) => [`${r.period_end}|${r.cohort}`, r])
+    );
+    for (const t of invRows) {
+      if (!t || t.primary_value == null) continue;
+      const key = TILE_TO_SNAPSHOT_KEY[t.tile_id];
+      const snap = snapBy.get(`${t.period_end}|${t.cohort}`);
+      if (!key || !snap) continue;
+      const a = Number(t.primary_value);
+      const b = Number(snap[key]);
+      if (Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) > KPI_CONSISTENCY_EPS) {
+        warnings.push(
+          `[cm-export] KPI_Inv_Snapshot ${t.tile_id} (${t.cohort} @ ${t.period_end}) ` +
+          `= ${a} but Data_On_Market_Snapshot ${key} = ${b} — the two tabs have ` +
+          `diverged (both must read cm_{vertical}_on_market_snapshot_q)`
+        );
+      }
+    }
+  }
+
+  return warnings;
+}
+
+export function applyColumnDisplay(token, value) {
+  const fn = token ? DISPLAY_TRANSFORMS[token] : null;
+  return fn ? fn(value) : value;
+}
 
 // Round 1 — PDF-style footer caption strips. Italicized one-liner per
 // chart that summarizes intent, displayed in a pale blue strip between
@@ -156,6 +381,8 @@ const CHART_FOOTER_CAPTIONS = {
     'Per-quarter transaction volume (NOT TTM). Companion to YoY Change — bars show the quarter-by-quarter pulse; TTM line in Data_Volume_TTM smooths it.',
   buyer_pool_monthly_count:
     'Stacked monthly buyer count by classification: Private (Individual) navy, Institutional/Fund sky, REIT sage. Read alongside Data_Buyer_Pool (annual %-stacked) for the full picture.',
+  clinic_econ_revenue_census:
+    'Average clinic economics per fiscal year: the stacked bar is average revenue per clinic, split into operating cost (navy) + operating profit (sky); the dots track average patient census per clinic on the right axis. Reconciled-truth basis (HCRIS treatments × payer-weighted rate less cost); full-population fiscal years only.',
   on_market_snapshot:
     'Side-by-side comparison of Total Market vs 10+ Year Term active-listing metrics: count, avg price, avg/upper/lower/median cap, DOM, price-change rate. ↑/↓/→ marks year-over-year direction of change.',
   available_by_tenant_count_donut:
@@ -223,6 +450,8 @@ const CHART_FOOTER_CAPTIONS = {
     'Cash return index (TTM avg cap) and modeled leveraged return (50% LTV, 30-yr am, 10Y + 180–220 bps). Leveraged > cash means accretive financing is achievable.',
   rent_psf_box_quarterly:
     'Quarterly rent / SF distribution: IQR (bars), median (line), min/max (whiskers).',
+  rent_psf_box_quarterly_modeled:
+    'Quarterly rent / SF distribution INCLUDING MODELED rents (contract/stated/projected, confidence ≥ 0.7): IQR (bars), median (line), min/max (whiskers). Companion to the actuals-only Data_Rent_PSF_Box; deepens the recent-quarter sample so the box chart plots every n ≥ 6 quarter since 2023.',
   ppsf_box_quarterly:
     'Quarterly price / SF distribution: IQR (bars), median (line), min/max (whiskers).',
   cap_rate_by_credit:
@@ -248,9 +477,22 @@ const CHART_FOOTER_CAPTIONS = {
   rent_heat_map:
     'Top states by average rent / SF.',
   sources_of_capital:
-    'Top buyer-state sources of capital by 15-year volume.',
+    'Top buyer-state sources of capital by 15-year volume. Buyer state is taken ' +
+    'from the sale record and, where blank, recovered from the linked buyer ' +
+    'contact. Buyers whose state could not be identified are excluded and the ' +
+    '% column is normalized over identified-state volume, so the shares sum to ' +
+    '100% of identified-state capital.',
+  value_proposition_results:
+    'TTM average NOI, cap rate, and sale price with NM vs. Non-NM splits on the ' +
+    'cap and price tiles. Same-address portfolio comps within a TTM window are ' +
+    'collapsed to one deal (summed price, volume-weighted cap) so a single ' +
+    'transaction split across parcels is not multi-counted. The NM gov comp ' +
+    'sample is small (~4 deals/quarter) and skews to smaller private-capital ' +
+    'trades, which sit at wider caps than the large institutional deals in the ' +
+    'Non-NM set — so the single-quarter NM/Non-NM cap split can read near-parity ' +
+    'or invert; lean on the multi-year NM-vs-Market trend for the durable story.',
   case_for_renewal:
-    'Annual GSA new-lease commencements (bars) vs. average rent / SF (line).',
+    'Monthly TTM GSA new-lease commencements from gsa_leases.latest_action=New (bars) vs. trimmed average rent / SF (line).',
   pace_of_cap_rate_expansion:
     'Nominal year-over-year change (in basis points) of the TTM avg cap rate — all cohort (navy) and the core cohort (sky; gov 6+ / dia 12+ firm-term yr). Bars above zero = expansion (cap rates rising); below zero = compression. Use to spot the rate-cycle inflection.',
 };
@@ -305,12 +547,38 @@ const hex = (color) => (color || '').replace('#', '').toUpperCase();
 // Non-cohort columns (period_end / subspecialty / counts on non-cap keys) are
 // never touched.
 const DIA_COHORT_KEYS = new Set(['cap_12plus', 'cap_8to12', 'cap_6to8', 'cap_5orless']);
-const GOV_COHORT_KEYS = new Set(['cap_10plus', 'cap_6to10', 'cap_5to10', 'cap_less5', 'cap_outside_firm']);
+// gov: the new 3-bucket value-of-firm-term scheme (cap_rate_by_lease_term) PLUS
+// the legacy 4-cohort keys the sold_/asking dot plots still emit.
+const GOV_COHORT_KEYS = new Set(['cap_6plus', 'cap_1_5to6', 'cap_sub1_5', 'cap_10plus', 'cap_6to10', 'cap_5to10', 'cap_less5', 'cap_outside_firm']);
 const COHORT_CAP_TEMPLATES = new Set([
   'cap_rate_by_lease_term',
   'sold_cap_by_term_dot_plot',
   'asking_cap_by_term_dot_plot',
 ]);
+
+// CM export audit item 3 (2026-08-07) — physically REMOVE (not just hide, per
+// R43 below) columns explicitly flagged `pruneIfEmpty: true` when they carry no
+// data across the exported rows. These are per-vertical-divergent columns whose
+// source field exists on ONE vertical's view but not the other (e.g.
+// valuation_index avg_expenses_psf / avg_noi_psf and available_cap_dot
+// is_northmarq exist on gov but not dia; volume_ttm yoy_change_pct exists on
+// neither and duplicates Data_YoY_Change). The R43 hide left them in the sheet
+// as ALL-NULL columns an openpyxl auditor still reads as "dead". Removal here
+// runs BEFORE the data-write loop so headers, data, the R43 hide, and the
+// native-chart column-letter assignment all see the same pruned column set —
+// letters stay internally consistent. A flagged column is KEPT when it has data
+// (so gov keeps its populated expenses/NOI/NM columns) or when no rows are
+// supplied (schema-sniffing/test callers).
+function pruneEmptyFlaggedColumns(cols, rows) {
+  if (!Array.isArray(cols)) return cols;
+  const rowList = Array.isArray(rows) ? rows : [];
+  if (rowList.length === 0) return cols;
+  const colHasData = (c) => {
+    const keys = [c.key, ...(Array.isArray(c.fieldKeys) ? c.fieldKeys : [])];
+    return rowList.some((r) => r != null && keys.some((k) => r[k] != null));
+  };
+  return cols.filter((c) => (c && c.pruneIfEmpty ? colHasData(c) : true));
+}
 
 function selectCohortColumns(cols, chartTemplateId, vertical, rows) {
   if (!COHORT_CAP_TEMPLATES.has(chartTemplateId)) return cols;
@@ -332,17 +600,66 @@ function selectCohortColumns(cols, chartTemplateId, vertical, rows) {
   });
 }
 
+function selectSellerSentimentColumns(cols, vertical) {
+  if (!Array.isArray(cols)) return cols;
+  const isGov = vertical === 'gov';
+  return cols
+    // gov only: drop the dialysis-only trailing `_8q` columns so the native
+    // chart's findCol() doesn't bind the gov core series to blank columns.
+    .filter((c) => !(isGov && String(c?.key || '').endsWith('_8q')))
+    .map((c) => {
+      let header = c.header;
+      // gov long-term cohort is the 6+ firm-yr CORE (dia stays 10+).
+      if (isGov && String(c?.key || '').includes('_long_term')) {
+        header = header.replace('10+ yr', '6+ yr');
+      }
+      // 2026-08-12 — BOTH verticals' seller-sentiment cap line no longer keys
+      // solely on the asking cap: it now uses an effective cap (true ask ->
+      // authoritative derived cap_rate ledger -> achieved sold cap) because
+      // the asking cap is captured on only a small minority of recent sales
+      // (which collapsed the recent tail to n~2-6). Relabel "Last Ask Cap" ->
+      // "Last Cap Rate" so the header matches the series. findCol() binds by
+      // column KEY, not header, so this relabel is cosmetic-only.
+      if (String(c?.key || '').startsWith('last_ask_cap')) {
+        header = header.replace('Last Ask Cap', 'Last Cap Rate');
+      }
+      return header === c.header ? c : { ...c, header };
+    });
+}
+
 const CHART_COLUMNS = {
+  // Reconciled facility economics (dialysis_econ_reconciled_v1) — categorical snapshots.
+  dia_facility_scale_curve: [
+    { key: 'volume_band',            header: 'Annual Treatment Volume', width: 20 },
+    { key: 'median_cost_per_tx',     header: 'Median Cost / Treatment', format: 'currency_dollars',   width: 20 },
+    { key: 'median_ebitda_margin',   header: 'Median EBITDA Margin',    format: 'percent_one_decimal', width: 20 },
+    { key: 'median_operating_margin',header: 'Median Operating Margin', format: 'percent_one_decimal', width: 22 },
+    { key: 'clinics',                header: 'Facilities',              format: 'integer_count',       width: 12 },
+  ],
+  dia_operator_ebitda_benchmark: [
+    // Prompt 119 item D — `display: 'short_operator'` shortens the category
+    // labels ("Fresenius Medical Care" -> "Fresenius") so the horizontal bar
+    // chart's y-axis is legible at book size. The native chart's category axis
+    // binds to this column, so tab and chart can't diverge.
+    { key: 'operator',             header: 'Operator',              width: 20, display: 'short_operator' },
+    { key: 'ebitda_margin',        header: 'EBITDA Margin',         format: 'percent_one_decimal', width: 16 },
+    { key: 'operating_margin',     header: 'Operating Margin',      format: 'percent_one_decimal', width: 17 },
+    { key: 'revenue_per_treatment',header: 'Revenue / Treatment',   format: 'currency_dollars',    width: 19 },
+    { key: 'clinics',              header: 'Facilities',            format: 'integer_count',       width: 12 },
+  ],
   volume_ttm_by_quarter: [
     { key: 'period_end',       header: 'Quarter End',         format: 'date_short',          width: 13 },
     { key: 'subspecialty',     header: 'Subspecialty',        width: 14 },
     { key: 'volume_dollars',   header: 'TTM Volume ($)',      format: 'currency_dollars',    width: 18 },
-    { key: 'yoy_change_pct',   header: 'YoY Change',          format: 'percent_one_decimal', width: 13 },
+    // item 3 — dead on both verticals (neither volume_ttm_m view exposes it and
+    // the master_m mapper never emits it); YoY lives in Data_YoY_Change. Prune.
+    { key: 'yoy_change_pct',   header: 'YoY Change',          format: 'percent_one_decimal', width: 13, pruneIfEmpty: true },
   ],
   quarterly_volume_bars: [
-    { key: 'period_end',         header: 'Quarter End',         format: 'date_short',         width: 13 },
-    { key: 'quarterly_volume',   header: 'Quarterly Volume ($)',format: 'currency_dollars',   width: 22 },
-    { key: 'quarterly_count',    header: 'Quarterly Count',     format: 'integer_count',      width: 17 },
+    // A5 — trailing-3-month rolling sum at monthly grain (was boxy quarter totals).
+    { key: 'period_end',         header: 'Month End',                 format: 'date_short',         width: 13 },
+    { key: 'quarterly_volume',   header: 'Rolling 3-Mo Volume ($)',   format: 'currency_dollars',   width: 22 },
+    { key: 'quarterly_count',    header: 'Rolling 3-Mo Count',        format: 'integer_count',      width: 17 },
   ],
   buyer_pool_monthly_count: [
     { key: 'period_end',           header: 'Month End',         format: 'date_short',         width: 13 },
@@ -379,6 +696,22 @@ const CHART_COLUMNS = {
     { key: 'operator',      header: 'Operator / Chain',                              width: 32 },
     { key: 'clinic_count',  header: 'U.S. Clinics',      format: 'integer_count',    width: 14 },
     { key: 'pct_of_market', header: '% of U.S. Clinics', format: 'percent_one_decimal', width: 16 },
+  ],
+  // Unit-level (per-clinic) operating statistics by operator — reconciled model.
+  dia_operator_unit_economics: [
+    { key: 'rank',                     header: '#',                      format: 'integer_count',       width: 5 },
+    // Prompt 119 item D — same short display names as Data_Operator_Bench so
+    // the two operator-keyed dialysis tabs read consistently.
+    { key: 'operator',                 header: 'Operator / Chain',                                      width: 22, display: 'short_operator' },
+    { key: 'clinics',                  header: 'U.S. Clinics',           format: 'integer_count',       width: 12 },
+    { key: 'avg_treatments_per_clinic',header: 'Avg Treatments / Clinic',format: 'integer_count',       width: 20 },
+    { key: 'avg_patients_per_clinic',  header: 'Avg Patients / Clinic',  format: 'integer_count',       width: 18 },
+    { key: 'avg_revenue_per_clinic',   header: 'Avg Revenue / Clinic',   format: 'currency_dollars',    width: 20 },
+    { key: 'avg_ebitda_per_clinic',    header: 'Avg EBITDA / Clinic',    format: 'currency_dollars',    width: 20 },
+    { key: 'revenue_per_treatment',    header: 'Revenue / Treatment',    format: 'currency_dollars',    width: 18 },
+    { key: 'cost_per_treatment',       header: 'Cost / Treatment',       format: 'currency_dollars',    width: 16 },
+    { key: 'operating_margin',         header: 'Operating Margin',       format: 'percent_one_decimal', width: 16 },
+    { key: 'ebitda_margin',            header: 'EBITDA Margin',          format: 'percent_one_decimal', width: 14 },
   ],
   top_sellers_table: [
     { key: 'rank',       header: '#',                   format: 'integer_count',    width: 5 },
@@ -436,6 +769,19 @@ const CHART_COLUMNS = {
     { key: 'period_end',          header: 'As of',           format: 'date_short',          width: 13 },
   ],
   // Round 18 — 3 new charts
+  // ── Data_Core_Cap_Dot / page-49 "Core Cap Rate Dot Plot" source of truth ──
+  // The catalog points core_cap_rate_dot_plot at cm_{vertical}_core_cap_dot_q,
+  // which is the CORE COHORT: firm_term_years >= 8, cap_rate in [0.04, 0.12],
+  // sale_date >= 2001-01-01 (it aliases the sale date to `period_end`). That is
+  // the intended plot — one dot per qualifying core sale. Do NOT repoint this
+  // at cm_{vertical}_core_cap_rate_dots: that view is the UNFILTERED superset
+  // (every sale back to 1985, stub terms + out-of-band caps included, ~3,019
+  // dia rows) and would contaminate the core plot. The prior "missing recent
+  // dots" symptom was the PostgREST 1000-row cap truncating the newest sales
+  // under ascending order — fixed by pagination in fetchView (capital-markets.js),
+  // NOT by switching views. A post-export freshness assertion (core dot
+  // max(sale_date) within 45 days of the export date) guards against a stalled
+  // source; see the CORE_DOT check in exportWorkbook.
   core_cap_rate_dot_plot: [
     { key: 'period_end',       header: 'Sale Date',           format: 'date_short',          width: 13 },
     { key: 'cap_rate',         header: 'Cap Rate',            format: 'percent_basis_points', width: 13 },
@@ -447,7 +793,10 @@ const CHART_COLUMNS = {
     { key: 'period_end',       header: 'As of',               format: 'date_short',          width: 13 },
     { key: 'cap_rate',         header: 'Asking Cap',          format: 'percent_basis_points', width: 14 },
     { key: 'firm_term_years',  header: 'Firm Term (yrs)',     format: 'number_one_decimal',  width: 16 },
-    { key: 'is_northmarq',     header: 'NM-Listed',           width: 12 },
+    // item 3 — gov's available_cap_dot view carries is_northmarq; dia's exposes
+    // is_core_10plus instead (no NM flag). pruneIfEmpty drops the dead NM-Listed
+    // column from the dia workbook while gov keeps its populated one.
+    { key: 'is_northmarq',     header: 'NM-Listed',           width: 12, pruneIfEmpty: true },
     { key: 'last_price',       header: 'Asking Price ($)',    format: 'currency_dollars',    width: 18 },
   ],
   // Round 31 — NEW: Asking Cap Rate Ranges by Lease Term Buckets
@@ -459,10 +808,15 @@ const CHART_COLUMNS = {
     { key: 'cap_8to12',   header: '8-12 Year Cap', format: 'percent_basis_points', width: 15 },
     { key: 'cap_6to8',    header: '6-8 Year Cap',  format: 'percent_basis_points', width: 14 },
     { key: 'cap_5orless', header: '≤5 Year Cap',   format: 'percent_basis_points', width: 14 },
-    { key: 'cap_12plus_n',  header: '12+ n',  format: 'integer_count', width: 8 },
-    { key: 'cap_8to12_n',   header: '8-12 n', format: 'integer_count', width: 8 },
-    { key: 'cap_6to8_n',    header: '6-8 n',  format: 'integer_count', width: 8 },
-    { key: 'cap_5orless_n', header: '≤5 n',   format: 'integer_count', width: 8 },
+    // item 4 (2026-08-07) — the n's are DISTINCT listings over the view's
+    // trailing 24-month window (cm_dialysis_asking_cap_by_term_m: a 2-year
+    // `windowed` CTE + row_number() per listing → distinct count), NOT the
+    // point-in-time active count. That is why they sum to ~392 vs ~204 current
+    // actives. Headers state the basis so the two counts can't be conflated.
+    { key: 'cap_12plus_n',  header: '12+ n (24-mo distinct)',  format: 'integer_count', width: 20 },
+    { key: 'cap_8to12_n',   header: '8-12 n (24-mo distinct)', format: 'integer_count', width: 20 },
+    { key: 'cap_6to8_n',    header: '6-8 n (24-mo distinct)',  format: 'integer_count', width: 20 },
+    { key: 'cap_5orless_n', header: '≤5 n (24-mo distinct)',   format: 'integer_count', width: 20 },
   ],
   // Round 30 — Sold_Cap_by_Term redefined as 4-line TTM cohort series.
   // Different column shape for gov vs dia. Data-tab writer iterates the
@@ -524,8 +878,14 @@ const CHART_COLUMNS = {
     { key: 'subspecialty',       header: 'Subspecialty',          width: 14 },
     { key: 'rent_psf',           header: 'Avg Rent / SF (TTM)',   format: 'currency_per_sf',  width: 20 },
     { key: 'price_psf',          header: 'Avg Sale Price / SF',   format: 'currency_per_sf',  width: 22 },
-    { key: 'n_with_rent_ttm',    header: 'N w/ Rent (TTM)',       format: 'integer_count',    width: 17 },
-    { key: 'n_with_price_ttm',   header: 'N w/ Price (TTM)',      format: 'integer_count',    width: 17 },
+    // item 3 — the count columns are LIVE, just under different field names per
+    // vertical: gov's rent_price_psf_q exposes n_with_rent_ttm/n_with_price_ttm,
+    // dia's exposes rent_n/price_n. Coalesce via fieldKeys so both populate
+    // (previously dia rendered these ALL-NULL against the gov-only key).
+    { key: 'n_with_rent_ttm',  fieldKeys: ['n_with_rent_ttm', 'rent_n'],
+                               header: 'N w/ Rent (TTM)',       format: 'integer_count',    width: 17 },
+    { key: 'n_with_price_ttm', fieldKeys: ['n_with_price_ttm', 'price_n'],
+                               header: 'N w/ Price (TTM)',      format: 'integer_count',    width: 17 },
   ],
   // Round 31 — Dia counterpart (per-chair unit econ).
   rent_and_price_per_chair: [
@@ -561,18 +921,29 @@ const CHART_COLUMNS = {
   nm_vs_market_cap: [
     { key: 'period_end',       header: 'Quarter End',         format: 'date_short',          width: 13 },
     { key: 'subspecialty',     header: 'Subspecialty',        width: 14 },
-    { key: 'nm_cap_rate',      header: 'Northmarq Cap Rate',  format: 'percent_basis_points', width: 19 },
-    { key: 'market_cap_rate',  header: 'Market Cap Rate',     format: 'percent_basis_points', width: 18 },
+    // 2026-08-29 (gov) — the CHARTED series (nm_cap_rate/market_cap_rate, cols
+    // C/D) are single-pass trailing-24-mo SIMPLE averages of CONFIRMED caps only
+    // (projected-rent 'rolled_forward_escalated' caps are excluded at the view).
+    // The dollar-weighted, 12-mo TTM, and Team Briggs columns are kept on the
+    // sheet as REFERENCE (uncharted). See cm_gov_nm_vs_market_m.
+    { key: 'nm_cap_rate',      header: 'Northmarq Cap Rate (24-mo avg, confirmed)', format: 'percent_basis_points', width: 26 },
+    { key: 'market_cap_rate',  header: 'Market Cap Rate (24-mo avg, confirmed)',    format: 'percent_basis_points', width: 26 },
+    { key: 'nm_cap_wtd',       header: 'Northmarq Cap ($-weighted, ref)', format: 'percent_basis_points', width: 26 },
+    { key: 'market_cap_wtd',   header: 'Market Cap ($-weighted, ref)',    format: 'percent_basis_points', width: 26 },
+    { key: 'nm_cap_ttm12',     header: 'Northmarq Cap (12-mo TTM, ref)', format: 'percent_basis_points', width: 26 },
+    { key: 'market_cap_ttm12', header: 'Market Cap (12-mo TTM, ref)',    format: 'percent_basis_points', width: 26 },
+    { key: 'briggs_cap_ew',    header: 'Team Briggs Cap (24-mo avg, ref)', format: 'percent_basis_points', width: 26 },
   ],
   cap_rate_by_lease_term: [
     { key: 'period_end',       header: 'Quarter End',         format: 'date_short',          width: 13 },
     { key: 'subspecialty',     header: 'Subspecialty',        width: 14 },
-    // Legacy gov-style cohorts (10+/6-10/<6/outside) — used by gov vertical
-    // and kept on dialysis for backward compatibility. T9 — <5 boundary -> <6.
-    { key: 'cap_10plus',       header: '10+ Year Cap',        format: 'percent_basis_points', width: 14 },
-    { key: 'cap_6to10',        header: '6–10 Year Cap',       format: 'percent_basis_points', width: 16 },
-    { key: 'cap_less5',        header: '< 6 Year Cap',        format: 'percent_basis_points', width: 14 },
-    { key: 'cap_outside_firm', header: 'Outside Firm Cap',    format: 'percent_basis_points', width: 18 },
+    // Gov value-of-firm-term THREE-BUCKET scheme (2026-08-13): 6+ / 1.5–6 /
+    // sub-1.5 yr. Cleanly monotonic + continuous across the trailing window and
+    // folds the old thin, jagged "Outside Firm" holdover cohort into sub-1.5.
+    // Reads cm_gov_cap_by_term_m.{cap_6plus,cap_1_5to6,cap_sub1_5}.
+    { key: 'cap_6plus',        header: '6+ Year Firm Cap',    format: 'percent_basis_points', width: 16 },
+    { key: 'cap_1_5to6',       header: '1.5–6 Year Firm Cap', format: 'percent_basis_points', width: 18 },
+    { key: 'cap_sub1_5',       header: 'Sub-1.5 Year Firm Cap', format: 'percent_basis_points', width: 20 },
     // Round 3 PDF-aligned dialysis cohorts (12+/8-12/6-8/≤5). NULL on gov
     // because gov master_m never carried these fields.
     { key: 'cap_12plus',       header: '12+ Year Cap',        format: 'percent_basis_points', width: 14 },
@@ -606,6 +977,19 @@ const CHART_COLUMNS = {
     { key: 'cross_border_pct',      header: 'Cross-Border %',      format: 'percent_zero_decimal', width: 15 },
     { key: 'institutional_pct',     header: 'Institutional %',     format: 'percent_zero_decimal', width: 16 },
   ],
+  // Dialysis reconciled economics — annual avg per clinic. Stacked bars
+  // (operating cost + operating profit = revenue) on the primary axis + a
+  // patient-census dot overlay on the secondary axis. HCRIS reconciled-truth
+  // basis; full-population fiscal years only (2011-2024).
+  clinic_econ_revenue_census: [
+    { key: 'year',                             header: 'Year',                       width: 10 },
+    { key: 'subspecialty',                     header: 'Subspecialty',               width: 14 },
+    { key: 'clinic_count',                     header: 'Clinics (n)',                format: 'integer_count',     width: 12 },
+    { key: 'avg_operating_cost_per_clinic',    header: 'Avg Operating Cost / Clinic',   format: 'currency_dollars',  width: 24 },
+    { key: 'avg_operating_profit_per_clinic',  header: 'Avg Operating Profit / Clinic', format: 'currency_dollars',  width: 26 },
+    { key: 'avg_revenue_per_clinic',           header: 'Avg Revenue / Clinic',          format: 'currency_dollars',  width: 22 },
+    { key: 'avg_patient_census_per_clinic',    header: 'Avg Patient Census / Clinic',   format: 'number_one_decimal',width: 24 },
+  ],
   dom_and_pct_of_ask: [
     { key: 'period_end',          header: 'Quarter End',           format: 'date_short',          width: 13 },
     { key: 'subspecialty',        header: 'Subspecialty',          width: 14 },
@@ -615,8 +999,15 @@ const CHART_COLUMNS = {
     // the typical fresh-listing experience. See dia DOM view for full
     // calc + 0-3650 day cap.
     { key: 'median_dom',          header: 'Median DOM (days)',     format: 'integer_count',       width: 17 },
-    { key: 'pct_of_ask',          header: '% of Ask Price',        format: 'percent_one_decimal', width: 16 },
-    { key: 'median_pct_of_ask',   header: 'Median % of Ask',       format: 'percent_one_decimal', width: 17 },
+    // CM export audit item E (2026-08-07): the canonical closed-sale
+    // price-realization basis for Data_DOM_Ask is % of ORIGINAL LIST
+    // (cm_{v}_dom_pct_ask_m derives `sold_price / initial_price`), NOT % of
+    // last ask. The parallel cm_{v}_dom_pct_ask_q view computes % of LAST ask
+    // (`sold_price / last_price`) and is NOT consumed by the export — headers
+    // are made explicit so the two bases can never be conflated in the report
+    // copy again. See the migration `..._cm_dom_pct_ask_canonical_labels`.
+    { key: 'pct_of_ask',          header: '% of Original List',        format: 'percent_one_decimal', width: 18 },
+    { key: 'median_pct_of_ask',   header: 'Median % of Original List', format: 'percent_one_decimal', width: 20 },
   ],
   bid_ask_spread: [
     { key: 'period_end',         header: 'Quarter End',         format: 'date_short',          width: 13 },
@@ -637,7 +1028,14 @@ const CHART_COLUMNS = {
     // views (min_last_ask_cap / max_last_ask_cap / achieved_last_ask_cap).
     { key: 'min_last_ask_cap',      header: 'Last Ask — Low (TTM)',  format: 'percent_basis_points', width: 19 },
     { key: 'max_last_ask_cap',      header: 'Last Ask — High (TTM)', format: 'percent_basis_points', width: 19 },
-    { key: 'achieved_last_ask_cap', header: 'Achieved Cap (TTM)',    format: 'percent_basis_points', width: 19 },
+    // CM export audit (2026-08-07) — the static `achieved_last_ask_cap` column
+    // was a DUPLICATE of the native-chart helper column `achieved_cap`
+    // (cm-native-chart-injector.js bid_ask_spread spec), which computes the
+    // identical value (avg_last_ask_cap + avg_bid_ask_spread) and is the column
+    // the chart's navy "Achieved" marker line actually binds to (via cols.length).
+    // Both rendered header "Achieved Cap (TTM)" with byte-identical data (verified
+    // 149/149 rows). Drop the static one; the helper remains and keeps the chart
+    // wired. (min/max Low/High stay — they are distinct range columns.)
   ],
 
   // Phase 2c additions (FRED macro)
@@ -669,6 +1067,10 @@ const CHART_COLUMNS = {
     { key: 'pct_price_change_long_term',  header: 'Price Chg % (10+ yr)',format: 'percent_one_decimal', width: 20 },
     { key: 'last_ask_cap_all',            header: 'Last Ask Cap (all)',  format: 'percent_basis_points', width: 19 },
     { key: 'last_ask_cap_long_term',      header: 'Last Ask Cap (10+ yr)',format: 'percent_basis_points', width: 21 },
+    // B3 — trailing-8-quarter core columns (the CHARTED core lines bind here so
+    // a thin single-quarter core cohort no longer nulls the line mid-2025).
+    { key: 'pct_price_change_long_term_8q', header: 'Price Chg % (10+ yr, trailing 8-qtr)', format: 'percent_one_decimal',  width: 26 },
+    { key: 'last_ask_cap_long_term_8q',     header: 'Last Ask Cap (10+ yr, trailing 8-qtr)', format: 'percent_basis_points', width: 27 },
   ],
   sources_of_capital: [
     { key: 'rank_15y',          header: 'Rank',                width: 6 },
@@ -680,8 +1082,10 @@ const CHART_COLUMNS = {
   valuation_index: [
     { key: 'period_end',         header: 'Quarter End',          format: 'date_short',          width: 13 },
     { key: 'avg_rent_psf',       header: 'Avg Rent PSF (TTM)',   format: 'currency_per_sf',     width: 18 },
-    { key: 'avg_expenses_psf',   header: 'Expenses PSF (TTM)',   format: 'currency_per_sf',     width: 19 },
-    { key: 'avg_noi_psf',        header: 'NOI PSF (TTM)',        format: 'currency_per_sf',     width: 17 },
+    // item 3 — gov's valuation_index_m view carries these; dia's does not.
+    // pruneIfEmpty drops them from the dia workbook (dead) while gov keeps them.
+    { key: 'avg_expenses_psf',   header: 'Expenses PSF (TTM)',   format: 'currency_per_sf',     width: 19, pruneIfEmpty: true },
+    { key: 'avg_noi_psf',        header: 'NOI PSF (TTM)',        format: 'currency_per_sf',     width: 17, pruneIfEmpty: true },
     { key: 'avg_cap_rate',       header: 'Avg Cap Rate (TTM)',   format: 'percent_basis_points', width: 18 },
     { key: 'valuation_index',    header: 'Valuation Index ($/SF)',format: 'currency_per_sf',    width: 22 },
     // Round 22 — surface the Round 20 yoy_change column in the data tab
@@ -758,10 +1162,11 @@ const CHART_COLUMNS = {
     { key: 'n_leases', header: 'N Leases', format: 'integer_count', width: 12 },
   ],
   case_for_renewal: [
-    { key: 'year', header: 'Year', format: 'integer_count', width: 8 },
-    { key: 'commencement_count', header: 'Lease Commencements', format: 'integer_count', width: 22 },
-    { key: 'avg_rent_per_sf', header: 'Avg Rent / SF', format: 'currency_per_sf', width: 16 },
+    { key: 'period_end', header: 'Month End', format: 'date_short', width: 13 },
+    { key: 'commencement_count', header: 'New Lease Commencements (TTM)', format: 'integer_count', width: 30 },
+    { key: 'avg_rent_per_sf', header: 'Avg Rent / SF (trimmed)', format: 'currency_per_sf', width: 24 },
     { key: 'total_lsf', header: 'Total LSF', format: 'integer_count', width: 16 },
+    { key: 'rent_sample_count', header: 'Rent Sample Count', format: 'integer_count', width: 18 },
   ],
   renewal_rent_growth: [
     { key: 'period_end', header: 'Quarter End', format: 'date_short', width: 13 },
@@ -866,7 +1271,8 @@ const CHART_COLUMNS = {
     { key: 'subspecialty',     header: 'Subspecialty',        width: 14 },
     { key: 'n_sales',          header: 'N Sales (TTM)',       format: 'integer_count',        width: 14 },
     { key: 'avg_dom',          header: 'Avg DOM (days)',      format: 'integer_count',        width: 14 },
-    { key: 'pct_of_ask',       header: '% of Ask Price',      format: 'percent_one_decimal',  width: 16 },
+    // CM export audit item E — canonical basis is % of ORIGINAL LIST (see dom_and_pct_of_ask).
+    { key: 'pct_of_ask',       header: '% of Original List',  format: 'percent_one_decimal',  width: 18 },
   ],
   bid_ask_spread_monthly: [
     { key: 'period_end',         header: 'Month End',           format: 'date_short',           width: 13 },
@@ -898,6 +1304,21 @@ const CHART_COLUMNS = {
     { key: 'rent_upper_quartile', header: 'Upper Quartile',      format: 'currency_per_sf',  width: 16 },
     { key: 'rent_max',            header: 'Max',                 format: 'currency_per_sf',  width: 10 },
   ],
+  // CM chart fixes round 2, item 1 — dialysis LABELED MODELED rent-box variant
+  // (cm_dialysis_rent_box_q_with_modeled): contract/stated/projected @ conf>=0.7.
+  // basis_scope is kept visible so the reader sees the modeled basis; n_points
+  // replaces n_leases (the modeled view counts observations, not just leases).
+  rent_psf_box_quarterly_modeled: [
+    { key: 'period_end',          header: 'Quarter End',         format: 'date_short',       width: 13 },
+    { key: 'subspecialty',        header: 'Subspecialty',        width: 14 },
+    { key: 'basis_scope',         header: 'Basis Scope',         width: 40, keepIfEmpty: true },
+    { key: 'n_points',            header: 'N Points',            format: 'integer_count',    width: 12 },
+    { key: 'rent_min',            header: 'Min',                 format: 'currency_per_sf',  width: 10 },
+    { key: 'rent_lower_quartile', header: 'Lower Quartile',      format: 'currency_per_sf',  width: 16 },
+    { key: 'rent_median',         header: 'Median',              format: 'currency_per_sf',  width: 12 },
+    { key: 'rent_upper_quartile', header: 'Upper Quartile',      format: 'currency_per_sf',  width: 16 },
+    { key: 'rent_max',            header: 'Max',                 format: 'currency_per_sf',  width: 10 },
+  ],
 };
 
 // Period-summary template — column headers are computed at render time from
@@ -908,6 +1329,9 @@ const PERIOD_SUMMARY_TEMPLATES = new Set([
 
 // Tab name per chart (kept short — Excel limits to 31 chars)
 const TAB_NAMES = {
+  dia_facility_scale_curve:      'Data_Facility_Scale',
+  dia_operator_ebitda_benchmark: 'Data_Operator_Bench',
+  dia_operator_unit_economics:   'Data_Operator_Unit_Econ',
   volume_ttm_by_quarter:        'Data_Volume_TTM',
   quarterly_volume_bars:        'Data_Volume_Quarterly',
   buyer_pool_monthly_count:     'Data_Buyer_Pool_M',
@@ -934,6 +1358,7 @@ const TAB_NAMES = {
   // Phase 2b additions
   yoy_volume_change:            'Data_YoY_Change',
   buyer_class_pct_by_year:      'Data_Buyer_Pool',
+  clinic_econ_revenue_census:   'Data_Rev_Cost_Profit',
   // Round 18 — 3 new charts (one applies to both verticals, one is gov-only)
   core_cap_rate_dot_plot:           'Data_Core_Cap_Dot',
   available_cap_rate_dot_plot:      'Data_Avail_Cap_Dot',
@@ -995,7 +1420,18 @@ const TAB_NAMES = {
   seller_sentiment_monthly:     'Data_Sentiment_M',
   // Lease-rent distribution (StockChart-style 5-number summary per quarter)
   rent_psf_box_quarterly:       'Data_Rent_PSF_Box',
+  // CM chart fixes round 2, item 1 — modeled companion sheet (dia only). The
+  // actuals-only Data_Rent_PSF_Box sheet stays unchanged; this is additive.
+  rent_psf_box_quarterly_modeled: 'Data_Rent_PSF_Box_Mdl',
 };
+
+export function getChartColumnsForTemplate(chartTemplateId) {
+  return CHART_COLUMNS[chartTemplateId] || null;
+}
+
+export function getTabNameForTemplate(chartTemplateId) {
+  return TAB_NAMES[chartTemplateId] || null;
+}
 
 // ============================================================================
 // Master Paste-Ready layout (gov vertical)
@@ -1098,8 +1534,14 @@ const GOV_MASTER_PASTE_LAYOUT = [
 // concept; dialysis says just "Lease Term"). Apply override at chart-loop
 // time so it flows into tab title + index row + chart <c:title> + page
 // header consistently.
+// CM chart fixes round 3, item 6 — the NM vs Market cap chart now plots
+// trailing-24-month simple averages (not TTM); the title says so on both
+// verticals. Applied via NAME_OVERRIDES so it flows to the tab title, index
+// row, chart <c:title>, and page header consistently.
+const NM_24MO_TITLE = 'NM vs Market — Avg Cap Rate (trailing 24-month averages)';
 const NAME_OVERRIDES_BY_VERTICAL = {
   dialysis: {
+    nm_vs_market_cap: NM_24MO_TITLE,
     // User notes 2026-05-22: "Firm term label in the dialysis chart title,
     // should just be lease term — firm term is for government only"
     available_cap_rate_dot_plot: 'Available Deals — Asking Cap vs Lease Term',
@@ -1110,13 +1552,54 @@ const NAME_OVERRIDES_BY_VERTICAL = {
     inventory_backlog: 'Market Turnover — Added vs Sold (Monthly) + Net to Market',
   },
   gov: {
+    nm_vs_market_cap: NM_24MO_TITLE,
     inventory_backlog: 'Market Turnover — Added vs Sold (Monthly) + Net to Market',
+    // The gov view now keys the x-axis to EFFECTIVE VINTAGE
+    // (GREATEST(year_built, year_renovated, build-to-suit lease-commencement
+    // year)), so an extensive retrofit or a new BTS award counts at the
+    // retrofit/delivery year — the title says "/ Renovated" to match. gov-only;
+    // the dia chart is year_built and keeps the catalog default.
+    rent_by_year_built: 'Rent by Year Built / Renovated',
   },
 };
 
-export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, charts, brand, masterRows, chartImages }) {
+// CM chart fixes round 3, item 6 — a visible methodology note on the sheet so
+// the trailing-24-month basis is documented in the deliverable itself (not just
+// in the view comment). Written into the subtitle line of the data sheet.
+// CM chart fixes round 3, item 7 — templates whose DATA sheet is written but
+// whose CHART is removed from the report set. dialysis rent_psf_box_quarterly:
+// the single rent-box chart is now the full-history modeled companion
+// (rent_psf_box_quarterly_modeled); the legacy actuals-only sheet stays for
+// reference but is no longer charted (native or PNG).
+const CHART_SUPPRESSED_BY_VERTICAL = {
+  dialysis: new Set(['rent_psf_box_quarterly']),
+};
+function isChartSuppressed(vertical, templateId) {
+  const set = CHART_SUPPRESSED_BY_VERTICAL[vertical];
+  return !!(set && set.has(templateId));
+}
+
+const METHODOLOGY_NOTE_BY_TEMPLATE = {
+  nm_vs_market_cap:
+    'Methodology: both plotted series are single-pass TRAILING-24-MONTH simple averages of ' +
+    'CONFIRMED transaction cap rates (0.04–0.12 band; Market = non-Northmarq brokered deals). ' +
+    'Projected-rent-derived caps (rolled_forward_escalated) and implausible/unverified caps are ' +
+    'excluded so the lines reflect true confirmed cap rates, not rents. The dollar-weighted, ' +
+    '12-month TTM, and Team Briggs columns are shown for reference only and are not charted.',
+};
+
+export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, charts, brand, masterRows, chartImages, provenance, commentary, previewWatermark = false }) {
   const palette = (brand?.palette) ? brand.palette : DEFAULT_BRAND.palette;
-  const fonts   = (brand?.fonts)   ? brand.fonts   : DEFAULT_BRAND.fonts;
+  // CM chart fixes round 3, item 1 — the workbook CELLS were rendering Calibri
+  // (the cm_brand_tokens Excel families / ExcelJS theme default) while the CHART
+  // text is Open Sans (CM_BRAND.typeface), so the file opened non-uniform.
+  // Force every styled cell to Open Sans to match the charts; injectNativeCharts
+  // additionally rewrites the workbook theme minor+major font so any unstyled
+  // cell inherits Open Sans too. Sizes/weights are preserved (title cells stay
+  // bold), so the visual hierarchy is unchanged — only the family is unified.
+  const CM_EXPORT_FONT = 'Open Sans';
+  const brandFonts = (brand?.fonts) ? brand.fonts : DEFAULT_BRAND.fonts;
+  const fonts   = { ...brandFonts, title_family: CM_EXPORT_FONT, body_family: CM_EXPORT_FONT };
   // R56 — patch chart.name based on per-vertical overrides ONCE up front.
   // chart.name is read in many places (tab title, page header, chart
   // <c:title>, index row); patching the source avoids per-callsite plumbing.
@@ -1150,6 +1633,10 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
   // inject native chart XML for migrated chart_template_ids. Each entry
   // is { tabName, spec } per the injectNativeCharts() contract.
   const nativeInjections = [];
+  // CM export audit (2026-08-07) — collects schema-drift warnings (template
+  // column absent from the pulled view) across every sheet for a single
+  // end-of-export console summary.
+  const driftWarnings = [];
 
   const wb = new ExcelJS.Workbook();
   wb.creator = 'Northmarq Capital Markets — LCC';
@@ -1166,6 +1653,20 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
   });
   cover.getColumn(1).width = 4;
   cover.getColumn(2).width = 80;
+
+  // INTERIM GUARD (CM packet-export parity, 2026-08-09): until the packet-backed
+  // export reaches full standard coverage, the packet build carries a loud
+  // PREVIEW banner so it can never be mistaken for the marketing deliverable.
+  // The canonical marketing export (no watermark) remains the standard export.
+  if (previewWatermark) {
+    cover.mergeCells('B1:B1');
+    cover.getCell('B1').value =
+      'PREVIEW — NOT FOR MARKETING — partial coverage. Use the standard export for the marketing deliverable.';
+    cover.getCell('B1').font = { name: fonts.title_family, size: 12, bold: true, color: { argb: 'FFFFFFFF' } };
+    cover.getCell('B1').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC00000' } };
+    cover.getCell('B1').alignment = { wrapText: true, vertical: 'middle', horizontal: 'left' };
+    cover.getRow(1).height = 34;
+  }
 
   const verticalLabel = vertical === 'gov' ? 'Government-Leased'
                       : vertical === 'dialysis' ? 'Dialysis'
@@ -1188,10 +1689,31 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
   cover.getCell('B6').value = `Generated: ${new Date().toISOString().slice(0, 10)} by Life Command Center`;
   cover.getCell('B6').font = { name: fonts.body_family, size: 10, color: { argb: 'FF' + hex(palette.nm_text_muted) } };
 
+  // CM export audit item 5 (2026-08-07) — build-provenance stamp. Records the
+  // exact deploy that produced this workbook (git SHA + full generated_at
+  // timestamp + builder module) so a "deployed build behind HEAD" divergence
+  // (the root cause behind the #1613 "fixed at HEAD yet still ALL-NULL" reports)
+  // is always visible ON the deliverable. Falls back gracefully when the caller
+  // passes no provenance (e.g. unit tests).
+  const prov = provenance || {};
+  const provSha = prov.gitSha || 'unknown';
+  const provWhen = prov.generatedAt || new Date().toISOString();
+  const provBuilder = prov.builder || 'cm-excel-export.js::buildCapitalMarketsWorkbook';
+  cover.getCell('B7').value =
+    `Build: ${provSha} · ${provWhen} · ${provBuilder}`;
+  cover.getCell('B7').font = { name: fonts.body_family, size: 9, italic: true, color: { argb: 'FF' + hex(palette.nm_text_muted) } };
+
   cover.getCell('B8').value = 'Data Source';
   cover.getCell('B8').font = { name: fonts.title_family, size: 14, bold: true, color: { argb: 'FF' + hex(palette.nm_navy) } };
 
-  cover.getCell('B9').value = 'Live-computed from public.sales_transactions on the Government Supabase, filtered to closed sales (sold_price > 0). Cap rate aggregates use N≥3 quarter guard for representative stats; NM/non-NM attribution stats use N≥1.';
+  // CM export audit (2026-08-07) — the data-source line must name the vertical's
+  // OWN backend, not a shared constant. A dialysis export previously read
+  // "Government Supabase" verbatim (copy-paste from the gov cover). Each vertical
+  // sources from a distinct Supabase project/table, so resolve it per-vertical.
+  const dataSourceBlurb = vertical === 'dialysis'
+    ? 'Live-computed from public.sales_transactions on the Dialysis Supabase (project zqzrriwuavgrquhisnoa), filtered to closed sales (sold_price > 0). Cap rate aggregates use N≥3 quarter guard for representative stats; NM/non-NM attribution stats use N≥1.'
+    : 'Live-computed from public.sales_transactions on the Government Supabase, filtered to closed sales (sold_price > 0). Cap rate aggregates use N≥3 quarter guard for representative stats; NM/non-NM attribution stats use N≥1.';
+  cover.getCell('B9').value = dataSourceBlurb;
   cover.getCell('B9').font = { name: fonts.body_family, size: 10, color: { argb: 'FF' + hex(palette.nm_text) } };
   cover.getCell('B9').alignment = { wrapText: true, vertical: 'top' };
   cover.getRow(9).height = 48;
@@ -1280,6 +1802,36 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
     idxRow++;
   }
 
+  if (Array.isArray(commentary) && commentary.length > 0) {
+    const cm = wb.addWorksheet('Commentary', {
+      views: [{ state: 'frozen', ySplit: 1, showGridLines: false }],
+    });
+    try { cm.properties.tabColor = { argb: 'FF' + hex(palette.nm_navy) }; } catch {}
+    cm.columns = [
+      { header: 'page_id', key: 'page_id', width: 34 },
+      { header: 'title', key: 'title', width: 42 },
+      { header: 'status', key: 'status', width: 14 },
+      { header: 'copy', key: 'copy', width: 110 },
+    ];
+    cm.getRow(1).font = { name: fonts.title_family, size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
+    cm.getRow(1).eachCell((cell) => {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF' + hex(palette.nm_navy) } };
+      cell.alignment = { vertical: 'middle', wrapText: true };
+    });
+    for (const row of commentary) {
+      cm.addRow({
+        page_id: row.page_id || '',
+        title: row.title || row.page_id || '',
+        status: row.status || '',
+        copy: row.copy || '',
+      });
+    }
+    for (let r = 2; r <= cm.rowCount; r++) {
+      cm.getRow(r).font = { name: fonts.body_family, size: 10, color: { argb: 'FF' + hex(palette.nm_text) } };
+      cm.getRow(r).alignment = { vertical: 'top', wrapText: true };
+    }
+  }
+
   // ----------------------------------------------------------------
   // Per-chart data tabs
   // ----------------------------------------------------------------
@@ -1333,21 +1885,35 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
     let cols      = CHART_COLUMNS[chart.chart_template_id];
     if (!tabName || !cols) continue;
 
-    // R73 #22 — seller_sentiment's long-term cohort is vertical-specific: gov is
-    // now the 6+ firm-yr CORE (Round 73), dia stays 10+. CHART_COLUMNS headers
-    // are the static "10+ yr"; relabel the gov copy to "6+ yr" so the data-sheet
-    // headers AND the injector chart series titles (which reference these header
-    // cells) match the gov cohort. Non-mutating copy; dia keeps "10+ yr".
-    if (chart.chart_template_id === 'seller_sentiment' && vertical === 'gov') {
-      cols = cols.map(c => /_long_term$/.test(c.key)
-        ? { ...c, header: c.header.replace('10+ yr', '6+ yr') }
-        : c);
+    // R73 #22 / 2026-08-11 — seller_sentiment's long-term cohort is
+    // vertical-specific: gov is the 6+ firm-yr CORE, dia stays 10+. Also keep
+    // gov off the dialysis-only trailing `_8q` columns; if those blank columns
+    // exist, the native chart's findCol() binds the core series to them before
+    // the populated gov `*_long_term` fields.
+    if (chart.chart_template_id === 'seller_sentiment') {
+      cols = selectSellerSentimentColumns(cols, vertical);
     }
 
     // R76 Layer A1 — prune the cap-by-term tabs to this vertical's canonical
     // cohort scheme so no chart series binds to a permanently-NULL column set
     // (the "missing 10+ cohort" / "data conflicts with itself" notes).
     cols = selectCohortColumns(cols, chart.chart_template_id, vertical, chart.rows);
+
+    // CM export audit item 3 — drop per-vertical-divergent columns that are
+    // dead for THIS vertical (flagged `pruneIfEmpty` in CHART_COLUMNS) so the
+    // dialysis workbook never ships an ALL-NULL Expenses/NOI/NM-Listed/YoY
+    // column while gov keeps the same columns (its views populate them).
+    cols = pruneEmptyFlaggedColumns(cols, chart.rows);
+
+    // A4 (CM chart feedback item #8) — drop the 'Undisclosed Term' bucket from
+    // the Data_Avail_by_Term breakdown sheet + its bar chart. The undisclosed
+    // listings remain in every total-market metric (they're only removed from
+    // this per-term breakout, which is meaningless for an unknown term).
+    if (chart.chart_template_id === 'available_by_term_bucket' && Array.isArray(chart.rows)) {
+      chart.rows = chart.rows.filter(
+        (r) => String(r?.term_bucket ?? '').trim().toLowerCase() !== 'undisclosed term'
+      );
+    }
 
     // Per-tab layout when chart image is available:
     //   Rows 1-22: chart PNG (~440px tall at default row height)
@@ -1451,8 +2017,27 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
     sheet.getCell(`A${titleRow}`).font = { name: fonts.title_family, size: 14, bold: true, color: { argb: 'FF' + hex(palette.nm_navy) } };
     sheet.getRow(titleRow).height = 22;
 
-    sheet.getCell(`A${subRow}`).value = `${chart.metric_focus || ''} · ${chart.chart_type || ''} · subspecialty=${subspecialty}`;
+    const methodologyNote = METHODOLOGY_NOTE_BY_TEMPLATE[chart.chart_template_id];
+    sheet.getCell(`A${subRow}`).value = methodologyNote
+      ? `${chart.metric_focus || ''} · ${chart.chart_type || ''} · subspecialty=${subspecialty}  —  ${methodologyNote}`
+      : `${chart.metric_focus || ''} · ${chart.chart_type || ''} · subspecialty=${subspecialty}`;
     sheet.getCell(`A${subRow}`).font = { name: fonts.body_family, size: 9, italic: true, color: { argb: 'FF' + hex(palette.nm_text_muted) } };
+
+    // Historical as-of provenance stamp (2026-08-07). A reconstructed snapshot
+    // (available tenant/term/cap-dot) notes the exact quarter it was rebuilt
+    // for; a current-only snapshot that could NOT be reconstructed for a
+    // historical as_of is flagged honestly so it is never mistaken for the
+    // report quarter (item 2 fallback contract).
+    if (chart.snapshot_not_historical) {
+      const noteRow = subRow;  // overwrite subtitle with the loud warning
+      const gen = new Date().toISOString().slice(0, 10);
+      sheet.getCell(`A${noteRow}`).value =
+        `⚠ Snapshot as of ${gen} (generation date) — NOT historical. This active-inventory feed cannot be reconstructed as of a past quarter for this vertical.`;
+      sheet.getCell(`A${noteRow}`).font = { name: fonts.body_family, size: 9, bold: true, italic: true, color: { argb: 'FFC00000' } };
+    } else if (chart.reconstructed && chart.snapshot_period) {
+      sheet.getCell(`A${subRow}`).value =
+        `${chart.metric_focus || ''} · reconstructed active inventory as of ${chart.snapshot_period} · subspecialty=${subspecialty}`;
+    }
 
     // Round 68-E (G8): a real fetch failure (after fetchView's retry pass) is
     // surfaced loudly so a transient cold-dyno blip can't masquerade as a
@@ -1563,6 +2148,10 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
             if (row[fk] != null) { v = row[fk]; break; }
           }
         }
+        // Prompt 119 item D — optional per-column display transform (currently
+        // the short operator names). Applied to the CELL only; the underlying
+        // view keeps its canonical values.
+        if (c.display) v = applyColumnDisplay(c.display, v);
         if (c.format === 'date_short' && typeof v === 'string') {
           // Convert ISO date string to Date object for proper Excel date type
           const d = new Date(v);
@@ -1588,6 +2177,58 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
       dataRowIdx++;
     }
 
+    // CM export audit (2026-08-07) — schema-drift assertion. A sheet template
+    // column whose `key` AND every `fieldKeys` alias is ABSENT from the view's
+    // returned row object (not merely null-valued) means the sheet was built
+    // against a different view schema than the one the export pulled — the
+    // "monthly-vs-quarterly drift" root cause behind the ALL-NULL columns
+    // (Data_Returns_Idx / Data_Val_Index). Absence ≠ thin data: PostgREST
+    // returns every real view column as a key even when its value is null, so
+    // a missing key can only be drift. We warn loudly (per-vertical legitimate
+    // omissions — e.g. dialysis valuation_index has no expenses/NOI — are
+    // expected and the R43 hide below keeps them out of the sheet), collecting
+    // into driftWarnings for the caller's end-of-export summary.
+    if ((chart.rows || []).length > 0) {
+      const rowKeys = new Set(Object.keys(chart.rows[0] || {}));
+      const drifted = cols
+        .filter((c) => {
+          const keys = [c.key, ...(Array.isArray(c.fieldKeys) ? c.fieldKeys : [])];
+          return !keys.some((k) => rowKeys.has(k));
+        })
+        .map((c) => c.key);
+      if (drifted.length > 0) {
+        const msg =
+          `[cm-export] schema drift on ${tabName} (view=${chart.view_name}, ` +
+          `vertical=${vertical}): template columns absent from view → ${drifted.join(', ')}`;
+        console.warn(msg);
+        if (Array.isArray(driftWarnings)) driftWarnings.push(msg);
+      }
+    }
+
+    // 2026-08-12 — recent-tail coverage guard for seller_sentiment. The cap
+    // line + N once collapsed at the newest edge (gov n~6, dia n~2) because
+    // the views keyed only on the asking cap, which recent sales rarely carry.
+    // The views are now broadened to an effective cap, but this guard catches
+    // any regression (a view reverted to ask-only, or the cap source dried up)
+    // AT EXPORT TIME — surfaced in driftWarnings — instead of by eye on the
+    // rendered chart. Rows are period_end-ascending, so the last row is the
+    // latest completed period.
+    if (chart.chart_template_id === 'seller_sentiment'
+        && Array.isArray(chart.rows) && chart.rows.length > 0) {
+      const SENTIMENT_MIN_RECENT_N = 10;
+      const latest = chart.rows[chart.rows.length - 1];
+      const nAll = Number(latest?.n_all);
+      if (Number.isFinite(nAll) && nAll < SENTIMENT_MIN_RECENT_N) {
+        const msg =
+          `[cm-export] seller_sentiment recent-tail coverage low ` +
+          `(view=${chart.view_name}, vertical=${vertical}): latest period ` +
+          `${latest?.period_end} n_all=${nAll} < ${SENTIMENT_MIN_RECENT_N} — ` +
+          `cap line/N may be collapsing; check the effective-cap coverage`;
+        console.warn(msg);
+        if (Array.isArray(driftWarnings)) driftWarnings.push(msg);
+      }
+    }
+
     // R43 — hide columns that ended up 100% empty across all rows.
     // Skip the first two anchor columns (period_end / subspecialty)
     // and any column explicitly marked `keepIfEmpty: true` in the
@@ -1608,7 +2249,8 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
     // injectNativeCharts() to swap the PNG for a real Excel chart object
     // anchored at the same location.
     let totalColsForAutoFilter = cols.length;
-    if (NATIVE_CHART_TEMPLATES.has(chart.chart_template_id)) {
+    if (NATIVE_CHART_TEMPLATES.has(chart.chart_template_id)
+        && !isChartSuppressed(vertical, chart.chart_template_id)) {
       const colsWithLetter = cols.map((c, i) => ({
         ...c,
         col: String.fromCharCode(65 + i),  // 0→'A', 1→'B', ...
@@ -1642,6 +2284,20 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
       });
       if (spec) {
         nativeInjections.push(spec);
+
+        // CM chart fixes round 3, item 4 — universal callout coverage: a
+        // callout-policy chart that emitted zero peak/low/latest labels fails
+        // the export (the module logs coverage per chart; no-op for non-policy
+        // templates).
+        assertCalloutCoverage(chart.chart_template_id, spec.spec || spec);
+
+        // CM chart feedback item #1 — flag any off-brand series color in the
+        // export log so a palette regression surfaces without altering output.
+        try {
+          for (const w of scanSpecPalette(spec, chart.chart_template_id)) {
+            driftWarnings.push(`[brand] ${w.template}: ${w.reason}`);
+          }
+        } catch { /* non-fatal — logging only */ }
 
         // R34 P8.5 — write declarative helper columns. Templates that
         // need derived data (e.g. IQR width = upper_q − lower_q for
@@ -1719,6 +2375,16 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
       oddFooter: `&L&"${fonts.body_family}"&9Generated by LCC &D&R&"${fonts.body_family}"&9Page &P of &N`,
     };
   }
+
+  // Prompt 119 items B + C — one number per metric across the KPI tab and its
+  // sibling data tab. Warn-only (never blocks an export); surfaced in the
+  // end-of-export driftWarnings summary alongside the schema-drift checks.
+  try {
+    for (const w of checkKpiSeriesConsistency(charts)) {
+      console.warn(w);
+      driftWarnings.push(w);
+    }
+  } catch { /* non-fatal — logging only */ }
 
   // ----------------------------------------------------------------
   // MasterPasteReady — matches the column order of master "All Charts"
@@ -1885,13 +2551,27 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
     }
     const useNativePath = eligibleNative.length > 0;
 
+    // Which orphaned PNGs are safe to embed on the Charts tab: only GENUINELY
+    // non-native templates. A template that IS in NATIVE_CHART_TEMPLATES but
+    // ended up orphaned is either (a) deliberately suppressed for this vertical
+    // (e.g. dia `rent_psf_box_quarterly` — superseded by the modeled variant),
+    // or (b) a native chart that failed to queue. In both cases its native
+    // chart is the source of truth — embedding a stale QuickChart PNG would
+    // duplicate/contradict it, so exclude it. (Scott flagged the suppressed dia
+    // rent box reappearing as a PNG.)
+    const embeddableOrphans = orphanedPngs.filter(o =>
+      o && o.png
+      && !NATIVE_CHART_TEMPLATES.has(o.chart_template_id)
+      && !isChartSuppressed(vertical, o.chart_template_id)
+    );
+
     if (useNativePath) {
-      const skipped = orphanedPngs.length;
+      const embeddedOrphans = embeddableOrphans.length;
       chartsSheet.getCell('B3').value =
-        `${eligibleNative.length} native Excel charts — fully editable, live-linked to the Data_* tabs.` +
-        (skipped > 0
-          ? ` ${skipped} additional chart${skipped === 1 ? '' : 's'} ${skipped === 1 ? 'is' : 'are'} only available on the per-tab Data_* sheet${skipped === 1 ? '' : 's'} (template${skipped === 1 ? '' : 's'} not yet migrated to native).`
-          : '');
+        `${eligibleNative.length} native Excel charts (fully editable, live-linked to the Data_* tabs)` +
+        (embeddedOrphans > 0
+          ? ` + ${embeddedOrphans} image chart${embeddedOrphans === 1 ? '' : 's'} (rendered snapshots of templates not yet migrated to native) — every chart in one place.`
+          : ' — every chart in one place.');
     } else {
       chartsSheet.getCell('B3').value =
         `LEGACY SNAPSHOT — auto-rendered via QuickChart from ${chartImages.length} chart configs ` +
@@ -1904,12 +2584,22 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
     // Each tile gets a header row + 25 data rows (≈ 480px tall)
     let cursor = 5;
     if (useNativePath) {
-      // Native path: emit a twin injection per native-eligible chart;
-      // skip orphaned PNGs (their data tab is authoritative).
+      // Native path: emit a native twin per native-eligible chart AND embed
+      // every remaining (non-native) chart as its PNG image in the SAME
+      // injector drawing — so the Charts tab is a complete single-page view of
+      // EVERY chart, not just the migrated ones. (Previously the orphaned PNGs
+      // were dropped from this tab; charts without a native builder went
+      // missing here — the gap Scott flagged, esp. on the gov export.)
+      // NOTE: images are pushed as `{ image: { png, anchor } }` injections so
+      // the native-chart injector embeds them as <xdr:pic> in the one drawing
+      // it builds for this sheet. We must NOT use ExcelJS `addImage` on the
+      // Charts sheet — that creates a second drawing and Excel allows only one
+      // <drawing> per sheet.
+      const titleFont = { name: fonts.title_family, size: 12, bold: true, color: { argb: 'FF' + hex(palette.nm_navy) } };
       for (const { img, spec } of eligibleNative) {
         const titleCell = chartsSheet.getCell(`B${cursor}`);
         titleCell.value = img.name || img.chart_template_id;
-        titleCell.font = { name: fonts.title_family, size: 12, bold: true, color: { argb: 'FF' + hex(palette.nm_navy) } };
+        titleCell.font = titleFont;
         chartsSheet.getRow(cursor).height = 20;
         nativeInjections.push({
           tabName: 'Charts',
@@ -1924,6 +2614,24 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
           },
         });
         cursor += 27; // header + 25 chart rows + 1 spacer
+      }
+      // Embed each genuinely-non-native chart's PNG (suppressed / native-but-
+      // -orphaned templates are excluded above so no stale PNG duplicates a
+      // native chart).
+      for (const img of embeddableOrphans) {
+        const titleCell = chartsSheet.getCell(`B${cursor}`);
+        titleCell.value = img.name || img.chart_template_id;
+        titleCell.font = titleFont;
+        chartsSheet.getRow(cursor).height = 20;
+        nativeInjections.push({
+          tabName: 'Charts',
+          image: {
+            png: img.png,
+            ext: 'png',
+            anchor: { col0: 1, row0: cursor },
+          },
+        });
+        cursor += 27;
       }
     } else {
       // Legacy path: pure-PNG (no native chart was queued for any
@@ -2021,6 +2729,15 @@ export function buildCapitalMarketsWorkbook({ vertical, subspecialty, asOf, char
   // Backward-compat: legacy property access still works because the
   // returned object exposes the workbook as both `.wb` and via spread.
   wb.nativeInjections = nativeInjections;
+  // CM export audit (2026-08-07) — surface schema drift once, loudly.
+  wb.driftWarnings = driftWarnings;
+  if (driftWarnings.length > 0) {
+    console.warn(
+      `[cm-export] ${driftWarnings.length} schema-drift warning(s) for ` +
+      `vertical=${vertical} — sheet templates reference view columns that ` +
+      `do not exist; affected columns were hidden. See per-sheet warnings above.`
+    );
+  }
   return wb;
 }
 
@@ -2324,7 +3041,9 @@ function renderLeaseStructuresTab({ wb, tabName, chart, palette, fonts, subspeci
   sheet.getCell('A1').font = { name: fonts.title_family, size: 14, bold: true, color: { argb: navy } };
   sheet.getRow(1).height = 22;
 
-  sheet.getCell('A2').value = `Lease-structure distribution — three rolling-period windows (subspecialty=${subspecialty})`;
+  sheet.getCell('A2').value =
+    `New / new-replacing GSA lease commencements — pct_building >= 50; ` +
+    `three rolling-period windows (subspecialty=${subspecialty})`;
   sheet.getCell('A2').font = { name: fonts.body_family, size: 9, italic: true, color: { argb: muted } };
 
   // Build pivot: term_bucket → { current_quarter: {count, pct}, ttm: {...}, last_5_years: {...} }
@@ -2443,6 +3162,7 @@ function renderLeaseStructuresTab({ wb, tabName, chart, palette, fonts, subspeci
   const footRow = rowIdx + 1;
   sheet.getCell(`A${footRow}`).value =
     'Lease-structure distribution by term bucket across three rolling windows (current quarter / last 12 months / last 5 years). ' +
+    'Cohort is GSA latest_action New or New/Replacing with pct_building >= 50, to represent single-tenant or primarily GSA-tenanted assets. ' +
     'Bucket label format "X, Y" = X-year total term with Y-year firm period.';
   sheet.getCell(`A${footRow}`).font = { name: fonts.body_family, size: 9, italic: true, color: { argb: muted } };
   sheet.getCell(`A${footRow}`).alignment = { wrapText: true };
@@ -2494,10 +3214,35 @@ function renderKpiBlockTab({ wb, tabName, chart, palette, fonts, asOf, subspecia
     }
   }
 
+  // Prompt 119 item F — append the two derived NM-vs-Non-NM tiles marketing
+  // used to compute by hand. Derived AFTER period selection so a null-valued
+  // derived tile can never influence which period the block renders.
+  if (chart.chart_template_id === 'value_proposition_results' && tiles.length > 0) {
+    tiles = [...tiles, ...deriveValuePropTiles(tiles)];
+  }
+
   sheet.getCell('A2').value = `KPI tile block — subspecialty=${subspecialty}${resolvedAsOf ? ' · as of ' + resolvedAsOf : ''}`;
   sheet.getCell('A2').font = { name: fonts.body_family, size: 9, italic: true, color: { argb: muted } };
 
-  sheet.getCell('A3').value = 'One row per tile. Rolling 12-month TTM. Primary value uses the tile\'s format token; NM / Non-NM splits (when present) use the same format.';
+  // Prompt 119 item C — the KPI tab and its sibling data tab must state which
+  // definition they carry, so a reader who has both open can tell at a glance
+  // that they are one number, not two.
+  const KPI_TAB_DESCRIPTORS = {
+    inventory_snapshot_kpis:
+      'One row per tile. Active on-market inventory at the quarter end. '
+      + 'CANONICAL SOURCE: cm_{vertical}_on_market_snapshot_q — the same view Data_On_Market_Snapshot renders, '
+      + 'unpivoted to tiles, so Days on Market and Price Change % agree between the two tabs by construction. '
+      + 'Days on Market averages listings with a positive DOM; Price Change % is the share of active listings with an observed reprice.',
+    whatsnew_quarter_kpis:
+      'One row per tile. CANONICAL SOURCE for Cap Rate (TTM): cm_{vertical}_cap_ttm_m — the same TTM series '
+      + 'Data_Cap_Avg charts, read at this quarter end (not a single-quarter simple average).',
+    value_proposition_results:
+      'One row per tile. Rolling 12-month TTM. Additional Proceeds ($) and Additional Value (%) are DERIVED at export '
+      + 'time from the NM / Non-NM Avg Sales Price split on this block.',
+  };
+  sheet.getCell('A3').value = (KPI_TAB_DESCRIPTORS[chart.chart_template_id]
+      || 'One row per tile. Rolling 12-month TTM.')
+    + ' Primary value uses the tile\'s format token; NM / Non-NM splits (when present) use the same format.';
   sheet.getCell('A3').font = { name: fonts.body_family, size: 9, color: { argb: muted } };
   sheet.getCell('A3').alignment = { wrapText: true };
   sheet.getRow(3).height = 26;
@@ -2523,7 +3268,9 @@ function renderKpiBlockTab({ wb, tabName, chart, palette, fonts, asOf, subspecia
   let rowIdx = 5;
   for (const t of tiles) {
     const r = sheet.getRow(rowIdx);
-    const fmt = FMT[t.primary_format] || '';
+    // Prompt 119 item A — never fall through to Excel's General format for a
+    // percent-natured tile (see resolveKpiTileFormat).
+    const fmt = resolveKpiTileFormat(t);
 
     const labelCell = r.getCell(1);
     labelCell.value = t.tile_label;
@@ -2531,9 +3278,15 @@ function renderKpiBlockTab({ wb, tabName, chart, palette, fonts, asOf, subspecia
 
     const setNumCell = (col, value) => {
       const cell = r.getCell(col);
-      cell.value = value == null ? null : Number(value);
+      if (value == null) {
+        // A derived tile whose inputs are absent says so out loud rather than
+        // shipping a blank the reader could mistake for zero.
+        cell.value = (col === 2 && t.null_display) ? t.null_display : null;
+      } else {
+        cell.value = Number(value);
+        if (fmt) cell.numFmt = fmt;
+      }
       cell.font = { name: fonts.body_family, size: 10, color: { argb: text } };
-      if (fmt) cell.numFmt = fmt;
     };
     setNumCell(2, t.primary_value);
     setNumCell(3, t.nm_value);
@@ -2549,8 +3302,16 @@ function renderKpiBlockTab({ wb, tabName, chart, palette, fonts, asOf, subspecia
 
   // Footer note
   const footRow = rowIdx + 1;
-  sheet.getCell(`A${footRow}`).value =
-    'Used to render the "Value Proposition Results" tile grid in the deliverable. NM / Non-NM splits are only populated when the tile has an NM-attribution comparison (Cap Rate, Sales Price). Avg NOI is single-value (no split).';
+  const KPI_TAB_FOOTERS = {
+    inventory_snapshot_kpis:
+      'Used to render the On-Market Snapshot tile grid. Every metric here is the same number Data_On_Market_Snapshot '
+      + 'reports for the current quarter — that tab additionally carries the prior-year comparison.',
+    whatsnew_quarter_kpis:
+      'Used to render the "What\'s New This Quarter" headline tiles. Cap Rate (TTM) is the trailing-twelve-month '
+      + 'weighted cap rate at this quarter end and matches the last plotted point on Data_Cap_Avg.',
+  };
+  sheet.getCell(`A${footRow}`).value = KPI_TAB_FOOTERS[chart.chart_template_id]
+    || 'Used to render the "Value Proposition Results" tile grid in the deliverable. NM / Non-NM splits are only populated when the tile has an NM-attribution comparison (Cap Rate, Sales Price). Avg NOI is single-value (no split). Additional Proceeds ($) / Additional Value (%) are derived from the NM vs Non-NM Avg Sales Price split.';
   sheet.getCell(`A${footRow}`).font = { name: fonts.body_family, size: 8, italic: true, color: { argb: muted } };
   sheet.getCell(`A${footRow}`).alignment = { wrapText: true };
   sheet.mergeCells(`A${footRow}:D${footRow}`);
@@ -2600,6 +3361,9 @@ export function getExportBundleSchema() {
     // R76 Layer A1 — vertical-aware cohort-column pruner for the cap-by-term
     // tabs (exported for regression coverage of the empty-column fix).
     selectCohortColumns,
+    selectSellerSentimentColumns,
+    // item 3 — pruneIfEmpty column remover (exported for regression coverage).
+    pruneEmptyFlaggedColumns,
     periodSummaryTemplates: PERIOD_SUMMARY_TEMPLATES,
     // Charts whose worksheet is built via a dedicated renderPeriodSummaryTab /
     // renderKpiBlockTab / renderOnMarketSnapshotTab path. They need a tab name

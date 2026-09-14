@@ -1,0 +1,13 @@
+{
+  "template_version": "healthcare_release_packet_template:1.0",
+  "template_id": "c5919f7f09bb10f73fd9e9ca317c5de72360976677f53009246e68399f92e147",
+  "lane": "idtf_fixed_site",
+  "status": "template_incomplete",
+  "source_candidates": [
+    { "source_key": "cms_ffs_enrollment_idtf", "catalog_url": "https://data.cms.gov/provider-characteristics/medicare-provider-supplier-enrollment/medicare-fee-for-service-public-provider-enrollment", "exact_release_required": true, "artifact_url": null, "release_date": null, "byte_size": null, "sha256": null, "header_sha256": null },
+    { "source_key": "cms_nppes_org_location", "catalog_url": "https://data.cms.gov/provider-characteristics/medicare-provider-supplier-enrollment", "exact_release_required": true, "artifact_url": null, "release_date": null, "byte_size": null, "sha256": null, "header_sha256": null },
+    { "source_key": "cms_physician_supplier_utilization", "catalog_url": "https://data.cms.gov/provider-summary-by-type-of-service/medicare-physician-other-practitioners", "exact_release_required": true, "artifact_url": null, "release_date": null, "byte_size": null, "sha256": null, "header_sha256": null },
+    { "source_key": "cms_pfs_reference", "catalog_url": "https://www.cms.gov/medicare/payment/fee-schedules/physician", "exact_release_required": true, "artifact_url": null, "release_date": null, "byte_size": null, "sha256": null, "header_sha256": null }
+  ],
+  "controls": { "download_authorized": false, "sample_draw_authorized": false, "production_write_authorized": false, "required_independent_hash_verifiers": 2, "required_execution_approvals": 2 }
+}

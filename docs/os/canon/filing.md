@@ -1,5 +1,5 @@
 # Filing Canon
-Canon: v1.0.0
+Canon: v1.0.1
 
 ## Purpose
 Save, read, and update documents in "Team Briggs – Documents" (SharePoint, Northmarq tenant) the same way
@@ -14,6 +14,8 @@ The document (attachment or SharePoint reference) + the property/deal it belongs
 
 ## Procedure (execution plane — Copilot only)
 1. Resolve the folder from the convention (build the path; don't ask Scott to spell it out):
+   - Finished deal artifacts → `Team Briggs - Documents/Deals/{Client}/{Property}/`, with repo-local fallback
+     `outputs/deals/{Client}_{Property}/`.
    - Correspondence / COs / signed docs → `PROPERTIES\[Tenant Initial]\[Tenant Name]\[City, State]\Correspondence\`
    - Deal-specific files → `Projects\{Deal Name}\`
 2. Use the **Document Files Agent** (Work IQ SharePoint) to find / read (≤5 MB) / file.
@@ -23,7 +25,8 @@ The document (attachment or SharePoint reference) + the property/deal it belongs
 5. After filing, log a one-line Cortex memory (see `logging-and-touchpoints.md`).
 
 ## Output contract
-Document lands in the correct convention folder; a link is returned; Cortex records the action.
+Finished deal artifacts use `{Property}_{DocType}_{Client}_{YYYYMM}` before the extension and land in the correct
+convention folder; a link is returned; Cortex records the action.
 
 ## Never
 - Never file Northmarq documents from the reasoning plane (Claude/ChatGPT) — SharePoint writes happen only via

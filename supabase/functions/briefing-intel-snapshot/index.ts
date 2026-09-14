@@ -11,7 +11,8 @@
 //   - fed_outlook    (EFFR baseline + implied Fed path)
 //   - sector_news    (RSS feeds, grouped by stream)
 //   - reading_list   (curated long-form picks)
-//   - analyst_take   (Claude-generated narrative)
+//   - analyst_take   (P138: now written ON-BOX by /api/briefing-analyst-take-tick;
+//                     this function only writes the key when it produced a take)
 //   - capital_markets (Claude-generated capital markets sub-narrative)
 //   - weekly_changes (Friday variant only)
 //
@@ -145,23 +146,116 @@ const COMMODITY_TICKERS = [
 ];
 
 // RSS feeds grouped by stream. Keep concise — 3-5 per stream is enough.
-const RSS_FEEDS: Record<string, { url: string; source: string }[]> = {
+//
+// MB2a (2026-09-12): the `dialysis` stream shipped by MB-b was dead on
+// arrival — all three URLs failed egress-verification (403/404, backlog
+// MB2/MB2a). Replaced with the two feeds Cowork actually fetched and parsed
+// live on 2026-09-12 (200 + real `<item>`/`<entry>` content):
+//   - Federal Register, filtered to "end-stage renal disease" — the
+//     authoritative federal source for ESRD PPS rule text (the policy input
+//     this lane's TTL table names explicitly, spec §3). A `.gov` API feed,
+//     no UA spoofing needed.
+//   - Google News, operator query (dialysis OR DaVita OR "Fresenius Medical
+//     Care") — broad by design, so `redirect: true` below marks its links as
+//     Google redirect URLs (never the publisher's own page) and its title
+//     carries a " - Publisher" suffix `fetchSectorNews` parses into
+//     `publisher` (see NewsItem). Feed relevance is filtered downstream by
+//     the on-box Ollama classifier + the verbatim-number check
+//     (market-brief-rss.js) — this feed is NOT itself dialysis-scoped.
+// A third publisher-specific feed (Renal & Urology News, Nephrology News &
+// Issues, CMS Newsroom variants) was deliberately NOT added this round: this
+// session's sandbox has no outbound egress to verify one (policy-denied
+// CONNECT to every candidate host, confirmed via the agent-proxy status
+// endpoint), and per MB2a's own instruction a feed that cannot be verified
+// is skipped rather than shipped with a spoofed User-Agent. Operator
+// follow-up: verify a trade-publication candidate from a reachable host,
+// confirm it returns `<item>`/`<entry>` content under `parseRss()`, then add
+// it here.
+//
+// FEED1 (2026-09-12): the `market_brief_feed_health` MB2a itself shipped
+// found three MORE dead feeds, all in streams nobody was checking:
+// `government` (GSA News, gsa.gov/.../rss → 404, an HTML page not a feed),
+// `healthcare` (Health Affairs, healthaffairs.org/rss/site → 410 Gone — the
+// publisher retired it), `net_lease` (GlobeSt, globest.com/feed/ → 403,
+// bot-blocked). All six replacements below were fetched live via pg_net from
+// LCC Opps on 2026-09-12 (this session's own sandbox has no egress to any
+// news host — same policy denial as the dialysis-stream note above) and each
+// returned HTTP 200 with real `<item>` content and a pubDate inside 72h, so
+// none needs the 72h-cutoff work MB2b/MB2c own — do not pull that in here.
+// Measured and REJECTED, do not re-try: Modern Healthcare
+// (modernhealthcare.com/section/rss → 403), The Real Deal
+// (therealdeal.com/feed/ → 403).
+//
+// ⚠️ EVERY FEED HERE NOW GETS A HEALTH RECORD (`market_brief_feed_health`,
+// MB2a) written per (stream, source) on every `fetchSectorNews()` call — a
+// feed returning zero items for `MARKET_BRIEF_FEED_STALE_DAYS` consecutive
+// days is a named gap (`lcc_check_market_brief_feed_health`), never silence,
+// per invariant I11 ("a monitor must alert on its own blindness").
+// MB2b (2026-09-14): `maxAgeHours` is an OPTIONAL per-feed override of the
+// 72h global cutoff. Federal Register (ESRD) is a low-VOLUME query — it
+// returns real rulemaking documents but spans WEEKS between publications, so
+// under the blanket 72h rule it returned HTTP 200 with real items and
+// contributed 0 to the brief on every run, forever, while reading "healthy"
+// on market_brief_feed_health (`item_count` was recorded at PARSE time, not
+// after the cutoff — see the `items_after_cutoff` column below). Do not
+// widen the DEFAULT 72h window globally — that is what keeps the daily brief
+// daily; give a feed its own window only when its own publication cadence
+// requires it.
+const RSS_FEEDS: Record<string, { url: string; source: string; redirect?: boolean; maxAgeHours?: number }[]> = {
   healthcare: [
     { source: "MedCity News",    url: "https://medcitynews.com/feed/" },
     { source: "KFF Health News", url: "https://kff.org/feed/" },
-    { source: "Health Affairs",  url: "https://www.healthaffairs.org/rss/site" },
+    { source: "STAT News",       url: "https://www.statnews.com/feed/" },
+    { source: "Healthcare Dive", url: "https://www.healthcaredive.com/feeds/news/" },
+  ],
+  dialysis: [
+    {
+      source: "Federal Register (ESRD)",
+      url: "https://www.federalregister.gov/api/v1/documents.rss?conditions%5Bterm%5D=end-stage%20renal%20disease&per_page=20",
+      // 30 days: the ESRD-term query publishes intermittently (rulemaking,
+      // not daily news), so 72h returned 200+real-items and 0 contributions
+      // on essentially every check. 30d still expires a document once it is
+      // no longer "new" without the feed being structurally unable to ever
+      // contribute.
+      maxAgeHours: 24 * 30,
+    },
+    {
+      source: "Google News (dialysis operators)",
+      url: "https://news.google.com/rss/search?q=dialysis+OR+DaVita+OR+%22Fresenius+Medical+Care%22&hl=en-US&gl=US&ceid=US:en",
+      redirect: true,
+    },
   ],
   government: [
-    { source: "GSA News",        url: "https://www.gsa.gov/about-us/newsroom/news-releases/rss" },
+    {
+      source: "Federal Register (GSA)",
+      url: "https://www.federalregister.gov/api/v1/documents.rss?conditions%5Bagencies%5D%5B%5D=general-services-administration&per_page=20",
+      // MB2e (2026-09-14): measured live -- newest item was 82h old on a
+      // Monday check (5 items land inside 7d, 0 inside 72h). This feed
+      // publishes a few rulemaking/notice documents a week, not daily, so
+      // the 72h news cutoff was structurally empty on the day-after-a-
+      // weekend check that matters most. 168h (7d) is the measured-correct
+      // window: it captures the real weekly cadence without approaching the
+      // 30d ESRD override (a materially slower query). Do not widen further
+      // without re-measuring -- see the maxAgeHours comment above RSS_FEEDS.
+      maxAgeHours: 24 * 7,
+    },
     { source: "Government Executive", url: "https://www.govexec.com/rss/all/" },
   ],
   net_lease: [
-    { source: "GlobeSt",          url: "https://www.globest.com/feed/" },
+    { source: "Connect CRE",      url: "https://www.connectcre.com/feed/" },
     { source: "Bisnow National",  url: "https://www.bisnow.com/rss" },
     { source: "Commercial Observer", url: "https://commercialobserver.com/feed/" },
+    { source: "REBusinessOnline", url: "https://rebusinessonline.com/feed/" },
   ],
   tax_policy: [
-    { source: "Tax Foundation",   url: "https://taxfoundation.org/feed/" },
+    {
+      source: "Tax Foundation",   url: "https://taxfoundation.org/feed/",
+      // MB2e (2026-09-14): same cadence-vs-window mismatch as Federal
+      // Register (GSA) above -- newest item 92h old on a Monday check, 5
+      // items land inside 7d, 0 inside 72h. Tax Foundation posts a few times
+      // a week, not daily. 168h measured-correct; see the note above.
+      maxAgeHours: 24 * 7,
+    },
   ],
 };
 
@@ -365,6 +459,13 @@ interface NewsItem {
   published_at: string | null;
   source:       string;
   summary:      string | null;
+  // MB2a: set only for feeds flagged `redirect: true` (Google News). `url`
+  // is a news.google.com/rss/articles/... redirect, never the publisher's
+  // own page, and `publisher` is parsed from the title's " - Publisher"
+  // suffix (Google News' own title format) so a citation can name the real
+  // source even though `url` cannot link straight to it.
+  publisher?:      string | null;
+  url_is_redirect?: boolean;
 }
 
 function stripTags(s: string): string {
@@ -376,7 +477,30 @@ function stripTags(s: string): string {
           .trim();
 }
 
-function parseRss(xml: string, source: string): NewsItem[] {
+// MB2a: Google News item titles are "Headline - Publisher" (an em/en dash or
+// hyphen). Split ONLY on the LAST " - "/" – " so a headline that itself
+// contains a dash (common in policy headlines: "CMS Proposes 2.9% ESRD PPS
+// Increase - DaVita Reacts") still keeps the true publisher suffix, and a
+// headline with no separator returns publisher=null rather than guessing.
+//
+// MB2c (2026-09-14): the publisher half of that suffix was itself restricted
+// to `[^-–—]+` — no dash allowed in the PUBLISHER name — so a hyphenated
+// outlet ("Honolulu Star-Advertiser", "ad-hoc-news.de") failed the whole
+// match, leaving `publisher: null` AND the raw " - Publisher" suffix stuck on
+// the headline. That silently returned the citation to the pre-MB2a state.
+// The greedy `(.*)` on the headline half already anchors to the LAST
+// separator (verified: it still splits correctly on headlines carrying an
+// earlier dash, e.g. "…low- and middle-income countries - nature.com"), so
+// widening only the publisher half to `.+` is sufficient — measured live
+// against 101 real titles from this feed on 2026-09-14: 98/101 parsed before,
+// 101/101 after, 0 previously-correct parses changed.
+export function splitGoogleNewsTitle(rawTitle: string): { headline: string; publisher: string | null } {
+  const m = rawTitle.match(/^(.*)\s+[-–—]\s+(.+)$/);
+  if (!m) return { headline: rawTitle, publisher: null };
+  return { headline: m[1].trim(), publisher: m[2].trim() || null };
+}
+
+function parseRss(xml: string, source: string, opts: { redirect?: boolean } = {}): NewsItem[] {
   const out: NewsItem[] = [];
   const itemRegex = /<(item|entry)\b[\s\S]*?<\/\1>/gi;
   const matches = xml.match(itemRegex) || [];
@@ -393,36 +517,85 @@ function parseRss(xml: string, source: string): NewsItem[] {
       item.match(/<description[^>]*>([\s\S]*?)<\/description>/i)?.[1] ||
       item.match(/<summary[^>]*>([\s\S]*?)<\/summary>/i)?.[1];
     if (!title || !link) continue;
-    const cleanTitle = stripTags(title);
+    let cleanTitle = stripTags(title);
     const cleanDesc  = desc ? stripTags(desc).slice(0, 240) : null;
     let isoPub: string | null = null;
     if (pub) {
       const d = new Date(pub.trim());
       if (!isNaN(d.getTime())) isoPub = d.toISOString();
     }
-    out.push({ title: cleanTitle, url: link.trim(), published_at: isoPub, source, summary: cleanDesc });
+    let publisher: string | null = null;
+    if (opts.redirect) {
+      const split = splitGoogleNewsTitle(cleanTitle);
+      cleanTitle = split.headline;
+      publisher = split.publisher;
+    }
+    out.push({
+      title: cleanTitle, url: link.trim(), published_at: isoPub, source, summary: cleanDesc,
+      ...(opts.redirect ? { publisher, url_is_redirect: true } : {}),
+    });
   }
   return out;
 }
 
 async function fetchSectorNews(): Promise<Record<string, NewsItem[]>> {
-  const result: Record<string, NewsItem[]> = { healthcare: [], government: [], net_lease: [], tax_policy: [] };
-  // Drop articles older than 72h so the briefing stays current.
-  const cutoff = Date.now() - 72 * 3600 * 1000;
+  // Built from RSS_FEEDS' own keys (not a hardcoded literal) so adding a
+  // stream (dialysis, MB-b) can never desync this initializer from the
+  // feed table above -- the exact drift this file's own history warns
+  // against (CLAUDE.md: "a JS copy is the normaliser drift ... check the
+  // name is not already taken").
+  const result: Record<string, NewsItem[]> = Object.fromEntries(
+    Object.keys(RSS_FEEDS).map((stream) => [stream, [] as NewsItem[]]),
+  );
+  // Drop articles older than 72h by default so the briefing stays current;
+  // a feed may override this via `maxAgeHours` (MB2b, above).
+  const DEFAULT_MAX_AGE_HOURS = 72;
+
+  // MB2a: one health row per (stream, source) every call — the instrument
+  // that lets `lcc_check_market_brief_feed_health` alert on a feed silently
+  // returning zero for N consecutive days instead of the failure looking
+  // identical to a quiet news day (I11: a monitor must alert on its own
+  // blindness).
+  //
+  // MB2b (2026-09-14): `item_count` alone records what the feed PARSED, not
+  // what it CONTRIBUTED — Federal Register (ESRD) sat at `item_count: 3,
+  // ok: true` on every check while adding 0 items to the brief, because all
+  // 3 were older than the cutoff. That is exactly the failure I11 exists to
+  // catch and it was invisible under the old single-count schema. Record
+  // both: `item_count` (parsed) and `items_after_cutoff` (survived this
+  // feed's own maxAgeHours window) — additive, so an existing consumer of
+  // `item_count` sees no change in meaning.
+  const feedHealth: { stream: string; source: string; url: string; ok: boolean; item_count: number; items_after_cutoff: number; error: string | null }[] = [];
 
   await Promise.all(
     Object.entries(RSS_FEEDS).flatMap(([stream, feeds]) =>
       feeds.map(async (feed) => {
-        const xml = await fetchText(feed.url);
-        if (!xml) return;
-        const items = parseRss(xml, feed.source);
+        let xml: string | null = null;
+        let error: string | null = null;
+        try {
+          xml = await fetchText(feed.url);
+          if (!xml) error = "fetch_failed_or_non_200";
+        } catch (err) {
+          error = (err as Error)?.message || String(err);
+        }
+        if (!xml) {
+          feedHealth.push({ stream, source: feed.source, url: feed.url, ok: false, item_count: 0, items_after_cutoff: 0, error });
+          return;
+        }
+        const items = parseRss(xml, feed.source, { redirect: feed.redirect });
+        const cutoff = Date.now() - (feed.maxAgeHours ?? DEFAULT_MAX_AGE_HOURS) * 3600 * 1000;
+        let afterCutoff = 0;
         for (const it of items) {
           if (it.published_at && new Date(it.published_at).getTime() < cutoff) continue;
+          afterCutoff += 1;
           result[stream].push(it);
         }
+        feedHealth.push({ stream, source: feed.source, url: feed.url, ok: true, item_count: items.length, items_after_cutoff: afterCutoff, error: null });
       }),
     ),
   );
+
+  await recordFeedHealth(feedHealth).catch(() => null); // best-effort; never blocks the snapshot
 
   // Per-stream: dedupe by URL, sort by published_at desc, cap at 6.
   for (const stream of Object.keys(result)) {
@@ -576,6 +749,42 @@ async function generateAnalystTake(
 }
 
 // ---------------------------------------------------------------------------
+// MB2a — per-feed health writer (upsert one row per (stream, source, date)).
+// Best-effort: a failure here must never abort the snapshot build, so every
+// call site wraps this in `.catch(() => null)`.
+// ---------------------------------------------------------------------------
+
+async function recordFeedHealth(
+  rows: { stream: string; source: string; url: string; ok: boolean; item_count: number; items_after_cutoff: number; error: string | null }[],
+): Promise<void> {
+  if (!OPS_URL || !OPS_KEY || !rows.length) return;
+  const today = new Date().toISOString().slice(0, 10);
+  const payload = rows.map((r) => ({
+    stream: r.stream,
+    source: r.source,
+    feed_url: r.url,
+    checked_date: today,
+    ok: r.ok,
+    item_count: r.item_count,
+    // MB2b: parsed-but-outside-this-feed's-cutoff-window count, additive
+    // column — see the feedHealth comment above.
+    items_after_cutoff: r.items_after_cutoff,
+    error: r.error,
+    checked_at: new Date().toISOString(),
+  }));
+  await fetch(`${OPS_URL}/rest/v1/market_brief_feed_health?on_conflict=stream,source,checked_date`, {
+    method: "POST",
+    headers: {
+      "apikey":        OPS_KEY,
+      "Authorization": `Bearer ${OPS_KEY}`,
+      "Content-Type":  "application/json",
+      "Prefer":        "resolution=merge-duplicates",
+    },
+    body: JSON.stringify(payload),
+  }).catch(() => null);
+}
+
+// ---------------------------------------------------------------------------
 // Snapshot writer
 // ---------------------------------------------------------------------------
 
@@ -617,7 +826,9 @@ async function buildSnapshot(variant: "daily" | "friday_deep_dive"): Promise<Rec
     }),
     fetchSectorNews().catch((err) => {
       warnings.push(`sector_news: ${(err as Error).message}`);
-      return { healthcare: [], government: [], net_lease: [], tax_policy: [] };
+      return Object.fromEntries(
+        Object.keys(RSS_FEEDS).map((stream) => [stream, [] as NewsItem[]]),
+      );
     }),
   ]);
 
@@ -649,13 +860,12 @@ async function buildSnapshot(variant: "daily" | "friday_deep_dive"): Promise<Rec
     reits:         (market.reits || []).length,
     tenants:       (market.tenants || []).length,
     commodities:   (market.commodities || []).length,
-    news_total:    (news.healthcare.length + news.government.length +
-                    news.net_lease.length + news.tax_policy.length),
+    news_total:    Object.values(news).reduce((sum, arr) => sum + (arr as NewsItem[]).length, 0),
     reading_items: readingList.length,
     runtime_ms:    Date.now() - startedAt,
   };
 
-  return {
+  const row: Record<string, unknown> = {
     as_of_date:      ctDateIso(),
     workspace_id:    null,    // global row
     variant,
@@ -674,6 +884,18 @@ async function buildSnapshot(variant: "daily" | "friday_deep_dive"): Promise<Rec
     ai_tokens_out:   ai.tokens_out,
     warnings,
   };
+
+  // P138 — ONE OWNER PER COLUMN. `analyst_take` is now written ON-BOX by
+  // POST /api/briefing-analyst-take-tick (private LCC signals must never egress
+  // to a cloud model), which PATCHes this same row at ~10:18 UTC. If this
+  // function later re-fires — a manual curl, the hourly self-heal, a backfill —
+  // it would upsert `analyst_take: null` over that take and the brief would go
+  // silently empty again. PostgREST derives the ON CONFLICT UPDATE column list
+  // from the payload KEYS, so DELETING the key preserves whatever is stored.
+  // Only a take this function actually produced is written.
+  if (row.analyst_take == null) delete row.analyst_take;
+
+  return row;
 }
 
 // ---------------------------------------------------------------------------

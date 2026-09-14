@@ -1,5 +1,9 @@
 # Flow Detail — Unflag Completed Email Tasks
 
+> 🚨 **RETIRED (DOCMAP3, 2026-09-08): this flow is `retired-unflag-completed` in
+> `docs/os/FLOW-REGISTRY.yaml` (`state: retired`).** This doc describes the flow as it ran before
+> retirement; treat it as historical build detail, not a live operational reference.
+
 ## Metadata
 - Export artifact: `UnflagCompletedEmailTasks_20260512135227.zip`
 - Display name: `Unflag Completed Email Tasks`

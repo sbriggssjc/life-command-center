@@ -24,11 +24,14 @@ import { createRequire } from 'module';
 const nodeRequire = createRequire(import.meta.url);
 import { authenticate, handleCors, requireRole } from './_shared/auth.js';
 import { fetchWithTimeout, opsQuery, pgFilterVal, requireOps, withErrorHandler } from './_shared/ops-db.js';
-import { logInboundCorrespondenceDualAnchor } from './_shared/intake-correspondence.js';
-import { getAiConfig } from './_shared/ai.js';
+import { logInboundCorrespondenceDualAnchor, logManualCallNote } from './_shared/intake-correspondence.js';
+import { getAiConfig, invokeExtractionAI } from './_shared/ai.js';
+import { findCrossPathDuplicate } from './_shared/outbound-advance.js';
+import { parseAddress, parseAddressList } from './_shared/outlook-recipients.js';
+import { maybeAttachActionSummary, touchedActionLabels } from './_shared/action-summary.js';
 import { writeSignal } from './_shared/signals.js';
 import { sendTeamsAlert } from './_shared/teams-alert.js';
-import { ensureEntityLink, normalizeCanonicalName } from './_shared/entity-link.js';
+import { ensureEntityLink, normalizeCanonicalName, recordContactFieldWrites } from './_shared/entity-link.js';
 import { processIntakeExtraction, handleExtractRoute } from './_handlers/intake-extractor.js';
 import { createPropertyFromIntake } from './_handlers/intake-create-property.js';
 import { processSidebarExtraction } from './_handlers/sidebar-pipeline.js';
@@ -162,6 +165,63 @@ export default withErrorHandler(async function handler(req, res) {
       const { handleCreDocTextTick } = await import('./_handlers/cre-doc-text.js');
       return handleCreDocTextTick(req, res);
     }
+    case 'capture-doc-bytes': {
+      // Capture-at-ingest (durable copy): the extension fetched a document's
+      // bytes IN the authenticated CoStar tab (the only way to reach a
+      // session-bound CDN link) and POSTs them here to store on the just-upserted
+      // property_documents row, keyed by (domain, source_url). Best-effort.
+      const { storeClientDocBytes } = await import('./_handlers/sidebar-pipeline.js');
+      const body = req.body || {};
+      const domain = /^(dia|dialysis)$/i.test(String(body.domain)) ? 'dia'
+                   : /^(gov|government)$/i.test(String(body.domain)) ? 'gov' : null;
+      if (!domain) return res.status(400).json({ ok: false, error: 'domain must be dia|gov' });
+      try {
+        const r = await storeClientDocBytes(domain, {
+          source_url: body.source_url, content_base64: body.content_base64, mime_type: body.mime_type,
+        });
+        return res.status(r.ok ? 200 : 200).json(r); // best-effort: non-ok is not an HTTP error
+      } catch (e) {
+        return res.status(500).json({ ok: false, error: 'capture_failed', detail: e?.message?.slice(0, 200) });
+      }
+    }
+    case 'asc-research-import': {
+      const { handleAscResearchImport } = await import('./_handlers/asc-research-handler.js');
+      return handleAscResearchImport(req, res);
+    }
+    case 'asc-research-target': {
+      const { handleAscResearchTarget } = await import('./_handlers/asc-research-handler.js');
+      return handleAscResearchTarget(req, res);
+    }
+    case 'asc-research-capture': {
+      const { handleAscResearchCapture } = await import('./_handlers/asc-research-handler.js');
+      return handleAscResearchCapture(req, res);
+    }
+    case 'asc-research-complete': {
+      const { handleAscResearchComplete } = await import('./_handlers/asc-research-handler.js');
+      return handleAscResearchComplete(req, res);
+    }
+    case 'asc-research-review': {
+      const { handleAscResearchReview } = await import('./_handlers/asc-research-handler.js');
+      return handleAscResearchReview(req, res);
+    }
+    case 'doc-bytes-backfill': {
+      // Bounded server-side re-fetch backfill for url-only docs (public/CDN links
+      // that are NOT session-bound). Session-bound CoStar links honestly stay
+      // url-only and are counted. ?domain=dia|gov&limit=&document_type=
+      const { backfillDocBytes } = await import('./_handlers/sidebar-pipeline.js');
+      const domain = /^(dia|dialysis)$/i.test(String(req.query.domain)) ? 'dia'
+                   : /^(gov|government)$/i.test(String(req.query.domain)) ? 'gov' : null;
+      if (!domain) return res.status(400).json({ ok: false, error: 'domain must be dia|gov' });
+      try {
+        const r = await backfillDocBytes(domain, {
+          limit: req.query.limit, documentType: req.query.document_type || null,
+          before: req.query.before || null, source: req.query.source || null,
+        });
+        return res.status(200).json(r);
+      } catch (e) {
+        return res.status(500).json({ ok: false, error: 'backfill_failed', detail: e?.message?.slice(0, 200) });
+      }
+    }
     case 'bov-extract': {
       // R58 Unit 4 (2B) — build the reviewable BOV record from text sidecars.
       const { handleBovExtract } = await import('./_handlers/bov-extract.js');
@@ -175,10 +235,43 @@ export default withErrorHandler(async function handler(req, res) {
       const { handleSfActivityIngest } = await import('./_handlers/sf-activity-ingest.js');
       return handleSfActivityIngest(req, res);
     }
+    case 'sf-cis': {
+      // Salesforce Closed-IS (CIS) national export → dia_nm_cis_closings.
+      const { handleSfCisIngest } = await import('./_handlers/sf-cis-ingest.js');
+      return handleSfCisIngest(req, res);
+    }
     case 'mobile-share': {
       // iPhone Share Sheet ("Send to LCC") — LinkedIn / Safari / any app.
       const { handleMobileShare } = await import('./_handlers/mobile-share.js');
       return handleMobileShare(req, res);
+    }
+    case 'log-call':
+      // W7.3 path A — in-app "Log call" quick-log → deal-stamped call activity.
+      return handleLogCall(req, res);
+    case 'tagged-comm': {
+      // W7.3 path C — Outlook category-tagging receiver (Power Automate).
+      const { handleTaggedComm } = await import('./_handlers/intake-tagged-comm.js');
+      return handleTaggedComm(req, res);
+    }
+    case 'mailbox-reconcile-worklist': {
+      // W7.6 — Mailbox Mirror: deterministic worklist of closed-loop flagged emails.
+      const { handleMailboxWorklist } = await import('./_handlers/mailbox-reconcile.js');
+      return handleMailboxWorklist(req, res);
+    }
+    case 'mailbox-reconcile-ack': {
+      // W7.6 — Mailbox Mirror: the PA mover acks each move outcome here.
+      const { handleMailboxAck } = await import('./_handlers/mailbox-reconcile.js');
+      return handleMailboxAck(req, res);
+    }
+    case 'move-queue-worklist': {
+      // P120 — Move-Queue Executor: pending moves the PA mover should execute.
+      const { handleMoveQueueWorklist } = await import('./_handlers/move-queue.js');
+      return handleMoveQueueWorklist(req, res);
+    }
+    case 'move-queue-ack': {
+      // P120 — Move-Queue Executor: the PA mover stamps each move outcome here.
+      const { handleMoveQueueAck } = await import('./_handlers/move-queue.js');
+      return handleMoveQueueAck(req, res);
     }
     case 'feedback': {
       const { handleIntakeFeedback } = await import('./_handlers/intake-feedback.js');
@@ -190,7 +283,7 @@ export default withErrorHandler(async function handler(req, res) {
     }
     default:
       return res.status(400).json({
-        error: 'Invalid _route. Use: outlook-message, outlook-sent, summary, extract, queue, promote, create-property, ocr-reextract, discard, copilot-action, parse-om, ingest_pdf, folder-feed-tick, intake-extract-drain, property-doc-writeback, cre-owner-backfill, lease-extract, lease-backfill, document-text-tick, cre-doc-text-tick, bov-extract, document-notify, sf-activity, mobile-share, feedback, accuracy'
+        error: 'Invalid _route. Use: outlook-message, outlook-sent, summary, extract, queue, promote, create-property, ocr-reextract, discard, copilot-action, parse-om, ingest_pdf, folder-feed-tick, intake-extract-drain, property-doc-writeback, cre-owner-backfill, lease-extract, lease-backfill, document-text-tick, cre-doc-text-tick, bov-extract, document-notify, sf-activity, sf-cis, mobile-share, log-call, tagged-comm, mailbox-reconcile-worklist, mailbox-reconcile-ack, move-queue-worklist, move-queue-ack, feedback, accuracy'
       });
   }
 });
@@ -339,16 +432,28 @@ async function handleOutlookSent(req, res) {
 
   const subject = firstNonEmpty(payload.subject, '(No subject)');
   const sentAtIso = isoOrNow(firstNonEmpty(payload.sent_date_time, payload.sentDateTime, payload.received_date_time, null));
-  const fromAddr = normalizeSender(firstNonEmpty(payload.from, payload.sender, null)).email;
+  const fromParsed = parseAddress(firstNonEmpty(payload.from, payload.sender, null));
+  const fromAddr = fromParsed.email || normalizeSender(firstNonEmpty(payload.from, payload.sender, null)).email;
+  const fromName = fromParsed.name || null;
   const bodySnippet = (firstNonEmpty(payload.body_preview, payload.bodyPreview, payload.body_text, payload.body, '') || '').toString().slice(0, 500) || null;
   const webLink = firstNonEmpty(payload.web_link, payload.webLink, null);
 
+  // Prompt 96 — preserve display names. Parse the RICH recipient shapes (Graph
+  // object arrays or 'Name <email>' delimited strings) so `to_names` carries the
+  // name↔email pairs the comms-harvest arm binds on. Falls back to bare-email
+  // extraction below so behavior is unchanged when PA sends only addresses.
+  const toPairs = [
+    ...parseAddressList(firstNonEmpty(payload.to_recipients, payload.toRecipients, payload.to, payload.recipients, '')),
+    ...parseAddressList(firstNonEmpty(payload.cc_recipients, payload.ccRecipients, payload.cc, '')),
+  ].filter((p) => p.email && !p.email.includes('northmarq'));
   const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
   const rawTo = String(firstNonEmpty(payload.to_recipients, payload.toRecipients, payload.to, payload.recipients, '') || '');
   const rawCc = String(firstNonEmpty(payload.cc_recipients, payload.ccRecipients, payload.cc, '') || '');
   const recips = [...new Set((rawTo.match(EMAIL_RE) || []).concat(rawCc.match(EMAIL_RE) || []).map(e => e.toLowerCase()))]
     .filter(e => !e.includes('northmarq'));
   if (recips.length === 0) return res.status(200).json({ ok: true, logged: false, reason: 'no_external_recipient' });
+  // Named recipient pairs (fill-blanks: only rows where a name was actually sent).
+  const toNames = toPairs.filter((p) => p.name).map((p) => ({ name: p.name, email: p.email }));
 
   // Resolve the DEAL via the contact resolver (prefers the asset/deal over the person via the city bridge);
   // fall back to the most-recent correspondent entity when the resolver finds no deal.
@@ -368,6 +473,31 @@ async function handleOutlookSent(req, res) {
       `&select=entity_id&order=occurred_at.desc&limit=1`);
     dealEntityId = match.data?.[0]?.entity_id || null;
   }
+  // W7.1 conversation-thread continuity: a sent reply inherits its thread's deal
+  // stamp when the resolver + correspondent fallback found none (cheap, precise).
+  const conversationId = firstNonEmpty(payload.conversation_id, payload.conversationId, null);
+  if (!dealEntityId && conversationId) {
+    const prior = await opsQuery('GET',
+      `activity_events?workspace_id=eq.${pgFilterVal(workspaceId)}` +
+      `&metadata->>conversation_id=eq.${encodeURIComponent(conversationId)}` +
+      `&entity_id=not.is.null&select=entity_id&order=occurred_at.desc&limit=1`).catch(() => null);
+    dealEntityId = prior?.data?.[0]?.entity_id || null;
+  }
+
+  // W7.5 cross-path de-dupe: a tagged send (source_type='outlook_tagged') may
+  // have already logged this internet_message_id and advanced its to-dos. The
+  // two outbound paths use different source_type values, so the per-path unique
+  // index can't catch it — skip here so a to-do never advances twice for one send.
+  const priorTagged = await findCrossPathDuplicate({
+    opsQuery, workspaceId, externalId: String(internetMsgId), sourceTypes: ['outlook_tagged'],
+  });
+  if (priorTagged) {
+    return res.status(200).json({
+      ok: true, logged: false, duplicate: true, cross_path: 'outlook_tagged',
+      activity_id: priorTagged.id, deal_entity_id: dealEntityId, recipients: recips,
+      note: 'Already logged via the tagged-comm path (outlook_tagged) — skipped to avoid a double advance.',
+    });
+  }
 
   const row = {
     workspace_id: workspaceId,
@@ -382,6 +512,9 @@ async function handleOutlookSent(req, res) {
     external_url: webLink,
     visibility: 'shared',
     metadata: { direction: 'outbound', from: fromAddr, to: recips, via: 'outlook_sent',
+                from_name: fromName || null,
+                to_names: toNames.length ? toNames : null,
+                conversation_id: conversationId,
                 party_entity_id: partyEntityId, deal_entity_id: dealEntityId },
   };
   const ins = await opsQuery('POST', 'activity_events?on_conflict=workspace_id,source_type,external_id',
@@ -410,6 +543,13 @@ async function handleOutlookSent(req, res) {
             p_subject: subject, p_occurred_at: sentAtIso });
       } catch (_e) { /* best-effort */ }
     }
+    // W7.5 Part C — flag-gated one-line "action taken" narration (no-op unless
+    // W75_ACTION_SUMMARY=true). Only references the to-dos actually touched.
+    await maybeAttachActionSummary({
+      opsQuery, invokeExtractionAI, activityId, metadata: row.metadata,
+      subject, body: bodySnippet || '', touchedLabels: touchedActionLabels(autoResolved),
+      direction: 'outbound',
+    }).catch(() => null);
   }
 
   return res.status(200).json({
@@ -418,6 +558,56 @@ async function handleOutlookSent(req, res) {
     recipients: recips, auto_resolved: autoResolved, backfill,
     note: dealEntityId ? 'logged outbound touch on deal; cadence advances via trigger'
                        : 'logged unattached (no matching deal correspondent)',
+  });
+}
+
+// ============================================================================
+// POST /api/intake?_route=log-call  (W7.3 path A — in-app quick-log)
+// ----------------------------------------------------------------------------
+// The deal surface / My Work "Log call" action. The operator has already chosen
+// the deal/party from context, so we stamp exactly that (never guess) and log a
+// `call` activity via the shared logManualCallNote — which reuses the spine
+// writer + Phase-1 to-do path, so the note flows through W7.2 automatically.
+// Body: { deal_entity_id?, party_entity_id?, direction?, notes, contact_name?,
+//         occurred_at?, structure? }
+// ============================================================================
+async function handleLogCall(req, res) {
+  if (req.method !== 'POST') return res.status(405).json({ error: `Method ${req.method} not allowed` });
+  const user = await authenticate(req, res);
+  if (!user) return;
+  const workspaceId = req.headers['x-lcc-workspace'] || user.memberships?.[0]?.workspace_id || process.env.LCC_DEFAULT_WORKSPACE_ID;
+  if (!workspaceId) return res.status(400).json({ error: 'No workspace context' });
+  if (!requireRole(user, 'operator', workspaceId)) return res.status(403).json({ error: 'Operator role required' });
+
+  const p = req.body || {};
+  const notes = String(p.notes || p.body || '').trim();
+  if (!notes) return res.status(400).json({ error: 'notes (call notes) is required' });
+
+  const r = await logManualCallNote({
+    workspaceId,
+    actorId:      user.id || user.user_id,
+    dealEntityId: p.deal_entity_id || p.entity_id || null,
+    partyEntityId: p.party_entity_id || null,
+    direction:    p.direction || null,
+    notes,
+    contactName:  p.contact_name || p.name || null,
+    occurredAt:   p.occurred_at || p.occurredAt || null,
+    source:       'quick_log',
+    // Structuring is proposal-only + gated on OLLAMA_URL inside the logger.
+    structure:    p.structure !== false,
+  });
+
+  if (!r.ok) return res.status(400).json({ ok: false, error: r.skipped || 'log_failed' });
+  return res.status(200).json({
+    ok: true,
+    logged: !!r.inserted,
+    duplicate: r.ok && !r.inserted,
+    activity_id: r.id,
+    deal_entity_id: r.deal_entity_id,
+    structured: r.structured || null,
+    note: r.deal_entity_id
+      ? 'Logged — the deal summary and next steps update within the hour.'
+      : 'Logged on the relationship (no deal anchor supplied).',
   });
 }
 
@@ -536,7 +726,17 @@ async function handleOutlookMessage(req, res) {
     received_at: receivedAtIso,
     received_at_raw: receivedAtRaw,
     from: sender?.email || null,
+    // Prompt 96 — carry the sender/recipient DISPLAY names so the correspondence
+    // logger can preserve them (metadata.from_name / to_names). `sender` already
+    // parses the Graph {name,address} shape; `to_names` parses whatever richer
+    // recipient shape PA sends (bare-email lists simply yield no names).
+    from_name: sender?.name || null,
     to: firstNonEmpty(payload.to_recipients, payload.toRecipients, payload.to, null),
+    to_names: parseAddressList(firstNonEmpty(payload.to_recipients, payload.toRecipients, payload.to, null))
+      .filter((p) => p.name).map((p) => ({ name: p.name, email: p.email })),
+    // W7.1 — carry the Outlook conversation id so the dual-anchor logger can
+    // apply thread continuity (a reply inherits its thread's deal stamp).
+    conversation_id: firstNonEmpty(payload.conversation_id, payload.conversationId, null),
   };
 
   // ── Live inbound dual-anchor stamp (relationship-primary, deal-subfilter) ──
@@ -1424,6 +1624,14 @@ async function processExtractedContacts(contacts, workspaceId, userId, senderEma
             `entities?id=eq.${existing.id}&workspace_id=eq.${workspaceId}`,
             updates
           );
+          // CONTACT1b — fill-blank UPDATE site #2 of the census; ungoverned
+          // before this. Audit-only (see entity-link.js recordContactFieldWrites).
+          await recordContactFieldWrites({
+            recordPk: existing.id,
+            source: 'intake_email',
+            workspaceId,
+            fields: updates,
+          });
         }
 
         // Link to intake item

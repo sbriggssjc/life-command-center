@@ -31,6 +31,20 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
   // Accumulated data: merges across CoStar tab switches and popups
   let accumulated = { contacts: [], sales_history: [], tenants: [] };
 
+  function resetForProperty(propertyKey) {
+    accumulated = {
+      contacts: [],
+      sales_history: [],
+      tenants: [],
+      _property_key: propertyKey,
+    };
+    lastPaginatedPage = 0;
+    paginationInProgress = false;
+    lastCommentaryPage = 0;
+    commentaryPaginationInProgress = false;
+    commentaryPropertyKey = null;
+  }
+
   // Auto-pagination state for Public Record sale/loan history
   let paginationInProgress = false;
   let lastPaginatedPage = 0;
@@ -70,7 +84,22 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
   // background worker now asks this content script to fetch first; we return the
   // bytes as base64 (chrome.runtime binary transfer is flaky, base64 is safe).
   chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
-    if (!msg || msg.type !== 'FETCH_DOC_BYTES') return undefined;
+    if (!msg) return undefined;
+    if (msg.type === 'GET_FRESH_ASC_TENANT_CONTEXT') {
+      const pageUrl = window.location.href;
+      const sourcePropertyKey = window.LccPropertyIdentity?.propertyIdentityKey(pageUrl) || null;
+      const tenants = extractTenants(getPageLines());
+      mergeTenants(tenants, extractStructuredTenantGrid());
+      respond({
+        ok: true,
+        page_url: pageUrl,
+        source_property_key: sourcePropertyKey,
+        tenant_provenance_key: sourcePropertyKey,
+        tenants,
+      });
+      return false;
+    }
+    if (msg.type !== 'FETCH_DOC_BYTES') return undefined;
     (async () => {
       try {
         const url = msg.url;
@@ -124,6 +153,16 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     // (last-write-wins in chrome.storage.session.pageContext).
     if (!url || url === 'about:blank' || url === 'about:srcdoc') return;
     if (!/^https?:\/\/[^/]*\.costar\.com\//i.test(url)) return;
+
+    // A street address is not a record boundary: CoStar can assign the same
+    // display address to adjacent buildings/parcels. Reset before reading the
+    // new DOM whenever the stable numeric CoStar record changes.
+    const propertyKey = window.LccPropertyIdentity?.propertyIdentityKey(url) || url;
+    if (accumulated._property_key && accumulated._property_key !== propertyKey) {
+      resetForProperty(propertyKey);
+    } else if (!accumulated._property_key) {
+      accumulated._property_key = propertyKey;
+    }
 
     let address = null;
     let headingEl = null;
@@ -228,16 +267,8 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     const compMatch = url.match(/\/Comp\/(\d+)\//i);
     if (compMatch) accumulated.costar_comp_id = compMatch[1];
 
-    // If address changed (navigated to different property), reset accumulation
-    if (accumulated._address && accumulated._address !== identifier) {
-      accumulated = { contacts: [], sales_history: [], tenants: [] };
-      lastPaginatedPage = 0;
-      paginationInProgress = false;
-      // Round 76ek.d: reset commentary pager too on property switch
-      lastCommentaryPage = 0;
-      commentaryPaginationInProgress = false;
-      commentaryPropertyKey = null;
-    }
+    // Address changes within one CoStar record are display normalization, not
+    // identity changes. Numeric record identity above is the sole reset gate.
     accumulated._address = identifier;
 
     if (!lines) lines = getPageLines();
@@ -254,12 +285,24 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     // path leaves gaps — a title rejected by one extractor can still
     // slip through the other — so we merge first, then let the
     // title/garbage filter below run once on the unified set.
-    const domContacts  = extractContactsFromDOM();
-    const textContacts = extractContacts(lines);
+    // Preferred: CoStar's redesigned For-Sale/For-Lease "Contacts" panel is a
+    // clean, data-testid-labelled DOM (one <figure> per contact, with an
+    // explicit "Sales Company" / "True Owner" designation). When present it is
+    // AUTHORITATIVE — parsing it structurally avoids the innerText line-guessing
+    // that mis-slotted the broker's email onto the owner and mislabeled the True
+    // Owner as the broker. Falls back to the DOM-mailto + text extractors when
+    // the structured panel isn't found (older layouts / comp pages).
+    const structuredContacts = extractStructuredForSaleContacts();
     let contacts = [];
-    mergeContacts(contacts, domContacts);
-    mergeContacts(contacts, textContacts);
-    enrichContactsFromDOM(contacts);
+    if (structuredContacts && structuredContacts.length) {
+      mergeContacts(contacts, structuredContacts);
+    } else {
+      const domContacts  = extractContactsFromDOM();
+      const textContacts = extractContacts(lines);
+      mergeContacts(contacts, domContacts);
+      mergeContacts(contacts, textContacts);
+      enrichContactsFromDOM(contacts);
+    }
     const salesHistory = extractSalesHistory(lines);
     const tenants = extractTenants(lines);
 
@@ -350,6 +393,38 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
         if (lines[i].trim()) noteLines.push(lines[i].trim());
       }
       if (noteLines.length) data.sale_notes_raw = noteLines.join(' ');
+    }
+
+    // ── Extract "Sale Highlights" / "Investment Highlights" bullets ─────
+    // 2026-08-14: On a property Summary page CoStar frequently carries the ONLY
+    // government/operator tenant signal inside the "Sale Highlights" (or
+    // "Investment Highlights" / "Property Highlights") bullet list — e.g. 3428
+    // Interstate 20 (Stanton TX) whose highlights read "Long-term federal
+    // tenancy with USDA and FSA occupancy…", "Current GSA lease renewed in April
+    // 2025…". There is no captured tenant on that page (Property Contacts shows
+    // only the recorded owner + sale broker, and the Tenant tab is separate), so
+    // without this the server classifier saw only property_type="Office" and
+    // dropped the capture to no_domain ("Promote failed — no_domain"). The
+    // server classifyDomain() already reads metadata.investment_highlights; this
+    // fills it. Fill-blanks only — never clobber a value already captured
+    // elsewhere. Deliberately NOT sale-specific (stays top-level on comp pages).
+    // Tolerate a trailing chevron/arrow — CoStar renders the heading as
+    // "Sale Highlights »" and getPageLines may keep the glyph on the line.
+    const HL_HEADING_RE = /^(sale|investment|property|key|location|tenant)\s+highlights\s*[»>›→]*\s*$/i;
+    const HL_TERMINATOR_RE = /^(building|land\b|market(\s+conditions)?|property\s+contacts|public\s+record|demographics|traffic|documents|my\s+notes|sources|income\s+&\s+expenses|tenants?\b|lease|leasing|financials?|changes|loan|analytics|peers|images|map|news|verification|©\s*\d{4}|by\s+using\s+this)/i;
+    const hlIdx = lines.findIndex(l => HL_HEADING_RE.test(l.trim()));
+    if (hlIdx > -1) {
+      const hlLines = [];
+      for (let i = hlIdx + 1; i < lines.length && hlLines.length < 20; i++) {
+        const t = lines[i].trim();
+        if (!t) continue;
+        if (HL_TERMINATOR_RE.test(t)) break;
+        hlLines.push(t);
+      }
+      if (hlLines.length && !data.investment_highlights) {
+        data.investment_highlights = hlLines.join(' ');
+        console.log('[LCC CoStar] captured highlights →', data.investment_highlights.substring(0, 120));
+      }
     }
 
     // ── Extract "Documents" section links (deeds, OMs, brochures) ─────
@@ -503,6 +578,18 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       }
       return true;
     });
+    // ── Broker→owner mis-attribution guard (2026-08-05) ──────────────────────
+    // CoStar renders the listing-broker contact card adjacent to the owner
+    // panel (and the redesigned Contacts tab prints the role label AFTER the
+    // name), so the extractors above can slot the listing broker's email/phone —
+    // and sometimes the broker person itself — into the "Current/True Owner"
+    // rows. Drop owner rows that ARE the captured broker (broker email) and
+    // strip broker reach from any surviving owner. Loaded before this script as
+    // globalThis.__lccBrokerOwnerReconcile (pure + Node-testable).
+    if (globalThis.__lccBrokerOwnerReconcile) {
+      accumulated.contacts = globalThis.__lccBrokerOwnerReconcile
+        .reconcileBrokerOwnerAttribution(accumulated.contacts);
+    }
     mergeTenants(accumulated.tenants, tenants);
     if (location.city) accumulated.city = location.city;
     if (location.state) accumulated.state = location.state;
@@ -551,26 +638,32 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       }
     }
 
+    const snapshot = {
+      domain: 'costar',
+      entity_type: 'property',
+      _version: 32,
+      address: address || parseAddress(document.title),
+      page_url: url,
+      city: accumulated.city,
+      state: accumulated.state,
+      zip: accumulated.zip,
+      ...accumulated,
+      contacts: accumulated.contacts,
+      sales_history: accumulated.sales_history,
+      tenants: accumulated.tenants,
+      source_property_key: propertyKey,
+      costar_property_id: window.LccPropertyIdentity?.costarPropertyId(url) || null,
+    };
+    snapshot._source_field_provenance = {};
+    for (const [field, value] of Object.entries(snapshot)) {
+      if (field.startsWith('_')) continue;
+      if (value == null || value === '' || (Array.isArray(value) && value.length === 0)) continue;
+      snapshot._source_field_provenance[field] = propertyKey;
+    }
+
     safeSendMessage({
       type: 'CONTEXT_DETECTED',
-      data: {
-        domain: 'costar',
-        entity_type: 'property',
-        _version: 26,
-        // Round 76cg: never let raw document.title leak through as the
-        // address. parseAddress(title) will succeed when the title contains
-        // a real address (after stripping 'Properties | ' style prefixes).
-        // If both fail, emit null and let the matcher use other signals.
-        address: address || parseAddress(document.title),
-        page_url: url,
-        city: accumulated.city,
-        state: accumulated.state,
-        zip: accumulated.zip,
-        ...accumulated,
-        contacts: accumulated.contacts,
-        sales_history: accumulated.sales_history,
-        tenants: accumulated.tenants,
-      },
+      data: snapshot,
     });
 
     if (headingEl) injectLccButton(headingEl);
@@ -1010,7 +1103,28 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     // (El Camino Real, Colma CA) validates. "camino"/"avenida" carry the
     // "Real"-suffixed streets without adding bare "real" (which would false-
     // match "Real Estate"/"Realty" broker lines).
-    const STREET_RE = /\b(st|street|ave|avenue|blvd|boulevard|dr|drive|rd|road|ln|lane|ct|court|pl|place|way|hwy|highway|pkwy|parkway|pky|pike|tpke|turnpike|byp|bypass|xing|crossing|cir|circle|loop|terr|terrace|ter|trail|trl|expy|expressway|speedway|spdwy|sq|square|cv|cove|crk|creek|hill|bnd|bend|run|plaza|plz|route|rt|us\s+route|state\s+route|sr|fm|cr|camino|paseo|calle|alameda|avenida|arroyo|rancho|mesa|vista)\b/i;
+    // 2026-08-14: added interstate / I-NN / IH-NN highway forms. "3428
+    // Interstate 20" (Stanton TX, a USDA/GSA-leased office) parsed to null
+    // because "Interstate" wasn't a known street type (hwy/highway were, but
+    // not "interstate" nor the "I-20"/"IH-20" shorthand Texas uses), so the
+    // sidebar fell back to the empty "unsupported site" state and the property
+    // was never recognized. The i-\d+/ih-\d+ alternates require a trailing
+    // route number (so a bare "I" / "IH" can't false-match) and everything is
+    // still gated by the leading street-number guard in parseAddress.
+    // 2026-09-12: added park/commons/center/centre/corners/crossing(s)/village/
+    // pointe/point/landing/junction/gateway/campus/complex. "483 Gateway
+    // Industrial Park" (a dialysis clinic in Jenkins, KY) parsed to null —
+    // the property's mailing address names its industrial/business park
+    // ("… Park", "… Commons", "… Business Center") rather than a numbered
+    // street, and none of those words was a known street type, so the
+    // sidebar fell back to the empty "unsupported site" state and the
+    // property could never be captured. These are common on rural/suburban
+    // CRE addresses (industrial parks, office parks, shopping centers) and
+    // are gated the same way as every other entry here — a leading street
+    // number is required, so a bare "Park Ave" style false-match on a
+    // broker line is not a new risk (that case already matches via
+    // "ave"/"pl"/etc regardless).
+    const STREET_RE = /\b(st|street|ave|avenue|blvd|boulevard|dr|drive|rd|road|ln|lane|ct|court|pl|place|way|hwy|highway|interstate\s+\d+|i-\d+|ih-\d+|pkwy|parkway|pky|pike|tpke|turnpike|byp|bypass|xing|crossing|crossings|cir|circle|loop|terr|terrace|ter|trail|trl|expy|expressway|speedway|spdwy|sq|square|cv|cove|crk|creek|hill|bnd|bend|run|plaza|plz|route|rt|us\s+route|state\s+route|sr|fm|cr|camino|paseo|calle|alameda|avenida|arroyo|rancho|mesa|vista|park|commons|center|centre|corners|village|pointe|point|landing|junction|gateway|campus|complex)\b/i;
     // Salt Lake City-style grid addresses have no street-type word.
     // Form: <building#> <dir> <grid#> <dir> — e.g. "3854 W 5400 S",
     // "3000 E 7800 S". Without this branch, Taylorsville/SLC properties
@@ -1057,7 +1171,27 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
   // No trailing \b: CoStar's two-column panels often render the label
   // concatenated with its value ("True BuyerBoyd Watterson Global"), so a
   // word-boundary after the header would miss the concatenated form.
-  const FOREIGN_PARTY_HEADER_RE = /^(recorded\s+buyer|true\s+buyer|recorded\s+seller|true\s+seller|recorded\s+owner|true\s+owner|current\s+owner|listing\s+broker|buyer\s+broker|lender|borrower|originator)/i;
+  //
+  // ADDR1 (2026-09-03): the redesigned For-Sale "Contacts" tab's section
+  // headers — "Sales Company"/"Sales Contacts"/"Listing Contacts" (the
+  // listing/sales BROKERAGE FIRM's own office, not the subject property) and
+  // "Property Manager"/"Property Management" — were absent from this list, so
+  // findAddressInLines (the fallback path used whenever the Contacts tab's
+  // address isn't inside an <h1>/<h2>/<h3>) walked straight past the brokerage
+  // office block and captured ITS street as the property's. Live: a Wisconsin
+  // Dells, WI DaVita clinic (property 35722) got a phantom duplicate
+  // (property 37491) carrying SRS Capital Markets' Newport Beach, CA office
+  // street ("680 Newport Center Dr") under the CORRECT Wisconsin Dells
+  // city/state/zip — the asymmetry comes from `city`/`state`/`zip` being
+  // resolved by the separate, unguarded findLocationInLines() off whichever
+  // "City, ST ZIP" line appears FIRST on the page (usually the property's own
+  // persistent header, above the Contacts panel), while `address` is
+  // recomputed fresh per extract() and has no such early-exit — it fell all
+  // the way to the brokerage block. These labels mirror SECTION_ROLE_MAP
+  // (the structured Contacts-panel extractor already treats them as
+  // party-designation headers, not property fields) so both readers of the
+  // page agree on what counts as "not the subject property".
+  const FOREIGN_PARTY_HEADER_RE = /^(recorded\s+buyer|true\s+buyer|recorded\s+seller|true\s+seller|recorded\s+owner|true\s+owner|current\s+owner|listing\s+broker|buyer\s+broker|lender|borrower|originator|sales?\s+comp(?:any|anies)|sales?\s+contacts?|listing\s+contacts?|property\s+manage(?:r|ment))/i;
   function isInsideForeignAddressSection(lines, idx, lookback) {
     const back = Math.max(0, idx - (lookback || 6));
     for (let k = idx - 1; k >= back; k--) {
@@ -1087,7 +1221,11 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     // 2026-07-29: added California/Spanish street types (Camino/Paseo/Calle/
     // Alameda/Avenida/Arroyo/Rancho/Mesa/Vista) to mirror parseAddress so
     // "1055 El Camino Real"-style subjects pair with their city line here too.
-    const STREET_RE = /^\d+(?:-\d+)?\s+(?:[A-Za-z][\w&'.\- ]{0,80}\b(?:St|Ave|Avenue|Rd|Road|Hwy|Highway|Pkwy|Parkway|Pky|Blvd|Boulevard|Way|Dr|Drive|Ln|Lane|Pl|Place|Ct|Court|Cir|Circle|Trl|Trail|Expy|Expressway|Speedway|Spdwy|Sq|Square|Ter|Terrace|Loop|Tpke|Turnpike|Byp|Bypass|Xing|Crossing|Camino|Paseo|Calle|Alameda|Avenida|Arroyo|Rancho|Mesa|Vista)|(?:Route|Rt|US\s+Route|State\s+Route|SR|FM|CR)\s+\d+|(?:N|S|E|W|NE|NW|SE|SW)\s+\d+\s+(?:N|S|E|W|NE|NW|SE|SW))\b\.?/i;
+    // 2026-09-12: added Park/Commons/Center/Centre/Corners/Crossings/Village/
+    // Pointe/Point/Landing/Junction/Gateway/Campus/Complex to mirror
+    // parseAddress's STREET_RE fix for "483 Gateway Industrial Park" (Jenkins,
+    // KY) — see that regex's comment for the full incident.
+    const STREET_RE = /^\d+(?:-\d+)?\s+(?:[A-Za-z][\w&'.\- ]{0,80}\b(?:St|Ave|Avenue|Rd|Road|Hwy|Highway|Pkwy|Parkway|Pky|Blvd|Boulevard|Way|Dr|Drive|Ln|Lane|Pl|Place|Ct|Court|Cir|Circle|Trl|Trail|Expy|Expressway|Speedway|Spdwy|Sq|Square|Ter|Terrace|Loop|Tpke|Turnpike|Byp|Bypass|Xing|Crossing|Crossings|Camino|Paseo|Calle|Alameda|Avenida|Arroyo|Rancho|Mesa|Vista|Park|Commons|Center|Centre|Corners|Village|Pointe|Point|Landing|Junction|Gateway|Campus|Complex)|(?:Route|Rt|US\s+Route|State\s+Route|SR|FM|CR|Interstate|I|IH)[\s-]+\d+|(?:N|S|E|W|NE|NW|SE|SW)\s+\d+\s+(?:N|S|E|W|NE|NW|SE|SW))\b\.?/i;
     const CITY_RE = /^[A-Z][A-Za-z.\- ]{1,40},\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?$/;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
@@ -1149,6 +1287,53 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     return n;
   }
 
+  function parseHistoryDate(str) {
+    if (!str || typeof str !== 'string') return null;
+    const s = str.trim();
+    const m = s.match(/\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}\b|\b\d{1,2}\/\d{1,2}\/\d{2,4}\b|\b\d{4}-\d{1,2}-\d{1,2}\b/i);
+    if (!m) return null;
+    const d = new Date(m[0]);
+    return Number.isFinite(d.getTime()) ? d.toISOString().slice(0, 10) : null;
+  }
+
+  function parsePercentRate(str) {
+    if (!str || typeof str !== 'string') return null;
+    const m = str.match(/\b(\d+(?:\.\d+)?)\s*%/);
+    if (!m) return null;
+    const n = parseFloat(m[1]);
+    return Number.isFinite(n) && n >= 2 && n <= 15 ? Math.round((n / 100) * 10000) / 10000 : null;
+  }
+
+  function parseDollarAmountInText(str) {
+    if (!str || typeof str !== 'string') return null;
+    const m = str.match(/\$[\d,]+(?:\.\d+)?\s*[KMB]?\b/i);
+    return m ? parseDollarAmount(m[0]) : null;
+  }
+
+  function parseListingPriceHistory(lines, startIdx) {
+    const rows = [];
+    const stopRe = /^(property|building|land|market|tenants?|seller|buyer|contacts?|sale|sales?\s+history|public\s+record|listing\s+broker|documents?|tax|assessment|loan|lease)\b/i;
+    for (let j = startIdx; j < Math.min(lines.length, startIdx + 90); j++) {
+      const line = String(lines[j] || '').trim();
+      if (!line) continue;
+      if (j > startIdx + 2 && stopRe.test(line) && !/price/i.test(line)) break;
+
+      const windowText = [line, lines[j + 1] || '', lines[j + 2] || ''].join(' ');
+      const change_date = parseHistoryDate(windowText);
+      const price = parseDollarAmountInText(windowText);
+      if (!change_date || !price || price < 25000) continue;
+
+      const cap_rate = parsePercentRate(windowText);
+      const prior = rows[rows.length - 1];
+      if (!prior || prior.change_date !== change_date || Math.round(prior.price) !== Math.round(price)) {
+        rows.push({ change_date, price, cap_rate });
+      }
+    }
+    return rows
+      .sort((a, b) => String(a.change_date).localeCompare(String(b.change_date)))
+      .slice(0, 25);
+  }
+
   // ── Property field extraction ─────────────────────────────────────────
 
   function extractFields(lines, pageUrl) {
@@ -1179,6 +1364,21 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       // labels inside the public-record body.
       if (/^(sales?\s+history|prior\s+sales?|transaction\s+history|transaction\s+details|last\s+sale|last\s+loan|sale[\s\/]*loan\s+history)$/i.test(line)) {
         inSalesHistorySection = true;
+      }
+
+      if (!data.price_change_history && /^(listing\s+)?price\s+history$/i.test(line)) {
+        const hist = parseListingPriceHistory(lines, i + 1);
+        if (hist.length) {
+          data.price_change_history = hist;
+          const first = hist[0];
+          const last = hist[hist.length - 1];
+          data.original_price = first.price;
+          data.list_price = first.price;
+          if (first.cap_rate != null) data.original_cap_rate = first.cap_rate;
+          if (last.change_date) data.last_price_change = last.change_date;
+          if (!data.asking_price && last.price) data.asking_price = `$${Math.round(last.price).toLocaleString()}`;
+          if (!data.cap_rate && last.cap_rate != null) data.cap_rate = `${(last.cap_rate * 100).toFixed(2)}%`;
+        }
       }
 
       if (!data.cap_rate && /^(actual\s+)?cap\s+rate$/i.test(line)) {
@@ -1504,6 +1704,13 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       // ── Tenant / Lease fields ─────────────────────────────────
       if (!data.tenancy_type && /^tenancy$/i.test(line)) {
         if (next && next.length < 30) data.tenancy_type = next;
+      }
+      // CoStar's top property-stat cards render the value before the label in
+      // DOM text order (for example, "Single" then "Tenancy"). Preserve the
+      // same structured field without inferring from the tenant list.
+      if (!data.tenancy_type && /^(single|multi)$/i.test(line)
+          && /^tenancy$/i.test(next)) {
+        data.tenancy_type = line;
       }
 
       if (!data.owner_occupied && /^owner\s+occup(ied)?$/i.test(line)) {
@@ -2813,6 +3020,21 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     return cleaned;
   }
 
+  function extractStructuredTenantGrid() {
+    const tenants = [];
+    const containers = document.querySelectorAll('table, [role="table"], [role="grid"]');
+    for (const container of containers) {
+      const rowElements = Array.from(container.querySelectorAll('tr, [role="row"]'))
+        .filter((row) => row.closest('table, [role="table"], [role="grid"]') === container);
+      const rows = rowElements.map((row) => Array.from(row.querySelectorAll(
+        ':scope > th, :scope > td, :scope > [role="columnheader"], :scope > [role="gridcell"], :scope > [role="cell"]',
+      )).map((cell) => cell.textContent?.trim() || ''));
+      const parsed = window.LccPropertyIdentity?.tenantRosterFromGridRows(rows) || [];
+      mergeTenants(tenants, parsed);
+    }
+    return tenants;
+  }
+
   function parseTenantSection(lines, startIdx, tenants) {
     let current = null;
 
@@ -2930,8 +3152,9 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       //       that mark sentence prose.
       const wordCount = line.trim().split(/\s+/).length;
       const SENTENCE_VERB_RE = /\s+(has|have|is|are|was|were|will|been|calls\s+for|indicates|signed|executed|installed|located|limited\s+to|priced\s+at|ensures?|provides?|offers?|features?|includes?|presents?)\s+/i;
-      if (line.length > 2 && line.length < 80 && /^[A-Z]/.test(line) &&
-          !/^\d/.test(line) && !/@/.test(line) && !/^https?:/i.test(line) &&
+      const numericHealthcareTenant = window.LccPropertyIdentity?.isNumericHealthcareTenantName(line) === true;
+      if (line.length > 2 && line.length < 80 && (/^[A-Z]/.test(line) || numericHealthcareTenant) &&
+          (!/^\d/.test(line) || numericHealthcareTenant) && !/@/.test(line) && !/^https?:/i.test(line) &&
           !TENANT_SECTION_REJECT.test(line) &&
           !TENANT_STORE_TYPE_REJECT.test(line) &&
           !TENANT_STREET_JUNK.test(line) &&
@@ -3042,11 +3265,35 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     let currentGroupBuyer  = null;
     let currentGroupSeller = null;
 
+    // CoStar's redesigned For-Sale/For-Lease "Contacts" panel prints the role
+    // label AFTER the name/firm (trailing-label layout), not as a leading
+    // header. On those pages the leading-header handlers below would sweep a
+    // firm's address/phone forward and capture the NEXT name (the True Owner)
+    // as a broker (observed: "Bradley Veo Timmons" mislabeled listing_broker on
+    // 3710 FM 1889). Parse the trailing-label block from the preceding name
+    // instead. Pure helpers live in _forsale-contacts-parse.js (loaded first).
+    const forSaleLayout = !!(globalThis.__lccForSaleContacts
+      && globalThis.__lccForSaleContacts.isForSaleContactsUrl(
+        (typeof window !== 'undefined' && window.location && window.location.href) || ''));
+
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
 
       // ── STOP at end-of-content sections ───────────────────────
       if (/^(my\s+notes|sources|verification|sale\s+comp\s+id|©\s*\d{4}|by\s+using\s+this|costar\s+comp|last\s+updated|report\s+an\s+error|publication\s+date)/i.test(line)) break;
+
+      // ── Trailing-label contact block (For-Sale/For-Lease Contacts panel) ──
+      if (forSaleLayout && i > 0) {
+        const trailRole = globalThis.__lccForSaleContacts.trailingRoleFor(line);
+        if (trailRole && globalThis.__lccForSaleContacts.looksLikeContactName(lines[i - 1])) {
+          const parsed = globalThis.__lccForSaleContacts.parseTrailingLabelBlock(lines, i, trailRole);
+          if (parsed && parsed.contact && parsed.contact.name) {
+            contacts.push(parsed.contact);
+            i = parsed.endIdx;   // skip the block's detail lines
+            continue;
+          }
+        }
+      }
 
       // ── Current Owner marks a new transaction group ──────────
       if (/^current\s+owner$/i.test(line)) {
@@ -3484,6 +3731,108 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
   // getOwnText (not textContent) to avoid matching parents that happen to
   // contain the label deep in their subtree.
   const SECTION_END_SENTINEL_RE = /^(my\s+notes|sources(\s+&\s+research)?|verification|documents?|assessment(\s+at\s+sale)?|public\s+record|tenants?\s+at|sale\s+comp\s+id|income\s+&\s+expenses|transaction\s+details|building(\s+summary|\s+information)?|land\b|market|investment\s+highlights|help\s+with\s+features|request\s+training|share\s+feedback|help\s+center|terms\s+of\s+use|privacy\s+policy|all\s+rights\s+reserved)/i;
+
+  // Shadow-DOM-piercing querySelectorAll. CoStar's listing page lives inside
+  // web components with (open) shadow roots; document.querySelectorAll stops at
+  // each shadow boundary. This walks every open shadowRoot so contact figures
+  // rendered inside a component are actually found. Bounded + try/guarded so a
+  // hostile/huge tree can't hang or throw.
+  function deepQuerySelectorAll(selector, root) {
+    const start = root || document;
+    const out = [];
+    const seen = new Set();
+    const stack = [start];
+    let budget = 20000; // node-visit cap (safety)
+    while (stack.length && budget-- > 0) {
+      const node = stack.pop();
+      if (!node || !node.querySelectorAll) continue;
+      try {
+        node.querySelectorAll(selector).forEach((el) => {
+          if (!seen.has(el)) { seen.add(el); out.push(el); }
+        });
+      } catch (_) { /* invalid context — skip */ }
+      let all = [];
+      try { all = node.querySelectorAll('*'); } catch (_) { all = []; }
+      for (const el of all) {
+        if (el && el.shadowRoot) stack.push(el.shadowRoot);
+      }
+    }
+    return out;
+  }
+
+  // ── Structured Contacts-panel extractor (preferred, 2026-08-05) ───────────
+  // CoStar's redesigned For-Sale/For-Lease summary renders the "Contacts" panel
+  // as a data-testid-labelled DOM: a <figure> per contact carrying an explicit
+  // designation ("Sales Company" / "True Owner" / "Recorded Owner" / "Property
+  // Manager"). This reads each figure's fields directly and hands them to the
+  // pure mapper (_forsale-contacts-parse.js) — no innerText line-guessing, so
+  // the broker's email can't bleed onto the owner and the True Owner can't be
+  // mislabeled a broker. Returns [] when the structured panel isn't on the page.
+  function extractStructuredForSaleContacts() {
+    try {
+      if (!globalThis.__lccForSaleContacts) return [];
+      // CoStar renders the listing page inside web components (cs-mount-component
+      // / costar-listings), which use shadow DOM — document.querySelectorAll does
+      // NOT pierce shadow roots. Use a shadow-piercing query so the Contacts
+      // figures are actually found (a plain querySelector returns 0 here).
+      const figureSel =
+        'figure[data-testid="companyIC"],figure[data-testid="contactsIC"],figure[data-testid="contactsIC-smaller-viewports"]';
+      const figureEls = deepQuerySelectorAll(figureSel);
+      if (!figureEls.length) return [];
+
+      // Null-safe: a missing field (q1 → null) must yield '' — `(null && …)`
+      // returns null, and calling .replace on null throws (which previously
+      // aborted the whole loop into the catch and forced the fallback path).
+      const txt = (el) => ((el && el.textContent) ? el.textContent : '').replace(/\s+/g, ' ').trim();
+      const figures = [];
+      for (const fig of figureEls) {
+        // The figure's inner content (name/designation/phone/email/address) is
+        // rendered inside nested shadow roots (web components with slot="title"
+        // etc.), so a plain fig.querySelector — which does NOT pierce shadow —
+        // returns empty. Query each field with the shadow-piercing deep query
+        // SCOPED to this figure, using single-testid selectors (a cross-boundary
+        // descendant selector like `[a] [b]` breaks at a shadow edge).
+        const q1 = (sel) => deepQuerySelectorAll(sel, fig)[0] || null;
+        const qN = (sel) => deepQuerySelectorAll(sel, fig);
+
+        const nameEl = q1('a[data-testid="name-link"]') || q1('[data-testid="contact-name"]');
+        const name = txt(nameEl);
+        if (!name) continue;
+
+        const designation = txt(q1('[data-testid="company-designation-company-type"]'));
+        const jobTitle    = txt(q1('[data-testid="contact-job-title"]'));
+        const company     = txt(q1('[data-testid="company-name-link"]'));
+
+        const phones = [];
+        qN('[data-testid^="phone-number-"]').forEach((el) => {
+          const tid = el.getAttribute('data-testid') || '';
+          if (/(-wrapper|-icon-label)$/.test(tid)) return; // skip wrapper/icon spans
+          const v = txt(el);
+          if (v && /\d{3}[^\d]*\d{3}[^\d]*\d{4}/.test(v)) phones.push(v);
+        });
+
+        let email = '';
+        const emailEl = q1('a[data-testid="email"]');
+        if (emailEl) {
+          const href = emailEl.getAttribute('href') || '';
+          email = href.replace(/^mailto:/i, '').split('?')[0].trim() || txt(emailEl);
+        }
+
+        const addressLines = [];
+        qN('[automation-id^="address-line-"]').forEach((el) => {
+          const v = txt(el);
+          if (v) addressLines.push(v);
+        });
+
+        figures.push({ name, designation, jobTitle, company, email, phones, addressLines });
+      }
+
+      return globalThis.__lccForSaleContacts.mapForSaleFigures(figures);
+    } catch (err) {
+      try { console.warn('[LCC costar] extractStructuredForSaleContacts failed:', err && err.message, err && err.stack); } catch (_) {}
+      return [];
+    }
+  }
 
   // `a.compareDocumentPosition(b) & FOLLOWING` is true when b follows a in
   // document order (or is a descendant of a). We use this to bucket each

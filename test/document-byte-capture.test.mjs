@@ -92,7 +92,11 @@ describe('UW#6-REV — document-notify writer', () => {
     assert.equal(r.outcome, 'created');
     assert.equal(r.document_id, 99);
     assert.equal(r.doctype, 'deed');
-    assert.ok(calls.some(c => c.method === 'POST' && c.path.includes('on_conflict=property_id,content_hash')));
+    // Prompt 81 (item 4): the INSERT upserts on the REAL live unique index
+    // (property_id, file_name). The former (property_id, content_hash) list
+    // matched no index and raised 42P10 on every insert reached here.
+    assert.ok(calls.some(c => c.method === 'POST' && c.path.includes('on_conflict=property_id,file_name')));
+    assert.ok(!calls.some(c => c.path.includes('on_conflict=property_id,content_hash')));
   });
 
   it('existing url_captured row (same file) → ATTACHES bytes, no duplicate', async () => {

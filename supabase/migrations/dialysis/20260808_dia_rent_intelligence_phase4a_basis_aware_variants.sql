@@ -1,0 +1,11 @@
+-- Rent Intelligence Phase 4a — basis-aware '_with_modeled' CM variants (dia).
+-- Applied live to zqzrriwuavgrquhisnoa. Published defaults (cm_dialysis_rent_box_q,
+-- cm_dialysis_rent_price_psf_q, cm_dialysis_rent_price_per_chair_q) are NOT touched
+-- (byte-identical). Variants gate conf>=0.7 AND basis IN (contract,stated,projected);
+-- convention basis structurally excluded. Each carries a basis_scope label column.
+-- Payoff: rent-box 2023+ populated quarters 4 -> 14.
+--   cm_dialysis_rent_box_q_with_modeled            (rent PSF box from timeline market events)
+--   cm_dialysis_rent_price_psf_q_with_modeled      (rent PSF at sale from timeline)
+--   cm_dialysis_rent_price_per_chair_q_with_modeled(rent per chair at sale from timeline)
+-- Full bodies applied via mcp apply_migration dia_rent_intelligence_phase4a_basis_aware_variants;
+-- reproduce via pg_get_viewdef('<view>'::regclass, true).

@@ -1,3 +1,46 @@
+> **CANONICAL CONNECTOR SPEC (single source of truth — read before editing anything):**
+> `copilot/lcc-deal-intelligence.connector.v4.swagger.json` is THE spec for the ONE
+> "LCC Deal Intelligence" custom connector in Power Platform. Update actions THERE
+> (the `dispatchCopilotAction` → `copilot_action` enum + the registry docs), bump
+> `info.version`, then re-import via the swagger editor into the EXISTING connector —
+> never create a second connector. v2/v3 and all other specs live in
+> `docs/archive/openapi-legacy/` and must NOT be imported. Server-side action
+> registration (`api/operations.js` ACTION_REGISTRY/ACTION_SCHEMAS) and this spec must
+> move TOGETHER — an action missing from the enum is invisible to Copilot (this gap
+> happened with the W7.3 actions, caught 2026-08-06; spec now v4.1.0).
+>
+> **THREE surfaces move together for a dispatch-routed action** (learned twice, 2026-08-06):
+> 1. Server: `api/operations.js` ACTION_REGISTRY + ACTION_SCHEMAS.
+> 2. Connector: the v4 spec's `copilot_action` enum → re-import the existing connector.
+> 3. **Agent instructions**: dispatch-routed actions NEVER appear as separate tools in the
+>    Copilot Studio tool list — the agent only uses them if its Instructions say so. Edit the
+>    relevant canon block (`docs/os/canon/blocks/`), bump CANON_VERSION, re-render
+>    (`node docs/os/tools/render-surfaces.mjs --write-live`), paste the rendered
+>    `docs/copilot/agent-instructions.md` into Copilot Studio → LCC Deal Agent → Instructions
+>    → Publish. `tools/check-parity.mjs` guards render drift; `test/copilot-connector-drift.test.mjs`
+>    guards spec drift.
+>
+> **ONE security definition only (root cause of the 2026-08-06 agent outage):** Power
+> Platform honors exactly ONE securityDefinition per custom connector. The spec once
+> carried two (apiKey `X-LCC-Key` + bearerAuth `Authorization`); re-importing it flipped
+> the connector's API-key header to `Authorization`, the saved connection stopped
+> sending `X-LCC-Key`, and EVERY agent message failed 401 → "I'm having trouble right
+> now." Fix applied: spec v4.1.1 keeps only apiKey/`X-LCC-Key`; the connector's
+> Security tab must always read Parameter name = `X-LCC-Key`, location = Header. After
+> ANY re-import, check the Security tab and run Test → dispatchCopilotAction before
+> touching the agent. The connector the agent binds to is **"LCC Intelligence"**
+> (Power Automate → Custom connectors, env Default-fccf69d3); "LCC Deal Intelligence"
+> is a stray/legacy duplicate — do not import into it.
+>
+> **NEVER remove a connector operation while an agent tool tile references it** (second
+> root cause of the 2026-08-06 outage): the v4 cleanup dropped the 41 legacy
+> `/api/copilot/compat/*` snake_case operations, but the agent's tool tiles (added in the
+> snake_case era) still bound those operationIds — the orchestrator failed tool-loading on
+> EVERY message with ConnectorOperationNotFound, even messages needing no tool. Spec
+> v4.2.0 restored all 41 (server still routes them; all verified in ACTION_REGISTRY).
+> Retirement order is always: delete the tool tile in Copilot Studio → Publish → only then
+> drop the operation from the spec → re-import.
+
 # Copilot Studio Setup Guide — LCC Assistant
 
 > **No M365 admin access required.** Any licensed M365 user can create and publish a personal Copilot agent through Copilot Studio (copilotstudio.microsoft.com).

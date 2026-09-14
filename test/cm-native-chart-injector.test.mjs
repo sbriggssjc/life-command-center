@@ -25,8 +25,19 @@ import {
   buildComboChartXml,
   buildRenewalRentGrowthXml,
   buildSingleBarChartXml,
+  buildSingleLineChartXml,
   buildDoughnutChartXml,
   fitDataAxisRange,
+  CALLOUT_POLICY_TEMPLATES,
+  countSpecCallouts,
+  assertCalloutCoverage,
+  lintChartSeriesXml,
+  specToChartXml,
+  C15_EXT_ALLOWED_CHILDREN,
+  validateChartExtWhitelist,
+  padSnapRange,
+  assertPercentAxisMin,
+  fitPercentAxis,
 } from '../api/_shared/cm-native-chart-injector.js';
 
 async function buildTinyWorkbook() {
@@ -61,6 +72,7 @@ test('injectNativeCharts: line chart on Data_Volume_TTM tab', async () => {
         catCol: 'A', valCol: 'B',
         dataStart: 6, dataEnd: 17,
         color: '003DA5',
+        title: 'Volume (TTM)',
         anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
       },
     },
@@ -83,7 +95,23 @@ test('injectNativeCharts: line chart on Data_Volume_TTM tab', async () => {
   // Assert drawing XML + its rels present
   assert.ok(zip.file('xl/drawings/drawing1.xml'), 'drawing1.xml created');
   const drawingXml = await zip.file('xl/drawings/drawing1.xml').async('string');
-  assert.match(drawingXml, /<xdr:twoCellAnchor/, 'drawing has twoCellAnchor');
+  // Marketing feedback (2026-08): charts carry a FIXED size via a oneCellAnchor
+  // with an explicit EMU extent (non-donut 10.00"W × 4.25"H).
+  assert.match(drawingXml, /<xdr:oneCellAnchor/, 'drawing has fixed-size oneCellAnchor');
+  assert.match(drawingXml, /<xdr:ext cx="9144000" cy="3886200"\/>/, 'non-donut chart is 10.00in x 4.25in');
+
+  // Marketing feedback: Chart Area No Fill / No Line + 8pt Futura PT default font.
+  assert.match(chartXml, /<c:spPr><a:noFill\/><a:ln><a:noFill\/><\/a:ln><\/c:spPr>\s*<c:txPr>/, 'chart area no fill / no line');
+  assert.match(chartXml, /<c:txPr>[\s\S]*sz="800"[\s\S]*Futura PT/, 'chart area default font 8pt Futura PT');
+  // Marketing ChartEdits 2026-08-12: title 12pt Futura PT NOT-bold Sky; x-axis interval unit 1.
+  assert.match(chartXml, /sz="1200" b="0">\s*<a:solidFill><a:srgbClr val="62B5E5"/, 'title 12pt not-bold Sky');
+  assert.match(chartXml, /<c:tickLblSkip val="1"\/><c:tickMarkSkip val="1"\/>/, 'x-axis label interval unit = 1');
+  // Marketing follow-up (2026-08): BOTH axis tick labels are 7pt.
+  const catAx1 = chartXml.match(/<c:catAx>[\s\S]*?<\/c:catAx>/)[0];
+  const valAx1 = chartXml.match(/<c:valAx>[\s\S]*?<\/c:valAx>/)[0];
+  assert.match(catAx1, /<c:txPr>[\s\S]*?sz="700"/, 'x-axis (catAx) labels 7pt');
+  assert.match(valAx1, /<c:txPr>[\s\S]*?sz="700"/, 'y-axis (valAx) labels 7pt');
+  assert.ok(valAx1.indexOf('<c:txPr>') < valAx1.indexOf('<c:crossAx'), 'valAx txPr precedes crossAx (schema order)');
 
   const drawingRels = await zip.file('xl/drawings/_rels/drawing1.xml.rels').async('string');
   assert.match(drawingRels, /chart1\.xml/, 'drawing rels references chart1.xml');
@@ -171,6 +199,9 @@ test('NATIVE_CHART_TEMPLATES: P7 scatter charts registered', () => {
 });
 
 test('NATIVE_CHART_TEMPLATES: P8 floating-bar / box-whisker charts registered', () => {
+  // CM close-out (bid-ask, native hi-low): bid_ask_spread(_monthly) are native
+  // again — two cap lines + gray hiLowLines spread sticks on a line-only axis
+  // (honors c:min → ~6-8%), not a bar (which would force a 0 axis).
   for (const id of [
     'bid_ask_spread',
     'bid_ask_spread_monthly',
@@ -816,7 +847,7 @@ test('buildInjectionSpec: available_by_term_summary builds 1-bar + 4-scatter com
   // R50 → R67: Avg Cap re-swapped from R50's #00B1B0 teal (off-brand)
   // back to navy #003DA5 per user batch 6: "match brand standards."
   assert.deepEqual(out.spec.lineSeries.map(s => s.color),
-    ['003DA5', '7E6BAD', '62B5E5', '4CB582'],
+    ['003DA5', '9B88A5', '62B5E5', '8FC49E'],
     'R67: navy / purple / sky / sage (brand-aligned)');
   // All 4 are markers-only (no connecting line)
   assert.ok(out.spec.lineSeries.every(s => s.showMarker === true),
@@ -890,11 +921,11 @@ test('injectNativeCharts: bar + 4-scatter composite renders diamond markers acro
       lineSeries: [
         { titleCol: 'D', titleRow: 4, valCol: 'D', color: '003DA5',
           showMarker: true, markerShape: 'diamond', markerSize: 7 },
-        { titleCol: 'E', titleRow: 4, valCol: 'E', color: '7E6BAD',
+        { titleCol: 'E', titleRow: 4, valCol: 'E', color: '9B88A5',
           showMarker: true, markerShape: 'diamond', markerSize: 7 },
         { titleCol: 'G', titleRow: 4, valCol: 'G', color: '6A748C',
           showMarker: true, markerShape: 'diamond', markerSize: 7 },
-        { titleCol: 'F', titleRow: 4, valCol: 'F', color: '4CB582',
+        { titleCol: 'F', titleRow: 4, valCol: 'F', color: '8FC49E',
           showMarker: true, markerShape: 'diamond', markerSize: 7 },
       ],
       anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
@@ -919,8 +950,11 @@ test('injectNativeCharts: bar + 4-scatter composite renders diamond markers acro
   const diamondCount = (chartXml.match(/<c:symbol val="diamond"\/>/g) || []).length;
   assert.equal(diamondCount, 4, '4 diamond markers');
   // No connecting lines on the marker series — each line has <a:noFill/>
-  // on its <a:ln> (one per line-with-marker series)
-  const noFillLineCount = (chartXml.match(/<a:ln><a:noFill\/><\/a:ln>/g) || []).length;
+  // on its <a:ln> (one per line-with-marker series). Scope to <c:plotArea>
+  // so the chart-area-level spPr (No Fill/No Line, marketing 2026-08) doesn't
+  // count.
+  const plotArea37 = chartXml.match(/<c:plotArea>[\s\S]*<\/c:plotArea>/)[0];
+  const noFillLineCount = (plotArea37.match(/<a:ln><a:noFill\/><\/a:ln>/g) || []).length;
   assert.equal(noFillLineCount, 4, '4 markers-only line series (no connecting lines)');
 
   // Global lineChart marker toggle is ON
@@ -948,7 +982,7 @@ test('buildInjectionSpec: available_by_tenant_count_donut builds 4-segment dough
   assert.equal(out.spec.holeSize, 55);
   // 4 colors per segment: navy / sky / sage / gray
   assert.deepEqual(out.spec.colors,
-    ['003DA5', '62B5E5', '4CB582', '6A748C'],
+    ['003DA5', '62B5E5', '8FC49E', '6A748C'],
     'DaVita / FMC / US Renal / Other');
 });
 
@@ -983,7 +1017,7 @@ test('buildInjectionSpec: doughnut extra segments past 4 fall back to gray', () 
   });
   assert.equal(out.spec.colors.length, 6);
   assert.deepEqual(out.spec.colors,
-    ['003DA5', '62B5E5', '4CB582', '6A748C', '6A748C', '6A748C']);
+    ['003DA5', '62B5E5', '8FC49E', '6A748C', '6A748C', '6A748C']);
 });
 
 test('injectNativeCharts: doughnut chart emits correct OOXML structure', async () => {
@@ -1006,7 +1040,7 @@ test('injectNativeCharts: doughnut chart emits correct OOXML structure', async (
       titleCol: 'B', titleRow: 4,
       catCol: 'A', valCol: 'B',
       dataStart: 5, dataEnd: 8,
-      colors: ['003DA5', '62B5E5', '4CB582', '6A748C'],
+      colors: ['003DA5', '62B5E5', '8FC49E', '6A748C'],
       holeSize: 55,
       anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
     },
@@ -1025,7 +1059,7 @@ test('injectNativeCharts: doughnut chart emits correct OOXML structure', async (
   // 4 per-point color blocks
   const dPtCount = (chartXml.match(/<c:dPt>/g) || []).length;
   assert.equal(dPtCount, 4, '4 segment dPt blocks');
-  for (const color of ['003DA5', '62B5E5', '4CB582', '6A748C']) {
+  for (const color of ['003DA5', '62B5E5', '8FC49E', '6A748C']) {
     assert.match(chartXml, new RegExp(`srgbClr val="${color}"`), `${color} segment present`);
   }
 
@@ -1201,8 +1235,11 @@ test('buildInjectionSpec: volume_cap_quartile_combo builds area-combo with all 3
   assert.equal(out.spec.barSeries[0].valCol, 'F', 'base = lower_quartile');
   assert.equal(out.spec.barSeries[0].noFill, true);
   assert.equal(out.spec.barSeries[1].valCol, 'G', 'band = iqr_width helper');
-  assert.equal(out.spec.barSeries[1].alpha, '30000', 'T10b — amethyst 30% alpha');
-  assert.equal(out.spec.barSeries[1].borderColor, '7E6BAD', 'T10b — amethyst border (was sky)');
+  // Marketing ChartEdits 2026-08-12: fill transparency 30% (alpha 70000 opacity)
+  // and border = No Line (noBorder), superseding the T10b 30%-alpha + amethyst border.
+  assert.equal(out.spec.barSeries[1].alpha, '70000', '30% transparency = 70% opacity');
+  assert.equal(out.spec.barSeries[1].noBorder, true, 'quartile band border = No Line');
+  assert.ok(!out.spec.barSeries[1].borderColor, 'no explicit border color');
 
   // Line series: cap_rate dots (navy circles — the lone navy element)
   assert.equal(out.spec.lineSeries.length, 1);
@@ -1210,6 +1247,7 @@ test('buildInjectionSpec: volume_cap_quartile_combo builds area-combo with all 3
   assert.equal(out.spec.lineSeries[0].color, '003DA5');
   assert.equal(out.spec.lineSeries[0].showMarker, true);
   assert.equal(out.spec.lineSeries[0].markerShape, 'circle');
+  assert.equal(out.spec.lineSeries[0].markerSize, 4, 'marker size 4 (ChartEdits 2026-08-12)');
 
   // Helper col: iqr_width = upper - lower
   assert.equal(out.helperCols.length, 1);
@@ -1244,7 +1282,7 @@ test('R73 C4: volume_cap cap (right) axis lowered per vertical to lift the band 
     'dia cap axis 3.0-9.0% (band 5.70-7.70% lifts to the upper frame)');
 });
 
-test('R2-B Unit 5: cap_rate_by_credit — clean Federal line, markers only on sparse State/Municipal', () => {
+test('2026-08-12: cap_rate_by_credit — all three are clean flush lines (no markers), blue-family ramp', () => {
   const cols = [
     { key: 'period_end',   col: 'A' },
     { key: 'federal_cap',  col: 'B' },
@@ -1258,38 +1296,68 @@ test('R2-B Unit 5: cap_rate_by_credit — clean Federal line, markers only on sp
   });
   assert.equal(out.spec.type, 'multi-line');
   const [fed, state, muni] = out.spec.series;
-  // R2-B Unit 5 (Scott) — markers belong only where they ADD value: the SPARSE
-  // State + Municipal series (isolated points a markerless line cannot draw
-  // across the gaps). Federal is dense → a CLEAN line with NO per-point markers.
+  // 2026-08-12 (Scott): State/Municipal densified enough (99/73 quarters) to drop
+  // markers and match Federal's flush line. All three render markerless.
   assert.ok(!fed.showMarker, 'federal is a clean line (no markers)');
-  assert.ok(state.showMarker, 'state carries a marker per present quarter');
-  assert.ok(muni.showMarker, 'municipal carries a marker per present quarter');
-  // XML: federal renders markerless; state/muni render circle markers.
+  assert.ok(!state.showMarker, 'state is now a clean flush line (no markers)');
+  assert.ok(!muni.showMarker, 'municipal is now a clean flush line (no markers)');
+  // Federal is drawn heavier to lead the ramp and stay distinct from Municipal blue.
+  assert.equal(fed.lineWidth, 28575, 'federal line emphasized (2.25pt)');
+  // Colors mesh into the brand blue family: NM Blue / Sky / Blue-85 (slots 1/2/3).
+  assert.deepEqual([fed.color, state.color, muni.color], ['003DA5', '62B5E5', '265AB2'],
+    'NM Blue / Sky / Blue-85 credit ramp');
+  // XML: no circle markers anywhere; every series is a markerless line.
   const xml = buildMultiLineChartXml(out.spec);
-  assert.match(xml, /<c:marker><c:symbol val="circle"\/>/, 'circle markers emitted for the sparse cohorts');
-  assert.match(xml, /<c:marker><c:symbol val="none"\/>/, 'federal renders as a markerless clean line');
+  assert.ok(!/<c:marker><c:symbol val="circle"\/>/.test(xml), 'no per-point circle markers emitted');
+  assert.match(xml, /<c:marker><c:symbol val="none"\/>/, 'series render as markerless clean lines');
 });
 
-test('R73 B1: bid_ask combo suppresses the invisible noFill base bar from the legend (no duplicate Last-Ask entry)', () => {
+test('bid_ask: two cap lines + hi-low spread band + all 3 callouts (native)', () => {
+  // CM bid-ask (Low/Latest fix 2026-08-10). The native builder plots two cap
+  // LINES (Last-Ask, Achieved) with <c:upDownBars> drawing the gray spread band
+  // between them. hiLowLines is a lineChart decoration (NOT a bar), so the
+  // line-only value axis still honors c:min → ~6-8% AND — unlike <c:upDownBars> —
+  // it does NOT trigger Excel's chart-wide data-label cull, so all three
+  // Peak/Low/Latest callouts (hosted on the Achieved line) render. No host series.
   const cols = [
     { key: 'period_end',         col: 'A' },
     { key: 'avg_last_ask_cap',   col: 'B' },
     { key: 'avg_bid_ask_spread', col: 'C' },
   ];
+  // Distinct spread values → distinct Peak(max)/Low(min)/Latest(last) points.
+  const rows = [
+    { period_end: '2020-03-31', avg_last_ask_cap: 0.070, avg_bid_ask_spread: 0.0050 },
+    { period_end: '2020-06-30', avg_last_ask_cap: 0.071, avg_bid_ask_spread: 0.0112 }, // peak
+    { period_end: '2020-09-30', avg_last_ask_cap: 0.072, avg_bid_ask_spread: 0.0030 }, // low
+    { period_end: '2020-12-31', avg_last_ask_cap: 0.073, avg_bid_ask_spread: 0.0080 },
+    { period_end: '2021-03-31', avg_last_ask_cap: 0.074, avg_bid_ask_spread: 0.0060 }, // latest
+  ];
   const out = buildInjectionSpec({
     chart_template_id: 'bid_ask_spread', tabName: 'Data_Bid_Ask',
-    cols, dataStart: 5, dataEnd: 60, vertical: 'dialysis',
+    cols, dataStart: 5, dataEnd: 60, vertical: 'dialysis', rows,
     brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
   });
-  // barSeries[0] is the invisible (noFill) base that reuses the Last-Ask title.
-  assert.equal(out.spec.barSeries[0].noFill, true, 'base bar is noFill');
-  const xml = buildComboChartXml(out.spec);
-  // The noFill base (idx 0) gets a legend delete -> the Last-Ask label is not
-  // duplicated between the base bar and the sky marker line.
-  assert.match(xml, /<c:legendEntry><c:idx val="0"\/><c:delete val="1"\/><\/c:legendEntry>/,
-    'noFill base bar (idx 0) is deleted from the legend');
-  assert.equal((xml.match(/<c:legendEntry>/g) || []).length, 1,
-    'exactly one legend entry deleted (the single noFill base)');
+  assert.equal(out.spec.type, 'multi-line');
+  // 2 series: Last-Ask dash tick + Achieved dash tick, solid up/down-bar band
+  // between them. Scott's chosen end state = solid band + Peak-ONLY callout
+  // 2 series: Last-Ask tick + Achieved tick. The Achieved line hosts the Peak
+  // spread callout directly; Low/Latest are intentionally not emitted because
+  // Excel culls them when <c:upDownBars> draws the solid spread band.
+  assert.equal(out.spec.series.length, 2, 'last-ask + achieved only');
+  assert.ok(!out.spec.series.some(s => s.hideFromLegend), 'no invisible host series');
+  const achieved = out.spec.series[1];
+  assert.equal(achieved.color, '003DA5', 'navy Achieved tick');
+  assert.ok(achieved.markerOnly, 'Achieved is a dash tick (markerOnly)');
+  assert.equal(achieved.dataLabels.length, 1, 'Peak only under up/down bars');
+  assert.equal(achieved.dataLabels[0].role, 'max', 'the one callout is Peak (max)');
+  assert.ok(out.spec.upDownBars, 'upDownBars draws the solid spread band');
+  assert.ok(!out.spec.hiLowLines, 'no hiLowLines (upDownBars is the band)');
+  assert.ok(!out.spec.barSeries, 'no bar series (a bar chart type would force a 0 axis)');
+  const xml = buildMultiLineChartXml(out.spec);
+  assert.equal((xml.match(/<c:ser>/g) || []).length, 2, 'two series in the XML');
+  assert.equal((xml.match(/<c:lineChart>/g) || []).length, 1, 'single lineChart group');
+  assert.match(xml, /<c:upDownBars>/, 'emits upDownBars spread band');
+  assert.doesNotMatch(xml, /<c:barChart>/, 'no bar chart element');
 });
 
 test('injectNativeCharts: area-combo (volume_cap_quartile_combo) renders 3 chart blocks + 2 axes', async () => {
@@ -1617,9 +1685,9 @@ test('buildInjectionSpec: dom_price_change_active builds 2-bar + 2-line with das
   assert.equal(out.spec.type, 'combo');
   assert.equal(out.spec.barSeries.length, 2, '2 DOM bars');
   assert.equal(out.spec.lineSeries.length, 2, '2 price-change lines');
-  // Both lines share #1F4E79 (dark blue); core variant dashed
-  assert.equal(out.spec.lineSeries[0].color, '1F4E79');
-  assert.equal(out.spec.lineSeries[1].color, '1F4E79');
+  // Both lines share #003DA5 (dark blue); core variant dashed
+  assert.equal(out.spec.lineSeries[0].color, '003DA5');
+  assert.equal(out.spec.lineSeries[1].color, '003DA5');
   assert.equal(out.spec.lineSeries[0].dashed || false, false, 'total solid');
   assert.equal(out.spec.lineSeries[1].dashed, true, 'core dashed');
 });
@@ -1642,14 +1710,46 @@ test('buildInjectionSpec: seller_sentiment uses swapAxes (lines LEFT, bars RIGHT
   });
   assert.equal(out.spec.type, 'combo');
   assert.equal(out.spec.swapAxes, true, 'PDF p.35 puts lines on left, bars on right');
-  // Bars = price change % (sage + light purple)
+  // CM chart fixes round 3, item 5 — bars = price change % now use the PRIMARY
+  // brand blues (NM Blue + Sky) instead of the tertiary peridot/amethyst hues
+  // that read green/purple.
   assert.equal(out.spec.barSeries.length, 2);
   assert.deepEqual(out.spec.barSeries.map(s => s.valCol), ['C', 'E']);
-  assert.deepEqual(out.spec.barSeries.map(s => s.color), ['4CB582', '7E6BAD']);
-  // Lines = cap rate (navy + sky)
+  assert.deepEqual(out.spec.barSeries.map(s => s.color), ['003DA5', '62B5E5']);
+  // Lines = cap rate (Blue 85 + Steel).
   assert.equal(out.spec.lineSeries.length, 2);
   assert.deepEqual(out.spec.lineSeries.map(s => s.valCol), ['F', 'G']);
-  assert.deepEqual(out.spec.lineSeries.map(s => s.color), ['003DA5', '62B5E5']);
+  assert.deepEqual(out.spec.lineSeries.map(s => s.color), ['265AB2', '9EA9B7']);
+});
+
+test('buildInjectionSpec: seller_sentiment prefers _8q columns only when the sheet actually contains them', () => {
+  const cols = [
+    { key: 'period_end', col: 'A' },
+    { key: 'pct_price_change_all', col: 'B' },
+    { key: 'pct_price_change_long_term', col: 'C' },
+    { key: 'last_ask_cap_all', col: 'D' },
+    { key: 'last_ask_cap_long_term', col: 'E' },
+    { key: 'pct_price_change_long_term_8q', col: 'F' },
+    { key: 'last_ask_cap_long_term_8q', col: 'G' },
+  ];
+  const with8q = buildInjectionSpec({
+    chart_template_id: 'seller_sentiment',
+    tabName: 'Data_Sentiment',
+    cols, dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.deepEqual(with8q.spec.barSeries.map(s => s.valCol), ['B', 'F']);
+  assert.deepEqual(with8q.spec.lineSeries.map(s => s.valCol), ['D', 'G']);
+
+  const govCols = cols.filter((c) => !c.key.endsWith('_8q'));
+  const gov = buildInjectionSpec({
+    chart_template_id: 'seller_sentiment',
+    tabName: 'Data_Sentiment',
+    cols: govCols, dataStart: 5, dataEnd: 60,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.deepEqual(gov.spec.barSeries.map(s => s.valCol), ['B', 'C']);
+  assert.deepEqual(gov.spec.lineSeries.map(s => s.valCol), ['D', 'E']);
 });
 
 test('buildInjectionSpec: seller_sentiment_monthly handles different column layout', () => {
@@ -1761,7 +1861,7 @@ test('R56: pace_of_cap_rate_expansion adds pace_cost YOY line when col present',
   assert.equal(out.spec.barSeries.length, 2);
   assert.equal(out.spec.lineSeries.length, 1);
   assert.equal(out.spec.lineSeries[0].valCol, 'D', 'pace_cost line reads from col D');
-  assert.equal(out.spec.lineSeries[0].color, 'D97706', 'amber matches deferred color in R45/R50');
+  assert.equal(out.spec.lineSeries[0].color, '9EA9B7', 'amber matches deferred color in R45/R50');
 });
 
 test('injectNativeCharts: clustered-bar dispatch produces grouping=clustered XML', async () => {
@@ -1799,8 +1899,10 @@ test('injectNativeCharts: clustered-bar dispatch produces grouping=clustered XML
   assert.match(chartXml, /<c:overlap val="-20"\/>/, 'clustered overlap=-20');
   // 2 series
   assert.equal((chartXml.match(/<c:ser>/g) || []).length, 2);
-  // Both visible (no noFill markers)
-  assert.ok(!/<a:noFill\/>/.test(chartXml), 'no invisible base in clustered-bar');
+  // Both visible (no noFill markers). Scope to <c:plotArea> so the chart-area
+  // No Fill/No Line spPr (marketing 2026-08) doesn't count as an invisible base.
+  const plotArea65 = chartXml.match(/<c:plotArea>[\s\S]*<\/c:plotArea>/)[0];
+  assert.ok(!/<a:noFill\/>/.test(plotArea65), 'no invisible base in clustered-bar');
 });
 
 test('injectNativeCharts: combo line series respect dashed flag (R35 P2)', async () => {
@@ -1830,8 +1932,8 @@ test('injectNativeCharts: combo line series respect dashed flag (R35 P2)', async
         { titleCol: 'C', titleRow: 4, valCol: 'C', color: '9DC3E6' },
       ],
       lineSeries: [
-        { titleCol: 'E', titleRow: 4, valCol: 'E', color: '1F4E79' },
-        { titleCol: 'F', titleRow: 4, valCol: 'F', color: '1F4E79', dashed: true },
+        { titleCol: 'E', titleRow: 4, valCol: 'E', color: '003DA5' },
+        { titleCol: 'F', titleRow: 4, valCol: 'F', color: '003DA5', dashed: true },
       ],
       anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
     },
@@ -1862,7 +1964,7 @@ test('buildInjectionSpec: cap_rate_top_bottom_quartile builds 3-line with dashed
   assert.equal(out.spec.series.length, 3);
   assert.deepEqual(out.spec.series.map(s => s.valCol), ['C', 'D', 'E']);
   assert.deepEqual(out.spec.series.map(s => s.color),
-    ['7E6BAD', '003DA5', '4CB582'], 'purple / navy / sage');
+    ['9B88A5', '003DA5', '8FC49E'], 'purple / navy / sage');
   assert.deepEqual(out.spec.series.map(s => !!s.dashed),
     [true, false, true], 'top + bottom dashed, median solid');
 });
@@ -1884,7 +1986,7 @@ test('buildInjectionSpec: cap_rate_by_credit builds 3-line federal/state/municip
   assert.equal(out.spec.series.length, 3);
   assert.deepEqual(out.spec.series.map(s => s.valCol), ['C', 'D', 'E']);
   assert.deepEqual(out.spec.series.map(s => s.color),
-    ['003DA5', '62B5E5', '4CB582'], 'navy / sky / sage');
+    ['003DA5', '62B5E5', '265AB2'], 'NM Blue / Sky / Blue-85 (brand blue-family ramp)');
 });
 
 test('buildInjectionSpec: cpi_vs_renewal_cagr builds 2-line', () => {
@@ -2040,7 +2142,7 @@ test('R68-E G5: lease_renewal_rate builds diverging stacked combo + net line', (
   // Color order unchanged: pale / navy / mid / sky / amber
   assert.deepEqual(
     out.spec.barSeries.map(s => s.color),
-    ['E0E8F4', '003DA5', '265AB2', '62B5E5', 'D97706'],
+    ['E0E8F4', '003DA5', '265AB2', '62B5E5', '9EA9B7'],
   );
   // Additive series (first 3) chart their own positive cols B/C/D.
   // Subtractive series (non_renewed_expirations/terminated) chart NEGATED helper
@@ -2096,7 +2198,7 @@ test('R68-E G6: lease_termination_rate adds soft-term % line when the rate colum
   assert.equal(out.spec.barSeries[0].valCol, 'H', 'bottom = in_firm helper col');
   assert.equal(out.spec.lineSeries.length, 1, 'soft-term rate line');
   assert.equal(out.spec.lineSeries[0].valCol, 'G', 'line = terminated_outside_firm_term_pct');
-  assert.equal(out.spec.lineSeries[0].color, 'D97706', 'amber line');
+  assert.equal(out.spec.lineSeries[0].color, '9EA9B7', 'amber line');
 });
 
 test('buildInjectionSpec: buyer_pool_monthly_count builds 3-series stacked-bar', () => {
@@ -2123,7 +2225,7 @@ test('buildInjectionSpec: buyer_pool_monthly_count builds 3-series stacked-bar',
   );
   assert.deepEqual(
     out.spec.series.map(s => s.color),
-    ['003DA5', '62B5E5', '4CB582'],
+    ['003DA5', '62B5E5', '8FC49E'],
     'colors: navy (Private) / sky (Institutional) / sage (REIT)'
   );
 });
@@ -2192,49 +2294,46 @@ test('buildInjectionSpec: cap_rate_by_lease_term — dia 4-cohort detection', ()
   );
   assert.deepEqual(
     out.spec.series.map(s => s.color),
-    ['7E6BAD', '4CB582', '62B5E5', '003DA5'],
+    ['9B88A5', '8FC49E', '62B5E5', '003DA5'],
     'colors: purple / sage / sky / navy'
   );
   // No dashed lines on the dia branch
   assert.ok(out.spec.series.every(s => !s.dashed), 'no dashed series on dia');
 });
 
-test('buildInjectionSpec: cap_rate_by_lease_term — gov 4-cohort with dashed Outside', () => {
+test('buildInjectionSpec: cap_rate_by_lease_term — gov value-of-firm-term 3-bucket', () => {
   const cols = [
-    { key: 'period_end',       col: 'A' },
-    { key: 'subspecialty',     col: 'B' },
-    { key: 'cap_10plus',       col: 'C' },
-    { key: 'cap_6to10',        col: 'D' },
-    { key: 'cap_less5',        col: 'E' },
-    { key: 'cap_outside_firm', col: 'F' },
-    { key: 'cap_12plus',       col: 'G' },
-    { key: 'cap_8to12',        col: 'H' },
-    { key: 'cap_6to8',         col: 'I' },
-    { key: 'cap_5orless',      col: 'J' },
+    { key: 'period_end',  col: 'A' },
+    { key: 'subspecialty', col: 'B' },
+    { key: 'cap_6plus',   col: 'C' },
+    { key: 'cap_1_5to6',  col: 'D' },
+    { key: 'cap_sub1_5',  col: 'E' },
+    { key: 'cap_12plus',  col: 'G' },
+    { key: 'cap_8to12',   col: 'H' },
+    { key: 'cap_6to8',    col: 'I' },
+    { key: 'cap_5orless', col: 'J' },
   ];
-  // Gov-shaped data row → picks the 10+/6-10/<5/Outside branch
+  // Gov-shaped data row (no dia cohort keys) → picks the 3-bucket firm-term branch
   const out = buildInjectionSpec({
     chart_template_id: 'cap_rate_by_lease_term',
     tabName: 'Data_Cap_by_Term',
     cols, dataStart: 5, dataEnd: 50,
     brand: { palette: {} },
-    rows: [{ cap_10plus: 0.062, cap_6to10: 0.068, cap_less5: 0.075, cap_outside_firm: 0.085 }],
+    rows: [{ cap_6plus: 0.0746, cap_1_5to6: 0.0763, cap_sub1_5: 0.0800 }],
   });
   assert.ok(out, 'should produce a spec');
-  assert.equal(out.spec.series.length, 4, '4 gov cohorts');
+  assert.equal(out.spec.series.length, 3, '3 gov firm-term buckets');
   assert.deepEqual(
     out.spec.series.map(s => s.valCol),
-    ['C', 'D', 'E', 'F'],
-    'series point at gov cohort columns'
+    ['C', 'D', 'E'],
+    'series point at the 3-bucket firm-term columns'
   );
   assert.deepEqual(
     out.spec.series.map(s => s.color),
-    ['7E6BAD', '4CB582', '003DA5', '6A748C'],
-    'colors: purple / sage / navy / gray'
+    ['9B88A5', '8FC49E', '003DA5'],
+    'colors: purple (6+) / sage (1.5–6) / navy (sub-1.5)'
   );
-  // Outside Firm (last series, gray) is dashed
-  assert.equal(out.spec.series[3].dashed, true, 'Outside Firm series is dashed');
-  assert.ok(out.spec.series.slice(0, 3).every(s => !s.dashed), 'first 3 series solid');
+  assert.ok(out.spec.series.every(s => !s.dashed), 'all 3 series solid (no Outside Firm line)');
 });
 
 test('buildInjectionSpec: sold_cap_by_term_dot_plot — gov uses cap_5to10 (not cap_6to10)', () => {
@@ -2332,6 +2431,27 @@ test('buildInjectionSpec: case_for_renewal uses year as x-axis', () => {
   assert.equal(out.spec.lineSeries[0].valCol, 'C', 'line = avg_rent_per_sf');
 });
 
+test('buildInjectionSpec: case_for_renewal prefers monthly period_end when present', () => {
+  const cols = [
+    { key: 'period_end',          col: 'A' },
+    { key: 'commencement_count',  col: 'B' },
+    { key: 'avg_rent_per_sf',     col: 'C' },
+    { key: 'total_lsf',           col: 'D' },
+    { key: 'rent_sample_count',   col: 'E' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'case_for_renewal',
+    tabName: 'Data_Case_For_Renewal',
+    cols, dataStart: 5, dataEnd: 30,
+    brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
+  });
+  assert.ok(out, 'should produce a spec');
+  assert.equal(out.spec.catCol, 'A', 'x-axis is monthly period_end when available');
+  assert.equal(out.spec.catAxNumFmt, 'mmm-yy', 'monthly axis gets month-year format');
+  assert.equal(out.spec.barSeries[0].valCol, 'B', 'bar = commencement_count');
+  assert.equal(out.spec.lineSeries[0].valCol, 'C', 'line = avg_rent_per_sf');
+});
+
 test('buildInjectionSpec: available_market_size_combo builds 2-bar + 2-line combo', () => {
   const cols = [
     { key: 'period_end',           col: 'A' },
@@ -2366,7 +2486,7 @@ test('buildInjectionSpec: available_market_size_combo builds 2-bar + 2-line comb
   //   navy solid line + navy DASHED line (no off-brand amber)
   assert.deepEqual(
     out.spec.barSeries.map(s => s.color),
-    ['62B5E5', '4CB582'],
+    ['62B5E5', '8FC49E'],
     'R65: brand bar colors — sky / nm_pale fill'
   );
   assert.equal(out.spec.barSeries[1].borderColor, '62B5E5',
@@ -2576,7 +2696,7 @@ test('R39: linear trendline omits order + forward fragments', async () => {
 // R41 — chart-area polish: explicit major gridlines + roundedCorners=0.
 // Audit finding (audit/cm-style-audit + on-demand inspection of master
 // Core Cap Chart's val axis XML): master has <c:majorGridlines> at every
-// val tick (~D9D9D9 light gray); our exports relied on Excel defaults
+// val tick (~E0E8F4 light gray); our exports relied on Excel defaults
 // which can render inconsistently across versions. Master also explicitly
 // sets <c:roundedCorners val="0"/> on the chart wrapper.
 // ============================================================================
@@ -2632,8 +2752,8 @@ test('R41: val axis emits <c:majorGridlines> with light-gray color', async () =>
   // Major gridlines inside the val axis block
   const valAx = chartXml.match(/<c:valAx>[\s\S]*?<\/c:valAx>/)[0];
   assert.match(valAx, /<c:majorGridlines>/, 'val axis has major gridlines');
-  assert.match(valAx, /<c:majorGridlines>[\s\S]*?<a:srgbClr val="D9D9D9"\/>/,
-    'gridline color is light gray D9D9D9 (matches master ~85%-lightened tx1)');
+  assert.match(valAx, /<c:majorGridlines>[\s\S]*?<a:srgbClr val="E0E8F4"\/>/,
+    'gridline color is light gray E0E8F4 (matches master ~85%-lightened tx1)');
   // Cat axis should NOT have gridlines (we only emit them on val axes)
   const catAx = chartXml.match(/<c:catAx>[\s\S]*?<\/c:catAx>/)[0];
   assert.ok(!/<c:majorGridlines>/.test(catAx),
@@ -2760,7 +2880,7 @@ test('R46: doughnut chart emits per-segment % labels when showSegmentLabels=true
       titleCol: 'B', titleRow: 4,
       catCol: 'A', valCol: 'B',
       dataStart: 5, dataEnd: 7,
-      colors: ['003DA5', '62B5E5', '4CB582'],
+      colors: ['003DA5', '62B5E5', '8FC49E'],
       showSegmentLabels: true,
       anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
     },
@@ -2792,7 +2912,7 @@ test('R46: doughnut omits dLbls when showSegmentLabels missing (backward compat)
       titleCol: 'B', titleRow: 4,
       catCol: 'A', valCol: 'B',
       dataStart: 5, dataEnd: 7,
-      colors: ['003DA5', '62B5E5', '4CB582'],
+      colors: ['003DA5', '62B5E5', '8FC49E'],
       // no showSegmentLabels
       anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
     },
@@ -2881,7 +3001,11 @@ test('R46: buildInjectionSpec wires per-series showSegmentVal on buyer_class_pct
   assert.equal(out.spec.series.length, 4);
   for (const s of out.spec.series) {
     assert.equal(s.showSegmentVal, true, 'every series has showSegmentVal');
-    assert.equal(s.segmentLabelFmt, '0%');
+    // Prompt 119 item E — the trailing `;;;` blanks the negative/zero/text
+    // format sections so a series that is 0% in a given year no longer stacks
+    // a "0%" label at the top of the bar (Cross-Border most years, Public REIT
+    // in several). Positives still render as `0%`.
+    assert.equal(s.segmentLabelFmt, '0%;;;');
   }
   // First two (private + reit) use white; last two (cross-border + institutional) use dark
   assert.equal(out.spec.series[0].segmentLabelColor, 'FFFFFF', 'private white text');
@@ -2995,20 +3119,55 @@ test('T1: cap_rate_ttm_by_quarter with continuous data from 2001 is NOT trimmed 
     'T1: continuous-from-2001 cap data plots from row 5');
 });
 
-test('T1: cap_rate_by_lease_term extends to the first cohort observation (not the 2015/2019 floor)', () => {
-  // Cohorts NULL 2001-2004, present from 2005 → range starts at the first row
-  // ANY cohort has data (2005). Each bucket gaps until its own first
-  // observation (e.g. a late-appearing ≤5yr bucket), never interpolated.
+test('cap_rate_by_lease_term: gov pins to the 2011 consistent-message floor', () => {
+  // 2026-08-12 — after the "Outside Firm" cohort was corrected to genuinely
+  // past-firm (firm_rem <= 0), gov is pinned to 2011: the earliest year all
+  // four cohorts are continuously present AND the "longer firm term = lower
+  // cap" ordering holds every month. gov rows carry NO dia-exclusive cohort
+  // columns (cap_8to12 / cap_5orless), so the floor applies to gov only.
   const rows = [];
   for (let y = 2001; y <= 2024; y++) {
     for (let m = 1; m <= 12; m++) {
       const has = y >= 2005;
       rows.push({
         period_end: `${y}-${String(m).padStart(2, '0')}-28`,
-        cap_10plus:       has ? 0.062 : null,
-        cap_6to10:        has ? 0.068 : null,
-        cap_less5:        has ? 0.075 : null,
-        cap_outside_firm: has ? 0.085 : null,
+        cap_6plus:  has ? 0.0746 : null,
+        cap_1_5to6: has ? 0.0763 : null,
+        cap_sub1_5: has ? 0.0800 : null,
+      });
+    }
+  }
+  const spec = buildInjectionSpec({
+    chart_template_id: 'cap_rate_by_lease_term',
+    tabName: 'Data_Cap_by_Term',
+    cols: [
+      { key: 'period_end', col: 'A' }, { key: 'subspecialty', col: 'B' },
+      { key: 'cap_6plus', col: 'C' }, { key: 'cap_1_5to6', col: 'D' },
+      { key: 'cap_sub1_5', col: 'E' },
+      { key: 'cap_12plus', col: 'G' }, { key: 'cap_8to12', col: 'H' },
+      { key: 'cap_6to8', col: 'I' }, { key: 'cap_5orless', col: 'J' },
+    ],
+    dataStart: 5, dataEnd: 5 + rows.length - 1, brand: { palette: {} }, rows,
+  });
+  // 2001-01 .. 2010-12 = 120 rows before the 2011-01 floor → dataStart 125.
+  assert.equal(spec.spec.dataStart, 5 + 120,
+    'gov cap-by-term pins to 2011');
+});
+
+test('cap_rate_by_lease_term: dia keeps the data-driven first-cohort start', () => {
+  // dia rows carry the dia-exclusive cohort columns (cap_8to12 / cap_5orless),
+  // so the vertical-aware floor uses first-non-null, NOT the gov 2011 pin.
+  // Cohorts NULL 2001-2004, present from 2005 → starts at 2005.
+  const rows = [];
+  for (let y = 2001; y <= 2024; y++) {
+    for (let m = 1; m <= 12; m++) {
+      const has = y >= 2005;
+      rows.push({
+        period_end: `${y}-${String(m).padStart(2, '0')}-28`,
+        cap_12plus: has ? 0.058 : null,
+        cap_8to12:  has ? 0.064 : null,
+        cap_6to8:   has ? 0.070 : null,
+        cap_5orless: has ? 0.078 : null,
       });
     }
   }
@@ -3026,7 +3185,7 @@ test('T1: cap_rate_by_lease_term extends to the first cohort observation (not th
   });
   // 2001-01 .. 2004-12 = 48 all-NULL-cohort rows trimmed → dataStart 53.
   assert.equal(spec.spec.dataStart, 5 + 48,
-    'T1: cap-by-term starts at the first cohort observation (2005)');
+    'dia cap-by-term starts at the first cohort observation (2005)');
 });
 
 test('R47: bid_ask_spread trims to 2014 (TRUE-gap)', () => {
@@ -3072,8 +3231,7 @@ test('R66aa: dom_and_pct_of_ask trims to 2018', () => {
 });
 
 // ── R73 Layer D — x-axis reach (density-gated floors) ───────────────────────
-// The above R66aa test now also proves the GOV path of dom_and_pct_of_ask:
-// gov rows carry no n_sales, so the per-vertical function falls back to 2018.
+// The above R66aa test still proves the no-context fallback path.
 
 test('R73 D-#2: dom_and_pct_of_ask floors dia at 2016 when n_sales is dense', () => {
   // dia carries n_sales (TTM). Thin (<15) through 2015, dense (>=15) from 2016
@@ -3090,6 +3248,55 @@ test('R73 D-#2: dom_and_pct_of_ask floors dia at 2016 when n_sales is dense', ()
   });
   // 2001-01 .. 2015-12 = 180 rows before 2016-01.
   assert.equal(spec.spec.dataStart, 5 + 180, 'dia dom floors at first 2016 row');
+});
+
+test('dom_and_pct_of_ask uses neutral 2018 fallback when n_sales is absent', () => {
+  const rows = mkRows(1997, 2026, 'avg_dom');
+  for (const r of rows) r.pct_of_ask = 0.93;
+  const spec = buildInjectionSpec({
+    chart_template_id: 'dom_and_pct_of_ask',
+    tabName: 'Data_DOM_Ask',
+    cols: [
+      { key: 'period_end',   col: 'A' },
+      { key: 'subspecialty', col: 'B' },
+      { key: 'avg_dom',      col: 'C' },
+      { key: 'pct_of_ask',   col: 'D' },
+    ],
+    dataStart: 5,
+    dataEnd: 5 + rows.length - 1,
+    brand: { palette: {} },
+    rows,
+    vertical: 'gov',
+  });
+  // 1997-01 .. 2017-12 = 252 rows before 2018-01.
+  assert.equal(spec.spec.dataStart, 5 + 252, 'DOM/% ask falls back at first 2018 row without n_sales');
+});
+
+test('gov dom_and_pct_of_ask uses DB-backed n_sales density for the 2011 floor', () => {
+  const rows = mkRows(1997, 2026, 'avg_dom');
+  for (const r of rows) {
+    const year = Number(String(r.period_end).slice(0, 4));
+    r.pct_of_ask = 0.93;
+    r.n_sales = year < 2011 ? 12 : 15;
+  }
+  const spec = buildInjectionSpec({
+    chart_template_id: 'dom_and_pct_of_ask',
+    tabName: 'Data_DOM_Ask',
+    cols: [
+      { key: 'period_end',   col: 'A' },
+      { key: 'subspecialty', col: 'B' },
+      { key: 'avg_dom',      col: 'C' },
+      { key: 'pct_of_ask',   col: 'D' },
+      { key: 'n_sales',      col: 'E' },
+    ],
+    dataStart: 5,
+    dataEnd: 5 + rows.length - 1,
+    brand: { palette: {} },
+    rows,
+    vertical: 'gov',
+  });
+  // 1997-01 .. 2010-12 = 168 rows before 2011-01.
+  assert.equal(spec.spec.dataStart, 5 + 168, 'gov DOM/% ask floors at first dense 2011 row');
 });
 
 test('R73 D-#12: bid_ask_spread floors gov at 2008 (first continuous Last-Ask), dia self-floors later', () => {
@@ -3110,6 +3317,36 @@ test('R73 D-#12: bid_ask_spread floors gov at 2008 (first continuous Last-Ask), 
   assert.equal(mk(2008).spec.dataStart, 5 + 84, 'gov bid-ask floors at first 2008 row');
   // dia: ask thin until 2015 -> floors later (2014-12 = 168 rows trimmed).
   assert.equal(mk(2015).spec.dataStart, 5 + 168, 'dia bid-ask self-floors at 2015 (no over-extend)');
+});
+
+test('R74: bid_ask_spread starts at the first dense period, not January of that year', () => {
+  const rows = [];
+  for (let y = 2006; y <= 2008; y++) {
+    for (let m = 1; m <= 12; m++) {
+      const period = `${y}-${String(m).padStart(2, '0')}-28`;
+      rows.push({
+        period_end: period,
+        avg_bid_ask_spread: 0.004,
+        avg_last_ask_cap: (y > 2007 || (y === 2007 && m >= 8)) ? 0.07 : null,
+      });
+    }
+  }
+  const spec = buildInjectionSpec({
+    chart_template_id: 'bid_ask_spread',
+    tabName: 'Data_Bid_Ask',
+    cols: [
+      { key: 'period_end', col: 'A' },
+      { key: 'subspecialty', col: 'B' },
+      { key: 'avg_bid_ask_spread', col: 'C' },
+      { key: 'avg_last_ask_cap', col: 'D' },
+    ],
+    dataStart: 5,
+    dataEnd: 5 + rows.length - 1,
+    brand: { palette: {} },
+    rows,
+  });
+  // 2006-01..2007-07 = 19 rows before the first dense month.
+  assert.equal(spec.spec.dataStart, 5 + 19);
 });
 
 test('R73 D-#19: net_lease_spread floors at 2002 (earliest consistent treasury)', () => {
@@ -3263,12 +3500,10 @@ test('T1: chart XML series references shift to the first non-null data row', asy
     'T1: val series references start at the first non-null row (53)');
 });
 
-test('buildInjectionSpec: bid_ask_spread R66l — floating-bar combo when last_ask present', () => {
-  // R66l — restructured from the R50 stacked-line/upDownBars shape to the
-  // deliverable PDF (Dialysis Market Filter p.34) floating-bar combo: a
-  // light-gray bar from Last Ask (invisible base) up to Achieved cap
-  // (last_ask + spread), with a sky dash marker at the bottom (Last Ask)
-  // and a navy dash marker at the top (Achieved) on a single cap-rate axis.
+test('buildInjectionSpec: bid_ask_spread — two cap lines + hi-low band on a line-only axis', () => {
+  // CM bid-ask (final: solid band + Peak-only). Spread band drawn with <c:upDownBars> — a
+  // lineChart decoration, NOT a bar chart type — between the two cap LINES. The
+  // line-only cap axis honors c:min → ~6-8%, and no bar element culls the callouts.
   const cols = [
     { key: 'period_end',         col: 'A' },
     { key: 'subspecialty',       col: 'B' },
@@ -3277,27 +3512,42 @@ test('buildInjectionSpec: bid_ask_spread R66l — floating-bar combo when last_a
     { key: 'pct_price_change',   col: 'E' },
     { key: 'avg_last_ask_cap',   col: 'F' },
   ];
+  const rows = [
+    { period_end: '2020-03-31', avg_last_ask_cap: 0.070, avg_bid_ask_spread: 0.0050 },
+    { period_end: '2020-06-30', avg_last_ask_cap: 0.071, avg_bid_ask_spread: 0.0112 },
+    { period_end: '2020-09-30', avg_last_ask_cap: 0.072, avg_bid_ask_spread: 0.0030 },
+    { period_end: '2020-12-31', avg_last_ask_cap: 0.073, avg_bid_ask_spread: 0.0080 },
+    { period_end: '2021-03-31', avg_last_ask_cap: 0.074, avg_bid_ask_spread: 0.0060 },
+  ];
   const out = buildInjectionSpec({
     chart_template_id: 'bid_ask_spread',
     tabName: 'Data_Bid_Ask',
-    cols, dataStart: 5, dataEnd: 60,
+    cols, dataStart: 5, dataEnd: 60, rows,
     brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
   });
   assert.ok(out, 'should produce a spec');
-  assert.equal(out.spec.type, 'combo');
+  assert.equal(out.spec.type, 'multi-line');
   assert.equal(out.spec.catCol, 'A');
-  assert.equal(out.spec.barGrouping, 'stacked');
-  assert.equal(out.spec.sharedAxis, true);
-  assert.equal(out.spec.barSeries.length, 2);
-  assert.equal(out.spec.barSeries[0].valCol, 'F', 'invisible base = avg_last_ask_cap');
-  assert.equal(out.spec.barSeries[0].noFill, true);
-  assert.equal(out.spec.barSeries[1].valCol, 'D', 'visible gray bar = avg_bid_ask_spread');
-  assert.equal(out.spec.lineSeries.length, 2);
-  assert.equal(out.spec.lineSeries[0].valCol, 'F', 'sky dash marker = Last Ask');
-  assert.equal(out.spec.lineSeries[0].color, '62B5E5');
-  assert.equal(out.spec.lineSeries[1].valCol, 'G', 'navy dash marker = Achieved helper col (G)');
-  assert.equal(out.spec.lineSeries[1].color, '003DA5');
+  // [Last-Ask tick (F, sky), Achieved tick (G, navy) hosting Peak]
+  assert.equal(out.spec.series.length, 2);
+  assert.equal(out.spec.series[0].valCol, 'F', 'sky tick = Last Ask');
+  assert.equal(out.spec.series[0].color, '62B5E5');
+  assert.ok(!out.spec.series.some(s => s.hideFromLegend), 'no invisible host series');
+  assert.equal(out.spec.series[1].valCol, 'G', 'navy tick = Achieved helper col (G)');
+  assert.equal(out.spec.series[1].color, '003DA5');
+  assert.ok(out.spec.series[1].markerOnly, 'Achieved is a dash tick (markerOnly)');
+  assert.equal(out.spec.series[1].dataLabels.length, 1, 'Peak only under up/down bars');
+  assert.equal(out.spec.series[1].dataLabels[0].role, 'max', 'the one callout is Peak (max)');
+  assert.ok(out.spec.upDownBars, 'upDownBars draws the spread band');
+  assert.ok(!out.spec.hiLowLines, 'no hiLowLines (upDownBars is the band)');
+  assert.ok(!out.spec.barSeries, 'no bar series');
+  assert.ok(out.spec.yAxisRange && out.spec.yAxisRange.min > 0.01, 'cap axis min is non-zero');
   assert.equal(out.helperCols[0].key, 'achieved_cap');
+  // Rendered: line-only value axis carries a non-zero c:min; upDownBars present.
+  const xml = buildMultiLineChartXml(out.spec);
+  assert.match(xml, /<c:min val="0\.\d+"\/>/, 'cap axis carries a non-zero c:min');
+  assert.match(xml, /<c:upDownBars>/, 'emits upDownBars spread band');
+  assert.doesNotMatch(xml, /<c:barChart>/, 'no bar chart element');
 });
 
 // QUARANTINED 2026-06-03 (QA suite-green pass): this asserts a min/max
@@ -3368,8 +3618,9 @@ test('buildInjectionSpec: bid_ask_spread (quarterly) gracefully degrades when la
   assert.equal(out.spec.valCol, 'C', 'fallback plots the spread');
 });
 
-test('buildInjectionSpec: bid_ask_spread_monthly R66l — same floating-bar combo as quarterly', () => {
-  // R66l — both cadences share the same floating-bar combo shape.
+test('buildInjectionSpec: bid_ask_spread_monthly — same dual-axis shape as quarterly', () => {
+  // Both cadences share the same shape: cap lines on the left axis, spread bar on
+  // the right bps axis.
   const cols = [
     { key: 'period_end',         col: 'A' },
     { key: 'subspecialty',       col: 'B' },
@@ -3378,21 +3629,28 @@ test('buildInjectionSpec: bid_ask_spread_monthly R66l — same floating-bar comb
     { key: 'pct_price_change',   col: 'E' },
     { key: 'avg_last_ask_cap',   col: 'F' },
   ];
+  const rows = [
+    { period_end: '2024-01-31', avg_last_ask_cap: 0.070, avg_bid_ask_spread: 0.0050 },
+    { period_end: '2024-02-29', avg_last_ask_cap: 0.071, avg_bid_ask_spread: 0.0112 },
+    { period_end: '2024-03-31', avg_last_ask_cap: 0.072, avg_bid_ask_spread: 0.0030 },
+    { period_end: '2024-04-30', avg_last_ask_cap: 0.073, avg_bid_ask_spread: 0.0080 },
+    { period_end: '2024-05-31', avg_last_ask_cap: 0.074, avg_bid_ask_spread: 0.0060 },
+  ];
   const out = buildInjectionSpec({
     chart_template_id: 'bid_ask_spread_monthly',
     tabName: 'Data_Bid_Ask_Monthly',
-    cols, dataStart: 5, dataEnd: 60,
+    cols, dataStart: 5, dataEnd: 60, rows,
     brand: { palette: { nm_navy: '#003DA5', nm_sky: '#62B5E5' } },
   });
   assert.ok(out, 'should produce a spec');
-  assert.equal(out.spec.type, 'combo');
-  assert.equal(out.spec.barGrouping, 'stacked');
-  assert.equal(out.spec.sharedAxis, true);
-  // Bars: invisible base = last_ask (F), visible gray = spread (D)
-  assert.deepEqual(out.spec.barSeries.map(s => s.valCol), ['F', 'D']);
-  // Lines: sky Last Ask (F), navy Achieved helper col (G)
-  assert.deepEqual(out.spec.lineSeries.map(s => s.valCol), ['F', 'G']);
-  assert.deepEqual(out.spec.lineSeries.map(s => s.color), ['62B5E5', '003DA5']);
+  assert.equal(out.spec.type, 'multi-line');
+  // [Last-Ask tick F, Achieved tick G hosting Peak] + up/down band
+  assert.deepEqual(out.spec.series.map(s => s.valCol), ['F', 'G']);
+  assert.ok(!out.spec.series.some(s => s.hideFromLegend), 'no invisible host series');
+  assert.equal(out.spec.series[1].dataLabels.length, 1, 'Peak only under up/down bars');
+  assert.ok(out.spec.upDownBars, 'upDownBars draws the spread band');
+  assert.ok(!out.spec.hiLowLines, 'no hiLowLines (upDownBars is the band)');
+  assert.ok(!out.spec.barSeries, 'no bar series');
 });
 
 test('buildInjectionSpec: valuation_index builds line+bar combo with swapped axes (Tier F1)', () => {
@@ -3600,7 +3858,7 @@ test('injectNativeCharts: stacked-bar chart renders correct XML', async () => {
         { titleCol: 'C', titleRow: 5, valCol: 'C', color: '003DA5' },
         { titleCol: 'D', titleRow: 5, valCol: 'D', color: '265AB2' },
         { titleCol: 'E', titleRow: 5, valCol: 'E', color: '62B5E5' },
-        { titleCol: 'F', titleRow: 5, valCol: 'F', color: 'D97706' },
+        { titleCol: 'F', titleRow: 5, valCol: 'F', color: '9EA9B7' },
       ],
       anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
     },
@@ -3617,7 +3875,7 @@ test('injectNativeCharts: stacked-bar chart renders correct XML', async () => {
   const serCount = (chartXml.match(/<c:ser>/g) || []).length;
   assert.equal(serCount, 5, '5 series in stacked bar');
   // All 5 colors present
-  for (const color of ['E0E8F4', '003DA5', '265AB2', '62B5E5', 'D97706']) {
+  for (const color of ['E0E8F4', '003DA5', '265AB2', '62B5E5', '9EA9B7']) {
     assert.match(chartXml, new RegExp(`srgbClr val="${color}"`), `color ${color} present`);
   }
   // First and last series reference correct columns
@@ -3656,8 +3914,8 @@ test('injectNativeCharts: multi-line cohort chart renders correct XML (gov dashe
       catCol: 'A',
       dataStart: 5, dataEnd: 12,
       series: [
-        { titleCol: 'C', titleRow: 4, valCol: 'C', color: '7E6BAD' },                  // 10+
-        { titleCol: 'D', titleRow: 4, valCol: 'D', color: '4CB582' },                  // 6-10
+        { titleCol: 'C', titleRow: 4, valCol: 'C', color: '9B88A5' },                  // 10+
+        { titleCol: 'D', titleRow: 4, valCol: 'D', color: '8FC49E' },                  // 6-10
         { titleCol: 'E', titleRow: 4, valCol: 'E', color: '003DA5' },                  // <5
         { titleCol: 'F', titleRow: 4, valCol: 'F', color: '6A748C', dashed: true },   // Outside
       ],
@@ -3673,7 +3931,7 @@ test('injectNativeCharts: multi-line cohort chart renders correct XML (gov dashe
   assert.match(chartXml, /<c:grouping val="standard"\/>/, 'grouping=standard (not stacked)');
   const serCount = (chartXml.match(/<c:ser>/g) || []).length;
   assert.equal(serCount, 4, '4 series in multi-line');
-  for (const color of ['7E6BAD', '4CB582', '003DA5', '6A748C']) {
+  for (const color of ['9B88A5', '8FC49E', '003DA5', '6A748C']) {
     assert.match(chartXml, new RegExp(`srgbClr val="${color}"`), `color ${color} present`);
   }
   // Outside Firm series (dashed) should have <a:prstDash val="dash"/>
@@ -4536,14 +4794,15 @@ test('R38 A: chart emits <c:title> when spec.title is provided', async () => {
   const zip = await JSZip.loadAsync(result);
   const chartXml = await zip.file('xl/charts/chart1.xml').async('string');
   assert.match(chartXml, /<c:title>/, '<c:title> block emitted');
-  assert.match(chartXml, /<a:t>Cap Rate — TTM Weighted Avg by Quarter<\/a:t>/,
-    'title text rendered');
+  // Marketing ChartEdits 2026-08-12: titles are ALL CAPS.
+  assert.match(chartXml, /<a:t>CAP RATE — TTM WEIGHTED AVG BY QUARTER<\/a:t>/,
+    'title text rendered (uppercased)');
   assert.match(chartXml, /<c:autoTitleDeleted val="0"\/>/,
     'autoTitleDeleted is 0 when title is set (auto-title is allowed since we have a title)');
-  // Title style: 12pt bold navy
-  assert.match(chartXml, /sz="1200"[^/]*b="1"/, '12pt bold');
-  // Color is navy 003DA5
-  assert.match(chartXml, /<c:title>[\s\S]*?<a:srgbClr val="003DA5"\/>/, 'navy color');
+  // Title style: 12pt NOT-bold Sky (marketing ChartEdits 2026-08-12)
+  assert.match(chartXml, /sz="1200"[^/]*b="0"/, '12pt not-bold');
+  // Color is Sky 62B5E5
+  assert.match(chartXml, /<c:title>[\s\S]*?<a:srgbClr val="62B5E5"\/>/, 'sky color');
 });
 
 test('R38 A: chart omits <c:title> when spec.title is missing (backward compat)', async () => {
@@ -4672,7 +4931,7 @@ test('R38 C: doughnut emits legend at bottom (not right)', async () => {
       titleCol: 'B', titleRow: 4,
       catCol: 'A', valCol: 'B',
       dataStart: 5, dataEnd: 7,
-      colors: ['003DA5', '62B5E5', '4CB582'],
+      colors: ['003DA5', '62B5E5', '8FC49E'],
       anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
     },
   }]);
@@ -5622,8 +5881,8 @@ test('R71: injectNativeCharts emits ONE drawing.xml per sheet when multiple char
 
   // Drawing XML contains two anchors
   const drawingXml = await zip.file(drawingFiles[0]).async('string');
-  const anchorCount = (drawingXml.match(/<xdr:twoCellAnchor/g) || []).length;
-  assert.equal(anchorCount, 2, 'R71: drawing.xml has 2 twoCellAnchor blocks');
+  const anchorCount = (drawingXml.match(/<xdr:oneCellAnchor/g) || []).length;
+  assert.equal(anchorCount, 2, 'R71: drawing.xml has 2 fixed-size oneCellAnchor blocks');
 
   // cNvPr ids are unique (2 and 3) within the drawing
   const ids = Array.from(drawingXml.matchAll(/<xdr:cNvPr\s+id="(\d+)"/g)).map(m => m[1]);
@@ -5640,6 +5899,46 @@ test('R71: injectNativeCharts emits ONE drawing.xml per sheet when multiple char
   const sheetXml = await zip.file('xl/worksheets/sheet2.xml').async('string');
   const drawingTagCount = (sheetXml.match(/<drawing\s+r:id=/g) || []).length;
   assert.equal(drawingTagCount, 1, 'R71: sheet XML has exactly one <drawing/> element');
+});
+
+test('Charts tab: mixes native charts + embedded PNG images in ONE drawing', async () => {
+  // Single-page Charts view must include EVERY chart — native twins as chart
+  // objects AND non-native templates as embedded PNG images — sharing one
+  // drawing.xml (Excel allows only one <drawing> per sheet).
+  const png = Buffer.from(
+    '89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489' +
+    '0000000d49444154789c6360000002000100ffff03000006000557bfabd4000000' +
+    '0049454e44ae426082', 'hex');
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Index').getCell('A1').value = 'X';
+  wb.addWorksheet('Charts');
+  const d = wb.addWorksheet('Data_M');
+  d.getCell('B5').value = 'S';
+  for (let i = 0; i < 6; i++) { d.getCell(`A${6 + i}`).value = new Date(2025, i, 28); d.getCell(`B${6 + i}`).value = 100 + i; }
+  const buf = await injectNativeCharts(await wb.xlsx.writeBuffer(), [
+    { tabName: 'Charts', spec: { type: 'line', tabName: 'Data_M', titleCol: 'B', titleRow: 5, catCol: 'A', valCol: 'B', dataStart: 6, dataEnd: 11, color: '003DA5', title: 'Native', anchor: { col0: 1, row0: 5, col1: 14, row1: 30 } } },
+    { tabName: 'Charts', image: { png, ext: 'png', anchor: { col0: 1, row0: 32 } } },
+    { tabName: 'Charts', image: { png, ext: 'png', anchor: { col0: 1, row0: 59 } } },
+  ]);
+  const zip = await JSZip.loadAsync(buf);
+  const drawingFiles = Object.keys(zip.files).filter(n => /^xl\/drawings\/drawing\d+\.xml$/.test(n));
+  assert.equal(drawingFiles.length, 1, 'exactly ONE drawing for the Charts sheet');
+  const dxml = await zip.file(drawingFiles[0]).async('string');
+  assert.equal((dxml.match(/<xdr:graphicFrame/g) || []).length, 1, '1 native chart graphicFrame');
+  assert.equal((dxml.match(/<xdr:pic>/g) || []).length, 2, '2 embedded image pics');
+  const ids = Array.from(dxml.matchAll(/<xdr:cNvPr\s+id="(\d+)"/g)).map(m => m[1]);
+  assert.deepEqual([...new Set(ids)].sort(), ['2', '3', '4'], 'unique cNvPr ids across charts + images');
+  // Two PNGs embedded as media
+  const media = Object.keys(zip.files).filter(n => /^xl\/media\/image\d+\.png$/.test(n));
+  assert.equal(media.length, 2, '2 media PNGs embedded');
+  // Drawing rels: 1 chart + 2 image relationships
+  const relsFile = Object.keys(zip.files).find(n => /^xl\/drawings\/_rels\/drawing\d+\.xml\.rels$/.test(n));
+  const rels = await zip.file(relsFile).async('string');
+  assert.equal((rels.match(/relationships\/chart"/g) || []).length, 1, '1 chart relationship');
+  assert.equal((rels.match(/relationships\/image"/g) || []).length, 2, '2 image relationships');
+  // Content-types declares the PNG default so images resolve
+  const ct = await zip.file('[Content_Types].xml').async('string');
+  assert.match(ct, /<Default Extension="png"/i, 'png content-type default present');
 });
 
 test('R71: single-chart path preserves legacy drawing.xml byte shape', async () => {
@@ -5670,7 +5969,7 @@ test('R71: single-chart path preserves legacy drawing.xml byte shape', async () 
   // Legacy single-chart drawings used cNvPr id=2, name="Chart 1"
   assert.match(drawingXml, /<xdr:cNvPr id="2" name="Chart 1"\/>/,
     'R71: single-chart path keeps legacy cNvPr id=2, name="Chart 1"');
-  const anchorCount = (drawingXml.match(/<xdr:twoCellAnchor/g) || []).length;
+  const anchorCount = (drawingXml.match(/<xdr:oneCellAnchor/g) || []).length;
   assert.equal(anchorCount, 1, 'R71: single-chart drawing has exactly 1 anchor');
 });
 
@@ -5715,6 +6014,26 @@ test('R68-E D13: quarterly_volume_bars y-axis uses abbreviated currency (million
   const xml = buildSingleBarChartXml(out.spec);
   assert.match(xml, /,,&quot;M&quot;/, 'val-axis numFmt rendered as $X.XM in chart XML');
   assert.ok(!/formatCode="\$#,##0_\)/.test(xml), 'no raw $#,##0 currency axis');
+});
+
+test('quarterly_volume_bars switches y-axis and callouts to billions for large plotted values', () => {
+  const rows = Array.from({ length: 16 }, (_, i) => ({
+    period_end: `20${20 + Math.floor(i / 4)}-${String(((i % 4) * 3) + 3).padStart(2, '0')}-30`,
+    quarterly_volume: 1_100_000_000 + i * 75_000_000,
+  }));
+  const out = buildInjectionSpec({
+    chart_template_id: 'quarterly_volume_bars',
+    tabName: 'Data_Volume_Quarterly',
+    cols: [
+      { key: 'period_end',       col: 'A' },
+      { key: 'quarterly_volume', col: 'B' },
+    ],
+    dataStart: 5, dataEnd: 20,
+    brand: { palette: {} },
+    rows,
+  });
+  assert.match(out.spec.valAxNumFmt, /,,,\"B\"/, 'spec carries abbreviated billions format');
+  assert.ok((out.spec.dataLabels || []).some((l) => /\$[0-9.]+B/.test(l.text)), 'callouts use $XB labels');
 });
 
 test('R68-E G11: sources_of_capital horizontal bar — category labels nextTo + centered', () => {
@@ -5828,4 +6147,486 @@ test('R68-E G6: termination_rate XML — count bars + soft-term % line on a seco
   assert.match(rightAx, /0\.0%/, 'right axis formats as percent');
   // Line plots the real rate column G.
   assert.match(xml, /\$G\$5:\$G\$60/, 'rate line plots from terminated_outside_firm_term_pct (col G)');
+});
+
+// A2 (CM chart feedback item #2) — max/min/latest callouts carry leader lines
+// and role-based manual-layout offsets so the labels sit clear of the line.
+test('A2: line callouts emit showLeaderLines + role-offset manualLayout', () => {
+  const rows = Array.from({ length: 12 }, (_, i) => ({
+    period_end: `2025-${String(i + 1).padStart(2, '0')}-28`,
+    ttm_weighted_cap_rate: 0.06 + (i % 5) * 0.002, // varied → distinct max/min/last
+  }));
+  const cols = [
+    { key: 'period_end', col: 'A' },
+    { key: 'ttm_weighted_cap_rate', col: 'B' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'cap_rate_ttm_by_quarter',
+    tabName: 'Data_Cap', cols, dataStart: 5, dataEnd: 16,
+    brand: {}, rows, vertical: 'dialysis',
+  });
+  // Auto-annotation produced max/min/latest with roles.
+  const roles = (out.spec.dataLabels || []).map(d => d.role).sort();
+  assert.deepEqual(roles, ['last', 'max', 'min'], 'three role-tagged callouts');
+  const xml = buildSingleLineChartXml(out.spec);
+  assert.match(xml, /<c:showLeaderLines val="1"\/>/, 'leader lines enabled');
+  // CM close-out (label placement) — every callout is pinned to the SAME top band
+  // via yMode="edge" (absolute), so Peak/Low/Latest all sit above the data with a
+  // leader line dropping to the marker (the "Low" label no longer lands in the
+  // data). The max callout uses the edge-mode top-band y.
+  assert.match(xml, /<c:manualLayout><c:yMode val="edge"\/><c:x val="0\.01"\/><c:y val="0\.13"\/>/,
+    'max label pinned to the top headroom band (edge mode)');
+  // Every emitted callout uses edge-mode vertical placement (uniform top band).
+  const yModeCount = (xml.match(/<c:yMode val="edge"\/>/g) || []).length;
+  assert.equal(yModeCount, 3, 'all three callouts (max/min/last) pinned to the top band');
+});
+
+// A3 (CM chart feedback item #3) — bid-ask shared cap axis is data-fit, not a
+// fixed 5.5-10% band, so the floating bars sit inside the axis range.
+test('A3: bid_ask cap axis fits the plotted Last-Ask/Achieved window', () => {
+  const rows = Array.from({ length: 24 }, (_, i) => ({
+    period_end: `2024-${String((i % 12) + 1).padStart(2, '0')}-28`,
+    avg_last_ask_cap: 0.070 + (i % 6) * 0.001,   // ~7.0-7.5%
+    avg_bid_ask_spread: 0.004,                     // achieved ~7.4-7.9%
+  }));
+  const cols = [
+    { key: 'period_end', col: 'A' },
+    { key: 'avg_last_ask_cap', col: 'B' },
+    { key: 'avg_bid_ask_spread', col: 'C' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'bid_ask_spread', tabName: 'Data_BidAsk',
+    cols, dataStart: 5, dataEnd: 28, brand: {}, rows, vertical: 'dialysis',
+  });
+  const r = out.spec.yAxisRange;   // native hi-low: single line-only cap axis
+  // Data max ≈ 0.079; fitted max must be close to it, NOT the old 0.10 ceiling.
+  assert.ok(r.max <= 0.085 && r.max >= 0.079, `fitted max ${r.max} hugs data max`);
+  assert.ok(r.min >= 0.06 && r.min <= 0.07, `fitted min ${r.min} hugs data min`);
+});
+
+// ===========================================================================
+// CM chart fixes round 2 (2026-08-08) — items 1, 2, 3.
+// ===========================================================================
+
+// Item 1 — dialysis rent-box report chart reads the LABELED MODELED variant.
+test('round2 item1: rent_psf_box_quarterly_modeled is a native box chart with the modeled title', () => {
+  assert.ok(
+    NATIVE_CHART_TEMPLATES.has('rent_psf_box_quarterly_modeled'),
+    'modeled companion registered for native injection'
+  );
+  const rows = Array.from({ length: 14 }, (_, i) => ({
+    period_end: `202${3 + Math.floor(i / 4)}-${String(((i % 4) * 3) + 3).padStart(2, '0')}-30`,
+    subspecialty: 'all',
+    basis_scope: 'contract,stated,projected; conf>=0.7 (modeled)',
+    n_points: 20 + i,
+    rent_min: 6, rent_lower_quartile: 15, rent_median: 22,
+    rent_upper_quartile: 30, rent_max: 60,
+  }));
+  const cols = [
+    { key: 'period_end', col: 'A' }, { key: 'subspecialty', col: 'B' },
+    { key: 'basis_scope', col: 'C' }, { key: 'n_points', col: 'D' },
+    { key: 'rent_min', col: 'E' }, { key: 'rent_lower_quartile', col: 'F' },
+    { key: 'rent_median', col: 'G' }, { key: 'rent_upper_quartile', col: 'H' },
+    { key: 'rent_max', col: 'I' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'rent_psf_box_quarterly_modeled',
+    tabName: 'Data_Rent_PSF_Box_Mdl', cols, dataStart: 5, dataEnd: 18,
+    brand: {}, rows, vertical: 'dialysis',
+    title: 'Rent/SF — Quarterly Box (incl. modeled rents)',
+    injectPeriodLabel: true,
+  });
+  assert.ok(out && out.spec, 'spec produced');
+  assert.equal(out.spec.type, 'combo', 'box decomposed as combo');
+  assert.equal(out.spec.title, 'Rent/SF — Quarterly Box (incl. modeled rents)', 'modeled title carried through');
+  // IQR band (lower base + iqr helper) + median line all present.
+  assert.equal(out.spec.barSeries.length, 2, 'invisible base + visible IQR band');
+  assert.equal(out.spec.lineSeries.length, 1, 'median line');
+  const xml = buildComboChartXml(out.spec);
+  // Titles render ALL CAPS (ChartEdits 2026-08-12).
+  assert.match(xml, /INCL\. MODELED RENTS/, 'title text embedded in chart XML (uppercased)');
+});
+
+// Item 2 — the volume_cap_quartile_combo right (cap) axis spans the quartile
+// band top (upper_quartile), not just the avg-cap series, so nothing clips.
+test('round2 item2: volume_cap_quartile_combo cap axis covers the upper-quartile band top', () => {
+  // upper_quartile peaks at 0.098 — above the OLD hardcoded dia max of 0.090.
+  const rows = Array.from({ length: 10 }, (_, i) => ({
+    period_end: `2025-${String(i + 1).padStart(2, '0')}-28`,
+    volume_dollars: 1e8 + i * 1e7,
+    cap_rate: 0.065 + (i % 3) * 0.001,
+    upper_quartile: 0.090 + (i % 5) * 0.002,   // up to 0.098
+    lower_quartile: 0.050 + (i % 4) * 0.001,
+  }));
+  const cols = [
+    { key: 'period_end', col: 'A' }, { key: 'subspecialty', col: 'B' },
+    { key: 'volume_dollars', col: 'C' }, { key: 'cap_rate', col: 'D' },
+    { key: 'upper_quartile', col: 'E' }, { key: 'lower_quartile', col: 'F' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'volume_cap_quartile_combo', tabName: 'Data_Vol_Cap_Combo',
+    cols, dataStart: 5, dataEnd: 14, brand: {}, rows, vertical: 'dialysis',
+    injectPeriodLabel: true,
+  });
+  const r = out.spec.yRightRange;
+  const bandTop = Math.max(...rows.map(x => x.upper_quartile)); // 0.098
+  assert.ok(r.max >= bandTop, `cap axis max ${r.max} covers band top ${bandTop}`);
+  assert.ok(r.max < 0.15, `cap axis max ${r.max} still snug`);
+  // The deliberate low floor (0.030 dia) is preserved to keep the volume area low.
+  assert.equal(r.min, 0.030, 'deliberate low cap-axis floor preserved');
+});
+
+// Item 3 — callouts are computed over the DISPLAYED (MIN_YEAR-trimmed) rows so
+// the emitted <c:idx> aligns with the plotted series, and labels render as a
+// charcoal label word + emphasized value.
+test('round2 item3: callout idx is plotted-space and text is label+value', () => {
+  // cap_rate_ttm_by_quarter has a dia MIN_YEAR trim; feed pre-cutoff rows so the
+  // plotted window is shorter than the full range. The last point is the max.
+  const rows = Array.from({ length: 20 }, (_, i) => ({
+    period_end: `${2005 + i}-06-30`,
+    ttm_weighted_cap_rate: 0.06 + i * 0.001,       // monotonic → last == max
+    transaction_count_ttm: i < 4 ? 2 : 40,          // sparse early years get trimmed
+  }));
+  const cols = [
+    { key: 'period_end', col: 'A' },
+    { key: 'ttm_weighted_cap_rate', col: 'B' },
+    { key: 'transaction_count_ttm', col: 'C' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'cap_rate_ttm_by_quarter', tabName: 'Data_Cap',
+    cols, dataStart: 5, dataEnd: 24, brand: {}, rows, vertical: 'dialysis',
+  });
+  const labels = out.spec.dataLabels || [];
+  assert.ok(labels.length >= 2, 'callouts produced');
+  // Every emitted idx must be a valid position within the PLOTTED window
+  // (dataEnd - effectiveStart + 1), never the full 20-row range.
+  const plottedLen = (out.spec.dataEnd - out.spec.dataStart) + 1;
+  for (const l of labels) {
+    assert.ok(l.idx >= 0 && l.idx < plottedLen,
+      `label idx ${l.idx} within plotted length ${plottedLen}`);
+  }
+  // Text carries a role word (Peak/Low/Latest) rendered in charcoal.
+  const xml = buildSingleLineChartXml(out.spec);
+  assert.match(xml, /<a:t>(Peak|Low|Latest) <\/a:t>/, 'role label word present');
+  assert.match(xml, /srgbClr val="3D4A54"/, 'charcoal callout text');
+});
+
+// ===========================================================================
+// CM chart fixes round 3 (2026-08-09) — items 4 (callout coverage) + 5 (lint).
+// ===========================================================================
+
+// Item 4 — the three round-3 absentees now emit peak/low/latest callouts.
+test('round3 item4: transaction_count_ttm bar emits integer callouts', () => {
+  const rows = Array.from({ length: 16 }, (_, i) => ({
+    period_end: `20${20 + Math.floor(i / 4)}-${String(((i % 4) * 3) + 3).padStart(2, '0')}-30`,
+    ttm_count: 20 + (i % 7) * 3,
+  }));
+  const cols = [{ key: 'period_end', col: 'A' }, { key: 'ttm_count', col: 'B' }];
+  const out = buildInjectionSpec({
+    chart_template_id: 'transaction_count_ttm', tabName: 'Data_Txn',
+    cols, dataStart: 5, dataEnd: 20, brand: {}, rows, vertical: 'dialysis',
+  });
+  assert.ok((out.spec.dataLabels || []).length >= 2, 'callouts produced');
+  const xml = buildSingleBarChartXml(out.spec);
+  // Integer-formatted (commas, no % or $) — not the toFixed(1) index form.
+  assert.match(xml, /<a:t>(Peak|Low|Latest) <\/a:t>/, 'role label word present');
+  assert.doesNotThrow(() => assertCalloutCoverage('transaction_count_ttm', out.spec));
+});
+
+test('round3 item4: quarterly_volume_bars emits currency callouts', () => {
+  const rows = Array.from({ length: 16 }, (_, i) => ({
+    period_end: `20${20 + Math.floor(i / 4)}-${String(((i % 4) * 3) + 3).padStart(2, '0')}-30`,
+    quarterly_volume: 100_000_000 * (1 + (i % 6) / 4),
+  }));
+  const cols = [{ key: 'period_end', col: 'A' }, { key: 'quarterly_volume', col: 'B' }];
+  const out = buildInjectionSpec({
+    chart_template_id: 'quarterly_volume_bars', tabName: 'Data_QVol',
+    cols, dataStart: 5, dataEnd: 20, brand: {}, rows, vertical: 'dialysis',
+  });
+  assert.ok((out.spec.dataLabels || []).length >= 2, 'callouts produced');
+  assert.doesNotThrow(() => assertCalloutCoverage('quarterly_volume_bars', out.spec));
+});
+
+test('round3 item4: cash_leveraged_returns labels both return lines', () => {
+  const rows = Array.from({ length: 18 }, (_, i) => ({
+    period_end: `20${20 + Math.floor(i / 4)}-${String(((i % 4) * 3) + 3).padStart(2, '0')}-30`,
+    cash_return: 0.06 + (i % 5) * 0.003,
+    leveraged_return_mid: 0.09 + (i % 6) * 0.004,
+  }));
+  const cols = [
+    { key: 'period_end', col: 'A' },
+    { key: 'cash_return', col: 'B' },
+    { key: 'leveraged_return_mid', col: 'C' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'cash_leveraged_returns', tabName: 'Data_Returns',
+    cols, dataStart: 5, dataEnd: 22, brand: {}, rows, vertical: 'dialysis',
+  });
+  const labelled = out.spec.series.filter(s => Array.isArray(s.dataLabels) && s.dataLabels.length);
+  assert.equal(labelled.length, 2, 'both return lines carry callouts');
+  assert.ok(countSpecCallouts(out.spec) >= 4, 'callouts across both lines');
+  assert.doesNotThrow(() => assertCalloutCoverage('cash_leveraged_returns', out.spec));
+});
+
+test('round3 item4: assertCalloutCoverage throws for a policy chart with zero callouts', () => {
+  // A policy template but a spec stripped of callouts → export must fail.
+  assert.throws(
+    () => assertCalloutCoverage('transaction_count_ttm', { type: 'bar', dataLabels: [] }),
+    /CALLOUT COVERAGE FAILED/,
+  );
+  // Non-policy template is a no-op even with no callouts.
+  assert.doesNotThrow(() => assertCalloutCoverage('leased_inventory_by_state', { type: 'bar' }));
+  // The three named absentees are in the policy list.
+  for (const t of ['transaction_count_ttm', 'quarterly_volume_bars', 'cash_leveraged_returns']) {
+    assert.ok(CALLOUT_POLICY_TEMPLATES.has(t), `${t} in policy list`);
+  }
+});
+
+// Item 5 — theme-color-leak lint (XML level).
+test('round3 item5: lintChartSeriesXml flags theme accents and missing spPr', () => {
+  const accentXml = `<c:ser><c:idx val="0"/><c:spPr><a:solidFill><a:schemeClr val="accent6"/></a:solidFill></c:spPr></c:ser>`;
+  const v1 = lintChartSeriesXml(accentXml, 't');
+  assert.ok(v1.some(v => /schemeClr/.test(v.reason)), 'accent flagged');
+
+  const noSpPrXml = `<c:ser><c:idx val="0"/><c:val><c:numRef><c:f>x</c:f></c:numRef></c:val></c:ser>`;
+  const v2 = lintChartSeriesXml(noSpPrXml, 't');
+  assert.ok(v2.some(v => /no <c:spPr>/.test(v.reason)), 'missing spPr flagged');
+
+  const cleanXml = `<c:ser><c:idx val="0"/><c:spPr><a:solidFill><a:srgbClr val="003DA5"/></a:solidFill></c:spPr></c:ser>`;
+  assert.equal(lintChartSeriesXml(cleanXml, 't').length, 0, 'explicit brand fill passes');
+});
+
+test('round3 item5: seller_sentiment XML carries explicit brand fills, zero lint violations', () => {
+  const cols = [
+    { key: 'period_end', col: 'A' },
+    { key: 'pct_price_change_all', col: 'B' },
+    { key: 'pct_price_change_long_term', col: 'C' },
+    { key: 'last_ask_cap_all', col: 'D' },
+    { key: 'last_ask_cap_long_term', col: 'E' },
+  ];
+  const rows = Array.from({ length: 40 }, (_, i) => ({
+    period_end: `20${17 + Math.floor(i / 4)}-${String(((i % 4) * 3) + 3).padStart(2, '0')}-30`,
+    pct_price_change_all: 0.1 + (i % 5) * 0.01,
+    pct_price_change_long_term: 0.08 + (i % 4) * 0.01,
+    last_ask_cap_all: 0.06 + (i % 6) * 0.002,
+    last_ask_cap_long_term: 0.065 + (i % 5) * 0.002,
+  }));
+  const out = buildInjectionSpec({
+    chart_template_id: 'seller_sentiment', tabName: 'Data_Sentiment',
+    cols, dataStart: 5, dataEnd: 44, brand: {}, rows, vertical: 'dialysis',
+  });
+  const xml = specToChartXml(out.spec);
+  assert.equal(lintChartSeriesXml(xml, 'seller_sentiment').length, 0, 'no theme leak');
+  // The primary brand blues are present; the tertiary peridot/amethyst are gone.
+  assert.match(xml, /srgbClr val="003DA5"/);
+  assert.match(xml, /srgbClr val="62B5E5"/);
+  assert.match(xml, /srgbClr val="265AB2"/);
+  assert.doesNotMatch(xml, /srgbClr val="8FC49E"/, 'peridot removed');
+  assert.doesNotMatch(xml, /srgbClr val="9B88A5"/, 'amethyst removed');
+});
+
+// Item 2 (DEFINITIVE) — the c15 (Chart-2012) extension now mirrors exactly what
+// Excel writes (empirically confirmed against labelsample.xlsx): a per-dLbl ext
+// carrying ONLY <c15:showDataLabelsRange val="0"/>, and a dLbls-level ext carrying
+// ONLY <c15:showLeaderLines val="1"/> as the last child of <c:dLbls>. The corrupt
+// round-3 children (c15:layout / per-dLbl c15:showLeaderLines / c15:leaderLines)
+// are gone, so exports open clean. No config gate — the structure always emits.
+function buildCapSpec() {
+  const rows = Array.from({ length: 12 }, (_, i) => ({
+    period_end: `2025-${String(i + 1).padStart(2, '0')}-28`,
+    ttm_weighted_cap_rate: 0.06 + (i % 5) * 0.002,
+  }));
+  const cols = [
+    { key: 'period_end', col: 'A' },
+    { key: 'ttm_weighted_cap_rate', col: 'B' },
+  ];
+  return buildInjectionSpec({
+    chart_template_id: 'cap_rate_ttm_by_quarter',
+    tabName: 'Data_Cap', cols, dataStart: 5, dataEnd: 16,
+    brand: {}, rows, vertical: 'dialysis',
+  }).spec;
+}
+
+test('round3 item2: per-dLbl ext carries only showDataLabelsRange; dLbls-level only showLeaderLines', () => {
+  const xml = buildSingleLineChartXml(buildCapSpec());
+  // The valid plain-c:layout float still ships (labels still float).
+  assert.match(xml, /<c:manualLayout>/, 'plain c:layout offset still present');
+  // The Chart-2012 ext uri is present (definitive structure always emits).
+  assert.match(xml, /CE6537A1-D6FC-4f65-9D91-7224C49458BB/, 'Chart-2012 ext uri present');
+  // Per-dLbl ext carries ONLY showDataLabelsRange, as the LAST child of c:dLbl.
+  assert.match(
+    xml,
+    /<c:showBubbleSize val="0"\/>\s*<c:extLst>\s*<c:ext[^>]*>\s*<c15:showDataLabelsRange val="0"\/>\s*<\/c:ext>\s*<\/c:extLst>\s*<\/c:dLbl>/,
+    'per-dLbl extLst is last child and holds only showDataLabelsRange',
+  );
+  // dLbls-level leader switch present as the last child of c:dLbls.
+  assert.match(xml, /<c15:showLeaderLines val="1"\/>/, 'dLbls-level c15 leader lines enabled');
+  // The corrupt round-3 children are GONE.
+  assert.doesNotMatch(xml, /<c15:layout>/, 'no c15:layout (corruption cause removed)');
+  assert.doesNotMatch(xml, /<c15:leaderLines>/, 'no c15:leaderLines stroke block');
+  assert.doesNotMatch(xml, /<c15:manualLayout>/, 'no c15:manualLayout');
+  // And the whole part passes the ext whitelist gate.
+  assert.deepEqual(validateChartExtWhitelist(xml, 'Data_Cap'), []);
+});
+
+test('round3 item2: optional callout-box spPr brands the floated labels', () => {
+  const xml = buildSingleLineChartXml(buildCapSpec());
+  // dLbls-level spPr: paper fill + Blue-12 hairline (item 3).
+  assert.match(
+    xml,
+    /<c:spPr>\s*<a:solidFill><a:srgbClr val="FFFFFF"\/><\/a:solidFill>\s*<a:ln[^>]*><a:solidFill><a:srgbClr val="E0E8F4"\/>/,
+    'callout box: FFFFFF fill + E0E8F4 line',
+  );
+});
+
+// Regression gate — the ext-whitelist validator rejects the corrupt c15 children
+// (layout / leaderLines) and a mixed-level ext, so a schema-invalid chart can
+// never ship, even if a future edit re-introduces the corrupt structure.
+test('round3 item2: validateChartExtWhitelist rejects unvetted / mislevelled c15 children', () => {
+  assert.deepEqual(
+    [...C15_EXT_ALLOWED_CHILDREN].sort(),
+    ['showDataLabelsRange', 'showLeaderLines'],
+    'whitelist is the two vetted children',
+  );
+  const bad = `<c:dLbl><c:extLst>
+    <c:ext uri="{CE6537A1-D6FC-4f65-9D91-7224C49458BB}" xmlns:c15="http://schemas.microsoft.com/office/drawing/2012/chart">
+      <c15:layout><c15:manualLayout><c15:x val="0.1"/></c15:manualLayout></c15:layout>
+      <c15:leaderLines/>
+    </c:ext></c:extLst></c:dLbl>`;
+  const els = validateChartExtWhitelist(bad, 'Data_Cap').map(x => x.element);
+  assert.ok(els.includes('c15:layout'), 'flags c15:layout');
+  assert.ok(els.includes('c15:leaderLines'), 'flags c15:leaderLines');
+  // A single ext mixing the per-dLbl and dLbls-level children is a placement error.
+  const mixed = `<c:ext uri="{CE6537A1-D6FC-4f65-9D91-7224C49458BB}" xmlns:c15="http://schemas.microsoft.com/office/drawing/2012/chart"><c15:showDataLabelsRange val="0"/><c15:showLeaderLines val="1"/></c:ext>`;
+  const mixedEls = validateChartExtWhitelist(mixed, 'Data_Cap').map(x => x.element);
+  assert.ok(mixedEls.includes('c15:showDataLabelsRange+showLeaderLines'), 'flags mixed-level ext');
+  // Each vetted single-purpose ext passes on its own.
+  assert.deepEqual(
+    validateChartExtWhitelist('<c:ext uri="{CE6537A1-D6FC-4f65-9D91-7224C49458BB}" xmlns:c15="http://schemas.microsoft.com/office/drawing/2012/chart"><c15:showDataLabelsRange val="0"/></c:ext>', 'Data_Cap'),
+    [],
+  );
+  // Clean XML (no ext) passes.
+  assert.deepEqual(validateChartExtWhitelist('<c:dLbl><c:idx val="0"/></c:dLbl>', 'Data_Cap'), []);
+});
+
+// The regression gate is wired into injectNativeCharts. With the DEFINITIVE
+// (valid) c15 structure, a real chart injects successfully — proving the emitted
+// exts pass the wired whitelist gate end-to-end (no CHART EXT WHITELIST FAILED).
+test('round3 item2: injectNativeCharts ships the definitive c15 structure cleanly', async () => {
+  const base = await buildTinyWorkbook();
+  const out = await injectNativeCharts(base, [{
+    tabName: 'Data_Volume_TTM',
+    spec: buildCapSpec(),
+  }]);
+  assert.ok(out, 'injection returns a workbook buffer');
+});
+
+// Item 1 — injectNativeCharts rewrites the workbook theme minor+major font to
+// the CM chart typeface (Futura PT, per marketing 2026-08) so the workbook
+// opens uniformly in that face (matching chart text).
+test('round3 item1: theme minor+major font rewritten to the CM chart typeface', async () => {
+  const base = await buildTinyWorkbook();
+  const result = await injectNativeCharts(base, [{
+    tabName: 'Data_Volume_TTM',
+    spec: {
+      type: 'line', tabName: 'Data_Volume_TTM',
+      titleCol: 'B', titleRow: 5, catCol: 'A', valCol: 'B',
+      dataStart: 6, dataEnd: 17, color: '003DA5',
+      anchor: { col0: 0, row0: 0, col1: 13, row1: 21 },
+    },
+  }]);
+  const zip = await JSZip.loadAsync(result);
+  const theme = await zip.file('xl/theme/theme1.xml').async('string');
+  const major = theme.match(/<a:majorFont>\s*<a:latin[^>]*typeface="([^"]*)"/);
+  const minor = theme.match(/<a:minorFont>\s*<a:latin[^>]*typeface="([^"]*)"/);
+  // Marketing feedback (2026-08): CM chart typeface is Futura PT (cm-brand.json).
+  assert.ok(major && major[1] === 'Futura PT', `majorFont Futura PT (got ${major && major[1]})`);
+  assert.ok(minor && minor[1] === 'Futura PT', `minorFont Futura PT (got ${minor && minor[1]})`);
+});
+
+// Item 3 — padSnapRange computes a real axis MIN (never 0 when data sits well
+// above ~1%) and a max that covers the top, exempting near-zero / stacked 0–1.
+test('round3 item3: padSnapRange computes min+max with 8% pad', () => {
+  // Bid-ask live band 0.0478–0.0971 → ≈ min 0.043 / max ~0.101.
+  const r = padSnapRange([0.0478, 0.062, 0.071, 0.0971], { minAbsFloor: 0.01 });
+  assert.ok(r.min >= 0.042 && r.min <= 0.044, `min hugs data (got ${r.min})`);
+  assert.ok(r.max >= 0.100 && r.max <= 0.102, `max covers achieved top (got ${r.max})`);
+  assert.ok(r.min > 0, 'min is NOT a 0 dead-zone');
+  // Near-zero series (treasury line ~0.2%–0.9%) is exempt: keeps min 0.
+  const nearZero = padSnapRange([0.002, 0.005, 0.009], { minAbsFloor: 0.01 });
+  assert.equal(nearZero.min, 0, 'near-zero series floored at 0');
+  // 100%-stacked (0–1) exempt via stacked01.
+  const stacked = padSnapRange([0.2, 0.5, 0.9], { stacked01: true });
+  assert.equal(stacked.min, 0, 'stacked 0–1 floored at 0');
+  // < 2 points → null (caller keeps its literal — no regression).
+  assert.equal(padSnapRange([0.07]), null);
+});
+
+// CM close-out item 3 — the SHARED zero-floor assertion both artifacts call.
+test('closeout item3: assertPercentAxisMin flags a zero-floor on a >1% data-min axis', () => {
+  // Legit cap axis: data well above 1%, real computed min → OK (true).
+  assert.equal(
+    assertPercentAxisMin({ label: 'ok', dataMin: 0.0478, axisMin: 0.043 }),
+    true,
+    'a real min on a >1% axis passes'
+  );
+  // The bug: data ~4.8% but axis pinned to 0 → violation (false).
+  assert.equal(
+    assertPercentAxisMin({ label: 'bug', dataMin: 0.0478, axisMin: 0 }),
+    false,
+    'a 0 min on a >1% axis is flagged'
+  );
+  // Auto/undefined axis min on a >1% axis is also a violation.
+  assert.equal(
+    assertPercentAxisMin({ label: 'auto', dataMin: 0.06, axisMin: undefined }),
+    false,
+    'an undefined/auto min on a >1% axis is flagged'
+  );
+  // Near-zero series (treasury line): min 0 is legitimately exempt → OK.
+  assert.equal(
+    assertPercentAxisMin({ label: 'nearzero', dataMin: 0.004, axisMin: 0 }),
+    true,
+    'a near-zero series keeps min 0 without a violation'
+  );
+});
+
+// CM close-out item 3 (final) — fitPercentAxis is the single per-axis fit+assert.
+test('closeout item3: fitPercentAxis fits the cap axis to its assigned series only', () => {
+  // Cap axis assigned Last-Ask + Achieved (the spread is bar geometry, NOT a
+  // cap-axis series): live dia band 0.062–0.079 → fits ~6.0–8.1%, min > 0.
+  const capAxis = [0.06201, 0.07172, 0.06455, 0.07869];
+  const fit = fitPercentAxis('test:cap%(last_ask+achieved)', capAxis, { minAbsFloor: 0.01 });
+  assert.ok(fit && fit.min > 0.05 && fit.min <= 0.063, `cap axis min fits ~6% (got ${fit && fit.min})`);
+  assert.ok(fit.max >= 0.079, `cap axis max covers achieved top (got ${fit.max})`);
+
+  // Regression guard: IF the raw spread (~0.6%) were ever mixed onto the cap
+  // axis, data-min drops below 1% and padSnapRange floors to 0 — which is exactly
+  // the four-strikes bug. fitPercentAxis surfaces it as a real 0 min so the
+  // assertion (inside) fires; the correct design keeps the spread OFF this axis.
+  const contaminated = [0.006, 0.062, 0.079];
+  const bad = fitPercentAxis('test:cap%+spread-contaminated', contaminated, { minAbsFloor: 0.01 });
+  assert.equal(bad.min, 0, 'a spread value on the cap axis reproduces the 0 floor (guarded)');
+
+  // < 2 finite points → null (caller keeps its literal fallback).
+  assert.equal(fitPercentAxis('test:one', [0.07]), null);
+});
+
+test('round3 item3: bid_ask cap axis is pad-snapped (min>0, covers achieved)', () => {
+  const rows = Array.from({ length: 24 }, (_, i) => ({
+    period_end: `2024-${String((i % 12) + 1).padStart(2, '0')}-28`,
+    avg_last_ask_cap: 0.048 + (i % 10) * 0.005,   // 0.048–0.093
+    avg_bid_ask_spread: 0.004,                     // achieved up to ~0.097
+  }));
+  const cols = [
+    { key: 'period_end', col: 'A' },
+    { key: 'avg_last_ask_cap', col: 'B' },
+    { key: 'avg_bid_ask_spread', col: 'C' },
+  ];
+  const out = buildInjectionSpec({
+    chart_template_id: 'bid_ask_spread', tabName: 'Data_BidAsk',
+    cols, dataStart: 5, dataEnd: 28, brand: {}, rows, vertical: 'dialysis',
+  });
+  const r = out.spec.yAxisRange;   // native hi-low: single line-only cap axis
+  assert.ok(r.min > 0.03, `bid-ask axis min is not a 0 dead-zone (got ${r.min})`);
+  assert.ok(r.max >= 0.097, `bid-ask axis max covers the achieved top (got ${r.max})`);
 });

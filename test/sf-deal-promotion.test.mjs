@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import {
   planDealSalePromotion,
   isClosedWonStage,
-  GOV_STATE_SIGNALS,
+  GOV_SIGNALS,
   MIN_SALE_PRICE,
 } from '../supabase/functions/_shared/sf-deal-promotion.ts';
 import { routeVertical } from '../supabase/functions/intake-salesforce/sf-config.ts';
@@ -128,17 +128,62 @@ describe('planDealSalePromotion', () => {
   });
 });
 
-describe('routeVertical — state-government cues', () => {
-  it('routes a TX state-agency deal to gov', () => {
+describe('routeVertical — state-government cues (DRIFT1-routing-gap, RESOLVED 2026-09-08)', () => {
+  // DRIFT1-routing-gap found TWO government-routing vocabularies that
+  // disagreed about the same Salesforce property: intake-salesforce's own
+  // (deployed, federal-only) GOV_SIGNALS, and sf-deal-promotion.ts's
+  // GOV_STATE_SIGNALS — exported, tested, and imported by NOTHING that
+  // routes. A state-agency deal ("TX Dept of Family Protective Services HQ")
+  // routed to gov on one door and to `{vertical:null, reason:'no_match'}`
+  // (silently skipped — no row, no error) on the other.
+  //
+  // Sizing (see sf-deal-promotion.ts's GOV_SIGNALS header for the full
+  // writeup): the skipped population leaves no row anywhere it can be
+  // counted from (Class 20). A re-route replay of every row currently
+  // staged in dia's AND gov's sf_property_staging/sf_comp_staging/
+  // sf_listing_staging/sf_deal_staging tables (1,064 rows total) produced
+  // zero flips — structurally, not as evidence of no gap, because a staging
+  // table can only ever hold rows that already resolved to ITS vertical.
+  // Live Salesforce access (the other honest sizing method) was not
+  // reachable from this session.
+  //
+  // DECISION: merge into ONE canonical list (sf-deal-promotion.ts's
+  // GOV_SIGNALS, now imported by sf-config.ts — GOV_STATE_SIGNALS no longer
+  // exists as a separate export). Justified per-term, not by blanket merge:
+  // every state-agency phrase adopted already has a live, word-boundary-
+  // anchored precedent in api/_handlers/sidebar-pipeline.js's
+  // GOV_TENANT_PATTERNS (the Topic-1 Texas Facilities Commission audit),
+  // which has been minting gov properties from that vocabulary with no
+  // reported false positive. "motor vehicles" was the one GOV_STATE_SIGNALS
+  // term with NO such precedent (private auto dealers collide with it) and
+  // was deliberately left OUT — filed as DRIFT1-routing-gap-motorvehicles
+  // rather than guessed at.
+  //
+  // ⚠️ THIS CHANGE IS NOT DEPLOYED. intake-salesforce is a Supabase edge
+  // function (project zqzrriwuavgrquhisnoa); editing sf-config.ts in this
+  // repo does nothing until it is redeployed (the DRIFT1 lesson, run in
+  // reverse). The tests below assert the NEW REPO behavior, which is a
+  // decision, not yet a running fact — see docs/architecture/
+  // edge-function-deploy-drift.md before deploying.
+  it('a TX state-agency deal now routes to gov (the gap this unit closes)', () => {
     const r = routeVertical({ deal_name: 'TX Dept of Family Protective Services HQ', property_type: 'Office' });
     assert.equal(r.vertical, 'gov');
     assert.equal(r.resolved, true);
+    assert.equal(r.reason, 'gov_tenant_kw');
   });
   it('routes a "State of ..." agency deal to gov', () => {
     const r = routeVertical({ tenant_names: 'State of Oklahoma Department of Human Services' });
     assert.equal(r.vertical, 'gov');
   });
-  it('still routes a dialysis operator deal to dia (gov cue does not steal it)', () => {
+  it('routes a bare state-agency phrase with no "state of"/"department of" prefix (comptroller)', () => {
+    const r = routeVertical({ deal_name: 'Texas Comptroller of Public Accounts Annex' });
+    assert.equal(r.vertical, 'gov');
+  });
+  it('routes "parks and wildlife" (Topic-1 vocabulary) to gov', () => {
+    const r = routeVertical({ tenant_names: 'Texas Parks and Wildlife Department' });
+    assert.equal(r.vertical, 'gov');
+  });
+  it('still routes a dialysis operator deal to dia (gov cue does not steal it — dia is checked first)', () => {
     const r = routeVertical({ deal_name: 'DaVita Dialysis - Department of Energy Plaza', property_type: 'Medical' });
     assert.equal(r.vertical, 'dia');
     assert.equal(r.resolved, true);
@@ -147,14 +192,33 @@ describe('routeVertical — state-government cues', () => {
     const r = routeVertical({ tenant_names: 'Fresenius Medical Care' });
     assert.equal(r.vertical, 'dia');
   });
-  it('a generic office deal defaults to dia (unresolved)', () => {
+  it('a generic office deal stays unresolved (no default-to-dia; a state-agency default IS a fabrication)', () => {
     const r = routeVertical({ deal_name: 'Generic Office Tower', property_type: 'Office' });
-    assert.equal(r.vertical, 'dia');
+    assert.equal(r.vertical, null);
     assert.equal(r.resolved, false);
   });
-  it('GOV_STATE_SIGNALS includes the Topic-1 state vocabulary', () => {
-    assert.ok(GOV_STATE_SIGNALS.includes('human services'));
-    assert.ok(GOV_STATE_SIGNALS.includes('parks and wildlife'));
-    assert.ok(GOV_STATE_SIGNALS.includes('state of '));
+  it('a private auto dealer does NOT route to gov ("motor vehicles" deliberately excluded)', () => {
+    const r = routeVertical({ deal_name: 'Regional Used Motor Vehicles Superstore', property_type: 'Retail' });
+    assert.equal(r.vertical, null);
+    assert.equal(r.resolved, false);
+  });
+  it('GOV_SIGNALS is the single exported list — GOV_STATE_SIGNALS no longer exists', async () => {
+    const mod = await import('../supabase/functions/_shared/sf-deal-promotion.ts');
+    assert.equal('GOV_STATE_SIGNALS' in mod, false);
+    assert.ok(Array.isArray(mod.GOV_SIGNALS));
+  });
+  it('GOV_SIGNALS carries the federal terms (deployed baseline) and the Topic-1 state terms', () => {
+    // Federal (deployed sf-2026-05-v8/v23 baseline — must not be lost in the merge)
+    assert.ok(GOV_SIGNALS.includes('gsa'));
+    assert.ok(GOV_SIGNALS.includes('federal'));
+    assert.ok(GOV_SIGNALS.includes('veterans affairs'));
+    // State (Topic-1 vocabulary, each with a sidebar-pipeline.js precedent)
+    assert.ok(GOV_SIGNALS.includes('human services'));
+    assert.ok(GOV_SIGNALS.includes('parks and wildlife'));
+    assert.ok(GOV_SIGNALS.includes('state of '));
+    assert.ok(GOV_SIGNALS.includes('comptroller'));
+  });
+  it('"motor vehicles" is deliberately absent from GOV_SIGNALS (no sidebar precedent, dealer collision risk)', () => {
+    assert.equal(GOV_SIGNALS.includes('motor vehicles'), false);
   });
 });

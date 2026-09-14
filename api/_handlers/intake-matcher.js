@@ -670,6 +670,16 @@ async function collectAmbiguousCandidates(address, state, primaryDomain) {
 // Exported (Phase 2 Slice 2a) so the enrich-channel promoter can route an
 // unresolved PROPERTIES file to the SAME lane instead of creating a property.
 export async function emitMatchDisambiguation(intakeId, address, tenant, candidates, opts = {}) {
+  // PRODUCER GUARD (Prompt 91): a match_disambiguation card with ZERO candidates
+  // is unworkable by construction — the human is asked to "pick one of nothing"
+  // and the assist tick rightly refuses it, but the empty card still inflates the
+  // lane badge (honest-counts violation). NEVER mint one; the caller routes the
+  // intake to its correct no-match path (create-property / park) instead. Callers
+  // read the returned { emitted } so `emitted_disambiguation` stays honest.
+  const list = Array.isArray(candidates) ? candidates.filter(Boolean) : [];
+  if (!list.length) {
+    return { emitted: false, skipped: 'empty_candidates' };
+  }
   try {
     // Slice 2d (Unit 2): the light attach path has no intake_id (a non-OM doc is
     // attached by path anchor without staging an intake), so callers can pass a
@@ -682,14 +692,16 @@ export async function emitMatchDisambiguation(intakeId, address, tenant, candida
       p_question: 'Multiple candidate properties matched this intake — which one (or create new)?',
       p_context: {
         intake_id: intakeId, address: address || null, tenant: tenant || null,
-        candidates: candidates,
+        candidates: list,
         ...(opts.context || {}),
       },
       p_subject_ref: subjectRef,
-      p_rank_value: candidates.length,
+      p_rank_value: list.length,
     });
+    return { emitted: true };
   } catch (e) {
     console.warn('[intake-matcher] match_disambiguation emit skipped:', e?.message || e);
+    return { emitted: false, skipped: 'emit_error', error: e?.message || String(e) };
   }
 }
 

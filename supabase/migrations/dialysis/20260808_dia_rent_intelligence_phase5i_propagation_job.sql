@@ -1,0 +1,35 @@
+-- ============================================================================
+-- Rent Intelligence Phase 5i — PROPAGATION JOB (dia)
+-- zqzrriwuavgrquhisnoa. Applied live via mcp apply_migration
+-- (dia_rent_intelligence_phase5i_scope_engines_by_property +
+--  dia_rent_intelligence_phase5i_propagation_job). Authoritative bodies in-DB.
+--
+-- THE PROMULGATION MECHANIC: nightly, for every property whose timeline gained a
+-- new version OR a confidence (corroboration) change since the last run,
+-- re-derive the dependent artifacts (5a sale caps, 5b listing implied caps) FOR
+-- THAT PROPERTY ONLY — bounded, provenance-tracked, ancestry-checked (the scoped
+-- engines carry the ancestry guard). One new OM improves every sale, listing,
+-- and comp that property touches by the next morning. (5c term serving is a live
+-- function — nothing to materialize.)
+--
+--   dia_derive_sale_caps(dry_run,batch,limit,property_id)          + p_property_id filter
+--   dia_validate_and_fill_listing_caps(dry_run,batch,bps,limit,property_id) + p_property_id filter
+--       (NULL = all; old signatures dropped. Behaviour-identical unscoped.)
+--   dia_rent_propagation_log         run ledger (since_ts, counts, batch).
+--   dia_propagate_rent_intelligence(since default last-run, dry_run, limit) ->
+--       changed properties since `since` -> per-property re-derive, per-property
+--       error isolation, one log row per run.
+--   pg_cron 'dia-rent-propagation' @ 55 6 * * * (after the morning refreshes).
+--       A baseline log row was seeded so the first scheduled run only processes
+--       changes from ship time forward (5a/5b already ran globally this session).
+--
+-- Acceptance — the flagship round-trip (self-rolling-back gate, property 22449,
+-- 0 residue): inject an OM/BOV-confirmed rent -> the timeline rebuilds -> the
+-- next propagation run (scoped to the 1 changed property) derives the sale's cap
+-- (sale 73: cap_rate_final NULL -> 0.07000), records 1 sale_cap provenance edge,
+-- and the 2024 timeline row ancestry-links to the BOV (full OM -> timeline ->
+-- sale cap chain); the 5c term view updates. RAISE rolled it back.
+--
+-- See: docs/architecture/rent-intelligence-engine-phase5-report.md
+-- ============================================================================
+-- (Executable bodies applied live; see report for the full functions + gate.)

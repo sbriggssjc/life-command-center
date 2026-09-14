@@ -24,7 +24,7 @@
 // ============================================================================
 
 import { opsQuery, pgFilterVal, insertEntityRelationship } from './ops-db.js';
-import { entityHasBdSignal, getCadenceState } from './cadence-engine.js';
+import { getCadenceState, cadenceSeedDecision } from './cadence-engine.js';
 
 // Active cadence phases — the ones the priority queue treats as a live next
 // action (must match the reachability/cadence bands + the picker query).
@@ -89,11 +89,14 @@ export async function stampCadenceContactById(cadenceId, { contactEntityId, sfCo
  * Seeding it makes it workable outreach.
  *
  * Boundaries (Producer/Consumer doctrine):
- *   - VALUE-GATE (reuse, not invent): `entityHasBdSignal` — the SAME R63
- *     predicate (Salesforce identity / open opp / SF activity / connected or
- *     portfolio value ≥ floor). A newly-contacted high-value owner passes by
- *     construction (it has value). Below the floor → NO seed (no low-value
- *     cadence spam — preserves R63).
+ *   - VALUE-GATE (reuse, not invent): `cadenceSeedDecision` — the SAME shared
+ *     predicate the sidebar capture path uses. It combines (a) the R63 BD
+ *     signal, TIGHTENED by P112 so a bare Salesforce identity no longer
+ *     qualifies (open opp / real SF activity / connected or portfolio value ≥
+ *     floor), and (b) the P112 REACHABILITY precondition. A newly-contacted
+ *     high-value owner passes by construction (it has value, and the contact we
+ *     just attached makes it reachable). Below the floor, or with no contact
+ *     method and no named person → NO seed.
  *   - IDEMPOTENT: seeds via `getCadenceState`, whose GET-first + race-retry
  *     means an existing cadence (even a paused / converted one) is FOUND, not
  *     duplicated. Only a freshly-CREATED row (`is_new`) counts as a seed; an
@@ -103,23 +106,32 @@ export async function stampCadenceContactById(cadenceId, { contactEntityId, sfCo
  *     `prospecting`, contact set, `next_touch_due=now` so it surfaces); every
  *     advance still goes through `advanceCadence` exclusively.
  *
- * deps injectable for tests: { signalCheck, seedCadence } default to the live
- * `entityHasBdSignal` / `getCadenceState`.
+ * deps injectable for tests: { seedDecision, signalCheck, reachCheck,
+ * seedCadence } default to the live `cadenceSeedDecision` / `getCadenceState`.
  *
  * @returns {Promise<{ok:boolean, seeded?:boolean, cadenceId?:string,
  *   cadenceOppId?:string|null, cadenceNextDue?:string|null, reason?:string}>}
  */
 export async function maybeSeedValuableCadence({ entityId, contactEntityId, sfContactId, floor, deps = {} }) {
   if (!entityId) return { ok: false, reason: 'no_entity' };
-  const signalCheck = deps.signalCheck || entityHasBdSignal;
   const seedCadence = deps.seedCadence || getCadenceState;
-  let hasSignal = false;
+  // P112: one decision covers BOTH the (tightened) value gate and the
+  // reachability precondition. A cadence for a party with no contact method and
+  // no named person can never advance — it is guaranteed to age into "overdue".
+  const decide = deps.seedDecision || cadenceSeedDecision;
+  let decision;
   try {
-    hasSignal = await signalCheck(entityId, { floor });
+    decision = await decide(entityId, {
+      floor,
+      ...(deps.signalCheck ? { signalCheck: deps.signalCheck } : {}),
+      ...(deps.reachCheck ? { reachCheck: deps.reachCheck } : {}),
+    });
   } catch (_e) {
     return { ok: false, reason: 'signal_check_failed' };
   }
-  if (!hasSignal) return { ok: false, reason: 'below_value_floor' };
+  if (!decision || !decision.seed) {
+    return { ok: false, reason: (decision && decision.reason) || 'below_value_floor' };
+  }
   const seed = await seedCadence(
     { entity_id: entityId, contact_id: contactEntityId || null, sf_contact_id: sfContactId || null },
     {}

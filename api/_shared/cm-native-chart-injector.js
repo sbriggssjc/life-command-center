@@ -24,6 +24,9 @@
 // ============================================================================
 
 import JSZip from 'jszip';
+import { readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 
 // ----------------------------------------------------------------------------
 // Excel XML namespace constants
@@ -39,6 +42,7 @@ const CT_DRAWING = 'application/vnd.openxmlformats-officedocument.drawing+xml';
 
 const REL_DRAWING = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing';
 const REL_CHART = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart';
+const REL_IMAGE = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/image';
 const REL_SHEET = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet';
 
 // ----------------------------------------------------------------------------
@@ -49,6 +53,389 @@ function escapeXml(s) {
   return String(s ?? '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+}
+
+// ----------------------------------------------------------------------------
+// c15 (Chart-2012) data-label extension — DEFINITIVE structure (round-3 item 2)
+// ----------------------------------------------------------------------------
+// The round-3 item-2 c15 leader-line extension CORRUPTED the workbook: Excel
+// schema-rejected it and prompted to repair. Root cause (empirically confirmed by
+// diffing Scott's Excel-authored labelsample.xlsx after an open→drag→save round-
+// trip) was THREE invalid children emitted inside the per-dLbl <c:ext>:
+// <c15:layout>, a per-dLbl <c15:showLeaderLines>, and a <c15:leaderLines> stroke
+// block. The rest of the emission was valid — Excel preserved our per-dLbl
+// c:layout offsets and rich text unchanged.
+//
+// The fix mirrors exactly what Excel writes:
+//   • PER-dLbl <c:ext>  → contains ONLY <c15:showDataLabelsRange val="0"/>.
+//   • dLbls-LEVEL <c:ext> (the real leader switch) → contains ONLY
+//     <c15:showLeaderLines val="1"/>, appended as the LAST child of <c:dLbls>.
+//   • NO <c15:layout>, NO per-dLbl showLeaderLines, NO <c15:leaderLines> stroke
+//     anywhere — default leader styling renders correctly (proven in the sample).
+// This is no longer config-gated; the structure is valid, so it always emits.
+
+// Vetted whitelist of c15-namespaced child local-names permitted inside a
+// chart-part <c:ext> block, confirmed valid by the Excel-authored labelsample.xlsx.
+// The per-dLbl ext carries only showDataLabelsRange; the dLbls-level ext only
+// showLeaderLines. The three corrupt children (layout / leaderLines / a per-dLbl
+// showLeaderLines mixed with showDataLabelsRange) are rejected by the gate below.
+const C15_EXT_ALLOWED_CHILDREN = new Set(['showDataLabelsRange', 'showLeaderLines']);
+
+// Regression gate (round-3 item 2): re-scan a generated chart XML part and
+// reject any c15-namespaced <c:ext> that (a) carries a child outside the vetted
+// whitelist, or (b) MIXES the per-dLbl child (showDataLabelsRange) with the
+// dLbls-level child (showLeaderLines) in one ext — a placement error, since each
+// CE6537A1 ext is single-purpose and lives at a distinct level. This backstops
+// the corruption cause: a schema-invalid chart extension can never ship again,
+// even if a future edit re-introduces <c15:layout>/<c15:leaderLines> or moves a
+// child to the wrong level. Returns an array of { element, reason } (empty=clean).
+function validateChartExtWhitelist(xml, template = '') {
+  const out = [];
+  if (typeof xml !== 'string' || !xml) return out;
+  // Only c15 (Chart-2012) ext blocks are in scope; other extLst uris (e.g.
+  // c16) are not emitted by this module. Scan each <c:ext ...>…</c:ext>.
+  const extRe = /<c:ext\b([^>]*)>([\s\S]*?)<\/c:ext>/g;
+  let m;
+  while ((m = extRe.exec(xml)) !== null) {
+    const attrs = m[1] || '';
+    const body = m[2] || '';
+    // Restrict to the c15 (drawing/2012/chart) extension namespace.
+    if (!/xmlns:c15\s*=\s*"http:\/\/schemas\.microsoft\.com\/office\/drawing\/2012\/chart"/.test(attrs)
+        && !/\bc15:/.test(body)) {
+      continue;
+    }
+    // Collect c15 element local-names appearing in this ext.
+    const seen = new Set();
+    for (const t of body.matchAll(/<c15:([A-Za-z][\w-]*)\b/g)) {
+      seen.add(t[1]);
+    }
+    for (const local of seen) {
+      if (!C15_EXT_ALLOWED_CHILDREN.has(local)) {
+        out.push({
+          template,
+          element: `c15:${local}`,
+          reason: `c15 child <c15:${local}> is not in the vetted whitelist (C15_EXT_ALLOWED_CHILDREN)`,
+        });
+      }
+    }
+    // Placement rule — a per-dLbl ext (showDataLabelsRange) and a dLbls-level
+    // ext (showLeaderLines) must never be combined in one <c:ext>.
+    if (seen.has('showDataLabelsRange') && seen.has('showLeaderLines')) {
+      out.push({
+        template,
+        element: 'c15:showDataLabelsRange+showLeaderLines',
+        reason: 'a single CE6537A1 c:ext must not mix the per-dLbl child (showDataLabelsRange) with the dLbls-level child (showLeaderLines) — they belong at different levels',
+      });
+    }
+  }
+  return out;
+}
+
+// ----------------------------------------------------------------------------
+// CM_BRAND — Briggs Brand Standards v3 / Northmarq 2024 (single source of truth)
+// ----------------------------------------------------------------------------
+// CM chart feedback item #1 (2026-08): chart text runs inherited the workbook
+// theme minor font (+mn-lt = Calibri) with no explicit typeface, and several
+// series used off-brand accents (sage #4CB582, amethyst #7E6BAD, amber #D97706).
+// This config is the single knob for chart typography + palette per the Briggs
+// standard, and drives the off-palette linter so any regression surfaces in the
+// export log.
+//
+// ⚠️ TYPEFACE: `typeface` (Open Sans) is the Excel-safe default that renders on
+// every machine. `typefacePreferred` (Futura PT) is the brand primary — flip
+// CM_BRAND.typeface to it (or pass brand.chartFont) ONLY once Futura PT is
+// confirmed installed on every machine that opens these workbooks, else Excel
+// silently falls back to the theme font. Single knob — nothing else changes.
+// Loaded from public/reports/cm-brand.json — DATA, not code, so a future
+// brand-guide update is a JSON change. Falls back to inline defaults if the
+// file is unreadable (keeps the injector working in minimal test contexts).
+const CM_BRAND_FALLBACK = {
+  typeface: 'Futura PT',
+  typefacePreferred: 'Futura PT',
+  palette: {
+    primary: '003DA5', deep: '001159', accent: '62B5E5', blue85: '265AB2',
+    gridline: 'E0E8F4', benchmark: '9EA9B7', peridot: '8FC49E', amethyst: '9B88A5',
+    topaz: '99B2DD', aquamarine: '5FA3A8', tourmaline: 'B6E0DA', morganite: 'D4C8CB',
+    iron: 'D8DFDF', steel: '9EA9B7', slate: '6A748C', charcoal: '3D4A54', ink: '191919',
+    paper: 'FFFFFF', black: '000000',
+  },
+  series: ['003DA5', '62B5E5', '265AB2', '5FA3A8', '8FC49E', '9B88A5', 'B6E0DA', '99B2DD', 'D4C8CB'],
+  series_ramp: ['003DA5', '62B5E5', '265AB2', '5FA3A8', '8FC49E', '9B88A5', 'B6E0DA', '99B2DD', 'D4C8CB'],
+  text: { title: '62B5E5', axisLabel: '6A748C', legend: '6A748C', callout: '003DA5' },
+  sizes: { title: 1200, axisTitle: 900, axisLabel: 700, dataLabel: 900, legend: 900, chartArea: 800 },
+  chartSize: { widthIn: 10.0, heightIn: 4.25, donutWidthIn: 4.25, donutHeightIn: 4.25 },
+  banned: ['4CB582', '7E6BAD', 'D97706', 'D9D9D9', '595959', '1F4E79'],
+};
+
+function loadCmBrand() {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const cfgPath = join(here, '..', '..', 'public', 'reports', 'cm-brand.json');
+    const raw = JSON.parse(readFileSync(cfgPath, 'utf8'));
+    return { ...CM_BRAND_FALLBACK, ...raw };
+  } catch {
+    return CM_BRAND_FALLBACK;
+  }
+}
+
+// CM_BRAND — resolved brand config. `banned` normalized to a Set for O(1)
+// lookup. Per-vertical overrides applied via cmBrandFor(vertical).
+const _CM_BRAND_RAW = loadCmBrand();
+const CM_BRAND = {
+  ..._CM_BRAND_RAW,
+  banned: new Set((_CM_BRAND_RAW.banned || []).map(h => String(h).toUpperCase())),
+};
+
+/**
+ * Resolve the brand config for a vertical, applying any `verticals[<v>]`
+ * override block from cm-brand.json (shallow-merged over the base). Returns
+ * CM_BRAND itself when there is no override.
+ */
+function cmBrandFor(vertical) {
+  const ov = _CM_BRAND_RAW.verticals && _CM_BRAND_RAW.verticals[vertical];
+  if (!ov || Object.keys(ov).length === 0) return CM_BRAND;
+  return {
+    ...CM_BRAND, ...ov,
+    palette: { ...CM_BRAND.palette, ...(ov.palette || {}) },
+    text: { ...CM_BRAND.text, ...(ov.text || {}) },
+  };
+}
+
+// Resolve the active chart font. brand.chartFont wins so the value is
+// overridable per-export without a code change.
+function chartFont(brand) {
+  return (brand && (brand.chartFont || brand.typeface)) || CM_BRAND.typeface;
+}
+
+// Emit <a:latin>/<a:ea>/<a:cs> so a text run declares an explicit typeface
+// instead of inheriting the theme minor font (+mn-lt).
+function fontRunFrag(brand) {
+  const f = escapeXml(chartFont(brand));
+  return `<a:latin typeface="${f}"/><a:ea typeface="${f}"/><a:cs typeface="${f}"/>`;
+}
+
+// ----------------------------------------------------------------------------
+// Marketing chart-formatting feedback (2026-08, ChartEdits.docx) — applied to
+// EVERY chart the injector emits, driven by cm-brand.json so a future spec
+// change is a JSON edit, not code:
+//   • Chart Area: NO fill, NO border line (Format Chart Area → No Fill / No Line)
+//   • Chart Area default font: Futura PT Book, 8pt (CM_BRAND.sizes.chartArea)
+//   • Chart title: Futura PT NOT-bold, ALL CAPS, CM_BRAND.sizes.title (12pt), Sky 62B5E5 — in chartTitleXml() (ChartEdits 2026-08-12)
+//   • X/Y axis tick labels: 7pt, Slate 6A748C (CM_BRAND.sizes.axisLabel / text.axisLabel)
+//   • X (category) axis: label Interval Unit = 1 (tickLblSkip/tickMarkSkip = 1)
+//   • Chart object size fixed in inches (CM_BRAND.chartSize) — in the drawing anchor
+// ----------------------------------------------------------------------------
+
+const EMU_PER_INCH = 914400;
+
+// Fixed chart-object (Chart Area) size in EMU. Donuts are square per marketing.
+function chartSizeEmu(type) {
+  const cs = CM_BRAND.chartSize || {};
+  const isDonut = type === 'doughnut';
+  const wIn = isDonut ? (cs.donutWidthIn ?? 4.25) : (cs.widthIn ?? 10.0);
+  const hIn = isDonut ? (cs.donutHeightIn ?? 4.25) : (cs.heightIn ?? 4.25);
+  return { cx: Math.round(wIn * EMU_PER_INCH), cy: Math.round(hIn * EMU_PER_INCH) };
+}
+
+// chartSpace-level <c:spPr> (No Fill / No Line) + <c:txPr> (default chart-area
+// font). These are children of <c:chartSpace> and, per the CT_ChartSpace schema
+// sequence, come AFTER </c:chart> and BEFORE </c:chartSpace>.
+function chartAreaSpPrTxPr() {
+  const f = escapeXml(CM_BRAND.typeface);
+  const sz = (CM_BRAND.sizes && CM_BRAND.sizes.chartArea) || 800;
+  return `  <c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr>
+  <c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="${sz}" b="0"><a:latin typeface="${f}"/><a:ea typeface="${f}"/><a:cs typeface="${f}"/></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p></c:txPr>`;
+}
+
+// Category-axis label Interval Unit = 1 (marketing: x-axis → Labels → Specify
+// Interval Unit 1). tickLblSkip/tickMarkSkip live near the end of CT_CatAx
+// (before extLst), so inserting just before </c:catAx> is schema-correct.
+const CAT_AX_INTERVAL_UNIT_FRAG = '<c:tickLblSkip val="1"/><c:tickMarkSkip val="1"/>';
+
+// Value-axis (y-axis; also the scatter x-axis) tick-label text run. Marketing
+// follow-up (2026-08): axis labels are 7pt (CM_BRAND.sizes.axisLabel). The
+// category (x) axis carries its own txPr (CAT_AX_VERTICAL_TXT, same size); the
+// value axis had none, so it inherited the 8pt chart-area default — this gives
+// it an explicit sized run. In CT_ValAx the txPr sits after spPr, before
+// crossAx, so it is injected immediately before <c:crossAx>.
+function valAxLabelTxPr() {
+  const f = escapeXml(CM_BRAND.typeface);
+  const sz = (CM_BRAND.sizes && CM_BRAND.sizes.axisLabel) || 700;
+  return `<c:txPr><a:bodyPr rot="0" spcFirstLastPara="1" vertOverflow="ellipsis" wrap="square" anchor="ctr" anchorCtr="1"/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="${sz}" b="0" i="0"><a:solidFill><a:srgbClr val="${CM_BRAND.text.axisLabel}"/></a:solidFill><a:latin typeface="${f}"/><a:ea typeface="${f}"/><a:cs typeface="${f}"/></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p></c:txPr>`;
+}
+
+// Post-process a generated chartSpace XML string to apply the marketing
+// chart-area edits uniformly across every builder (single choke point so no
+// builder can miss them). Idempotent — guards against double application.
+function applyChartAreaBranding(xml) {
+  if (typeof xml !== 'string' || !xml) return xml;
+  let out = xml;
+  // 1. Category-axis interval unit = 1 (only for a <c:catAx> that lacks it).
+  out = out.replace(/<c:catAx>([\s\S]*?)<\/c:catAx>/g, (full, body) => {
+    if (/<c:tickLblSkip\b/.test(body)) return full;
+    return `<c:catAx>${body}${CAT_AX_INTERVAL_UNIT_FRAG}</c:catAx>`;
+  });
+  // 1b. Value-axis tick-label font size (marketing 2026-08: 7pt). Inject a
+  //     txPr before <c:crossAx> in each <c:valAx> that lacks one.
+  out = out.replace(/<c:valAx>([\s\S]*?)<\/c:valAx>/g, (full, body) => {
+    if (/<c:txPr>/.test(body)) return full;
+    const injected = body.replace(/(<c:crossAx\b)/, `${valAxLabelTxPr()}$1`);
+    return `<c:valAx>${injected}</c:valAx>`;
+  });
+  // 2. Chart Area No Fill / No Line + default font, inserted between </c:chart>
+  //    and </c:chartSpace>. Keyed off the </c:chart> tail so it is inserted
+  //    exactly once (a second pass finds spPr/txPr already sitting there).
+  out = out.replace(/(<\/c:chart>)(\s*)(<\/c:chartSpace>)/, (m, a, ws, b) =>
+    `${a}\n${chartAreaSpPrTxPr()}\n${b}`
+  );
+  return out;
+}
+
+// On-brand hex set (uppercase, no '#') for off-palette detection.
+const CM_PALETTE_HEXES = new Set(
+  Object.values(CM_BRAND.palette).map(h => h.toUpperCase())
+    .concat(['000000']) // black baseline reference is allowed
+);
+const CM_BANNED_HEXES = new Set([...CM_BRAND.banned].map(h => h.toUpperCase()));
+
+/**
+ * Reason a color is off-brand, or null when on-brand / non-color. Pure.
+ * Semantic status colors (functional red/green/amber) are intentionally NOT
+ * flagged — only the retired brand accents + non-palette blues.
+ */
+function offPaletteReason(hex) {
+  if (!hex) return null;
+  const h = String(hex).replace('#', '').toUpperCase();
+  if (!/^[0-9A-F]{6}$/.test(h)) return null;
+  if (CM_PALETTE_HEXES.has(h)) return null;
+  if (CM_BANNED_HEXES.has(h)) return `banned off-brand color #${h}`;
+  return `non-palette color #${h}`;
+}
+
+/**
+ * Walk a chart injection spec and return { template, color, reason } for any
+ * off-palette series colors. Used by the exporter to log brand drift without
+ * altering chart output.
+ */
+function scanSpecPalette(injection, template) {
+  const out = [];
+  const spec = injection && injection.spec ? injection.spec : injection;
+  if (!spec || typeof spec !== 'object') return out;
+  const seen = new Set();
+  const check = (c) => {
+    const reason = offPaletteReason(c);
+    if (reason && !seen.has(reason)) { seen.add(reason); out.push({ template, color: c, reason }); }
+  };
+  check(spec.color);
+  for (const key of ['barSeries', 'lineSeries', 'colors']) {
+    const arr = spec[key];
+    if (Array.isArray(arr)) {
+      for (const s of arr) check(typeof s === 'string' ? s : (s && (s.color || s.borderColor)));
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// CM chart fixes round 3, item 4 — universal callout coverage.
+// ---------------------------------------------------------------------------
+// The peak/low/latest callout module was wired per-call-site, so several primary
+// time-series charts shipped with NO callouts (Leveraged Return Indexes,
+// Transaction Count — TTM, Rolling 3-Mo / Quarterly Volume Bars). This is the
+// POLICY LIST: every report chart whose PRIMARY series is a peak/low/latest
+// time-series and therefore MUST emit callouts. The export upgrades the label
+// audit from "emitted labels match computed" to "every policy chart EMITTED
+// labels AND they match" — a policy chart with zero labels fails the export
+// (see assertCalloutCoverage + the export-loop wiring in cm-excel-export.js).
+//
+// Charts deliberately EXCLUDED (no single peak/low/latest primary): stacked
+// bars, donuts, scatter dot plots, box-whisker (rent_psf_box*/rent_by_year_built),
+// horizontal state rankings, term-cohort multi-lines, and marker-only whisker
+// charts (bid_ask_spread*). Add a template here only when it has a labelable
+// primary series.
+const CALLOUT_POLICY_TEMPLATES = new Set([
+  'volume_ttm_by_quarter',
+  'cap_rate_ttm_by_quarter',
+  'transaction_count_ttm',        // round-3 absentee (fixed)
+  'avg_deal_size',
+  'quarterly_volume_bars',        // round-3 absentee (fixed) — the Rolling/Quarterly Volume Bars
+  'nm_vs_market_cap',
+  'dom_and_pct_of_ask',
+  'dom_and_pct_of_ask_monthly',
+  'case_for_renewal',
+  'cash_leveraged_returns',       // round-3 absentee (fixed) — Leveraged Return Indexes
+  'seller_sentiment',
+  'seller_sentiment_monthly',
+]);
+
+// Count the callout (dLbl override) entries a built spec carries across every
+// callout-bearing slot (spec.dataLabels, series[], barSeries[], lineSeries[]).
+// A callout array is the { idx, text, role } shape produced by
+// buildAnnotationsForSpec; chart-level { showVal:true } label modes are NOT
+// peak/low/latest callouts and don't count.
+function countSpecCallouts(spec) {
+  if (!spec || typeof spec !== 'object') return 0;
+  let n = 0;
+  const add = (dl) => { if (Array.isArray(dl)) n += dl.length; };
+  add(spec.dataLabels);
+  for (const key of ['series', 'barSeries', 'lineSeries']) {
+    const arr = spec[key];
+    if (Array.isArray(arr)) for (const s of arr) add(s && s.dataLabels);
+  }
+  return n;
+}
+
+// Throws when a policy-list chart emitted zero callouts. Non-policy templates
+// are a no-op. Called from the export loop with the built spec.
+function assertCalloutCoverage(template, spec) {
+  if (!CALLOUT_POLICY_TEMPLATES.has(template)) return;
+  // Callouts (peak/low/latest) need ≥3 finite plotted points to compute
+  // (buildAnnotationsForSpec returns [] below that). A chart plotting fewer than
+  // 3 rows legitimately has no callouts, so coverage only applies once the
+  // plotted window is large enough — never fail a genuinely sparse chart.
+  const plottedLen = (spec && spec.dataStart != null && spec.dataEnd != null)
+    ? (spec.dataEnd - spec.dataStart + 1)
+    : Infinity;
+  if (plottedLen < 3) return;
+  const n = countSpecCallouts(spec);
+  console.log(`[cm-native-chart-injector] CALLOUT COVERAGE ${template} emitted=${n} plotted=${plottedLen}`);
+  if (n === 0) {
+    throw new Error(
+      `[cm-native-chart-injector] CALLOUT COVERAGE FAILED: policy chart ${template} ` +
+      `emitted 0 peak/low/latest callouts. Every callout-policy chart must label ` +
+      `its primary series. Wire buildAnnotationsForSpec into this template's case.`
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// CM chart fixes round 3, item 5 — theme-color-leak lint (XML level).
+// ---------------------------------------------------------------------------
+// The spec-level palette lint (scanSpecPalette) only sees hex colors the spec
+// declares — it is blind to (a) a <c:ser> that carries NO <c:spPr> at all (so
+// Excel falls back to the Office theme accents, rendering off-brand green/purple)
+// and (b) an explicit <a:schemeClr val="accent*"/> inside a series. This lints
+// the GENERATED chart XML so either failure fails the export. Every data series
+// must carry an explicit srgbClr fill/line from cm-brand.json.
+function lintChartSeriesXml(xml, template = '') {
+  const out = [];
+  if (typeof xml !== 'string' || !xml) return out;
+  // Split into <c:ser>…</c:ser> blocks and check each.
+  const serRe = /<c:ser\b[\s\S]*?<\/c:ser>/g;
+  let m;
+  let idx = 0;
+  while ((m = serRe.exec(xml)) !== null) {
+    const ser = m[0];
+    if (!/<c:spPr>/.test(ser) && !/<c:spPr\s*\/>/.test(ser)) {
+      out.push({ template, series: idx, reason: 'series has no <c:spPr> (falls back to theme accents)' });
+    }
+    const accent = ser.match(/<a:schemeClr\s+val="(accent\d)"/);
+    if (accent) {
+      out.push({ template, series: idx, reason: `series uses theme <a:schemeClr val="${accent[1]}"/> instead of an explicit brand fill` });
+    }
+    idx++;
+  }
+  return out;
 }
 
 // R37 P1 — default cat-axis date format. Renders 2026-03-31 as "1Q-2026"
@@ -101,15 +488,25 @@ const CAT_AX_TICK_LBL_POS = '<c:tickLblPos val="low"/>';
 // auto-cuts them. Vertical rotation is the master's chosen idiom.
 //
 // txPr appears after spPr / before crossAx in the EG_AxShared sequence.
-// Color 595959 (NM neutral gray, dark enough to print) matches R63.
+// Color 3D4A54 (NM neutral gray, dark enough to print) matches R63.
 const CAT_AX_VERTICAL_TXT = `<c:txPr>
           <a:bodyPr rot="-5400000" spcFirstLastPara="1" vertOverflow="ellipsis" wrap="square" anchor="ctr" anchorCtr="1"/>
           <a:lstStyle/>
-          <a:p><a:pPr><a:defRPr sz="900" b="0" i="0"><a:solidFill><a:srgbClr val="595959"/></a:solidFill></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p>
+          <a:p><a:pPr><a:defRPr sz="${CM_BRAND.sizes.axisLabel}" b="0" i="0"><a:solidFill><a:srgbClr val="${CM_BRAND.text.axisLabel}"/></a:solidFill><a:latin typeface="${CM_BRAND.typeface}"/><a:ea typeface="${CM_BRAND.typeface}"/><a:cs typeface="${CM_BRAND.typeface}"/></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p>
         </c:txPr>`;
 // R66 — retained alias so call sites read naturally; R63's "horizontal"
 // naming was a misnomer once the master parity was confirmed.
 const CAT_AX_HORIZONTAL_TXT = CAT_AX_VERTICAL_TXT;
+
+// A GENUINELY horizontal cat-axis txPr (rot="0"). Opt-in per chart via
+// spec.horizontalCatLabels for charts whose category labels are short enough to
+// read horizontally (marketing ChartEdits 2026-08-12: "Available – Avg Price by
+// Term Bucket" x-axis Text Direction = Horizontal). Same 7pt slate label style.
+const CAT_AX_TRUE_HORIZONTAL_TXT = `<c:txPr>
+          <a:bodyPr rot="0" spcFirstLastPara="1" vertOverflow="ellipsis" wrap="square" anchor="ctr" anchorCtr="1"/>
+          <a:lstStyle/>
+          <a:p><a:pPr><a:defRPr sz="${CM_BRAND.sizes.axisLabel}" b="0" i="0"><a:solidFill><a:srgbClr val="${CM_BRAND.text.axisLabel}"/></a:solidFill><a:latin typeface="${CM_BRAND.typeface}"/><a:ea typeface="${CM_BRAND.typeface}"/><a:cs typeface="${CM_BRAND.typeface}"/></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p>
+        </c:txPr>`;
 
 // ----------------------------------------------------------------------------
 // R37 P2 — value-axis range pinning + number format
@@ -261,6 +658,143 @@ function fitDataAxisRange(values, kind = 'percent') {
   return { min: r6(min), max: r6(max) };
 }
 
+// CM chart fixes round 2, item 2 — derive a value-axis range from EVERY series
+// bound to that axis, not a single series. The combo cases historically pinned a
+// secondary (cap-rate) axis max off the average-cap series alone, so a quartile-
+// band top or a second cohort line taller than the pin clipped. This flattens
+// all provided series keys across the plotted rows, fits via fitDataAxisRange,
+// then GUARANTEES the snapped max strictly covers the true data max. It also
+// logs per-axis data-max vs axis-max so a clip can never recur silently.
+//   opts.kind     — fitDataAxisRange kind ('cap' default).
+//   opts.minFloor — pin the axis min (deliberate low floor, e.g. to lift a band
+//                   into the upper frame). Omit to let the fit choose the min.
+//   opts.fallback — literal range used when there is nothing to fit (<2 points).
+// Returns null only when there's no fit AND no fallback.
+function fitAxisToSeries(templateId, axisLabel, plottedRows, seriesKeys, opts = {}) {
+  const STEP = opts.step || 0.005;
+  const r6 = (n) => Math.round(n * 1e6) / 1e6;
+  const vals = [];
+  for (const r of (Array.isArray(plottedRows) ? plottedRows : [])) {
+    for (const k of seriesKeys) {
+      const v = Number(r == null ? NaN : r[k]);
+      if (Number.isFinite(v)) vals.push(v);
+    }
+  }
+  const dataMax = vals.length ? Math.max(...vals) : null;
+  const dataMin = vals.length ? Math.min(...vals) : null;
+  const fit = fitDataAxisRange(vals, opts.kind || 'cap');
+  let range = fit ? { min: fit.min, max: fit.max } : (opts.fallback ? { ...opts.fallback } : null);
+  if (range) {
+    if (opts.minFloor != null) range.min = opts.minFloor;
+    // The band/second-series high must be strictly inside the axis — snap the
+    // max UP a step past the true data max whenever the fit/fallback fell short.
+    if (dataMax != null && range.max < dataMax) {
+      range.max = r6(Math.ceil(dataMax / STEP) * STEP);
+    }
+    if (range.max <= range.min) range.max = r6(range.min + STEP);
+  }
+  console.log(
+    `[cm-native-chart-injector] axis-fit template=${templateId} axis=${axisLabel} ` +
+    `series=[${seriesKeys.join(',')}] data-min=${dataMin != null ? dataMin : 'none'} ` +
+    `data-max=${dataMax != null ? dataMax : 'none'} ` +
+    `axis-min=${range ? range.min : 'auto'} axis-max=${range ? range.max : 'auto'}` +
+    `${range && dataMax != null && dataMax > range.max ? ' CLIP!' : ''}`
+  );
+  return range;
+}
+
+// CM chart fixes round 3, item 3 — pad+snap axis fit that ALWAYS emits a
+// computed MIN (not just a computed max) so a percent/cap axis never dead-zones
+// from 0 when the data sits well above zero. This was the Bid-Ask regression:
+// the deployed books carried an explicit min=0 / max=0.085 on the cap axis while
+// the plotted Last-Ask/Achieved band spans ~0.0478–0.0971, so both bounds were
+// wrong. Rule (per marketing review): compute min = dataMin − 8% of range,
+// snapped down to `grid`, and max = dataMax + 8% of range, snapped up — but only
+// apply the computed min where dataMin is materially above zero (> minAbsFloor,
+// default 1%). Genuinely-near-zero series (e.g. Cost of Capital's treasury line)
+// and 100%-stacked charts (Buyer Pool 0–1) are EXEMPT and keep min 0 — pass
+// stacked01 or let the near-zero floor catch them.
+//   @param {number[]} values  the plotted values across every series on the axis
+//   @returns {{min,max}|null}  null when there are < 2 finite points (caller
+//                              falls back to its prior literal — no regression)
+function padSnapRange(values, opts = {}) {
+  const padFrac = opts.padFrac != null ? opts.padFrac : 0.08;
+  const grid = opts.grid || 0.001;
+  const minAbsFloor = opts.minAbsFloor != null ? opts.minAbsFloor : 0.01;
+  const vals = (Array.isArray(values) ? values : [])
+    .map(Number)
+    .filter((v) => Number.isFinite(v));
+  if (vals.length < 2) return null;
+  const r6 = (n) => Math.round(n * 1e6) / 1e6;
+  const mn = Math.min(...vals);
+  const mx = Math.max(...vals);
+  const range = (mx - mn) || Math.abs(mx) || grid;
+  const pad = padFrac * range;
+  let max = r6(Math.ceil((mx + pad) / grid) * grid);
+  let min;
+  if (opts.stacked01) {
+    min = 0;
+  } else if (mn > minAbsFloor) {
+    min = r6(Math.max(0, Math.floor((mn - pad) / grid) * grid));
+  } else {
+    min = 0; // near-zero series → keep the zero baseline (exempt)
+  }
+  if (max <= min) max = r6(min + grid);
+  return { min, max };
+}
+
+// CM close-out item 3 (bid-ask third strike) — the SHARED zero-floor assertion.
+// A percent (cap-rate) axis whose plotted data sits well above 1% must NEVER be
+// pinned to a min of 0 (a "zero dead-zone" that squashes the series into the top
+// of the frame). This is the failure that recurred across three rounds because it
+// was fixed on one artifact's axis path while the other still emitted min=0. Both
+// the native XLSX injector AND the PNG image renderer call this on the bid-ask cap
+// axis so a regression fails LOUDLY in the export log instead of shipping silently.
+//   Returns true when OK; logs console.error + returns false on a zero-floor
+//   violation (dataMin > floorPct but axisMin <= 0). Never throws — the export
+//   still completes, but the log line is greppable and unmistakable.
+function assertPercentAxisMin({ label, dataMin, axisMin, floorPct = 0.01 } = {}) {
+  const dMin = Number(dataMin);
+  const aMin = Number(axisMin);
+  const violated =
+    Number.isFinite(dMin) && dMin > floorPct &&
+    (!Number.isFinite(aMin) || aMin <= 0);
+  if (violated) {
+    console.error(
+      `[cm-axis-assert] ZERO-FLOOR VIOLATION on ${label || 'percent-axis'}: ` +
+      `data-min=${dMin} (> ${floorPct}) but axis-min=${Number.isFinite(aMin) ? aMin : 'auto/0'}. ` +
+      `A percent axis with data well above 1% must compute a real min (padSnapRange), not 0.`
+    );
+  }
+  return !violated;
+}
+
+// CM close-out item 3 (bid-ask, final) — the SINGLE per-axis fit+assert entry.
+// Fits a percent axis to ONLY the series assigned to that axis (padSnapRange) AND
+// asserts the result in one call, so the pinned range and the zero-floor check can
+// never diverge. This is what "evaluate per-axis after series assignment" means:
+// the caller passes the values of the series actually drawn on THIS axis (e.g. the
+// cap axis gets [last_ask, achieved] — the spread lives only as floating-bar
+// geometry, never as a cap-axis series), and gets back the range to pin.
+//   @returns {{min,max}|null} the range to pin (null when < 2 finite points →
+//                             caller keeps its literal fallback).
+function fitPercentAxis(label, seriesValues, opts = {}) {
+  const range = padSnapRange(seriesValues, opts);
+  const vals = (Array.isArray(seriesValues) ? seriesValues : [])
+    .map(Number).filter((v) => Number.isFinite(v));
+  const dataMin = vals.length ? Math.min(...vals) : null;
+  const dataMax = vals.length ? Math.max(...vals) : null;
+  if (range) {
+    console.log(
+      `[cm-axis-fit] ${label} data-min=${dataMin} data-max=${dataMax} ` +
+      `axis-min=${range.min} axis-max=${range.max}` +
+      `${dataMax != null && dataMax > range.max ? ' MAX-CLIP!' : ''}`
+    );
+    assertPercentAxisMin({ label, dataMin, axisMin: range.min });
+  }
+  return range;
+}
+
 // Emit <c:scaling> block with optional min/max. If both are undefined
 // returns the default orientation-only scaling. otherwise embeds the
 // pinned range.
@@ -286,10 +820,10 @@ function valAxNumFmtFrag(numFmt) {
 // emitting the gridlines block explicitly pins the visual.
 //
 // Master uses tx1 schemeClr with lumMod 15000 / lumOff 85000
-// (= "Black, Text 1, Lighter 85%" → ~#D9D9D9). We use the equivalent
+// (= "Black, Text 1, Lighter 85%" → ~#E0E8F4). We use the equivalent
 // srgbClr so the color stays consistent regardless of the workbook's
 // theme — same approach we use for series colors elsewhere.
-const VAL_AX_GRIDLINE_COLOR = 'D9D9D9';  // ~85%-lightened tx1 (master parity)
+const VAL_AX_GRIDLINE_COLOR = 'E0E8F4';  // ~85%-lightened tx1 (master parity)
 const MAJOR_GRIDLINES_FRAG =
   `<c:majorGridlines>` +
     `<c:spPr><a:ln w="9525" cap="flat" cmpd="sng" algn="ctr">` +
@@ -316,6 +850,7 @@ const fmtCurrencyBNative   = (v) => '$' + (Number(v) / 1_000_000_000).toFixed(2)
 const fmtCurrencyNative    = (v) => '$' + Math.round(Number(v)).toLocaleString('en-US');
 const fmtCurrencyKNative   = (v) => '$' + Math.round(Number(v) / 1000) + 'K';
 const fmtIndexNative       = (v) => Number(v).toFixed(1);
+const fmtIntegerNative     = (v) => Math.round(Number(v)).toLocaleString('en-US');
 const fmtCurrencyPerSfNative = (v) => '$' + Number(v).toFixed(2);
 
 // Map a named formatter string to its function. Used in the buildInjectionSpec
@@ -329,7 +864,36 @@ const ANNOTATION_FORMATTERS = {
   currency_k:    fmtCurrencyKNative,
   currency_psf:  fmtCurrencyPerSfNative,
   index:         fmtIndexNative,
+  integer:       fmtIntegerNative,
 };
+
+// A2 — infer the annotation formatter name from a y-axis Excel numFmt string
+// so line charts without an explicit annotateFmt still label max/min/latest in
+// a format that matches their axis. Returns null when it can't tell (skips the
+// auto-callout rather than mis-formatting).
+function inferAnnotationFmt(numFmt) {
+  if (!numFmt || typeof numFmt !== 'string') return null;
+  const f = numFmt;
+  if (f.includes('%')) return /0\.00/.test(f) ? 'pct2' : 'pct1';
+  if (f.includes('$')) {
+    if (/,,,/.test(f)) return 'currency_b';   // billions
+    if (/,,/.test(f))  return 'currency_m';    // millions
+    if (/,"K"|,"k"/.test(f) || /,K/.test(f)) return 'currency_k';
+    if (/0\.00/.test(f)) return 'currency_psf';
+    return 'currency';
+  }
+  return null;
+}
+
+function currencyScaleForValues(values) {
+  const maxAbs = (values || [])
+    .map((v) => Math.abs(Number(v)))
+    .filter(Number.isFinite)
+    .reduce((m, v) => Math.max(m, v), 0);
+  return maxAbs >= 1_000_000_000
+    ? { valAxNumFmt: VAL_FMT_CURRENCY_B, annotateFmt: 'currency_b' }
+    : { valAxNumFmt: VAL_FMT_CURRENCY_M_1DP, annotateFmt: 'currency_m' };
+}
 
 /**
  * Given an array of rows + a value-extraction function, return the
@@ -341,61 +905,206 @@ const ANNOTATION_FORMATTERS = {
  * @param {Function} formatter (number) => string
  * @returns {Array<{idx: number, text: string}>} 0..3 label entries
  */
-function buildAnnotationsForSpec(rows, getter, formatter) {
+// CM chart fixes round 2, item 3 — callout selection + audit.
+//
+//   a. `rows` MUST be the DISPLAYED (cropped + as-of-clamped + MIN_YEAR-trimmed
+//      `plottedRows`) set, NOT the full underlying range. The emitted <c:idx> is
+//      a position in the plotted series, so computing max/min/latest against a
+//      longer array offsets every label onto the wrong datapoint (the historical
+//      mislabel bug). All callers now pass `plottedRows`.
+//   d. LABEL AUDIT — when `auditLabel` is supplied, print the three computed
+//      values + their row indexes and assert the emitted <c:idx> set is exactly
+//      the computed {max,min,last} set (deduped) and every idx is in range. A
+//      wrong selection throws, failing the export loudly rather than shipping a
+//      mislabeled chart.
+// Latest-only annotation: a single "Latest <value>" callout at the last finite
+// point. `simplePos` (t/b/l/r) places it relative to its own line end instead of
+// the top band, so N series' Latest labels spread by the lines' natural spacing.
+function buildLatestOnlyForSpec(rows, getter, formatter, simplePos = 'r', color = null) {
+  if (!Array.isArray(rows) || rows.length === 0) return [];
+  const points = rows
+    .map((r, i) => ({ idx: i, val: Number(getter(r)) }))
+    .filter(p => Number.isFinite(p.val));
+  if (points.length === 0) return [];
+  const lastP = points[points.length - 1];
+  return [{ idx: lastP.idx, text: formatter(lastP.val), role: 'last', label: 'Latest', simplePos, color }];
+}
+
+function buildAnnotationsForSpec(rows, getter, formatter, auditLabel = '', color = null) {
   if (!Array.isArray(rows) || rows.length === 0) return [];
   // Filter to (idx, val) where val is a finite number
   const points = rows
-    .map((r, i) => ({ idx: i, val: getter(r) }))
-    .filter(p => p.val != null && Number.isFinite(Number(p.val)));
+    .map((r, i) => ({ idx: i, val: Number(getter(r)) }))
+    .filter(p => Number.isFinite(p.val));
   if (points.length < 3) return [];
 
   let maxP = points[0], minP = points[0];
   for (const p of points) {
-    if (Number(p.val) > Number(maxP.val)) maxP = p;
-    if (Number(p.val) < Number(minP.val)) minP = p;
+    if (p.val > maxP.val) maxP = p;
+    if (p.val < minP.val) minP = p;
   }
   const lastP = points[points.length - 1];
 
   const out = [];
-  // Last (primary callout — emit first so it's deterministically present)
-  out.push({ idx: lastP.idx, text: formatter(lastP.val) });
-  // Max — emit only if distinct from last
+  // Last (primary callout — emit first so it's deterministically present).
+  // `role` drives the leader-line offset direction in dLblXml (A2).
+  out.push({ idx: lastP.idx, text: formatter(lastP.val), role: 'last', label: 'Latest', color });
+  // Max — emit only if distinct from last (dedupe coincident max/latest).
   if (maxP.idx !== lastP.idx) {
-    out.push({ idx: maxP.idx, text: formatter(maxP.val) });
+    out.push({ idx: maxP.idx, text: formatter(maxP.val), role: 'max', label: 'Peak', color });
   }
-  // Min — emit only if distinct from both
+  // Min — emit only if distinct from both.
   if (minP.idx !== lastP.idx && minP.idx !== maxP.idx) {
-    out.push({ idx: minP.idx, text: formatter(minP.val) });
+    out.push({ idx: minP.idx, text: formatter(minP.val), role: 'min', label: 'Low', color });
+  }
+
+  {
+    const rowCount = rows.length;
+    const emittedIdx = out.map(o => o.idx);
+    const expectedIdx = new Set([lastP.idx, maxP.idx, minP.idx]);
+    console.log(
+      `[cm-native-chart-injector] LABEL AUDIT ${auditLabel || 'primary'} n=${rowCount} ` +
+      `max={idx:${maxP.idx},val:${maxP.val}} min={idx:${minP.idx},val:${minP.val}} ` +
+      `last={idx:${lastP.idx},val:${lastP.val}} emitted-idx=[${emittedIdx.join(',')}]`
+    );
+    for (const idx of emittedIdx) {
+      if (idx < 0 || idx >= rowCount || !expectedIdx.has(idx)) {
+        throw new Error(
+          `[cm-native-chart-injector] LABEL AUDIT FAILED ${auditLabel}: emitted idx ${idx} ` +
+          `is out of range [0,${rowCount}) or not in computed {max,min,last} ` +
+          `{${[...expectedIdx].join(',')}}`
+        );
+      }
+    }
   }
   return out;
 }
 
+// CM close-out (label placement) — ALL callout labels (Peak / Low / Latest) sit
+// in the SAME blank band above the plotted data, never inside it. The prior
+// design floated each label by an offset RELATIVE to its own point (max up, min
+// DOWN), so the "Low" label landed deep in the data near the axis floor. Now each
+// label is pinned to an ABSOLUTE vertical position via yMode="edge" — a fraction
+// of the chart area measured from the top — so it always renders in the header
+// gap above the data, with a leader line dropping down to its marker. The
+// horizontal position stays at the point (xMode defaults to "factor", x offset 0)
+// with a tiny per-role nudge so coincident points don't overlap. DLBL_TOP_Y is a
+// fraction of the CHART area from the top and must land INSIDE the plot's top
+// headroom — below the title + y-axis-max label (~top 0.10), above the tallest
+// data point. 0.09 was too high (labels overlapped the title / axis-max, "outside
+// the charted area"); 0.13 drops them into the blank headroom just above the data.
+// Bigger = lower (toward the data); smaller = higher (toward the title). The x
+// nudges are all slightly POSITIVE (rightward) so a leftmost point's label clears
+// the y-axis labels instead of colliding with them.
+const DLBL_TOP_Y = 0.13;
+// CM close-out (label de-collision) — two remaining issues after the top-band
+// pin: (1) the rightmost "Latest" callout sits at the last point (x≈1.0); a
+// POSITIVE x nudge pushed it past the plot's right border ("goes off the page"),
+// so `last` now nudges NEGATIVE (leftward, into the plot). (2) On a multi-series
+// chart each series emits its own Peak/Low/Latest at the SAME top-band y, so two
+// series whose peaks fall at nearby x overlap. dLblsXml/dLblXml take a
+// `bandIndex` (the series ordinal); band N drops DLBL_BAND_STEP lower, stacking
+// the series' callout rows instead of colliding. Band 0 = the base top band.
+const DLBL_BAND_STEP = 0.06;
+// All callouts sit in the TOP whitespace headroom (above the plotted data) with a
+// leader line down to their point — never over the data. Peak/Low share the top
+// row; Latest is nudged LEFT so the last-point label clears the right border. On a
+// multi-series chart each series' row is offset by DLBL_BAND_STEP (small, so the
+// rows stay in the top headroom, not pushed into the data), AND its text is
+// color-matched to the series line so overlapping rows stay decipherable.
+const DLBL_ROLE_OFFSET = {
+  max:  { x: 0.01, y: DLBL_TOP_Y, yMode: 'edge' },   // top row, above the peak
+  min:  { x: 0.02, y: DLBL_TOP_Y, yMode: 'edge' },   // top row (NOT down at the trough)
+  last: { x: -0.05, y: DLBL_TOP_Y, yMode: 'edge' },  // top row, pulled LEFT off the right border
+};
+
+// Callout brand text (item 3c): charcoal label word, emphasized (bold) value.
+const DLBL_LABEL_COLOR = (CM_BRAND.palette && CM_BRAND.palette.charcoal) || '3D4A54';
+const DLBL_VALUE_COLOR = (CM_BRAND.palette && CM_BRAND.palette.charcoal) || '3D4A54';
+
 /**
  * Emit a single <c:dLbl> block overriding one data point with a custom
  * text label. The other points in the series get no label (via the
- * surrounding <c:dLbls> showXxx=0 defaults).
+ * surrounding <c:dLbls> showXxx=0 defaults). The label reads
+ * "<Peak|Low|Latest> <value>" — the role word in regular-weight charcoal, the
+ * value bold (emphasized), matching cm-brand.json.
  */
-function dLblXml(idx, text) {
+function dLblXml(idx, text, role, label, bandIndex = 0, simplePos = null, color = null, yEdge = null, xNudge = null) {
+  // simplePos (t/b/l/r/ctr) — place the label relative to its own point via
+  // <c:dLblPos> instead of the absolute top-band manual layout. Used where each
+  // series' single "Latest" label should sit at its own line end (e.g. the 4-cohort
+  // cap charts) so they spread by the lines' natural vertical separation.
+  const usePos = ['t', 'b', 'l', 'r', 'ctr'].includes(simplePos);
+  const base = DLBL_ROLE_OFFSET[role];
+  // Drop this series' callout row by band so multi-series peaks/lasts at nearby
+  // x stack vertically instead of overlapping (band 0 = the base top band).
+  // yEdge (0..1, absolute fraction of the chart area from the top) — an explicit
+  // per-label vertical override that WINS over the role/band offset. Used by the
+  // 4-cohort cap charts to split the Latest callouts into a TOP whitespace band
+  // (the 2 highest-value cohorts) and a BOTTOM whitespace band (the 2 lowest) so
+  // no label sits over a line. Always yMode="edge"; x keeps its role/factor nudge.
+  const hasYEdge = Number.isFinite(yEdge);
+  let off = hasYEdge
+    ? { x: (base && base.x) || 0, y: yEdge, yMode: 'edge' }
+    : (base && bandIndex ? { ...base, y: base.y + bandIndex * DLBL_BAND_STEP } : base);
+  // xNudge (factor offset, +right/-left) — an explicit per-label horizontal shift
+  // that moves a callout off the plotted data into side whitespace (e.g. a Peak
+  // label sitting on top of the volume-area apex → nudged left/right).
+  if (off && Number.isFinite(xNudge)) off = { ...off, x: xNudge };
+  // yMode="edge" pins the label to an ABSOLUTE vertical position (fraction of the
+  // chart area from the top) so every callout sits in the same top band above the
+  // data; x stays in the default "factor" mode (offset from the point) so the
+  // label stays over its marker. Per CT_ManualLayout the mode elements precede the
+  // x/y values. When no yMode is given we fall back to the legacy factor offset.
+  const yModeFrag = off && off.yMode ? `<c:yMode val="${off.yMode}"/>` : '';
+  const layoutFrag = (!usePos && off)
+    ? `<c:layout><c:manualLayout>${yModeFrag}<c:x val="${off.x}"/><c:y val="${off.y}"/></c:manualLayout></c:layout>`
+    : '';
+  // dLblPos sits AFTER <c:tx> and before the show* group per CT_DLbl order.
+  const dLblPosFrag = usePos ? `<c:dLblPos val="${simplePos}"/>` : '';
+  // CM chart fixes round 3, item 2 (DEFINITIVE) — Excel writes a per-dLbl
+  // CE6537A1 extension on every custom label, and it carries ONLY
+  // <c15:showDataLabelsRange val="0"/> (this label's text is literal, not sourced
+  // from a cell range). The corrupt round-3 children (<c15:layout>, a per-dLbl
+  // <c15:showLeaderLines>, and the <c15:leaderLines> stroke block) are GONE —
+  // they were the schema violations that made Excel repair the workbook. The
+  // actual leader-line switch lives at the dLbls level (see dLblsXml). extLst is
+  // the LAST child of <c:dLbl> per the CT_DLbl schema order. Always emitted (the
+  // structure is now valid); the plain <c:layout> above still carries the float.
+  const c15Frag = `
+            <c:extLst>
+              <c:ext uri="{CE6537A1-D6FC-4f65-9D91-7224C49458BB}" xmlns:c15="http://schemas.microsoft.com/office/drawing/2012/chart">
+                <c15:showDataLabelsRange val="0"/>
+              </c:ext>
+            </c:extLst>`;
+  const font = (t) => `<a:latin typeface="${t}"/><a:ea typeface="${t}"/><a:cs typeface="${t}"/>`;
+  // Optional per-series color so a multi-series chart's callouts are color-matched
+  // to their line (disambiguates which label belongs to which series).
+  const _lblColor = color ? String(color).replace('#', '') : DLBL_LABEL_COLOR;
+  const _valColor = color ? String(color).replace('#', '') : DLBL_VALUE_COLOR;
+  const labelRun = label
+    ? `<a:r><a:rPr lang="en-US" b="0" sz="800"><a:solidFill><a:srgbClr val="${_lblColor}"/></a:solidFill>${font(CM_BRAND.typeface)}</a:rPr><a:t>${escapeXml(label)} </a:t></a:r>`
+    : '';
+  const valueRun = `<a:r><a:rPr lang="en-US" b="1" sz="900"><a:solidFill><a:srgbClr val="${_valColor}"/></a:solidFill>${font(CM_BRAND.typeface)}</a:rPr><a:t>${escapeXml(text)}</a:t></a:r>`;
   return `          <c:dLbl>
             <c:idx val="${idx}"/>
+            ${layoutFrag}
             <c:tx>
               <c:rich>
                 <a:bodyPr wrap="none" anchor="ctr"/>
                 <a:lstStyle/>
                 <a:p>
-                  <a:r>
-                    <a:rPr lang="en-US" b="1" sz="900"/>
-                    <a:t>${escapeXml(text)}</a:t>
-                  </a:r>
+                  ${labelRun}${valueRun}
                 </a:p>
               </c:rich>
             </c:tx>
+            ${dLblPosFrag}
             <c:showLegendKey val="0"/>
             <c:showVal val="0"/>
             <c:showCatName val="0"/>
             <c:showSerName val="0"/>
             <c:showPercent val="0"/>
-            <c:showBubbleSize val="0"/>
+            <c:showBubbleSize val="0"/>${c15Frag}
           </c:dLbl>`;
 }
 
@@ -409,6 +1118,9 @@ function dLblXml(idx, text) {
 // cm-excel-export.js (`titleRow` line ~1250).
 function chartTitleXml(text) {
   if (!text) return '<c:autoTitleDeleted val="1"/>';
+  // Marketing ChartEdits 2026-08-12: chart titles are NOT bold (b="0"), ALL CAPS,
+  // 12pt, Sky 62B5E5. Size + color come from CM_BRAND; caps applied here.
+  const titleText = String(text).toUpperCase();
   return `<c:title>
       <c:tx>
         <c:rich>
@@ -416,18 +1128,19 @@ function chartTitleXml(text) {
           <a:lstStyle/>
           <a:p>
             <a:pPr algn="ctr">
-              <a:defRPr sz="1200" b="1" i="0" u="none" strike="noStrike" kern="1200" spc="0" baseline="0">
-                <a:solidFill><a:srgbClr val="003DA5"/></a:solidFill>
-                <a:latin typeface="+mn-lt"/>
-                <a:ea typeface="+mn-ea"/>
-                <a:cs typeface="+mn-cs"/>
+              <a:defRPr sz="${CM_BRAND.sizes.title}" b="0" i="0" u="none" strike="noStrike" kern="1200" spc="0" baseline="0">
+                <a:solidFill><a:srgbClr val="${CM_BRAND.text.title}"/></a:solidFill>
+                <a:latin typeface="${CM_BRAND.typeface}"/>
+                <a:ea typeface="${CM_BRAND.typeface}"/>
+                <a:cs typeface="${CM_BRAND.typeface}"/>
               </a:defRPr>
             </a:pPr>
             <a:r>
-              <a:rPr lang="en-US" sz="1200" b="1">
-                <a:solidFill><a:srgbClr val="003DA5"/></a:solidFill>
+              <a:rPr lang="en-US" sz="${CM_BRAND.sizes.title}" b="0">
+                <a:solidFill><a:srgbClr val="${CM_BRAND.text.title}"/></a:solidFill>
+                <a:latin typeface="${CM_BRAND.typeface}"/><a:ea typeface="${CM_BRAND.typeface}"/><a:cs typeface="${CM_BRAND.typeface}"/>
               </a:rPr>
-              <a:t>${escapeXml(text)}</a:t>
+              <a:t>${escapeXml(titleText)}</a:t>
             </a:r>
           </a:p>
         </c:rich>
@@ -493,18 +1206,42 @@ function trendlineXml(t) {
  *      (defaults to source-linked).
  *   3. Anything else → empty (no label block emitted).
  */
-function dLblsXml(spec) {
-  // Mode 1 — legacy array of per-point labels (R37 P3)
+function dLblsXml(spec, bandIndex = 0) {
+  // Mode 1 — array of per-point labels (R37 P3 + A2 max/min/latest callouts).
+  // A2: emit showLeaderLines so the role-offset labels draw a leader back to
+  // their point. bandIndex (the series ordinal on multi-series charts) drops this
+  // series' callout row so nearby peaks/lasts stack instead of overlapping.
   if (Array.isArray(spec) && spec.length > 0) {
-    const lbls = spec.map(p => dLblXml(p.idx, p.text)).join('\n');
+    const lbls = spec.map(p => dLblXml(p.idx, p.text, p.role, p.label, bandIndex, p.simplePos, p.color, p.yEdge, p.xNudge)).join('\n');
+    // Item 3 (recommended, from Excel's own output) — give the floated callouts a
+    // brand callout-box look so they stay legible where they sit over the plotted
+    // lines: paper (FFFFFF) fill + a Blue-12 (E0E8F4) hairline. Per CT_DLbls order
+    // spPr precedes the show* group. Sits at the dLbls level so it styles all the
+    // per-point callouts uniformly.
+    const spPrFrag = `          <c:spPr>
+            <a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill>
+            <a:ln w="9525"><a:solidFill><a:srgbClr val="E0E8F4"/></a:solidFill></a:ln>
+          </c:spPr>`;
+    // The DEFINITIVE leader-line switch — a dLbls-level CE6537A1 ext carrying ONLY
+    // <c15:showLeaderLines val="1"/>, appended as the LAST child of <c:dLbls>
+    // (after the show* group + the plain c:showLeaderLines). This is exactly what
+    // Excel writes; no <c15:leaderLines> stroke block (default styling renders).
+    const c15LevelExt = `          <c:extLst>
+            <c:ext uri="{CE6537A1-D6FC-4f65-9D91-7224C49458BB}" xmlns:c15="http://schemas.microsoft.com/office/drawing/2012/chart">
+              <c15:showLeaderLines val="1"/>
+            </c:ext>
+          </c:extLst>`;
     return `        <c:dLbls>
 ${lbls}
+${spPrFrag}
           <c:showLegendKey val="0"/>
           <c:showVal val="0"/>
           <c:showCatName val="0"/>
           <c:showSerName val="0"/>
           <c:showPercent val="0"/>
           <c:showBubbleSize val="0"/>
+          <c:showLeaderLines val="1"/>
+${c15LevelExt}
         </c:dLbls>`;
   }
   // Mode 2 — R60 chart-level showVal for "label every point" mode
@@ -516,15 +1253,28 @@ ${lbls}
     // firm-term-bucket combo (G23/D9) spread its 4 overlapping cap labels
     // around their diamonds instead of stacking them all above (default 't').
     const pos = ['t', 'b', 'l', 'r', 'ctr'].includes(spec.pos) ? spec.pos : 't';
+    // CM close-out — optional branded callout styling for showVal labels:
+    //   serName:true → prefix each label with the series name ("Avg Cap: 6.50%")
+    //   boxed:true   → white callout box + hairline + brand charcoal text, matching
+    //                  the Peak/Low/Latest callouts. Per CT_DLbls order spPr → txPr
+    //                  precede dLblPos, and separator sits after the show* group.
+    const boxedFrag = spec.boxed
+      ? `          <c:spPr><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:ln w="9525"><a:solidFill><a:srgbClr val="E0E8F4"/></a:solidFill></a:ln></c:spPr>
+          <c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="800" b="1"><a:solidFill><a:srgbClr val="${DLBL_VALUE_COLOR}"/></a:solidFill><a:latin typeface="${CM_BRAND.typeface}"/><a:ea typeface="${CM_BRAND.typeface}"/><a:cs typeface="${CM_BRAND.typeface}"/></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p></c:txPr>`
+      : '';
+    const serNameVal = spec.serName ? 1 : 0;
+    const separatorFrag = spec.serName ? `<c:separator>: </c:separator>` : '';
     return `        <c:dLbls>
           ${numFmtFrag}
+${boxedFrag}
           <c:dLblPos val="${pos}"/>
           <c:showLegendKey val="0"/>
           <c:showVal val="1"/>
           <c:showCatName val="0"/>
-          <c:showSerName val="0"/>
+          <c:showSerName val="${serNameVal}"/>
           <c:showPercent val="0"/>
           <c:showBubbleSize val="0"/>
+          ${separatorFrag}
         </c:dLbls>`;
   }
   return '';
@@ -598,7 +1348,7 @@ ${dLblsFrag}
         <c:axPos val="b"/>
         ${catFmtFrag}
         ${CAT_AX_TICK_LBL_POS}
-        ${CAT_AX_HORIZONTAL_TXT}
+        ${spec.horizontalCatLabels ? CAT_AX_TRUE_HORIZONTAL_TXT : CAT_AX_HORIZONTAL_TXT}
         <c:crossAx val="2"/>
       </c:catAx>
       <c:valAx>
@@ -813,7 +1563,7 @@ function buildStackedBarChartXml(spec) {
             <c:txPr>
               <a:bodyPr rot="0" spcFirstLastPara="1" vertOverflow="ellipsis" wrap="square" anchor="ctr" anchorCtr="1"/>
               <a:lstStyle/>
-              <a:p><a:pPr><a:defRPr sz="900" b="1"><a:solidFill><a:srgbClr val="${lblColor}"/></a:solidFill></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p>
+              <a:p><a:pPr><a:defRPr sz="900" b="1"><a:solidFill><a:srgbClr val="${lblColor}"/></a:solidFill><a:latin typeface="${CM_BRAND.typeface}"/><a:ea typeface="${CM_BRAND.typeface}"/><a:cs typeface="${CM_BRAND.typeface}"/></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p>
             </c:txPr>
             <c:dLblPos val="ctr"/>
             <c:showLegendKey val="0"/>
@@ -869,7 +1619,7 @@ ${seriesXml}
         <c:axPos val="b"/>
         ${catFmtFrag}
         ${CAT_AX_TICK_LBL_POS}
-        ${CAT_AX_HORIZONTAL_TXT}
+        ${spec.horizontalCatLabels ? CAT_AX_TRUE_HORIZONTAL_TXT : CAT_AX_HORIZONTAL_TXT}
         <c:crossAx val="2"/>
       </c:catAx>
       <c:valAx>
@@ -935,20 +1685,25 @@ function buildMultiLineChartXml(spec) {
           <c:tx><c:rich>
             <a:bodyPr rot="-5400000" vert="horz"/>
             <a:lstStyle/>
-            <a:p><a:r><a:rPr lang="en-US" sz="900" b="0"><a:solidFill><a:srgbClr val="6A748C"/></a:solidFill></a:rPr><a:t>${escapeXml(spec.yLeftAxisTitle || spec.yAxisTitle)}</a:t></a:r></a:p>
+            <a:p><a:r><a:rPr lang="en-US" sz="900" b="0"><a:solidFill><a:srgbClr val="6A748C"/></a:solidFill><a:latin typeface="${CM_BRAND.typeface}"/><a:ea typeface="${CM_BRAND.typeface}"/><a:cs typeface="${CM_BRAND.typeface}"/></a:rPr><a:t>${escapeXml(spec.yLeftAxisTitle || spec.yAxisTitle)}</a:t></a:r></a:p>
           </c:rich></c:tx>
           <c:overlay val="0"/>
         </c:title>`
     : '';
-  const seriesXml = spec.series.map((s, i) => {
+  let mlBand = 0;   // band ordinal among LABELED series only (not raw series idx)
+  const _perSeries = spec.series.map((s, i) => {
     const color = (s.color || '003DA5').replace('#', '');
     // Dashed line variant (e.g. gov "Outside Firm" cohort) — Excel
     // renders <a:prstDash val="dash"/> as a regular dashed stroke.
     const dashFrag = s.dashed
       ? `<a:prstDash val="dash"/>`
       : '';
-    // R37 P3 — per-series data labels
-    const dLblsFrag = dLblsXml(s.dataLabels);
+    // R37 P3 — per-series data labels; band by LABELED-series ordinal so a 2nd
+    // labeled series' Peak/Low/Latest stacks below the first. A chart with a
+    // single labeled series (even at a high index) stays at band 0 — never pushed
+    // into the data.
+    const _hasLbl = Array.isArray(s.dataLabels) && s.dataLabels.length > 0;
+    const dLblsFrag = dLblsXml(s.dataLabels, _hasLbl ? mlBand++ : 0);
     // R73 B13 — optional per-series markers (line KEPT). Sparse cohorts
     // (gov state/municipal cap) have isolated non-null points between gaps
     // that a markerless line cannot draw; a small circle marker makes single
@@ -959,10 +1714,21 @@ function buildMultiLineChartXml(spec) {
     // T10c — `markerOnly` suppresses the connecting line (no-fill stroke) so the
     // series renders as DOTS only (Avg Deal Size: "the average should be a dot,
     // not a bar"). The category axis + markers are kept; only the line is hidden.
+    // Optional decoupled line color/width: lets a series draw a line in a DIFFERENT
+    // color than its markers (e.g. bid-ask Achieved draws a thin `steel` line that
+    // blends with the up/down-bar top border — a DRAWN line is required for Excel to
+    // render manual-positioned data labels at the first/last points, which a no-line
+    // markerOnly series drops).
+    const _lineColor = s.lineColor ? String(s.lineColor).replace('#', '') : color;
+    const _lineWidth = Number.isFinite(s.lineWidth) ? s.lineWidth : 22225;
+    // lineAlpha (0..100000) → a DRAWN but transparent line. Used by a label-host
+    // series: Excel needs a drawn line to render manual-positioned labels at all
+    // points, but the line itself must be invisible (alpha 0).
+    const _lineAlphaFrag = Number.isFinite(s.lineAlpha) ? `<a:alpha val="${s.lineAlpha}"/>` : '';
     const lineSpFrag = s.markerOnly
       ? `<a:ln><a:noFill/></a:ln>`
-      : `<a:ln w="22225" cap="rnd"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill>${dashFrag}<a:round/></a:ln>`;
-    return `        <c:ser>
+      : `<a:ln w="${_lineWidth}" cap="rnd"><a:solidFill><a:srgbClr val="${_lineColor}">${_lineAlphaFrag}</a:srgbClr></a:solidFill>${dashFrag}<a:round/></a:ln>`;
+    const xml = `        <c:ser>
           <c:idx val="${i}"/>
           <c:order val="${i}"/>
           <c:tx><c:strRef><c:f>'${sheet}'!$${s.titleCol}$${s.titleRow}</c:f></c:strRef></c:tx>
@@ -975,7 +1741,24 @@ ${dLblsFrag}
           <c:val><c:numRef><c:f>'${sheet}'!$${s.valCol}$${spec.dataStart}:$${s.valCol}$${spec.dataEnd}</c:f></c:numRef></c:val>
           <c:smooth val="0"/>
         </c:ser>`;
-  }).join('\n');
+    return { xml, sep: !!s.separateGroup };
+  });
+  // A label-host series (separateGroup) goes in its OWN lineChart group so it is
+  // NOT affected by the up/down bars in the main group — Excel suppresses all but
+  // the max data label across a lineChart group that carries up/down bars, so the
+  // host must live in a bar-free group to render Peak/Low/Latest.
+  const seriesXml = _perSeries.filter(p => !p.sep).map(p => p.xml).join('\n');
+  const hostSeriesXml = _perSeries.filter(p => p.sep).map(p => p.xml).join('\n');
+  const hostGroupFrag = hostSeriesXml
+    ? `      <c:lineChart>
+        <c:grouping val="standard"/>
+        <c:varyColors val="0"/>
+${hostSeriesXml}
+        <c:marker val="1"/>
+        <c:axId val="1"/>
+        <c:axId val="2"/>
+      </c:lineChart>`
+    : '';
 
   // R50 — optional stacked grouping + chart-level up-down bars.
   // upDownBars is a child of <c:lineChart> AFTER all <c:ser> blocks and
@@ -989,12 +1772,22 @@ ${dLblsFrag}
   // schema it precedes <c:upDownBars>. Default color = deck market-gray.
   const hiLowColor = (spec.hiLowLines && spec.hiLowLines !== true)
     ? String(spec.hiLowLines).replace('#', '') : 'C9CED6';
+  // Optional wide stroke (EMU; 12700 = 1pt). bid-ask uses a wide gray stroke so
+  // the per-period spread sticks nearly touch and read as a filled band between
+  // the two cap lines (the up/down-bar look) WITHOUT a bar element that would
+  // force the axis to 0. Default 0.75pt (thin drop-line connectors elsewhere).
+  const hiLowWidth = Number.isFinite(spec.hiLowLineWidth) ? spec.hiLowLineWidth : 9525;
+  const hiLowCap = hiLowWidth >= 20000 ? 'flat' : 'rnd';   // flat butt for wide band sticks
   const hiLowLinesFrag = spec.hiLowLines
-    ? `        <c:hiLowLines><c:spPr><a:ln w="9525" cap="rnd"><a:solidFill><a:srgbClr val="${hiLowColor}"/></a:solidFill><a:round/></a:ln></c:spPr></c:hiLowLines>`
+    ? `        <c:hiLowLines><c:spPr><a:ln w="${hiLowWidth}" cap="${hiLowCap}"><a:solidFill><a:srgbClr val="${hiLowColor}"/></a:solidFill></a:ln></c:spPr></c:hiLowLines>`
     : '';
+  // gapWidth controls the up/down-bar WIDTH: lower = wider bars. Default 150
+  // (Excel default, narrow). bid-ask uses a low value so the bars nearly touch
+  // and read as a continuous gray spread band between the two cap lines.
+  const upDownGap = Number.isFinite(spec.upDownGapWidth) ? spec.upDownGapWidth : 150;
   const upDownBarsFrag = spec.upDownBars
     ? `        <c:upDownBars>
-          <c:gapWidth val="150"/>
+          <c:gapWidth val="${upDownGap}"/>
           <c:upBars><c:spPr><a:solidFill><a:srgbClr val="D8DFDF"/></a:solidFill><a:ln w="9525"><a:solidFill><a:srgbClr val="9EA9B7"/></a:solidFill></a:ln></c:spPr></c:upBars>
           <c:downBars><c:spPr><a:solidFill><a:srgbClr val="9EA9B7"/></a:solidFill><a:ln w="9525"><a:solidFill><a:srgbClr val="6A748C"/></a:solidFill></a:ln></c:spPr></c:downBars>
         </c:upDownBars>`
@@ -1017,6 +1810,7 @@ ${upDownBarsFrag}
         <c:axId val="1"/>
         <c:axId val="2"/>
       </c:lineChart>
+${hostGroupFrag}
       <c:catAx>
         <c:axId val="1"/>
         <c:scaling><c:orientation val="minMax"/></c:scaling>
@@ -1024,7 +1818,7 @@ ${upDownBarsFrag}
         <c:axPos val="b"/>
         ${catFmtFrag}
         ${CAT_AX_TICK_LBL_POS}
-        ${CAT_AX_HORIZONTAL_TXT}
+        ${spec.horizontalCatLabels ? CAT_AX_TRUE_HORIZONTAL_TXT : CAT_AX_HORIZONTAL_TXT}
         <c:crossAx val="2"/>
       </c:catAx>
       <c:valAx>
@@ -1040,6 +1834,7 @@ ${upDownBarsFrag}
     </c:plotArea>
     <c:legend>
       <c:legendPos val="b"/>
+${(spec.series || []).map((s, i) => s.hideFromLegend ? `      <c:legendEntry><c:idx val="${i}"/><c:delete val="1"/></c:legendEntry>` : '').filter(Boolean).join('\n')}
       <c:overlay val="0"/>
     </c:legend>
     <c:plotVisOnly val="1"/>
@@ -1127,6 +1922,7 @@ function buildComboChartXml(spec) {
           <a:lstStyle/>
           <a:p><a:r><a:rPr lang="en-US" sz="900" b="0">
             <a:solidFill><a:srgbClr val="6A748C"/></a:solidFill>
+            <a:latin typeface="${CM_BRAND.typeface}"/><a:ea typeface="${CM_BRAND.typeface}"/><a:cs typeface="${CM_BRAND.typeface}"/>
           </a:rPr><a:t>${escapeXml(text)}</a:t></a:r></a:p>
         </c:rich></c:tx>
         <c:overlay val="0"/>
@@ -1141,6 +1937,11 @@ function buildComboChartXml(spec) {
   const barAxId  = (spec.sharedAxis || !spec.swapAxes) ? 2 : 3;
   const lineAxId = spec.sharedAxis ? 2 : (spec.swapAxes ? 2 : 3);
 
+  // Shared band counter across bar THEN line series — only LABELED series consume
+  // a band, so a combo with one labeled series stays at band 0 (Cost of Capital's
+  // Avg Cap line no longer pushes into the data), while a combo with two labeled
+  // series (DOM_Ask bar + line) stacks them on separate rows.
+  let comboBand = 0;
   const barXml = barSeries.map((s, i) => {
     const color = (s.color || '003DA5').replace('#', '');
     // P8.5 — `noFill` flag on bar series (invisible base for floating bars)
@@ -1153,12 +1954,19 @@ function buildComboChartXml(spec) {
     let lineFrag = '';
     if (s.noFill) {
       lineFrag = `<a:ln><a:noFill/></a:ln>`;
+    } else if (s.noBorder) {
+      // Explicit "No Line" on a visible-fill bar (marketing ChartEdits
+      // 2026-08-12: quartile-band series border = No Line).
+      lineFrag = `<a:ln><a:noFill/></a:ln>`;
     } else if (s.borderColor) {
       const borderColor = s.borderColor.replace('#', '');
       lineFrag = `<a:ln w="9525"><a:solidFill><a:srgbClr val="${borderColor}"/></a:solidFill></a:ln>`;
     }
-    // R37 P3 — per-series data labels (combo bar)
-    const dLblsFrag = dLblsXml(s.dataLabels);
+    // R37 P3 — per-series data labels (combo bar); band by LABELED-series ordinal
+    // so bar callouts and line callouts sit on separate rows (DOM_Ask) without
+    // pushing a lone labeled series into the data.
+    const _hasLbl = !(s.dataLabels && s.dataLabels.showVal) && Array.isArray(s.dataLabels) && s.dataLabels.length > 0;
+    const dLblsFrag = dLblsXml(s.dataLabels, _hasLbl ? comboBand++ : 0);
     return `        <c:ser>
           <c:idx val="${i}"/>
           <c:order val="${i}"/>
@@ -1199,8 +2007,11 @@ ${dLblsFrag}
   const lineXml = lineSeries.map((s, i) => {
     const idx = barSeries.length + i;
     const color = (s.color || '003DA5').replace('#', '');
-    // R37 P3 — per-series data labels (combo line)
-    const dLblsFrag = dLblsXml(s.dataLabels);
+    // R37 P3 — per-series data labels (combo line); band continues from the shared
+    // counter so line callouts stack below any bar callouts (array-mode labels
+    // only; showVal-mode diamond labels are positioned separately, not banded).
+    const _hasLbl = !(s.dataLabels && s.dataLabels.showVal) && Array.isArray(s.dataLabels) && s.dataLabels.length > 0;
+    const dLblsFrag = dLblsXml(s.dataLabels, _hasLbl ? comboBand++ : 0);
     if (s.showMarker) {
       const shape = s.markerShape || 'circle';
       const size = s.markerSize || 5;
@@ -1275,7 +2086,7 @@ ${lineXml}
         <c:axPos val="b"/>
         ${catFmtFrag}
         ${CAT_AX_TICK_LBL_POS}
-        ${CAT_AX_HORIZONTAL_TXT}
+        ${spec.horizontalCatLabels ? CAT_AX_TRUE_HORIZONTAL_TXT : CAT_AX_HORIZONTAL_TXT}
         <c:crossAx val="2"/>
       </c:catAx>
       <c:valAx>
@@ -1391,7 +2202,7 @@ function buildDoughnutChartXml(spec) {
           <c:txPr>
             <a:bodyPr rot="0" spcFirstLastPara="1" vertOverflow="ellipsis" wrap="square" anchor="ctr" anchorCtr="1"/>
             <a:lstStyle/>
-            <a:p><a:pPr><a:defRPr sz="900" b="1"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p>
+            <a:p><a:pPr><a:defRPr sz="1000" b="1"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:latin typeface="${CM_BRAND.typeface}"/><a:ea typeface="${CM_BRAND.typeface}"/><a:cs typeface="${CM_BRAND.typeface}"/></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p>
           </c:txPr>
           <!-- R68-E (D14): dLblPos is ILLEGAL under c:doughnutChart per ECMA-376;
                its presence made Excel classify chart31/chart32 as corrupt and
@@ -1605,6 +2416,12 @@ function buildAreaComboChartXml(spec) {
   // Area series (always index 0)
   const areaColor   = (area?.fillColor   || 'E0E8F4').replace('#', '');
   const areaBorder  = (area?.borderColor || '003DA5').replace('#', '');
+  // Optional Peak/Low/Latest callouts on the area series (e.g. TTM volume).
+  // labelBand shifts them to a lower row so they don't collide with the line
+  // series' callouts (which sit at band 0 on the same top band).
+  const areaLblFrag = area && area.dataLabels
+    ? dLblsXml(area.dataLabels, Number.isFinite(area.labelBand) ? area.labelBand : 0)
+    : '';
   const areaXml = area ? `        <c:ser>
           <c:idx val="0"/>
           <c:order val="0"/>
@@ -1613,6 +2430,7 @@ function buildAreaComboChartXml(spec) {
             <a:solidFill><a:srgbClr val="${areaColor}"/></a:solidFill>
             <a:ln w="22225"><a:solidFill><a:srgbClr val="${areaBorder}"/></a:solidFill></a:ln>
           </c:spPr>
+${areaLblFrag}
           <c:cat><c:numRef><c:f>'${sheet}'!$${spec.catCol}$${spec.dataStart}:$${spec.catCol}$${spec.dataEnd}</c:f></c:numRef></c:cat>
           <c:val><c:numRef><c:f>'${sheet}'!$${area.valCol}$${spec.dataStart}:$${area.valCol}$${spec.dataEnd}</c:f></c:numRef></c:val>
         </c:ser>` : '';
@@ -1725,7 +2543,7 @@ ${lineXml}
         <c:axPos val="b"/>
         ${catFmtFrag}
         ${CAT_AX_TICK_LBL_POS}
-        ${CAT_AX_HORIZONTAL_TXT}
+        ${spec.horizontalCatLabels ? CAT_AX_TRUE_HORIZONTAL_TXT : CAT_AX_HORIZONTAL_TXT}
         <c:crossAx val="2"/>
       </c:catAx>
       <c:valAx>
@@ -1816,7 +2634,7 @@ ${markerSer(spec.rightCol, (spec.rightColor || '003DA5').replace('#',''), 1, 1, 
         <c:axPos val="b"/>
         ${catAxNumFmtFrag(spec.catAxNumFmt !== undefined ? spec.catAxNumFmt : DEFAULT_CAT_AX_NUM_FMT)}
         ${CAT_AX_TICK_LBL_POS}
-        ${CAT_AX_HORIZONTAL_TXT}
+        ${spec.horizontalCatLabels ? CAT_AX_TRUE_HORIZONTAL_TXT : CAT_AX_HORIZONTAL_TXT}
         <c:crossAx val="2"/>
       </c:catAx>
       <c:valAx>
@@ -1963,7 +2781,7 @@ ${cagrLine}
         <c:axPos val="b"/>
         ${catAxNumFmtFrag(spec.catAxNumFmt !== undefined ? spec.catAxNumFmt : DEFAULT_CAT_AX_NUM_FMT)}
         ${CAT_AX_TICK_LBL_POS}
-        ${CAT_AX_HORIZONTAL_TXT}
+        ${spec.horizontalCatLabels ? CAT_AX_TRUE_HORIZONTAL_TXT : CAT_AX_HORIZONTAL_TXT}
         <c:crossAx val="2"/>
       </c:catAx>
       <c:valAx>
@@ -2007,17 +2825,19 @@ ${cagrLine}
  * `nvIdx` (default 2) sets the `<xdr:cNvPr>` id; must be unique within
  * the parent drawing.xml. Sequence id+1 per chart on the same sheet.
  */
-function buildDrawingAnchorFrag({ chartRelId, anchor, nvIdx = 2 }) {
+function buildDrawingAnchorFrag({ chartRelId, anchor, nvIdx = 2, type }) {
   const a = anchor || { col0: 0, row0: 0, col1: 13, row1: 21 };
-  return `  <xdr:twoCellAnchor editAs="oneCell">
+  // Marketing feedback (2026-08): every chart carries a FIXED Chart-Area size
+  // (CM_BRAND.chartSize) — non-donut 4.25"H × 10.00"W, donut 4.25" square.
+  // A oneCellAnchor pins the top-left to the anchor's (col0,row0) and gives an
+  // explicit EMU extent, so the chart no longer resizes with the spanned cells.
+  const { cx, cy } = chartSizeEmu(type);
+  return `  <xdr:oneCellAnchor>
     <xdr:from>
       <xdr:col>${a.col0}</xdr:col><xdr:colOff>0</xdr:colOff>
       <xdr:row>${a.row0}</xdr:row><xdr:rowOff>0</xdr:rowOff>
     </xdr:from>
-    <xdr:to>
-      <xdr:col>${a.col1}</xdr:col><xdr:colOff>0</xdr:colOff>
-      <xdr:row>${a.row1}</xdr:row><xdr:rowOff>0</xdr:rowOff>
-    </xdr:to>
+    <xdr:ext cx="${cx}" cy="${cy}"/>
     <xdr:graphicFrame macro="">
       <xdr:nvGraphicFramePr>
         <xdr:cNvPr id="${nvIdx}" name="Chart ${nvIdx - 1}"/>
@@ -2025,7 +2845,7 @@ function buildDrawingAnchorFrag({ chartRelId, anchor, nvIdx = 2 }) {
       </xdr:nvGraphicFramePr>
       <xdr:xfrm>
         <a:off x="0" y="0"/>
-        <a:ext cx="0" cy="0"/>
+        <a:ext cx="${cx}" cy="${cy}"/>
       </xdr:xfrm>
       <a:graphic>
         <a:graphicData uri="${NS_CHART}">
@@ -2034,7 +2854,41 @@ function buildDrawingAnchorFrag({ chartRelId, anchor, nvIdx = 2 }) {
       </a:graphic>
     </xdr:graphicFrame>
     <xdr:clientData/>
-  </xdr:twoCellAnchor>`;
+  </xdr:oneCellAnchor>`;
+}
+
+/**
+ * Generate one `<xdr:oneCellAnchor>` block hosting an embedded PNG image
+ * (a `<xdr:pic>`), used on the aggregate Charts tab for chart templates that
+ * do NOT have a native builder — so every chart appears in the single-page
+ * view. Same fixed-size sizing as native charts (CM_BRAND.chartSize, non-donut)
+ * so tiles line up. `imageRelId` is a drawing-rels rId pointing at the media.
+ */
+function buildPicAnchorFrag({ imageRelId, anchor, nvIdx = 2 }) {
+  const a = anchor || { col0: 0, row0: 0 };
+  const { cx, cy } = chartSizeEmu('image'); // non-donut default (10.00" x 4.25")
+  return `  <xdr:oneCellAnchor>
+    <xdr:from>
+      <xdr:col>${a.col0}</xdr:col><xdr:colOff>0</xdr:colOff>
+      <xdr:row>${a.row0}</xdr:row><xdr:rowOff>0</xdr:rowOff>
+    </xdr:from>
+    <xdr:ext cx="${cx}" cy="${cy}"/>
+    <xdr:pic>
+      <xdr:nvPicPr>
+        <xdr:cNvPr id="${nvIdx}" name="Image ${nvIdx - 1}"/>
+        <xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr>
+      </xdr:nvPicPr>
+      <xdr:blipFill>
+        <a:blip xmlns:r="${NS_REL}" r:embed="${imageRelId}"/>
+        <a:stretch><a:fillRect/></a:stretch>
+      </xdr:blipFill>
+      <xdr:spPr>
+        <a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm>
+        <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+      </xdr:spPr>
+    </xdr:pic>
+    <xdr:clientData/>
+  </xdr:oneCellAnchor>`;
 }
 
 /**
@@ -2046,10 +2900,22 @@ function buildDrawingAnchorFrag({ chartRelId, anchor, nvIdx = 2 }) {
  * single-chart path so existing tests (and callers that emit a single
  * chart per sheet) work unchanged.
  */
-function buildDrawingXml({ chartRelId, anchor }) {
+function buildDrawingXml({ chartRelId, anchor, type }) {
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <xdr:wsDr xmlns:xdr="${NS_SS_DRAW}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}" xmlns:c="${NS_CHART}">
-${buildDrawingAnchorFrag({ chartRelId, anchor, nvIdx: 2 })}
+${buildDrawingAnchorFrag({ chartRelId, anchor, nvIdx: 2, type })}
+</xdr:wsDr>`;
+}
+
+/**
+ * Picture-anchor builder for the single embedded PNG case (kept parallel to
+ * buildDrawingXml). Rarely used alone — the Charts tab mixes charts + images
+ * via buildMultiChartDrawingXml.
+ */
+function buildImageDrawingXml({ imageRelId, anchor }) {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<xdr:wsDr xmlns:xdr="${NS_SS_DRAW}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}" xmlns:c="${NS_CHART}">
+${buildPicAnchorFrag({ imageRelId, anchor, nvIdx: 2 })}
 </xdr:wsDr>`;
 }
 
@@ -2064,7 +2930,9 @@ ${buildDrawingAnchorFrag({ chartRelId, anchor, nvIdx: 2 })}
  */
 function buildMultiChartDrawingXml(entries) {
   const frags = entries.map((e, i) =>
-    buildDrawingAnchorFrag({ chartRelId: e.chartRelId, anchor: e.anchor, nvIdx: 2 + i })
+    e.kind === 'image'
+      ? buildPicAnchorFrag({ imageRelId: e.relId || e.chartRelId, anchor: e.anchor, nvIdx: 2 + i })
+      : buildDrawingAnchorFrag({ chartRelId: e.relId || e.chartRelId, anchor: e.anchor, nvIdx: 2 + i, type: e.type })
   ).join('\n');
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <xdr:wsDr xmlns:xdr="${NS_SS_DRAW}" xmlns:a="${NS_DRAWINGML}" xmlns:r="${NS_REL}" xmlns:c="${NS_CHART}">
@@ -2081,10 +2949,67 @@ ${frags}
  * @param {Array}  injections   List of { tabName, spec } records
  * @returns {Promise<Buffer>}   New buffer with native charts injected
  */
+// R71 — generate chart XML for a spec via the type→builder dispatch. Module
+// level so the export loop can render + lint a spec without re-implementing the
+// dispatch. (Formerly a closure inside injectNativeCharts.)
+function specToChartXml(spec) {
+  return applyChartAreaBranding(_specToChartXmlRaw(spec));
+}
+
+// Type→builder dispatch. Wrapped by specToChartXml so the marketing chart-area
+// edits (No Fill/No Line + default font + x-axis interval unit) apply uniformly
+// to every chart type from one choke point.
+function _specToChartXmlRaw(spec) {
+  if (spec.type === 'stacked-bar') return buildStackedBarChartXml(spec);
+  if (spec.type === 'clustered-bar') {
+    // R35 P2 — shares the builder with stacked-bar but forces
+    // grouping='clustered'. Used for inventory_backlog and
+    // pace_of_cap_rate_expansion (multi-bar single-axis charts).
+    return buildStackedBarChartXml({ ...spec, grouping: 'clustered' });
+  }
+  if (spec.type === 'bar') return buildSingleBarChartXml(spec);
+  if (spec.type === 'multi-line') return buildMultiLineChartXml(spec);
+  if (spec.type === 'combo') return buildComboChartXml(spec);
+  if (spec.type === 'bidask-dual') return buildBidAskDualAxisChartXml(spec);
+  if (spec.type === 'renewal-combo') return buildRenewalRentGrowthXml(spec);
+  if (spec.type === 'area-combo') {
+    // R35 P4 — 3-block combo (area + bar + line) for volume_cap_quartile_combo.
+    return buildAreaComboChartXml(spec);
+  }
+  if (spec.type === 'scatter') return buildScatterChartXml(spec);
+  if (spec.type === 'doughnut') {
+    // R36 P2 — single-ring pie/donut chart with per-segment colors.
+    return buildDoughnutChartXml(spec);
+  }
+  // 'line' (default) and any future shapes that don't have their own
+  // builder yet fall back to the line builder.
+  return buildSingleLineChartXml(spec);
+}
+
 export async function injectNativeCharts(buffer, injections) {
   if (!Array.isArray(injections) || injections.length === 0) return buffer;
 
   const zip = await JSZip.loadAsync(buffer);
+
+  // CM chart fixes round 3, item 1 — rewrite the workbook theme minor+major
+  // font to Open Sans so any cell that doesn't set an explicit font inherits it
+  // (ExcelJS defaults the theme to Calibri Light/Calibri, which made the file
+  // open non-uniform vs. the Open Sans chart text). Purely a font-family swap.
+  try {
+    const themePath = 'xl/theme/theme1.xml';
+    const themeFile = zip.file(themePath);
+    if (themeFile) {
+      let themeXml = await themeFile.async('string');
+      // Replace the latin typeface inside both <a:majorFont> and <a:minorFont>.
+      themeXml = themeXml.replace(
+        /(<a:(?:majorFont|minorFont)>\s*<a:latin[^>]*typeface=")[^"]*(")/g,
+        `$1${CM_BRAND.typeface}$2`
+      );
+      zip.file(themePath, themeXml);
+    }
+  } catch (e) {
+    console.warn('[cm-native-chart-injector] theme font rewrite skipped:', e && e.message);
+  }
 
   // Locate the workbook's sheet name → file mapping by parsing
   // xl/workbook.xml + xl/_rels/workbook.xml.rels.
@@ -2106,40 +3031,50 @@ export async function injectNativeCharts(buffer, injections) {
   // Find next available numeric IDs for new chart/drawing files
   const existingCharts = Object.keys(zip.files).filter(n => /^xl\/charts\/chart\d+\.xml$/.test(n));
   const existingDrawings = Object.keys(zip.files).filter(n => /^xl\/drawings\/drawing\d+\.xml$/.test(n));
+  const existingMedia = Object.keys(zip.files).filter(n => /^xl\/media\/image\d+\.(png|jpe?g)$/i.test(n));
   let nextChartId = existingCharts.length + 1;
   let nextDrawingId = existingDrawings.length + 1;
+  let nextImageId = existingMedia.length + 1;
 
   // Collect content-types overrides to append
   const newOverrides = [];
 
-  // R71 — generate chart XML for a spec via the type→builder dispatch.
-  // Extracted so the multi-chart-per-sheet path (Charts aggregate tab)
-  // can reuse it.
+  // Ensure [Content_Types].xml declares a PNG default so embedded chart images
+  // (aggregate Charts tab) resolve. Added once, up front, if absent.
+  let ctXmlLocal = ctXml;
+  if (!/<Default\s+Extension="png"/i.test(ctXmlLocal)) {
+    ctXmlLocal = ctXmlLocal.replace(
+      /(<Types[^>]*>)/,
+      `$1<Default Extension="png" ContentType="image/png"/>`
+    );
+  }
+
+  // R71 — generate chart XML for a spec via the type→builder dispatch
+  // (specToChartXml, module-level). CM chart fixes round 3, item 5 — lint the
+  // generated XML for theme-accent / missing-spPr series and fail loudly.
   const renderChartXml = (spec) => {
-    if (spec.type === 'stacked-bar') return buildStackedBarChartXml(spec);
-    if (spec.type === 'clustered-bar') {
-      // R35 P2 — shares the builder with stacked-bar but forces
-      // grouping='clustered'. Used for inventory_backlog and
-      // pace_of_cap_rate_expansion (multi-bar single-axis charts).
-      return buildStackedBarChartXml({ ...spec, grouping: 'clustered' });
+    const xml = specToChartXml(spec);
+    const violations = lintChartSeriesXml(xml, spec.tabName);
+    if (violations.length) {
+      throw new Error(
+        `[cm-native-chart-injector] SERIES SPPR LINT FAILED (${spec.tabName}): ` +
+        violations.map(v => `series #${v.series}: ${v.reason}`).join('; ')
+      );
     }
-    if (spec.type === 'bar') return buildSingleBarChartXml(spec);
-    if (spec.type === 'multi-line') return buildMultiLineChartXml(spec);
-    if (spec.type === 'combo') return buildComboChartXml(spec);
-    if (spec.type === 'bidask-dual') return buildBidAskDualAxisChartXml(spec);
-    if (spec.type === 'renewal-combo') return buildRenewalRentGrowthXml(spec);
-    if (spec.type === 'area-combo') {
-      // R35 P4 — 3-block combo (area + bar + line) for volume_cap_quartile_combo.
-      return buildAreaComboChartXml(spec);
+    // Round-3 item 2 regression gate — re-parse the chart part and reject any
+    // unknown c15 extension child against the vetted whitelist, so a
+    // schema-invalid chart extension (the corruption cause) can never ship.
+    const extViolations = validateChartExtWhitelist(xml, spec.tabName);
+    if (extViolations.length) {
+      throw new Error(
+        `[cm-native-chart-injector] CHART EXT WHITELIST FAILED (${spec.tabName}): ` +
+        extViolations.map(v => `${v.element}: ${v.reason}`).join('; ') +
+        ' — this schema-invalid extension corrupts the workbook; the only vetted c15 children are ' +
+        '<c15:showDataLabelsRange> (per-dLbl) and <c15:showLeaderLines> (dLbls-level). Do not add ' +
+        'others (e.g. c15:layout / c15:leaderLines) to C15_EXT_ALLOWED_CHILDREN without a new empirical Excel test.'
+      );
     }
-    if (spec.type === 'scatter') return buildScatterChartXml(spec);
-    if (spec.type === 'doughnut') {
-      // R36 P2 — single-ring pie/donut chart with per-segment colors.
-      return buildDoughnutChartXml(spec);
-    }
-    // 'line' (default) and any future shapes that don't have their own
-    // builder yet fall back to the line builder.
-    return buildSingleLineChartXml(spec);
+    return xml;
   };
 
   // R71 — collate injections by destination tabName so each sheet gets
@@ -2178,35 +3113,61 @@ export async function injectNativeCharts(buffer, injections) {
     const drawingRels = `xl/drawings/_rels/drawing${nextDrawingId}.xml.rels`;
     const sheetRels   = cleanSheetPath.replace(/^(xl\/worksheets\/)([^.]+)\.xml$/, '$1_rels/$2.xml.rels');
 
-    // Generate each chart's XML and collect drawing-rels entries.
-    // Reserve chart numeric ids and per-drawing-rels rIds in lockstep.
+    // Generate each entry's part (native chart XML, or an embedded PNG image
+    // for a non-native chart template) and collect drawing-rels entries.
+    // Reserve chart/image numeric ids and per-drawing-rels rIds in lockstep.
+    // An entry with `inj.image` (a { png, anchor } pair) is embedded as a
+    // <xdr:pic>; otherwise `inj.spec` is a native chart. This lets the Charts
+    // tab host BOTH in one drawing so EVERY chart appears in the single-page
+    // view (charts that lack a native builder ride in as their PNG).
     const chartEntries = [];
     for (let i = 0; i < sheetInjections.length; i++) {
-      const { spec } = sheetInjections[i];
-      const chartId = nextChartId++;
-      const chartFile = `xl/charts/chart${chartId}.xml`;
-      zip.file(chartFile, renderChartXml(spec));
-      newOverrides.push(`<Override PartName="/${chartFile}" ContentType="${CT_CHART}"/>`);
-      chartEntries.push({
-        chartId,
-        chartFile,
-        chartRelId: `rId${i + 1}`,  // sequenced within this sheet's drawing rels
-        anchor: spec.anchor,
-      });
+      const inj = sheetInjections[i];
+      const relId = `rId${i + 1}`; // sequenced within this sheet's drawing rels
+      if (inj && inj.image && inj.image.png) {
+        const ext = (inj.image.ext || 'png').toLowerCase();
+        const imageId = nextImageId++;
+        const mediaFile = `xl/media/image${imageId}.${ext}`;
+        zip.file(mediaFile, inj.image.png);
+        chartEntries.push({
+          kind: 'image',
+          imageId,
+          ext,
+          relId,
+          anchor: inj.image.anchor,
+        });
+      } else {
+        const { spec } = inj;
+        const chartId = nextChartId++;
+        const chartFile = `xl/charts/chart${chartId}.xml`;
+        zip.file(chartFile, renderChartXml(spec));
+        newOverrides.push(`<Override PartName="/${chartFile}" ContentType="${CT_CHART}"/>`);
+        chartEntries.push({
+          kind: 'chart',
+          chartId,
+          chartFile,
+          relId,
+          anchor: spec.anchor,
+          type: spec.type,
+        });
+      }
     }
 
-    // 2. Drawing XML — single-chart path uses the legacy builder so
-    //    its byte-for-byte output is unchanged (preserving existing
-    //    snapshot-style assertions); multi-chart path tiles N anchors.
-    const drawingXml = chartEntries.length === 1
-      ? buildDrawingXml({ chartRelId: chartEntries[0].chartRelId, anchor: chartEntries[0].anchor })
+    // 2. Drawing XML — single native-chart path uses the legacy builder so its
+    //    byte-for-byte output is unchanged (preserving existing snapshot-style
+    //    assertions); every other case (multi, or any image) tiles N anchors.
+    const soleChart = chartEntries.length === 1 && chartEntries[0].kind === 'chart';
+    const drawingXml = soleChart
+      ? buildDrawingXml({ chartRelId: chartEntries[0].relId, anchor: chartEntries[0].anchor, type: chartEntries[0].type })
       : buildMultiChartDrawingXml(chartEntries);
     zip.file(drawingFile, drawingXml);
 
-    // 3. Drawing rels — one Relationship per chart on this sheet
+    // 3. Drawing rels — one Relationship per entry (chart OR embedded image).
     const drawingRelsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-${chartEntries.map(e => `  <Relationship Id="${e.chartRelId}" Type="${REL_CHART}" Target="../charts/chart${e.chartId}.xml"/>`).join('\n')}
+${chartEntries.map(e => e.kind === 'image'
+    ? `  <Relationship Id="${e.relId}" Type="${REL_IMAGE}" Target="../media/image${e.imageId}.${e.ext}"/>`
+    : `  <Relationship Id="${e.relId}" Type="${REL_CHART}" Target="../charts/chart${e.chartId}.xml"/>`).join('\n')}
 </Relationships>`;
     zip.file(drawingRels, drawingRelsXml);
 
@@ -2240,9 +3201,12 @@ ${chartEntries.map(e => `  <Relationship Id="${e.chartRelId}" Type="${REL_CHART}
     nextDrawingId++;
   }
 
-  // 6. Update [Content_Types].xml with all new overrides at once
-  if (newOverrides.length) {
-    const updatedCt = ctXml.replace('</Types>', `${newOverrides.join('')}</Types>`);
+  // 6. Update [Content_Types].xml with all new overrides at once (on the copy
+  //    that already carries the PNG Default for embedded images).
+  const updatedCt = newOverrides.length
+    ? ctXmlLocal.replace('</Types>', `${newOverrides.join('')}</Types>`)
+    : ctXmlLocal;
+  if (updatedCt !== ctXml) {
     zip.file('[Content_Types].xml', updatedCt);
   }
 
@@ -2268,6 +3232,23 @@ export {
   heatRampColors,
   fitCapAxisRange,
   fitDataAxisRange,
+  padSnapRange,
+  assertPercentAxisMin,
+  fitPercentAxis,
+  CM_BRAND,
+  chartFont,
+  offPaletteReason,
+  scanSpecPalette,
+  // CM chart fixes round 3
+  CALLOUT_POLICY_TEMPLATES,
+  countSpecCallouts,
+  assertCalloutCoverage,
+  lintChartSeriesXml,
+  specToChartXml,
+  // Round-3 item 2 — c15 ext whitelist regression guard
+  C15_EXT_ALLOWED_CHILDREN,
+  validateChartExtWhitelist,
+  dLblXml,
 };
 
 // ----------------------------------------------------------------------------
@@ -2288,6 +3269,9 @@ export {
  * to native chart XML. See task #16 for the full migration plan.
  */
 export const NATIVE_CHART_TEMPLATES = new Set([
+  // Reconciled facility economics (dialysis_econ_reconciled_v1) — categorical snapshots
+  'dia_facility_scale_curve',
+  'dia_operator_ebitda_benchmark',
   // P2 (R34) — first migration
   'volume_ttm_by_quarter',
   // P3 — simple single-series line + bar charts
@@ -2330,9 +3314,18 @@ export const NATIVE_CHART_TEMPLATES = new Set([
   //       data tab naturally carries both [bottom, height] columns.
   //   (b) Render box-whisker as a multi-line quartile chart (preserves
   //       all data; drops the shaded IQR fill — user can add it manually).
-  'bid_ask_spread',                 // (a) quarterly: only spread col present → simple line fallback
-  'bid_ask_spread_monthly',         // (a) monthly: invisible(last_ask) + visible(spread) stacked bar
+  // CM close-out (bid-ask, native hi-low — Scott's chosen end state 2026-08). A
+  // native FILLED band + ~6-8% axis is impossible (any bar forces the axis to 0),
+  // so the native builder draws two cap lines (Last-Ask + Achieved) + gray
+  // <c:hiLowLines> spread STICKS on a line-only axis that honors c:min (~6-8%).
+  // Native + editable, no PNG/QuickChart dependency. See the case body.
+  'bid_ask_spread',
+  'bid_ask_spread_monthly',
   'rent_psf_box_quarterly',         // (b) upgraded to IQR floating-bar + median line in P8.5
+  // CM chart fixes round 2, item 1 — dialysis companion box chart backed by the
+  // LABELED MODELED rent variant (cm_dialysis_rent_box_q_with_modeled). Same
+  // IQR floating-bar + median-line decomposition; only the title/source differ.
+  'rent_psf_box_quarterly_modeled',
   // P9 — composite: IQR floating bar + median (circle) + avg (diamond)
   //      dot markers over a year x-axis. Uses helper col for IQR width.
   'rent_by_year_built',
@@ -2345,7 +3338,7 @@ export const NATIVE_CHART_TEMPLATES = new Set([
   // R35 P1 — 6 missed multi-line templates caught by post-R34 audit.
   //   All reuse buildMultiLineChartXml (no new builder needed).
   'cap_rate_top_bottom_quartile',   // 3-line: top_q dashed / median bold / bottom_q dashed
-  'cap_rate_by_credit',             // 3-line: Federal navy / State sky / Municipal sage
+  'cap_rate_by_credit',             // 3-line: Federal navy / State sky / Municipal dark gray
   'cpi_vs_renewal_cagr',            // 2-line: CPI sky / GSA renewal navy
   'fed_funds_vs_treasury',          // 2-line: Fed Funds navy / 10Y Treasury sky
                                     // (renderer references mortgage_30y but it's not in
@@ -2366,6 +3359,7 @@ export const NATIVE_CHART_TEMPLATES = new Set([
   'pace_of_cap_rate_expansion',     // 2 bars: pace_all (navy) + pace_core (sky)
   // R35 P3 — final 2 simple-shape missed templates from audit.
   'buyer_class_pct_by_year',        // annual stacked bar (Private / REIT / Cross-Border / Institutional)
+  'clinic_econ_revenue_census',     // dia annual combo: stacked cost+profit bars (=revenue) + census dots (2nd axis)
   'renewal_rent_growth',            // single-bar Renewal Rent / SF
   // R35 P4 — final 2 complex composites.
   'cost_of_capital',                // 2 lines + floating gray range bar (sharedAxis combo)
@@ -2457,6 +3451,28 @@ function findFirstDenseYear(rows, fieldKey, minN, consecutive = 4) {
       if (run >= consecutive) return runStartYear;
     } else {
       run = 0; runStartYear = null;
+    }
+  }
+  return null;
+}
+
+function findFirstDensePeriod(rows, fieldKey, minN, consecutive = 4) {
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  let run = 0;
+  let runStartPeriod = null;
+  for (const r of rows) {
+    const rawPeriod = r && r.period_end ? String(r.period_end).slice(0, 10) : null;
+    const pe = rawPeriod ? new Date(`${rawPeriod}T00:00:00Z`) : null;
+    if (!pe || Number.isNaN(pe.getTime())) {
+      run = 0; runStartPeriod = null; continue;
+    }
+    const n = r[fieldKey];
+    if (n != null && Number(n) >= minN) {
+      if (run === 0) runStartPeriod = rawPeriod;
+      run++;
+      if (run >= consecutive) return runStartPeriod;
+    } else {
+      run = 0; runStartPeriod = null;
     }
   }
   return null;
@@ -2625,10 +3641,25 @@ const MIN_YEAR_BY_TEMPLATE = {
   // never interpolated. Superseded the R67/R76-A3 2015/2019 floors (which clipped
   // a decade of real cohort history). The dot-plot variants stay on capByTermFloor
   // (they are recent-window dispersion views, a different chart purpose).
-  cap_rate_by_lease_term:       (rows) => firstNonNullYear(rows, [
-    'cap_10plus', 'cap_6to10', 'cap_less5', 'cap_outside_firm',
-    'cap_12plus', 'cap_8to12', 'cap_6to8', 'cap_5orless', 'cap_5to10',
-  ]),
+  // 2026-08-12 — gov "Outside Firm" cohort was redefined from unknown-term
+  // (firm_rem IS NULL) to genuinely-past-firm (firm_rem <= 0) in
+  // cm_gov_cap_by_term_m (migration 20260812_cm_gov_cap_by_term_outside_firm_
+  // semantics.sql). With the corrected 4 cohorts, gov is pinned to 2011 — the
+  // earliest year where ALL FOUR lines are continuously populated (n>=5 every
+  // month) AND the "longer firm term = lower cap" head-to-tail message holds
+  // every month through today (grounded live: 2007-2010 are too thin for the
+  // past-firm/10+ cohorts to be continuous; 2011 forward is clean). "As far
+  // back as we can while keeping a consistent message" (Scott 2026-08-12).
+  // dia keeps the data-driven first-non-null start (its cohorts differ).
+  cap_rate_by_lease_term:       (rows) => {
+    const isDia = Array.isArray(rows) && rows.some((r) => r &&
+      (r.cap_8to12 != null || r.cap_5orless != null));
+    if (!isDia) return 2011;   // gov — fixed consistent-message floor
+    return firstNonNullYear(rows, [
+      'cap_10plus', 'cap_6to10', 'cap_less5', 'cap_outside_firm',
+      'cap_12plus', 'cap_8to12', 'cap_6to8', 'cap_5orless', 'cap_5to10',
+    ]);
+  },
   // T1 (2026-06-23) — NM-vs-Market: plot the MARKET line full-range (it runs
   // 12/12 from 2001) and let the NM overlay begin where NM sales become
   // non-trivial (~2014). Scanning BOTH series' first non-null makes the range
@@ -2642,7 +3673,14 @@ const MIN_YEAR_BY_TEMPLATE = {
   // is the chart's subject, so scan nm_cap_rate ONLY; the market line is cropped
   // to the same window. Superseded the T1/T7-U2 "market full-range + NM overlay
   // gaps" start (which opened the chart on ~13yr of NM-less market history).
-  nm_vs_market_cap:             (rows) => firstNonNullYear(rows, ['nm_cap_rate']) ?? 2014,
+  // CM feedback item #4 — floor at 2012 (sustained modern NM era). A real but
+  // isolated pre-GFC 2008 NM cluster + a genuine 2009-2011 collapse would
+  // otherwise start the plot at ~2008; the registry display_from (2012-01-01)
+  // is the primary crop, this is the belt-and-suspenders floor.
+  // 2026-08-12 — SUPERSEDED for the crop by the month-granular MIN_PERIOD_BY_TEMPLATE
+  // entry (which trims the ~11-month market-only lead-in to the NM line's first
+  // datum). Kept as the year-granular fallback for minYearForTemplate() consumers.
+  nm_vs_market_cap:             (rows) => Math.max(2012, firstNonNullYear(rows, ['nm_cap_rate']) ?? 2012),
   // R70 — sentiment: data-aware cutoff. R47's 2006 was too generous;
   // sentiment data is genuinely sparse before ~Q3 2014 (n=0-3/TTM in
   // 2006-2010, n=1-6/TTM in 2011-2013, n≥5 sustained from Q3 2014).
@@ -2665,12 +3703,9 @@ const MIN_YEAR_BY_TEMPLATE = {
   // after the n>=10 gate; deck's DOM chart also starts 2018. With the gate+smoothing
   // the 2018+ window lands DOM 168-290 (0-300 axis) / % ask 86.9-95.8% (84-96% axis).
   // R73 D-list — dom_and_pct_of_ask was a static 2018 for both verticals.
-  // Now per-vertical density-gated: dia carries n_sales (TTM) per row, so the
-  // floor drops to the first year with 4 consecutive months of n>=15 — dia
-  // reaches 2016 (n 14/16/30 in 2015/16/17; 2014 n=10 + 2013 4-mo partial held
-  // back as the thin edge). The gov view has NO n_sales column, so
-  // findFirstDenseYear returns null and gov falls back to 2018 unchanged
-  // (gov dom density not separately confirmed this round). Density-gated.
+  // Now density-gated where the source exposes n_sales (TTM). Gov's 2011 floor
+  // moved into cm_view_registry + cm_gov_dom_pct_ask_m/_q n_sales, so there is
+  // no hidden gov-only code fallback here anymore.
   dom_and_pct_of_ask:           (rows) => findFirstDenseYear(rows, 'n_sales', 15) ?? 2018,
   dom_and_pct_of_ask_monthly:   (rows) => findFirstDenseYear(rows, 'n_sales', 15) ?? 2018,
   // R73 D-#12 — per-vertical bid-ask floor. The view has no sample-count
@@ -2741,15 +3776,42 @@ const MIN_YEAR_BY_TEMPLATE = {
   // for gov and risk cropping dia's other series.
 };
 
+const MIN_PERIOD_BY_TEMPLATE = {
+  // 2026-08-10 — bid-ask coverage can begin mid-year (live gov begins
+  // 2007-08-31, with 2008 the first full year). A year-only floor starts the
+  // chart at Jan-2007 and leaves blank x-axis categories before the first real
+  // plotted point. Use the exact first dense period for this chart family.
+  bid_ask_spread:         (rows) => findFirstDensePeriod(rows, 'avg_last_ask_cap', 0.0001),
+  bid_ask_spread_monthly: (rows) => findFirstDensePeriod(rows, 'avg_last_ask_cap', 0.0001),
+  // 2026-08-12 — NM-vs-Market value-prop chart: start the x-axis EXACTLY at the
+  // Northmarq (blue) line's first plotted point, not the Jan-of-that-year floor.
+  // The MIN_YEAR entry floors at the YEAR of the first non-null nm_cap_rate
+  // (gov = 2013), so the plot opens at Jan-2013 while the NM line's first datum
+  // is 2013-12 — leaving ~11 months of MARKET-ONLY (gray) line at the left before
+  // the blue line begins. A month-granular first-non-null crop trims that lead-in
+  // so both lines start together (Scott: "adjust the x-axis to the start of the
+  // NM line"). MIN_PERIOD takes precedence over MIN_YEAR in buildInjectionSpec.
+  // consecutive=3 (not 1) so an isolated early single print can't anchor the
+  // start; clamped to >= 2012-01 — the same belt-and-suspenders guard the
+  // MIN_YEAR entry carried against an isolated pre-GFC NM cluster. nm_cap_rate
+  // already carries the view-level n>=3 gate, so a non-null value is already
+  // dense. Applies to both verticals (dia's NM line begins ~2012).
+  nm_vs_market_cap: (rows) => {
+    const p = findFirstDensePeriod(rows, 'nm_cap_rate', 0.0001, 3);
+    if (!p) return null;
+    return p < '2012-01-01' ? '2012-01-01' : p;
+  },
+};
+
 // R2-A2 (2026-06-30) — single source of truth for a template's displayed
 // dataStart year, so the PNG renderer (cm-chart-image-renderer.js) can crop to
 // the IDENTICAL window the native injector plots and the two surfaces' data-fit
 // axes stay in step. Resolves the MIN_YEAR_BY_TEMPLATE entry (a static year or a
 // rows→year function) and returns a finite year or null (no floor). Pass the
 // FULL row set (the function-floors scan it for first-dense / first-non-null).
-export function minYearForTemplate(templateId, rows) {
+export function minYearForTemplate(templateId, rows, context = {}) {
   const entry = MIN_YEAR_BY_TEMPLATE[templateId];
-  const year = typeof entry === 'function' ? entry(rows) : entry;
+  const year = typeof entry === 'function' ? entry(rows, context) : entry;
   return Number.isFinite(year) ? year : null;
 }
 
@@ -2776,20 +3838,26 @@ export function buildInjectionSpec(args) {
   // showing single-sample outlier-driven cap rates. The function reads
   // each row's transaction_count_ttm to find the first chronological
   // year where the underlying sample is dense enough to be honest.
+  const minPeriodEntry = MIN_PERIOD_BY_TEMPLATE[args.chart_template_id];
+  const minPeriod = typeof minPeriodEntry === 'function'
+    ? minPeriodEntry(args.rows)
+    : minPeriodEntry;
   const minYearEntry = MIN_YEAR_BY_TEMPLATE[args.chart_template_id];
   const minYear = typeof minYearEntry === 'function'
-    ? minYearEntry(args.rows)
+    ? minYearEntry(args.rows, args)
     : minYearEntry;
   let effectiveStart = args.dataStart;
   let trimOffset = 0;
-  if (minYear && Array.isArray(args.rows) && args.rows.length > 0) {
-    // Find first row at or after the cutoff year. Rows arrive in
-    // chronological order from the view; first match is the offset.
-    const cutoff = new Date(`${minYear}-01-01T00:00:00Z`).getTime();
+  const cutoffTime = minPeriod
+    ? new Date(`${String(minPeriod).slice(0, 10)}T00:00:00Z`).getTime()
+    : (minYear ? new Date(`${minYear}-01-01T00:00:00Z`).getTime() : NaN);
+  if (Number.isFinite(cutoffTime) && Array.isArray(args.rows) && args.rows.length > 0) {
+    // Find first row at or after the cutoff. Rows arrive in chronological order
+    // from the view; first match is the offset.
     let offset = 0;
     for (const r of args.rows) {
       const pe = r.period_end ? new Date(r.period_end).getTime() : NaN;
-      if (Number.isFinite(pe) && pe >= cutoff) break;
+      if (Number.isFinite(pe) && pe >= cutoffTime) break;
       offset++;
     }
     // Don't shift past the end (safety — keep at least 1 row visible)
@@ -3048,12 +4116,28 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
     const periodCol = findCol('period_end');
     const valCol = findCol(...(Array.isArray(valKeys) ? valKeys : [valKeys]));
     if (!periodCol || !valCol) return null;
-    // R37 P3 — compute data labels from rows if requested
+    // R37 P3 — compute data labels from rows if requested. A2: when a line
+    // chart doesn't explicitly opt in, auto-annotate max/min/latest on the
+    // primary series, inferring the label format from the y-axis numFmt so
+    // every single-line chart carries the standard callouts.
     let dataLabels;
-    if (opts.annotateKey && opts.annotateFmt && Array.isArray(rows)) {
-      const fmt = ANNOTATION_FORMATTERS[opts.annotateFmt];
+    let annKey = opts.annotateKey;
+    let annFmt = opts.annotateFmt;
+    // CM chart fixes round 3, item 4 — annotateKey may be an array of candidate
+    // row keys; resolve to whichever the data actually carries so a bar chart
+    // whose view uses e.g. `count` vs `ttm_count` still emits callouts.
+    if (Array.isArray(annKey)) {
+      annKey = annKey.find(k => cols.some(c => c.key === k)) || annKey[0];
+    }
+    if (!annKey && type === 'line' && Array.isArray(rows)) {
+      const keys = Array.isArray(valKeys) ? valKeys : [valKeys];
+      annKey = keys.find(k => cols.some(c => c.key === k)) || keys[0];
+      annFmt = inferAnnotationFmt(opts.valAxNumFmt);
+    }
+    if (annKey && annFmt && Array.isArray(rows)) {
+      const fmt = ANNOTATION_FORMATTERS[annFmt];
       if (fmt) {
-        dataLabels = buildAnnotationsForSpec(rows, r => r[opts.annotateKey], fmt);
+        dataLabels = buildAnnotationsForSpec(plottedRows, r => r[annKey], fmt, `${chart_template_id}:${annKey}`);
       }
     }
     return {
@@ -3073,6 +4157,60 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
   };
 
   switch (chart_template_id) {
+    // ────────────────────────────────────────────────────────────────
+    // Reconciled facility economics (dialysis_econ_reconciled_v1) —
+    // categorical snapshots (no time axis). Category = volume band / operator.
+    // ────────────────────────────────────────────────────────────────
+    case 'dia_facility_scale_curve': {
+      // Vertical categorical bar: median EBITDA margin by treatment-volume band
+      // (bands ordered small -> large), showing margin rising with facility scale.
+      // The Data tab also carries cost/treatment + operating margin for reference.
+      // (Text category axis — mirrors the proven leased_inventory_by_state path.)
+      const bandCol = findCol('volume_band');
+      const ebCol   = findCol('median_ebitda_margin');
+      if (!bandCol || !ebCol) return null;
+      const marginLabels = Array.isArray(rows)
+        ? buildAnnotationsForSpec(plottedRows, r => r.median_ebitda_margin, fmtPct1Native, 'scale_ebitda')
+        : undefined;
+      return {
+        tabName,
+        spec: {
+          type: 'bar', tabName,
+          titleCol: ebCol, titleRow: headerRow,
+          catCol: bandCol, valCol: ebCol,
+          dataStart, dataEnd,
+          color: navy,
+          valAxNumFmt: VAL_FMT_PERCENT_1DP,
+          dataLabels: marginLabels,
+          anchor: standardAnchor,
+        },
+      };
+    }
+
+    case 'dia_operator_ebitda_benchmark': {
+      // Horizontal bar: reconciled EBITDA margin by operator (DaVita/Fresenius
+      // reconcile to their 10-K). Category axis = operator, value = ebitda_margin.
+      const opCol     = findCol('operator');
+      const marginCol = findCol('ebitda_margin');
+      if (!opCol || !marginCol) return null;
+      const opLabels = Array.isArray(rows)
+        ? buildAnnotationsForSpec(plottedRows, r => r.ebitda_margin, fmtPct1Native, 'oper_ebitda')
+        : undefined;
+      return {
+        tabName,
+        spec: {
+          type: 'bar', tabName,
+          titleCol: marginCol, titleRow: headerRow,
+          catCol: opCol, valCol: marginCol,
+          dataStart, dataEnd,
+          color: navy, horizontal: true,
+          valAxNumFmt: VAL_FMT_PERCENT_1DP,
+          dataLabels: opLabels,
+          anchor: standardAnchor,
+        },
+      };
+    }
+
     // P2 — first migration
     case 'volume_ttm_by_quarter':
       // master_m mapper renames ttm_volume → volume_dollars in some places.
@@ -3094,8 +4232,13 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
         valAxNumFmt: VAL_FMT_PERCENT_2DP,
       });
     case 'transaction_count_ttm':
+      // CM chart fixes round 3, item 4 — this primary time-series bar was in the
+      // callout-policy list but emitted no peak/low/latest labels (annotate was
+      // never wired for the bar path). Add integer-formatted callouts.
       return singleSeries('bar', ['ttm_count', 'count'], navy, {
         valAxNumFmt: VAL_FMT_INTEGER,
+        annotateKey: ['ttm_count', 'count'],
+        annotateFmt: 'integer',
       });
     case 'avg_deal_size':
       // R2-B Unit 3 (2026-06-29) — REVERT the T10c average→dot change for THIS
@@ -3195,6 +4338,12 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // — a relative inventory-vs-pace indicator, not an organic on-market count;
       // it self-heals as organic page-marker capture accrues.)
       const stripUniverse = false;
+      // Peak / Low / Latest callouts on the Months-of-Supply line (user request):
+      // formatted "X.X mo" to match the right-axis number format.
+      const fmtMonths = (v) => `${Number(v).toFixed(1)} mo`;
+      const mosLabels = Array.isArray(rows)
+        ? buildAnnotationsForSpec(plottedRows, r => r.months_of_supply, fmtMonths, 'market_turnover:months_of_supply')
+        : undefined;
       return {
         tabName,
         spec: {
@@ -3218,7 +4367,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             { titleCol: monthlyPaceCol,   titleRow: headerRow, valCol: monthlyPaceCol,   color: navy },
           ],
           lineSeries: stripUniverse ? [] : [
-            { titleCol: mosCol, titleRow: headerRow, valCol: mosCol, color: '6A748C' },
+            { titleCol: mosCol, titleRow: headerRow, valCol: mosCol, color: '6A748C', dataLabels: mosLabels },
           ],
           anchor: standardAnchor,
         },
@@ -3236,12 +4385,20 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       };
     }
     case 'quarterly_volume_bars':
-      // R68-E (D13): abbreviate the currency y-axis ($300M, $1.2B) instead of
-      // raw $300,000,000. Quarterly volume spans ~$100M-$1.2B; the $X.XM form
-      // matches the avg_deal_size convention and keeps tick labels legible.
-      // (volume_ttm_by_quarter already abbreviates in billions.)
-      return singleSeries('bar', 'quarterly_volume', sky, {
-        valAxNumFmt: VAL_FMT_CURRENCY_M_1DP,
+      // R68-E (D13) + CM gov feedback: abbreviate the currency y-axis and
+      // callouts using the plotted scale. Smaller rotations use $XM; charts
+      // with billion-dollar bars use $XB so the labels don't read as huge
+      // million figures.
+      // CM chart fixes round 3, item 4 — add peak/low/latest callouts (was in
+      // the policy list but the bar path never wired annotate).
+      const qVolScale = currencyScaleForValues(
+        Array.isArray(plottedRows) ? plottedRows.map((r) => r.quarterly_volume) : []
+      );
+      // Bar color NM Blue #003DA5 per marketing ChartEdits 2026-08-12 (was sky).
+      return singleSeries('bar', 'quarterly_volume', navy, {
+        valAxNumFmt: qVolScale.valAxNumFmt,
+        annotateKey: 'quarterly_volume',
+        annotateFmt: qVolScale.annotateFmt,
       });
 
     // P4 — stacked bar charts
@@ -3271,7 +4428,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
         { key: 'renewed_leases',                 color: '003DA5', sign: +1 },  // navy
         { key: 'succeeding_superseding_leases',  color: '265AB2', sign: +1 },  // mid blue
         { key: 'non_renewed_expirations',        color: '62B5E5', sign: -1 },  // sky — expired & not renewed
-        { key: 'terminated_leases',              color: 'D97706', sign: -1 },  // amber
+        { key: 'terminated_leases',              color: '9EA9B7', sign: -1 },  // amber
       ];
       const resolved = RENEWAL_SERIES
         .map(s => ({ ...s, col: findCol(s.key) }))
@@ -3349,7 +4506,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       const seriesDefs = [
         { key: 'private_count',       color: '003DA5' },  // navy — Private
         { key: 'institutional_count', color: '62B5E5' },  // sky — Institutional/Fund
-        { key: 'reit_count',          color: '4CB582' },  // sage — REIT
+        { key: 'reit_count',          color: '8FC49E' },  // sage — REIT
       ];
       const series = seriesDefs
         .map(s => ({ ...s, col: findCol(s.key) }))
@@ -3381,8 +4538,8 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // matches the PDF visual exactly.
       //
       // Cohort palette per cm-chart-image-renderer.js PDF_COLORS:
-      //   cap_long_term     #7E6BAD  (purple)   — longest-term
-      //   cap_mid_long      #4CB582  (sage)     — middle-long
+      //   cap_long_term     #9B88A5  (purple)   — longest-term
+      //   cap_mid_long      #8FC49E  (sage)     — middle-long
       //   cap_mid           #62B5E5  (sky)      — middle (dia only)
       //   cap_short         #003DA5  (navy)     — shortest
       //   cap_outside_firm  #6A748C  (gray)     — gov only, dashed
@@ -3417,14 +4574,26 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
         ? 'cap_5to10'
         : 'cap_6to10';
 
+      // Gov "Cap Rate by Remaining Lease Term" recut to the value-of-firm-term
+      // THREE-BUCKET scheme (2026-08-13): 6+ / 1.5–6 / sub-1.5 yr. Cleanly
+      // monotonic + continuous, and folds the old thin/jagged "Outside Firm"
+      // holdover line into sub-1.5. Only the cap_rate_by_lease_term template
+      // (which reads cm_gov_cap_by_term_m) gets the 3-bucket columns; the
+      // sold_/asking_cap_by_term dot plots read different views that still
+      // expose the legacy 4-cohort keys, so they keep those.
+      const govThreeBucket = chart_template_id === 'cap_rate_by_lease_term';
       const seriesDefs = hasDialysisCohorts ? [
-        { key: 'cap_12plus',  color: '7E6BAD' },                       // 12+ purple
-        { key: 'cap_8to12',   color: '4CB582' },                       // 8-12 sage
+        { key: 'cap_12plus',  color: '9B88A5' },                       // 12+ purple
+        { key: 'cap_8to12',   color: '8FC49E' },                       // 8-12 sage
         { key: 'cap_6to8',    color: '62B5E5' },                       // 6-8 sky
         { key: 'cap_5orless', color: '003DA5' },                       // ≤5 navy
+      ] : govThreeBucket ? [
+        { key: 'cap_6plus',   color: '9B88A5' },                       // 6+ purple  (most firm term → lowest cap)
+        { key: 'cap_1_5to6',  color: '8FC49E' },                       // 1.5–6 sage
+        { key: 'cap_sub1_5',  color: '003DA5' },                       // sub-1.5 navy (least firm term → highest cap)
       ] : [
-        { key: 'cap_10plus',       color: '7E6BAD' },                  // 10+ purple
-        { key: govSixToTenKey,     color: '4CB582' },                  // 6-10 sage
+        { key: 'cap_10plus',       color: '9B88A5' },                  // 10+ purple
+        { key: govSixToTenKey,     color: '8FC49E' },                  // 6-10 sage
         { key: 'cap_less5',        color: '003DA5' },                  // <5 navy
         { key: 'cap_outside_firm', color: '6A748C', dashed: true },    // Outside dashed gray
       ];
@@ -3479,12 +4648,46 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           yAxisRange: cohortCapFit || capFit || cohortRange,
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
           yLeftAxisTitle: 'Cap rate',   // R76 E4 — label the % axis
-          series: series.map(s => ({
-            titleCol: s.col, titleRow: headerRow,
-            valCol: s.col,
-            color: s.color,
-            dashed: !!s.dashed,
-          })),
+          // Scott request (2026-08-10) — the 4 cohort Latest labels stacked in the
+          // top-right band and HID the lines. Split them: the 2 highest-value
+          // cohorts' Latest callouts go into the TOP whitespace band, the 2 lowest
+          // into the BOTTOM whitespace band, each with a leader line to its point,
+          // so no label overlaps a line. Rank by each cohort's latest value, then
+          // assign an absolute yEdge (top: 0.10/0.17; bottom: 0.80/0.87). Text stays
+          // color-matched to the cohort line.
+          series: (() => {
+            // latest finite value per series (for ranking)
+            const latestVal = (s) => {
+              for (let i = plottedRows.length - 1; i >= 0; i--) {
+                const v = Number(plottedRows[i] && plottedRows[i][s.key]);
+                if (Number.isFinite(v)) return v;
+              }
+              return null;
+            };
+            const ranked = series
+              .map((s, i) => ({ i, v: latestVal(s) }))
+              .filter(o => o.v != null)
+              .sort((a, b) => b.v - a.v); // highest → lowest
+            // top 2 ranks → top band; the rest → bottom band
+            const TOP_EDGES = [0.10, 0.17];
+            const BOT_EDGES = [0.80, 0.87];
+            const yEdgeByIdx = {};
+            ranked.forEach((o, rank) => {
+              yEdgeByIdx[o.i] = rank < 2
+                ? TOP_EDGES[rank]
+                : BOT_EDGES[Math.min(rank - 2, BOT_EDGES.length - 1)];
+            });
+            return series.map((s, i) => ({
+              titleCol: s.col, titleRow: headerRow,
+              valCol: s.col,
+              color: s.color,
+              dashed: !!s.dashed,
+              dataLabels: Array.isArray(rows)
+                ? buildLatestOnlyForSpec(plottedRows, r => r[s.key], fmtPct2Native, null, s.color)
+                    .map(a => ({ ...a, yEdge: yEdgeByIdx[i] }))
+                : undefined,
+            }));
+          })(),
           anchor: standardAnchor,
         },
       };
@@ -3510,8 +4713,8 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // T11 floor clamp lowered the start to 2001 (market context) — it would stamp
       // a label index from the 2020+ subset onto the 2001-based plotted series.
       const nmLabelRows = plottedRows;
-      const nmLabels  = buildAnnotationsForSpec(nmLabelRows, r => r.nm_cap_rate, fmtPct2Native);
-      const mktLabels = buildAnnotationsForSpec(nmLabelRows, r => r.market_cap_rate, fmtPct2Native);
+      const nmLabels  = buildAnnotationsForSpec(nmLabelRows, r => r.nm_cap_rate, fmtPct2Native, 'nm_cap', sky);
+      const mktLabels = buildAnnotationsForSpec(nmLabelRows, r => r.market_cap_rate, fmtPct2Native, 'market_cap', '8A8F98');
       return {
         tabName,
         spec: {
@@ -3558,10 +4761,10 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // User feedback 2026-05-23 batch 6: "data labels for high, low
       // and most recent are off" → on the most-logical series per chart.
       const pctLabels = Array.isArray(rows)
-        ? buildAnnotationsForSpec(rows, r => r.pct_of_ask, fmtPct1Native)
+        ? buildAnnotationsForSpec(plottedRows, r => r.pct_of_ask, fmtPct1Native, 'pct_of_ask')
         : undefined;
       const domLabels = Array.isArray(rows)
-        ? buildAnnotationsForSpec(rows, r => r.avg_dom, (v) => `${Math.round(v)}d`)
+        ? buildAnnotationsForSpec(plottedRows, r => r.avg_dom, (v) => `${Math.round(v)}d`)
         : undefined;
       return {
         tabName,
@@ -3599,26 +4802,28 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
     }
 
     case 'case_for_renewal': {
-      // X-axis is `year` (integer), not period_end.
+      // Monthly TTM view uses period_end. Keep year fallback for old fixtures or
+      // pre-migration exports.
       // Bar: commencement_count (sky), Line: avg_rent_per_sf (navy).
+      const periodCol = findCol('period_end');
       const yearCol = findCol('year');
+      const catCol = periodCol || yearCol;
       const cntCol  = findCol('commencement_count');
       const rentCol = findCol('avg_rent_per_sf');
-      if (!yearCol || !cntCol || !rentCol) return null;
+      if (!catCol || !cntCol || !rentCol) return null;
       // R37 P3 — peak/trough/most-recent labels on rent line
       // (renderer line 1923: buildAnnotations(rows, r => r.avg_rent_per_sf, fmtCurrencyPerSf, 'year'))
       const rentLabels = Array.isArray(rows)
-        ? buildAnnotationsForSpec(rows, r => r.avg_rent_per_sf, fmtCurrencyPerSfNative)
+        ? buildAnnotationsForSpec(plottedRows, r => r.avg_rent_per_sf, fmtCurrencyPerSfNative, 'avg_rent_per_sf')
         : undefined;
       return {
         tabName,
         spec: {
           type: 'combo',
           tabName,
-          catCol: yearCol,
+          catCol,
           dataStart, dataEnd,
-          // R37 P1 — year x-axis (integer 2020), not quarter date.
-          catAxNumFmt: '0',
+          catAxNumFmt: periodCol ? 'mmm-yy' : '0',
           // R37 P2 — left = lease count integers, right = rent currency.
           // Renderer auto-pins right around the rent data ±10% — auto-scale
           // is acceptable here since the rent range varies per dataset.
@@ -3642,8 +4847,8 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       //
       // R65 — colors realigned to Northmarq brand tokens (per user notes
       // 2026-05-22 batch 5: "Color scheme doesn't match the brand
-      // standards"). Pre-R65 used off-brand sage (#4CB582) for the core
-      // 10+ bar and amber (#D97706) for the core 10+ line. R65 swaps to:
+      // standards"). Pre-R65 used off-brand sage (#8FC49E) for the core
+      // 10+ bar and amber (#9EA9B7) for the core 10+ line. R65 swaps to:
       //   count_total         nm_sky  #62B5E5  (was sky — keep)
       //   count_core_10plus   nm_pale #E0E8F4  (pale fill + sky border)
       //   avg_cap_total       nm_navy #003DA5  solid line (was navy — keep)
@@ -3666,19 +4871,22 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           catCol: periodCol,
           dataStart, dataEnd,
           yLeftNumFmt:  VAL_FMT_INTEGER,
-          // R66t — TTM-basis core cap dips to ~5.4% and total reaches ~7.0%; widen
-          // from 5.5-7.5% so neither cap line clips (deck right axis is 4.5-7.0%).
-          yRightRange:  { min: 0.05, max: 0.0725 },
+          // R66t — TTM-basis core cap dips to ~5.4% and total reaches ~7.0%.
+          // CM chart fixes round 2, item 2 — fit the right axis to BOTH cap
+          // lines (total + core) so neither clips; keep the 0.05 low floor.
+          yRightRange:  fitAxisToSeries('available_market_size_combo', 'A3(cap%)', plottedRows,
+                          ['avg_cap_total', 'avg_cap_core_10plus'],
+                          { kind: 'cap', minFloor: 0.05, fallback: { min: 0.05, max: 0.0725 } }),
           yRightNumFmt: VAL_FMT_PERCENT_2DP,
           barSeries: [
             { titleCol: cntTotCol,  titleRow: headerRow, valCol: cntTotCol,  color: sky },
             // R67 — was pale-sky (#E0E8F4) which was too faint against the
             // gridlines and the user couldn't see the core-10+ bar at all.
-            // Sage (#4CB582) is the next NM brand-palette color over from
+            // Sage (#8FC49E) is the next NM brand-palette color over from
             // sky and creates clear visual separation in the clustered
             // grouping. Keep sky border as a tint cue ("close cousin of
             // total market"). User feedback 2026-05-23 batch 6.
-            { titleCol: cntCoreCol, titleRow: headerRow, valCol: cntCoreCol, color: '4CB582', borderColor: sky },
+            { titleCol: cntCoreCol, titleRow: headerRow, valCol: cntCoreCol, color: '8FC49E', borderColor: sky },
           ],
           lineSeries: [
             { titleCol: capTotCol,  titleRow: headerRow, valCol: capTotCol,  color: navy },
@@ -3835,32 +5043,96 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       //       (was 5.25-8%, which clipped everything above 8%).
       const achievedCol = String.fromCharCode(65 + cols.length);
       if (lastAskCol) {
+        // A3 (CM chart feedback item #3) — data-fit the shared cap axis over
+        // BOTH plotted levels (Last Ask + Achieved = last_ask + spread) instead
+        // of the fixed 5.5-10% band that left the bars floating in empty space.
+        // Fits to the plotted window ±0.5% snap; falls back to the prior literal
+        // only when there's nothing to fit (< 2 finite points).
+        // CM close-out item 3 (bid-ask, final) — the cap axis is fit to ONLY the
+        // series assigned to it: Last-Ask + Achieved (= last_ask + spread). The
+        // bid-ask SPREAD is NEVER a cap-axis series — it exists purely as the
+        // floating-bar geometry (invisible last_ask base + visible spread height →
+        // top = achieved), so it can't drag data-min to ~0.6% and force a 0 floor.
+        // fitPercentAxis fits + asserts in ONE per-axis call, so the pinned range
+        // and the zero-floor check can never diverge. On live data (dia/gov) the
+        // cap axis fits ~6.0–8.1%; falls back to the literal only when < 2 points.
+        const plotVals = [];
+        for (const r of plottedRows) {
+          const la = r.avg_last_ask_cap == null ? NaN : Number(r.avg_last_ask_cap);
+          const sp = r.avg_bid_ask_spread == null ? NaN : Number(r.avg_bid_ask_spread);
+          if (Number.isFinite(la)) {
+            plotVals.push(la);
+            if (Number.isFinite(sp)) plotVals.push(la + sp);  // achieved = top of bar
+          }
+        }
+        const bidAskFit = fitPercentAxis(
+          `native:${chart_template_id}:cap%(last_ask+achieved)`,
+          plotVals, { minAbsFloor: 0.01 }
+        );
+        // CM close-out item 3 (bid-ask, FINAL — Excel axis floor, user's option A).
+        // History of the strikes: the spread was rendered on the CAP AXIS as a
+        // stacked bar (invisible base + spread), then as line + <c:upDownBars>.
+        // BOTH keep a BAR element on the cap axis, and in Excel any bar/updown-bar
+        // element forces its value axis to include 0 — so c:min was silently
+        // ignored and the axis stayed 0–8% every time (confirmed: the rendered XML
+        // DID carry <c:min val="0.06"/>, Excel just overrode it). A value axis
+        // honors c:min ONLY when nothing bar-like is plotted on it (proven by the
+        // dom_and_pct_of_ask combo, whose pinned line axis works). So: the two cap
+        // LINES (Last-Ask + Achieved) go on the LEFT cap axis alone (swapAxes) —
+        // that axis is line-only → honors c:min → fits ~6–8%. The SPREAD becomes a
+        // gray bar on a SEPARATE right-hand bps axis (0-based, fine for a bar),
+        // scaled so the bars sit low and never invade the cap-line band.
+        // CM close-out (bid-ask, native hi-low — user's chosen end state). Excel
+        // forces a value axis to include 0 whenever a BAR/upDownBar sits on it, so
+        // no native FILLED band can keep a ~6-8% axis. `<c:hiLowLines>` is a
+        // lineChart element (NOT a bar), so it draws a thin vertical stick between
+        // the highest and lowest series value at each period — here the spread
+        // between Last-Ask and Achieved — WITHOUT dragging the axis to 0. Result:
+        // two continuous cap lines (sky Last-Ask, navy Achieved) + gray spread
+        // sticks between them, on a line-only cap axis that honors c:min (~6-8%).
+        // Native + editable; no PNG/QuickChart dependency. (Trade-off vs the PNG:
+        // hi-low sticks instead of a solid filled band — chosen 2026-08 by Scott.)
         return {
           tabName,
           spec: {
-            type: 'combo',
+            type: 'multi-line',
             tabName,
             catCol: periodCol,
             dataStart, dataEnd,
-            barGrouping: 'stacked',
-            sharedAxis:  true,
-            barGapWidth: 60,
-            yLeftRange: ((vertical === 'gov' || vertical === 'government_leased')
-              ? { min: 0.055, max: 0.10 }
-              : { min: 0.055, max: 0.10 }),
-            yLeftNumFmt: VAL_FMT_PERCENT_2DP,
-            barSeries: [
-              // invisible base lifts the visible bar to the Last Ask level
-              { titleCol: lastAskCol, titleRow: headerRow, valCol: lastAskCol, color: '003DA5', noFill: true },
-              // visible light-gray bar = the spread (Last Ask -> Achieved)
-              { titleCol: spreadCol,  titleRow: headerRow, valCol: spreadCol,  color: 'D8DFDF', borderColor: '9EA9B7' },
-            ],
-            lineSeries: [
-              { titleCol: lastAskCol, titleRow: headerRow, valCol: lastAskCol, color: sky,
-                showMarker: true, markerShape: 'dash', markerSize: 7 },
-              { titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy,
-                showMarker: true, markerShape: 'dash', markerSize: 7 },
-            ],
+            yAxisRange: bidAskFit || { min: 0.055, max: 0.10 },   // line-only axis → honors c:min → ~6-8%
+            valAxNumFmt: VAL_FMT_PERCENT_2DP,
+            yLeftAxisTitle: 'Cap rate',
+            // CM bid-ask (final — Scott's chosen end state 2026-08-10: solid band +
+            // Peak-only callout). Live testing CONFIRMED that <c:upDownBars> makes
+            // Excel keep ONLY the single max-value ("Peak") data label chart-wide
+            // and drop Low/Latest — even with normal drawn lines. The solid
+            // up/down-bar band and all three callouts cannot coexist in native
+            // Excel, so per Scott we keep the master's solid gray band and emit ONLY
+            // the Peak callout (the one label Excel reliably renders under up/down
+            // bars — it IS the series max). Low/Latest are intentionally not emitted
+            // rather than shipped as labels Excel would silently cull.
+            upDownBars: true,
+            upDownGapWidth: 20,
+            // Master look: each series is a flat DASH tick (markerOnly, no connecting
+            // line) — Last-Ask sky (bottom), Achieved navy (top) — with the solid
+            // gray up/down-bar band filling the spread between them.
+            series: (() => {
+              const spreadAnns = buildAnnotationsForSpec(
+                plottedRows,
+                (r) => (Number.isFinite(Number(r.avg_last_ask_cap)) && Number.isFinite(Number(r.avg_bid_ask_spread)))
+                  ? Number(r.avg_bid_ask_spread) : NaN,
+                (v) => `${Math.round(Number(v) * 10000)} bps`,
+                'bid_ask:spread');
+              // Peak only — the max-role callout Excel keeps under up/down bars.
+              const peakAnn = spreadAnns.filter((a) => a.role === 'max');
+              return [
+                { titleCol: lastAskCol,  titleRow: headerRow, valCol: lastAskCol,  color: sky,
+                  showMarker: true, markerShape: 'dash', markerSize: 8, markerOnly: true },
+                { titleCol: achievedCol, titleRow: headerRow, valCol: achievedCol, color: navy,
+                  showMarker: true, markerShape: 'dash', markerSize: 8, markerOnly: true,
+                  dataLabels: peakAnn },
+              ];
+            })(),
             anchor: standardAnchor,
           },
           helperCols: [
@@ -3871,7 +5143,10 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
               width: 18,
               getValue: (row) => {
                 const la = row.avg_last_ask_cap, sp = row.avg_bid_ask_spread;
-                return (la != null && sp != null) ? Number(la) + Number(sp) : null;
+                if (la == null || sp == null) return null;
+                const lastAsk = Number(la);
+                const spread = Number(sp);
+                return Number.isFinite(lastAsk) && Number.isFinite(spread) ? lastAsk + spread : null;
               },
             },
           ],
@@ -3884,6 +5159,13 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       });
     }
 
+    // CM chart fixes round 2, item 1 — the modeled companion shares the exact
+    // IQR floating-bar + median-line decomposition (same rent_lower_quartile /
+    // rent_median / rent_upper_quartile columns). The "(incl. modeled rents)"
+    // title arrives via spec.title (chart.name) and the extra basis_scope /
+    // n_points columns are ignored by the box builder but stay visible on the
+    // sheet. Fall through to the shared case.
+    case 'rent_psf_box_quarterly_modeled':
     case 'rent_psf_box_quarterly': {
       // R34 P8.5 upgrade — proper box-whisker visual now that we have
       // helper-column infrastructure.
@@ -3930,9 +5212,12 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
               color: sky },
           ],
           lineSeries: [
-            // Median line over the band
+            // Median line over the band — Peak/Low/Latest callouts (currency/SF).
             { titleCol: medianCol, titleRow: headerRow, valCol: medianCol,
-              color: navy },
+              color: navy,
+              dataLabels: Array.isArray(rows)
+                ? buildAnnotationsForSpec(plottedRows, r => r.rent_median, fmtCurrencyPerSfNative, 'rent_psf_box:median')
+                : undefined },
           ],
           anchor: standardAnchor,
         },
@@ -4030,6 +5315,65 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       };
     }
 
+    case 'clinic_econ_revenue_census': {
+      // dia annual reconciled economics, avg per clinic (2011-2024).
+      //   • Stacked bars (LEFT / primary axis): operating cost (navy) +
+      //     operating profit (sky). They sum to average revenue per clinic —
+      //     the bar total IS the revenue-per-clinic figure.
+      //   • Dot overlay (RIGHT / secondary axis): average patient census per
+      //     clinic (slate diamonds, no connecting line).
+      // Year x-axis is categorical (integer). barGrouping='stacked' WITHOUT
+      // sharedAxis, so the census line-series lands on the secondary (right)
+      // axis automatically — dollars left, census right.
+      const yearCol   = findCol('year');
+      const costCol    = findCol('avg_operating_cost_per_clinic');
+      const profitCol  = findCol('avg_operating_profit_per_clinic');
+      const censusCol  = findCol('avg_patient_census_per_clinic');
+      if (!yearCol || !costCol || !profitCol || !censusCol) return null;
+
+      // Fit the census (right) axis snugly around the observed range so the
+      // dots read as a trend, padded to a round decade and floored at 0.
+      const censusVals = plottedRows
+        .map((r) => Number(r.avg_patient_census_per_clinic))
+        .filter((v) => Number.isFinite(v));
+      const cMin = censusVals.length ? Math.min(...censusVals) : 0;
+      const cMax = censusVals.length ? Math.max(...censusVals) : 100;
+      const censusRange = {
+        min: Math.max(0, Math.floor((cMin - 5) / 10) * 10),
+        max: Math.ceil((cMax + 5) / 10) * 10,
+      };
+
+      return {
+        tabName,
+        spec: {
+          type: 'combo',
+          tabName,
+          catCol: yearCol,
+          dataStart, dataEnd,
+          // Year x-axis (integer 2011, 2012, ...), not a quarter date.
+          catAxNumFmt: '0',
+          yLeftNumFmt:  VAL_FMT_CURRENCY,
+          yLeftAxisTitle:  'Avg Revenue / Clinic',
+          yRightRange:  censusRange,
+          yRightNumFmt: VAL_FMT_INTEGER,
+          yRightAxisTitle: 'Avg Patient Census / Clinic',
+          barGrouping: 'stacked',
+          barSeries: [
+            // Operating cost — bottom of the stack (navy)
+            { titleCol: costCol,   titleRow: headerRow, valCol: costCol,   color: navy },
+            // Operating profit — top of the stack (sky). cost + profit = revenue.
+            { titleCol: profitCol, titleRow: headerRow, valCol: profitCol, color: sky },
+          ],
+          lineSeries: [
+            // Patient census — slate diamond markers, no connecting line, right axis
+            { titleCol: censusCol, titleRow: headerRow, valCol: censusCol,
+              color: '6A748C', showMarker: true, markerShape: 'diamond', markerSize: 7, markerOnly: true },
+          ],
+          anchor: standardAnchor,
+        },
+      };
+    }
+
     // R33 Tier F1 — valuation_index combo: navy line (index) on LEFT
     // axis + sky YoY% bars on RIGHT axis. Matches the renderer at
     // cm-chart-image-renderer.js line ~1084 (Round 20+).
@@ -4057,7 +5401,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // R37 P3 — peak/trough/most-recent labels on valuation_index navy line
       // (renderer line 1105: buildAnnotations(rows, r => r.valuation_index, fmtIndex))
       const indexLabels = Array.isArray(rows)
-        ? buildAnnotationsForSpec(rows, r => r.valuation_index, fmtIndexNative)
+        ? buildAnnotationsForSpec(plottedRows, r => r.valuation_index, fmtIndexNative, 'valuation_index')
         : undefined;
       return {
         tabName,
@@ -4125,11 +5469,11 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
           series: [
             { titleCol: topCol, titleRow: headerRow, valCol: topCol,
-              color: '7E6BAD', dashed: true },  // purple
+              color: '9B88A5', dashed: true },  // purple
             { titleCol: medCol, titleRow: headerRow, valCol: medCol,
               color: '003DA5' },                // navy
             { titleCol: botCol, titleRow: headerRow, valCol: botCol,
-              color: '4CB582', dashed: true },  // sage
+              color: '8FC49E', dashed: true },  // sage
           ],
           anchor: standardAnchor,
         },
@@ -4137,28 +5481,32 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
     }
 
     case 'cap_rate_by_credit': {
-      // 3-line: Federal navy bold / State sky / Municipal sage.
+      // 3-line: Federal navy bold / State sky / Municipal dark gray.
       // R73 B13 / R76 E2 — the feed IS populated (verified live 2026-06-10:
       // cm_gov_cap_by_credit_q has federal in 101 quarters, state 76, muni 29).
-      // state/muni are SPARSE, not empty. R73 put per-point markers on state +
-      // muni only — but that makes them read as a different SERIES TYPE than
-      // federal's clean line (Scott R76 E2: "line type different for municipal
-      // and state — fix … same line style as federal, not a different one").
-      // T6 (CM final closeout, 2026-06-28) — E2 removed ALL native markers,
-      // which made the sparse State/Municipal points INVISIBLE in the editable
-      // Excel chart (a markerless line cannot draw an isolated point between
-      // null gaps). T6 then put a uniform circle marker on ALL THREE series.
-      // R2-B Unit 5 (2026-06-29, Scott) — markers on the DENSE Federal line read
-      // as clutter ("now has dots in the lines"); markers belong only where they
-      // ADD value — the SPARSE State + Municipal series, whose isolated points a
-      // markerless line cannot draw across the surrounding null gaps. So Federal
-      // renders as a CLEAN line (no per-point dots) while State + Municipal carry
-      // a circle marker on every present quarter, so each available reading shows.
-      // dispBlanksAs='gap' + NO spanGaps keeps real holes honest. The genuine
-      // State/Municipal scarcity (state → ~2025-11, municipal → isolated single
-      // sales after ~2023-03, n>=2 TTM gate unmet) is annotated in the worksheet
-      // caption (CHART_CAPTIONS.cap_rate_by_credit) — gaps read as real scarcity,
-      // not a broken pull; no points are fabricated.
+      // state/muni WERE sparse (R73/T6 era: state 76q, muni 29q), which forced
+      // per-point markers so isolated readings could draw across null gaps. That
+      // made State/Municipal read as a different SERIES TYPE than Federal's clean
+      // line (Scott R76 E2 / 2026-08-12: "the state and municipal lines include
+      // markers while the federal version is a flush line — match them").
+      // 2026-08-12 (Scott, this round): the gov credit-tier resolver (migration
+      // 20260811124435) + classifier widening (20260812120000) densified the
+      // series — verified live: State now 99 quarters, Municipal 73 (of Federal's
+      // 121), with only 2 State + 1 Municipal ISOLATED points across a 36-year
+      // span. The sparse-series premise for markers is gone, so ALL THREE now
+      // render as clean flush lines (no markers), matching Federal and the brand
+      // "data styling" line spec. Trade-off (accepted, honest): the 3 isolated
+      // 1-quarter islands don't draw on a markerless line — a negligible loss vs
+      // the ~270 drawn points, and the genuine State/Municipal scarcity is still
+      // annotated in the worksheet caption (CHART_CAPTIONS.cap_rate_by_credit).
+      // dispBlanksAs='gap' + NO spanGaps keeps real holes honest; nothing fabricated.
+      //
+      // Colors mesh into the brand BLUE family (Scott: "mesh with our color
+      // schemes") as a Federal→Municipal credit ramp using sanctioned report-ramp
+      // slots (cm-brand.json series_ramp 1/2/3): Federal = NM Blue (003DA5, slot 1,
+      // drawn HEAVIER as the dominant/highest-credit line), State = Sky (62B5E5,
+      // slot 2), Municipal = Blue-85 (265AB2, slot 3) — replacing the prior off-
+      // family Slate gray (6A748C) that read as a different scheme in the export.
       const periodCol = findCol('period_end');
       const fedCol    = findCol('federal_cap');
       const stateCol  = findCol('state_cap');
@@ -4174,12 +5522,12 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           valAxNumFmt: VAL_FMT_PERCENT_2DP,
           yLeftAxisTitle: 'Cap rate',   // R76 E4 — label the % axis
           series: [
-            // Federal = clean line (dense, ~100 quarters → no markers).
-            { titleCol: fedCol,   titleRow: headerRow, valCol: fedCol,   color: navy },
-            // State + Municipal = marker per present quarter (sparse → each
-            // available reading visible across the null gaps).
-            { titleCol: stateCol, titleRow: headerRow, valCol: stateCol, color: sky,      showMarker: true, markerSize: 4 },
-            { titleCol: muniCol,  titleRow: headerRow, valCol: muniCol,  color: '4CB582', showMarker: true, markerSize: 4 },  // sage
+            // All three = clean flush lines (dense enough → no markers).
+            // Federal drawn heavier (2.25pt) to lead the blue credit ramp and stay
+            // distinct from the Municipal blue.
+            { titleCol: fedCol,   titleRow: headerRow, valCol: fedCol,   color: navy,     lineWidth: 28575 },
+            { titleCol: stateCol, titleRow: headerRow, valCol: stateCol, color: sky      },
+            { titleCol: muniCol,  titleRow: headerRow, valCol: muniCol,  color: '265AB2' },  // brand Blue-85 (slot 3)
           ],
           anchor: standardAnchor,
         },
@@ -4195,7 +5543,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // R37 P3 — peak/trough/most-recent labels on the navy GSA renewal CAGR line
       // (renderer line 1561: buildAnnotations(rows, r => r.gsa_renewal_cagr, fmtPct1))
       const cagrLabels = Array.isArray(rows)
-        ? buildAnnotationsForSpec(rows, r => r.gsa_renewal_cagr, fmtPct1Native)
+        ? buildAnnotationsForSpec(plottedRows, r => r.gsa_renewal_cagr, fmtPct1Native, 'gsa_renewal_cagr')
         : undefined;
       return {
         tabName,
@@ -4246,6 +5594,16 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       const cashCol    = findCol('cash_return');
       const lvgMidCol  = findCol('leveraged_return_mid');
       if (!periodCol || !cashCol || !lvgMidCol) return null;
+      // CM chart fixes round 3, item 4 — the Leveraged Return Indexes chart had
+      // NO callouts (multi-line case never wired dataLabels). Label peak/low/
+      // latest on BOTH the cash-return and leveraged-mid lines over the plotted
+      // window. Callouts use 2dp to match the data-tab values (7.42% etc.).
+      const cashLabels = Array.isArray(rows)
+        ? buildAnnotationsForSpec(plottedRows, r => r.cash_return, fmtPct2Native, 'cash_leveraged_returns:cash_return', navy)
+        : undefined;
+      const lvgLabels = Array.isArray(rows)
+        ? buildAnnotationsForSpec(plottedRows, r => r.leveraged_return_mid, fmtPct2Native, 'cash_leveraged_returns:leveraged_return_mid', sky)
+        : undefined;
       return {
         tabName,
         spec: {
@@ -4260,8 +5618,8 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           yAxisRange: (vertical === 'gov' ? { min: 0.04, max: 0.13 } : { min: 0.04, max: 0.13 }),
           valAxNumFmt: VAL_FMT_PERCENT_1DP,
           series: [
-            { titleCol: cashCol,   titleRow: headerRow, valCol: cashCol,   color: navy },
-            { titleCol: lvgMidCol, titleRow: headerRow, valCol: lvgMidCol, color: sky  },
+            { titleCol: cashCol,   titleRow: headerRow, valCol: cashCol,   color: navy, dataLabels: cashLabels },
+            { titleCol: lvgMidCol, titleRow: headerRow, valCol: lvgMidCol, color: sky,  dataLabels: lvgLabels },
           ],
           anchor: standardAnchor,
         },
@@ -4325,8 +5683,27 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       if (!periodCol || !cntCol || !avgCol) return null;
       // R37 P3 — peak/trough/most-recent labels on avg deal line
       // (renderer line 2348: buildAnnotations(rows, r => r.avg_deal_size, fmtCurrencyM))
+      // Scott request (2026-08-10) — nudge each "Peak" callout horizontally into the
+      // side whitespace (right if the peak is in the left half of the window, else
+      // left) so it doesn't block the bars/line at the apex.
+      const nudgePeak = (anns) => {
+        if (!Array.isArray(anns)) return anns;
+        const maxAnn = anns.find(a => a.role === 'max');
+        if (maxAnn) {
+          const n = plottedRows.length || 1;
+          maxAnn.xNudge = (maxAnn.idx / n) < 0.5 ? 0.12 : -0.12;
+        }
+        return anns;
+      };
       const avgLabels = Array.isArray(rows)
-        ? buildAnnotationsForSpec(rows, r => r.avg_deal_size, fmtCurrencyMNative)
+        ? nudgePeak(buildAnnotationsForSpec(plottedRows, r => r.avg_deal_size, fmtCurrencyMNative, 'avg_deal_size', navy))
+        : undefined;
+      // Peak/Low/Latest on the TTM transaction-count bars (integer), color-matched
+      // to the sky bars; the avg-deal line callouts are navy — the color tells them
+      // apart where they land near each other in the top band.
+      const cntLabels = Array.isArray(rows)
+        ? nudgePeak(buildAnnotationsForSpec(plottedRows, r => r.ttm_count,
+            (v) => Math.round(Number(v)).toLocaleString('en-US'), 'txn_count:ttm_count', sky))
         : undefined;
       return {
         tabName,
@@ -4338,7 +5715,8 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           // R37 P2 — left integer count, right compact currency for avg deal
           yLeftNumFmt:  VAL_FMT_INTEGER,
           yRightNumFmt: VAL_FMT_CURRENCY_M,
-          barSeries:  [{ titleCol: cntCol, titleRow: headerRow, valCol: cntCol, color: sky }],
+          barSeries:  [{ titleCol: cntCol, titleRow: headerRow, valCol: cntCol, color: sky,
+                         dataLabels: cntLabels }],
           lineSeries: [{ titleCol: avgCol, titleRow: headerRow, valCol: avgCol, color: navy,
                          dataLabels: avgLabels }],
           anchor: standardAnchor,
@@ -4356,7 +5734,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // R37 P3 — peak/trough/most-recent labels on the price/chair line
       // (renderer line 2393: buildAnnotations(rows, r => r.price_per_chair, fmtCurrencyK))
       const priceLabels = Array.isArray(rows)
-        ? buildAnnotationsForSpec(rows, r => r.price_per_chair, fmtCurrencyKNative)
+        ? buildAnnotationsForSpec(plottedRows, r => r.price_per_chair, fmtCurrencyKNative, 'price_per_chair')
         : undefined;
       return {
         tabName,
@@ -4387,7 +5765,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // R37 P3 — peak/trough/most-recent labels on price/SF line
       // (renderer line 2433: buildAnnotations(rows, r => r.price_psf, $rounded))
       const priceLabels = Array.isArray(rows)
-        ? buildAnnotationsForSpec(rows, r => r.price_psf, fmtCurrencyNative)
+        ? buildAnnotationsForSpec(plottedRows, r => r.price_psf, fmtCurrencyNative, 'price_psf')
         : undefined;
       return {
         tabName,
@@ -4410,7 +5788,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
 
     case 'dom_price_change_active': {
       // 4 series — 2 DOM bars (left) + 2 price-change % lines (right).
-      // Both lines share the same color (#1F4E79 dark blue) with the
+      // Both lines share the same color (#003DA5 dark blue) with the
       // core variant DASHED per renderer line ~1393. Bar colors per
       // renderer: avg_dom_total=palette[3] (pale/sky), avg_dom_core=palette[1] (sky).
       const periodCol = findCol('period_end');
@@ -4419,7 +5797,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       const pctTotCol = findCol('pct_price_change_total');
       const pctCorCol = findCol('pct_price_change_core');
       if (!periodCol || !domTotCol || !domCorCol || !pctTotCol || !pctCorCol) return null;
-      const DARK_BLUE = '1F4E79';
+      const DARK_BLUE = '003DA5';
       return {
         tabName,
         spec: {
@@ -4456,18 +5834,28 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       //   Lines: palette[0] navy (all), palette[1] sky (8+yr)
       const periodCol = findCol('period_end');
       const barAllCol = findCol('pct_price_change_all');
-      const barLongCol = findCol('pct_price_change_long_term');
+      // B3 — bind the CORE series to the trailing-8-quarter columns when present
+      // (dia) so a thin single-quarter core cohort no longer nulls the line
+      // mid-2025; fall back to the single-quarter column (gov, no _8q yet).
+      const barLongCol = findCol('pct_price_change_long_term_8q', 'pct_price_change_long_term');
       const lineAllCol = findCol('last_ask_cap_all');
-      const lineLongCol = findCol('last_ask_cap_long_term');
+      const lineLongCol = findCol('last_ask_cap_long_term_8q', 'last_ask_cap_long_term');
       if (!periodCol || !barAllCol || !barLongCol || !lineAllCol || !lineLongCol) return null;
       // R37 P3 — peak/trough/most-recent labels on the all-cap navy line.
-      // R66cc — compute over the DISPLAYED window (>= 2017) only; the chart trims to
-      // 2017+ but the full-history peak (e.g. an ~8.2% pre-2017 value) was being
-      // stamped onto a windowed point (same idx-vs-trim bug fixed on NM-vs-Market).
-      const sentWindowRows = Array.isArray(rows)
-        ? rows.filter(r => r && r.period_end && new Date(r.period_end).getFullYear() >= 2017)
-        : [];
-      const capLabels = buildAnnotationsForSpec(sentWindowRows, r => r.last_ask_cap_all, fmtPct2Native);
+      // CM close-out FIX — compute over `plottedRows` (= fitRows, the exact rows
+      // the chart references after the MIN_YEAR crop), NOT a bespoke >=2017 filter.
+      // seller_sentiment's MIN_YEAR is the first dense-`n_all` year (~2019), so a
+      // separate >=2017 filter left the annotation indices ~8 quarters ahead of the
+      // plotted cells — the dLbl `idx` is relative to the plotted series, so "Latest"
+      // landed well short of the true last point. plottedRows aligns idx exactly and
+      // still restricts to the displayed window.
+      const capLabels = buildAnnotationsForSpec(plottedRows, r => r.last_ask_cap_all, fmtPct2Native, 'seller_sentiment:last_ask_cap_all', '265AB2');
+      // Scott request — add Peak/Low/Latest to the SECOND asking-cap line (the
+      // 10+ yr trailing-8-qtr steel line), color-matched (steel) so it's distinct.
+      const capLongLabels = buildAnnotationsForSpec(
+        plottedRows,
+        r => (r.last_ask_cap_long_term_8q != null ? r.last_ask_cap_long_term_8q : r.last_ask_cap_long_term),
+        fmtPct2Native, 'seller_sentiment:last_ask_cap_long', '9EA9B7');
       return {
         tabName,
         spec: {
@@ -4490,14 +5878,23 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           // vertical signal — leave range auto-scale, just set formats.
           yLeftNumFmt:  VAL_FMT_PERCENT_2DP,
           yRightNumFmt: VAL_FMT_PERCENT_0DP,
+          // CM chart fixes round 3, item 5 — these series previously used the
+          // TERTIARY hues peridot (#8FC49E, reads green) + amethyst (#9B88A5,
+          // reads purple) where the PRIMARY blues belong. Per Scott's marketing
+          // review + the brand guide ("primary blues dominate; tertiary hues are
+          // series 4+ and <10% of any chart"), bars are now NM Blue + Sky and the
+          // lines are Blue-85 + Steel — all explicit cm-brand.json palette fills.
+          // Scott request — 60% opacity on the price-change bars so the two cap
+          // lines + their Peak/Low/Latest callouts read clearly over the bars.
           barSeries: [
-            { titleCol: barAllCol,  titleRow: headerRow, valCol: barAllCol,  color: '4CB582' },  // sage
-            { titleCol: barLongCol, titleRow: headerRow, valCol: barLongCol, color: '7E6BAD' },  // light purple
+            { titleCol: barAllCol,  titleRow: headerRow, valCol: barAllCol,  color: '003DA5', alpha: '60000' },  // NM Blue
+            { titleCol: barLongCol, titleRow: headerRow, valCol: barLongCol, color: '62B5E5', alpha: '60000' },  // Sky
           ],
           lineSeries: [
-            { titleCol: lineAllCol,  titleRow: headerRow, valCol: lineAllCol,  color: navy,
+            { titleCol: lineAllCol,  titleRow: headerRow, valCol: lineAllCol,  color: '265AB2',   // Blue 85
               dataLabels: capLabels },
-            { titleCol: lineLongCol, titleRow: headerRow, valCol: lineLongCol, color: sky  },
+            { titleCol: lineLongCol, titleRow: headerRow, valCol: lineLongCol, color: '9EA9B7',   // Steel
+              dataLabels: capLongLabels },
           ],
           anchor: standardAnchor,
         },
@@ -4623,6 +6020,10 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           },
         };
       }
+      // CM close-out — Peak / Low / Latest callouts on the pace-of-cost line
+      // (user request). Values are in bps; format "+150 bps" / "-50 bps".
+      const fmtBps = (v) => `${Number(v) >= 0 ? '+' : ''}${Math.round(Number(v))} bps`;
+      const paceLabels = buildAnnotationsForSpec(plottedRows, r => r.pace_cost, fmtBps, 'pace_of_cap_rate_expansion:pace_cost');
       return {
         tabName,
         spec: {
@@ -4642,7 +6043,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           lineSeries: [
             // R56 — Cost-of-capital YoY pace, amber (matches the
             // renderer's deferred 3rd series color noted in R45/R50).
-            { titleCol: costCol, titleRow: headerRow, valCol: costCol, color: 'D97706' },
+            { titleCol: costCol, titleRow: headerRow, valCol: costCol, color: '9EA9B7', dataLabels: paceLabels },
           ],
           anchor: standardAnchor,
         },
@@ -4695,15 +6096,31 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           // sky/pale fills (legibility). Mirror that here per-series:
           //   navy + mid-blue  → showSegmentVal: true, white text
           //   sky + pale       → showSegmentVal: true, dark text
+          //
+          // Prompt 119 item E — marketing (2Q-2026 book): a series that is 0%
+          // in a given year (Cross-Border most years, Public REIT in several)
+          // still emitted a "0%" label, and the zero-height segments stack
+          // their labels on top of each other at the top of the bar. The
+          // number format `0%;;;` renders positives as 0% and leaves the
+          // negative/zero/text sections EMPTY, so a zero point's label is
+          // blank — per-point <c:dLbl> deletion isn't available on this
+          // series-level emitter, and a format section is the portable,
+          // Excel-native way to do it (the label object still exists, so a
+          // user can restyle the series by hand).
+          //
+          // Label typography follows marketing's ChartEdits spec
+          // (public/reports/cm-brand.json): 9 pt (sz=900 in the emitter),
+          // Futura PT, white on the navy Private and mid-blue Public REIT
+          // fills, ink on the pale sky / gridline fills.
           series: [
             { titleCol: privCol, titleRow: headerRow, valCol: privCol, color: navy,
-              showSegmentVal: true, segmentLabelFmt: '0%', segmentLabelColor: 'FFFFFF' },
+              showSegmentVal: true, segmentLabelFmt: '0%;;;', segmentLabelColor: 'FFFFFF' },
             { titleCol: reitCol, titleRow: headerRow, valCol: reitCol, color: blueMid,
-              showSegmentVal: true, segmentLabelFmt: '0%', segmentLabelColor: 'FFFFFF' },
+              showSegmentVal: true, segmentLabelFmt: '0%;;;', segmentLabelColor: 'FFFFFF' },
             { titleCol: cbCol,   titleRow: headerRow, valCol: cbCol,   color: sky,
-              showSegmentVal: true, segmentLabelFmt: '0%', segmentLabelColor: '191919' },
+              showSegmentVal: true, segmentLabelFmt: '0%;;;', segmentLabelColor: '191919' },
             { titleCol: instCol, titleRow: headerRow, valCol: instCol, color: pale,
-              showSegmentVal: true, segmentLabelFmt: '0%', segmentLabelColor: '191919' },
+              showSegmentVal: true, segmentLabelFmt: '0%;;;', segmentLabelColor: '191919' },
           ],
           anchor: standardAnchor,
         },
@@ -4796,11 +6213,26 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       const bandCol = String.fromCharCode(65 + cols.length);  // helper col letter
       const GRAY = '6A748C';  // nm_axis
 
-      // R37 P3 — peak/trough/most-recent labels on the navy avg_cap_rate line
-      // (renderer line 1217: buildAnnotations(rows, r => r.avg_cap_rate, fmtPct2))
-      const capLabels = Array.isArray(rows)
-        ? buildAnnotationsForSpec(rows, r => r.avg_cap_rate, fmtPct2Native)
-        : undefined;
+      // CM close-out (Scott request) — show ONE callout series: the LOAN CONSTANT
+      // RANGE in Peak/Low/Latest format, on the gray band (instead of the avg-cap
+      // line labels). Peak/Low/Latest are chosen on the high loan constant (gated
+      // on both bounds finite so the band anchor exists); each label text is the
+      // range "lo–hi%".
+      const loanBase = Array.isArray(rows)
+        ? buildAnnotationsForSpec(
+            plottedRows,
+            (r) => (Number.isFinite(Number(r.low_loan_constant)) && Number.isFinite(Number(r.high_loan_constant)))
+              ? Number(r.high_loan_constant) : NaN,
+            (v) => v, 'cost_of_capital:loan_range')
+        : [];
+      const loanLabels = loanBase.map((a) => {
+        const row = plottedRows[a.idx] || {};
+        const lo = Number(row.low_loan_constant), hi = Number(row.high_loan_constant);
+        const txt = (Number.isFinite(lo) && Number.isFinite(hi))
+          ? `${(lo * 100).toFixed(1)}–${(hi * 100).toFixed(1)}%`
+          : `${(hi * 100).toFixed(1)}%`;
+        return { ...a, text: txt };
+      });
 
       return {
         tabName,
@@ -4819,14 +6251,14 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
             { titleCol: lowCol,  titleRow: headerRow, valCol: lowCol,
               color: GRAY, noFill: true },
             // Visible band — pale gray fill with solid gray border
-            // (matches renderer's rgba(106,116,140,0.12) fill + #6A748C border)
+            // (matches renderer's rgba(106,116,140,0.12) fill + #6A748C border).
+            // Carries the Peak/Low/Latest loan-constant-range callouts.
             { titleCol: bandCol, titleRow: headerRow, valCol: bandCol,
-              color: GRAY, alpha: '12000', borderColor: GRAY },
+              color: GRAY, alpha: '12000', borderColor: GRAY, dataLabels: loanLabels },
           ],
           lineSeries: [
             { titleCol: treasCol, titleRow: headerRow, valCol: treasCol, color: sky  },
-            { titleCol: capCol,   titleRow: headerRow, valCol: capCol,   color: navy,
-              dataLabels: capLabels },
+            { titleCol: capCol,   titleRow: headerRow, valCol: capCol,   color: navy },
           ],
           anchor: standardAnchor,
         },
@@ -4872,12 +6304,12 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // other": volume area = pale fill + SKY edge (recedes, was navy), cap
       // quartile band = AMETHYST low-opacity (was sky — blended with the area),
       // avg-cap dots = NM navy (the lone navy element, the headline metric).
-      const amethyst = '7E6BAD';
+      const amethyst = '9B88A5';
 
       // R37 P3 — peak/trough/most-recent labels on the navy cap-rate dots
       // (renderer line 1489: buildAnnotations(rows, r => r.cap_rate, fmtPct2))
       const capLabels = Array.isArray(rows)
-        ? buildAnnotationsForSpec(rows, r => r.cap_rate, fmtPct2Native)
+        ? buildAnnotationsForSpec(plottedRows, r => r.cap_rate, fmtPct2Native, 'cap_rate', navy)
         : undefined;
 
       return {
@@ -4895,26 +6327,56 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
           // for the ~10.08% upper-q; dia caps at 9.0% (dia top-q ~7.7%).
           // Mirrors the renderer.
           yLeftNumFmt:  VAL_FMT_CURRENCY_M,
-          yRightRange:  ((vertical === 'gov' || vertical === 'government_leased') ? { min: 0.020, max: 0.105 } : { min: 0.030, max: 0.090 }),
+          // CM chart fixes round 2, item 2 — the right (cap) axis carries the
+          // avg-cap dots AND the Q1–Q3 floating band, so its max must span the
+          // UPPER-quartile highs, not just the average. Keep the deliberate low
+          // MIN floor (R73 C4: lifts the band into the upper frame so the volume
+          // area reads in the lower ~45%); fit the MAX to every right-axis series.
+          yRightRange:  fitAxisToSeries('volume_cap_quartile_combo', 'A3(cap%)', plottedRows,
+                          ['cap_rate', 'upper_quartile', 'lower_quartile'],
+                          { kind: 'cap',
+                            minFloor: (vertical === 'gov' || vertical === 'government_leased') ? 0.020 : 0.030,
+                            fallback: (vertical === 'gov' || vertical === 'government_leased') ? { min: 0.020, max: 0.105 } : { min: 0.030, max: 0.090 } }),
           yRightNumFmt: VAL_FMT_PERCENT_2DP,
           areaSeries: {
             titleCol: volCol, titleRow: headerRow, valCol: volCol,
             fillColor: pale,     // pale blue fill (quiet background area)
             borderColor: sky,    // T10b — sky edge (was navy; frees navy for the dots)
+            // Peak/Low/Latest TTM-volume callouts ($M), banded to row 1 so they
+            // don't collide with the cap-rate callouts (band 0) on the top band.
+            // Scott request (2026-08-10) — the "Peak $…M" callout sat on top of the
+            // volume-area apex. Nudge the Peak label horizontally into the side
+            // whitespace (right if the peak is in the left half, else left) so it
+            // clears the plotted area; Latest/Low stay put in the top band.
+            dataLabels: Array.isArray(rows)
+              ? (() => {
+                  const anns = buildAnnotationsForSpec(plottedRows, r => r.volume_dollars, fmtCurrencyMNative, 'volume_cap:volume', sky);
+                  const maxAnn = anns.find(a => a.role === 'max');
+                  if (maxAnn) {
+                    const n = plottedRows.length || 1;
+                    // peak in left half → push right into whitespace, else push left
+                    maxAnn.xNudge = (maxAnn.idx / n) < 0.5 ? 0.12 : -0.12;
+                  }
+                  return anns;
+                })()
+              : undefined,
+            labelBand: 1,
           },
           barSeries: [
             // Invisible base — lifts the IQR bar off 0 up to lower_quartile
             { titleCol: lowerCol, titleRow: headerRow, valCol: lowerCol,
               color: amethyst, noFill: true },
-            // Visible IQR band — T10b: amethyst 30% alpha w/ solid amethyst
-            // border (distinct from the sky volume area + the navy dots).
+            // Visible IQR band ("Quartile Range Width" series) — marketing
+            // ChartEdits 2026-08-12: fill transparency 30% (alpha 70% opacity =
+            // val 70000) and border = No Line (was solid amethyst border).
             { titleCol: iqrCol, titleRow: headerRow, valCol: iqrCol,
-              color: amethyst, alpha: '30000', borderColor: amethyst },
+              color: amethyst, alpha: '70000', noBorder: true },
           ],
           lineSeries: [
-            // Avg cap rate dots — navy circle markers, no connecting line
+            // Avg cap rate dots ("TTM Cap (avg)") — navy circle markers, no
+            // connecting line. Marker size 4 per marketing ChartEdits 2026-08-12.
             { titleCol: capCol, titleRow: headerRow, valCol: capCol,
-              color: navy, showMarker: true, markerShape: 'circle', markerSize: 5,
+              color: navy, showMarker: true, markerShape: 'circle', markerSize: 4,
               dataLabels: capLabels },
           ],
           anchor: standardAnchor,
@@ -5010,7 +6472,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // PDF segment colors (positional — DaVita first, FMC second, etc.).
       // Excess rows get the "Other" gray. The data tab arrives pre-sorted
       // from the view (per the renderer's expectation).
-      const SEGMENT_COLORS = ['003DA5', '62B5E5', '4CB582', '6A748C'];
+      const SEGMENT_COLORS = ['003DA5', '62B5E5', '8FC49E', '6A748C'];
       // Build a per-row color array sized to the data range. Anything
       // past the 4 known segments falls back to the "Other" gray so
       // unknown tenants don't crash the chart.
@@ -5082,9 +6544,9 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       //
       // Updated mapping (R50):
       //   Avg Cap        teal   (R50, was navy)    aquamarine #00B1B0
-      //   Upper Quartile purple (unchanged)         #7E6BAD
+      //   Upper Quartile purple (unchanged)         #9B88A5
       //   Lower Quartile sky   (R50, was gray)    #62B5E5
-      //   Median         sage   (unchanged)         #4CB582
+      //   Median         sage   (unchanged)         #8FC49E
       // R60 — per-dot callout labels. User notes 2026-05-22 batch 4:
       // "We need the data points labeled with call outs so we can see
       // the data, maybe even adjust the cap rate axis so we can see
@@ -5100,20 +6562,30 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
       // labels on top of each other ("still cramped", Scott's G23/D9 note).
       // Spread them around each diamond: avg→right, upper→top, lower→bottom,
       // median→left. Four distinct positions => no overlap, axis range unchanged.
-      const capLbl = (pos) => ({ showVal: true, numFmt: VAL_FMT_PERCENT_2DP, pos });
+      // CM close-out — branded callouts WITH the metric name ("Avg Cap: 6.50%"),
+      // matching the Peak/Low/Latest callout style, instead of bare floating values.
+      const capLbl = (pos) => ({ showVal: true, numFmt: VAL_FMT_PERCENT_2DP, pos, serName: true, boxed: true });
       return {
         tabName,
         spec: {
           type: 'combo',
           tabName,
           catCol: termCol,
+          // Marketing ChartEdits 2026-08-12: term-bucket labels read horizontally
+          // (short "Sub 5 / 5-8 / 8-12 / 12+" buckets), not rotated -90°.
+          horizontalCatLabels: true,
           dataStart, dataEnd: bucketDataEnd,   // T10 — Undisclosed bar trimmed
           // R64 — left axis "$X.XM" per user batch 5: "lets adjust the
           // number formatting of the x-axis to show $x.xM". Avg Price
           // for dia chair sale typically $1.5M-$5M; gov bldg $3M-$30M;
           // single-decimal millions is the right resolution.
           yLeftNumFmt:  VAL_FMT_CURRENCY_M_1DP,
-          yRightRange:  { min: 0.05, max: 0.09 },  // R60 — tighter than CAP_RATE_DOT_RANGE
+          // CM chart fixes round 2, item 2 — the right axis carries FOUR cap
+          // diamonds (avg/upper/lower/median); the hardcoded 0.09 max clipped
+          // any upper-quartile above it. Fit the range to all four series.
+          yRightRange:  fitAxisToSeries(chart_template_id, 'A3(cap%)', rows,
+                          ['avg_cap', 'upper_quartile_cap', 'lower_quartile_cap', 'median_cap'],
+                          { kind: 'cap', fallback: { min: 0.05, max: 0.09 } }),
           yRightNumFmt: VAL_FMT_PERCENT_2DP,
           barSeries: [
             { titleCol: priceCol, titleRow: headerRow, valCol: priceCol, color: sky },
@@ -5127,13 +6599,13 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
               color: '003DA5', showMarker: true, markerShape: 'diamond', markerSize: 7,
               dataLabels: capLbl('r') },
             { titleCol: upperQCol,  titleRow: headerRow, valCol: upperQCol,
-              color: '7E6BAD', showMarker: true, markerShape: 'diamond', markerSize: 7,
+              color: '9B88A5', showMarker: true, markerShape: 'diamond', markerSize: 7,
               dataLabels: capLbl('t') },
             { titleCol: lowerQCol,  titleRow: headerRow, valCol: lowerQCol,
               color: '62B5E5', showMarker: true, markerShape: 'diamond', markerSize: 7,
               dataLabels: capLbl('b') },
             { titleCol: medianCol,  titleRow: headerRow, valCol: medianCol,
-              color: '4CB582', showMarker: true, markerShape: 'diamond', markerSize: 7,
+              color: '8FC49E', showMarker: true, markerShape: 'diamond', markerSize: 7,
               dataLabels: capLbl('l') },
           ],
           anchor: standardAnchor,
@@ -5226,7 +6698,7 @@ function buildInjectionSpecInner({ chart_template_id, tabName, cols, dataStart, 
                         || { min: 0, max: 0.25 },
           barSeries,
           lineSeries: [
-            { titleCol: rateCol, titleRow: headerRow, valCol: rateCol, color: 'D97706' },
+            { titleCol: rateCol, titleRow: headerRow, valCol: rateCol, color: '9EA9B7' },
           ],
           anchor: standardAnchor,
         },

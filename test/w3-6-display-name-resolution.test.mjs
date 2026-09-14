@@ -22,7 +22,13 @@ import {
 import { applyListingBdEntityNames, collectListingBdEntityIds } from '../api/_shared/listing-bd.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const opsSrc = readFileSync(join(root, 'ops.js'), 'utf8');
+// W6.5 Stage 1 (P87): _fedCardHTML was extracted from ops.js to dc-lanes.js (a
+// classic <script> loaded before ops.js, same global scope). Both files are one
+// runtime surface, so slice the concatenation — renderListingBdTriageBody still
+// lives in ops.js, _fedCardHTML now in dc-lanes.js; the sliceFn markers resolve
+// against either half. Assertions unchanged.
+const opsSrc = readFileSync(join(root, 'ops.js'), 'utf8')
+  + '\n' + readFileSync(join(root, 'dc-lanes.js'), 'utf8');
 
 function sliceFn(src, marker) {
   const start = src.indexOf(marker);
@@ -87,6 +93,12 @@ describe('W3.6(a) owner_reconcile — card renders real names, not "contact <hex
       let _dcFedType = 'owner_reconcile';
       function esc(s){ return s == null ? '' : String(s); }
       function _fedMoney(){ return ''; }
+      // W6.5 Stage 1 collateral: _fedCardHTML moved to dc-lanes.js but still
+      // calls _cleanAssistHTML, which stayed in ops.js. In production that is
+      // fine (classic scripts share one global scope); in an isolated eval it
+      // is a ReferenceError. Faithful stub: the real fn returns '' when the row
+      // carries no clean_assist, which is the case for every fixture here.
+      function _cleanAssistHTML(){ return ''; }
       ${src}
       return _fedCardHTML;
     `)();

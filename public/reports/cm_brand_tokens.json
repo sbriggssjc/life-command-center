@@ -41,7 +41,7 @@
   },
 
   "type_scale": {
-    "chart_title":   { "size_pt": 14, "weight": 600, "color": "nm_text" },
+    "chart_title":   { "size_pt": 12, "weight": 400, "color": "nm_sky" },
     "axis_title":    { "size_pt": 10, "weight": 600, "color": "nm_axis" },
     "axis_label":    { "size_pt":  9, "weight": 400, "color": "nm_axis" },
     "data_label":    { "size_pt":  9, "weight": 400, "color": "nm_text" },

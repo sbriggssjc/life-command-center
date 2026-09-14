@@ -1,3 +1,12 @@
+> ## ⚠️ 2026-04-13 DESIGN DOC — one later verdict against it was OVERTURNED
+>
+> **The cadence layer is NOT being retired.** A 2026-08-15 audit (BREAK-2) concluded it was *"a
+> producer with no consumer"*; **Scott overturned that on 2026-08-27** — it is core, and it reads
+> empty because LCC has not yet been used for BD, not because it is orphaned. See
+> [`connectivity-and-open-threads.md`](connectivity-and-open-threads.md) BREAK-2 box + §0.
+> ⚠️ `touchpoint_cadence.owner_user_id` FKs a **different user table** than
+> `lcc_entity_owner_override` — resolve through `lcc_cadence_point_person()`.
+
 # Touchpoint Cadence Specification
 ## Life Command Center — Scott Briggs / Team Briggs, Northmarq
 

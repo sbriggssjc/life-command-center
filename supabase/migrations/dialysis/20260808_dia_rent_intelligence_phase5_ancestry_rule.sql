@@ -1,0 +1,44 @@
+-- ============================================================================
+-- Rent Intelligence Engine — Phase 5 KEYSTONE: The Ancestry Rule (dia)
+-- DB: Dialysis_DB zqzrriwuavgrquhisnoa. Applied live via mcp apply_migration
+-- (dia_rent_intelligence_phase5_ancestry_rule + _symmetric). Additive /
+-- idempotent / reversible. Authoritative bodies live in-DB; reproduce via
+-- pg_get_functiondef(). This file documents the surface for repo review.
+--
+-- THE ONE LAW that makes self-improvement safe: no evidence item may
+-- corroborate, derive, or raise the confidence of anything in its own
+-- provenance chain. A projection is never evidence. Provenance chains make it
+-- mechanically checkable; a self-improving system without this rule is a
+-- self-confirming system.
+--
+--   rent_evidence_provenance   directed edges (derived DEPENDS ON source).
+--                              node = (kind, id text): timeline (uuid), sale,
+--                              listing, lease, bov. relation in
+--                              derived_from | anchored_on | corroborated_by.
+--   dia_record_provenance_edge idempotent edge writer (ON CONFLICT upsert).
+--   dia_provenance_parents(kind,id) -> direct upstream nodes, combining the
+--                              EXPLICIT edge table with the IMPLICIT provenance
+--                              already carried in property_rent_timeline
+--                              (evidence row -> lease/sale via provenance jsonb;
+--                              projected row -> nearest-prior evidence anchor),
+--                              so the rule works on all existing data with NO
+--                              edge backfill.
+--   dia_ancestry_reachable(from,goal) one-directional BFS over parents.
+--   dia_check_ancestry(evidence, target) -> boolean. SYMMETRIC independence
+--                              test: TRUE when evidence and target are
+--                              provenance-dependent in EITHER direction (one is
+--                              in the other's chain) or identical. Corroboration
+--                              / derivation is legitimate ONLY between
+--                              provenance-independent items. Callers skip+log on
+--                              TRUE.
+--
+-- Proven on live data:
+--   * stated timeline row descends from its sale  -> dia_check_ancestry TRUE
+--   * unrelated sale                              -> FALSE (no over-blocking)
+--   * projected rows resolve to their ACTUAL nearest-prior anchor (a lease, not
+--     the sale, when that is the true anchor)     -> precise, not over-blocking
+--   * identity                                    -> TRUE
+--
+-- See: docs/reports/rent-intelligence-engine-phase5-report.md
+-- ============================================================================
+-- (Executable DDL applied live; see report for the full bodies / verification.)

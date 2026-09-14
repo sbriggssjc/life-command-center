@@ -28,7 +28,7 @@
 
 import { authenticate } from '../_shared/auth.js';
 import { opsQuery } from '../_shared/ops-db.js';
-import { domainQuery } from '../_shared/domain-db.js';
+import { domainQuery, domainPropertyExists } from '../_shared/domain-db.js';
 import { uploadDocToFolder } from '../_shared/storage-adapter.js';
 import { resolvePropertyFolder } from '../_shared/property-folder-resolver.js';
 import { ensureLccTag, dedupeFileName } from '../_shared/folder-feed-classify.js';
@@ -82,6 +82,15 @@ async function insertLccDocument(domain, propertyId, { fileName, docType, source
     source_url:       sourceUrl || null,
     ingestion_status: 'lcc_generated',
   };
+  // Prompt 81 (item 3): confirm the FK parent exists before writing the doc.
+  // A dangling property_id otherwise aborts the INSERT with 23503
+  // (property_documents_property_id_fkey). Skip cleanly (not a hard failure)
+  // when the parent is absent; proceed on an unknown (null) read result.
+  const parentOk = await domainPropertyExists(domain, base.property_id).catch(() => null);
+  if (parentOk === false) {
+    return { ok: false, status: 409, skipped: 'missing_property',
+      detail: { property_id: base.property_id } };
+  }
   const attempts = [
     { ...base, source: 'lcc_generated' },  // preferred — record the authoritative channel
     base,                                  // fallback — schema without a source column
@@ -100,7 +109,14 @@ async function insertLccDocument(domain, propertyId, { fileName, docType, source
     }
     lastErr = { status: r.status, detail: r.data };
   }
-  const plain = await dq(domain, 'POST', 'property_documents', base)
+  // Prompt 81 (item 2): last-resort insert now folds a duplicate into the
+  // (property_id, file_name) dedup path via on_conflict merge instead of a
+  // bare INSERT that aborts with 23505 (uix_prop_doc). The handled duplicate
+  // is suppressed from the failure surface.
+  const plain = await dq(domain, 'POST',
+    'property_documents?on_conflict=property_id,file_name', base,
+    { Prefer: 'return=representation,resolution=merge-duplicates' },
+    { suppressFailureCodes: ['23505'] })
     .catch(e => ({ ok: false, status: 0, data: e?.message }));
   if (plain.ok) {
     const inserted = Array.isArray(plain.data) ? plain.data[0] : plain.data;

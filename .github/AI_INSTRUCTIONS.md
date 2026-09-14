@@ -168,6 +168,6 @@ deployment failures because they bypass review of the function count constraint.
 | `/api/_handlers/` | Delegated handler modules (contacts, entities) |
 | `/server.js` | Railway Express entry — the `/api/*` routing table + headers |
 | `/.github/AI_INSTRUCTIONS.md` | This file — AI assistant guardrails |
-| `/LCC_ARCHITECTURE_STRATEGY.md` | Full architecture strategy (2026-04-03) |
-| `/copilot_authoritative_architecture_plan.md` | Copilot integration plan |
-| `/copilot_capability_map_lcc.md` | Action registry + Wave 1-4 roadmap |
+| `/docs/history/LCC_ARCHITECTURE_STRATEGY.md` | Full architecture strategy (2026-04-03) |
+| `/docs/architecture/copilot_authoritative_architecture_plan.md` | Copilot integration plan |
+| `/docs/architecture/copilot_capability_map_lcc.md` | Action registry + Wave 1-4 roadmap |

@@ -7,8 +7,15 @@
 //   • enrich + confident match  → fill-blanks property patch + property_documents
 //     attach + field_provenance; NEVER an available_listings / sales_transactions
 //     write; result.enrich_ok === true.
-//   • enrich + no match          → a match_disambiguation decision is emitted
-//     (lcc_open_decision) and NO property/listing is created; enrich_ok === false.
+//   • enrich + no match          → NOTHING is created; enrich_ok === false and the
+//     file parks as 'enrich_unresolved'. Whether a match_disambiguation decision
+//     is emitted depends on the Prompt 91 producer guard in
+//     emitMatchDisambiguation: ZERO candidates → no card (an empty "pick one of
+//     nothing" card is unworkable and inflates the lane badge), ≥1 candidate →
+//     lcc_open_decision. This test pins BOTH branches.
+//     (P130: the assertion here used to demand an unconditional emit — the
+//     pre-P91 intent. Re-anchored; the zero-candidate arm now guards the P91
+//     producer guard against regression rather than contradicting it.)
 //   • ingest (default) + match   → the create/update listing path runs
 //     (available_listings IS written) — the divergence proof.
 //
@@ -85,6 +92,15 @@ const SNAPSHOT = {
 
 const MATCHED = { status: 'matched', confidence: 0.95, domain: 'dialysis', property_id: 123 };
 const UNMATCHED = { status: 'unmatched', confidence: 0, domain: 'dialysis', property_id: null };
+// Same miss, but the matcher surfaced workable candidates — the only shape that
+// earns a match_disambiguation card under the Prompt 91 producer guard.
+const UNMATCHED_WITH_CANDIDATES = {
+  ...UNMATCHED,
+  candidates: [
+    { domain: 'dialysis', property_id: 501, address: '123 Main St', tenant: 'DaVita', confidence: 0.62 },
+    { domain: 'dialysis', property_id: 502, address: '123 Main Street', tenant: 'DaVita', confidence: 0.58 },
+  ],
+};
 
 // A dia property with blank fillable fields.
 const BLANK_PROPERTY = {
@@ -128,7 +144,8 @@ describe('enrich-mode promotion (PROPERTIES folder feed)', () => {
     assert.equal(wroteTo('properties'), false, 'no property INSERT in enrich mode');
   });
 
-  it('enrich + no match → emits match_disambiguation, creates nothing', async () => {
+  it('enrich + no match → creates nothing; emits match_disambiguation only when there are candidates', async () => {
+    // ---- Arm 1: no candidates → the Prompt 91 producer guard suppresses the card.
     installFetchMock({ existingProperty: null });
     const res = await promoteIntakeToDomainListing('intake-enrich-2', SNAPSHOT, UNMATCHED, {
       promoteMode: 'enrich',
@@ -140,11 +157,36 @@ describe('enrich-mode promotion (PROPERTIES folder feed)', () => {
     assert.equal(res.mode, 'enrich');
     assert.equal(res.enrich_ok, false);
     assert.equal(res.skipped, 'enrich_unresolved');
-    assert.equal(res.emitted_disambiguation, true, 'disambiguation decision emitted');
+    // An empty-candidate card is unworkable by construction, so none is minted
+    // and the flag stays honest instead of reporting a decision that isn't there.
+    assert.equal(res.emitted_disambiguation, false,
+      'no disambiguation card for zero candidates (Prompt 91 producer guard)');
+    assert.equal(wroteTo('rpc/lcc_open_decision'), false,
+      'lcc_open_decision NOT called for zero candidates');
 
-    assert.ok(wroteTo('rpc/lcc_open_decision'), 'lcc_open_decision called');
+    // The file still parks rather than creating anything.
     assert.equal(wroteTo('available_listings'), false, 'no listing created');
     assert.equal(wroteTo('property_documents'), false, 'no doc attached for an unresolved file');
+    assert.equal(wroteTo('properties'), false, 'no property created');
+
+    // ---- Arm 2: real candidates → the card IS emitted, and still nothing is created.
+    installFetchMock({ existingProperty: null });
+    const res2 = await promoteIntakeToDomainListing('intake-enrich-3', SNAPSHOT, UNMATCHED_WITH_CANDIDATES, {
+      promoteMode: 'enrich',
+      seedData: { mode: 'enrich', source_path: '/sites/x/PROPERTIES/Z/Unknown/OM.pdf' },
+      workspaceId: 'ws-1', actorId: 'user-1',
+    });
+
+    assert.equal(res2.ok, false);
+    assert.equal(res2.skipped, 'enrich_unresolved');
+    assert.equal(res2.emitted_disambiguation, true,
+      'disambiguation card emitted when the matcher surfaced candidates');
+    assert.ok(wroteTo('rpc/lcc_open_decision'), 'lcc_open_decision called');
+    // The candidates ride on the decision context — the card is workable.
+    const decisionCall = calls.find(c => c.url.includes('/rest/v1/rpc/lcc_open_decision'));
+    assert.equal(decisionCall.body.p_context.candidates.length, 2, 'candidates carried onto the card');
+
+    assert.equal(wroteTo('available_listings'), false, 'no listing created');
     assert.equal(wroteTo('properties'), false, 'no property created');
   });
 

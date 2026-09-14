@@ -131,8 +131,13 @@ export async function performDocumentNotify(args, deps = {}) {
     return { ok: true, status: 200, outcome: 'attached', document_id: target.document_id, domain, doctype: dt };
   }
 
-  // 3. No existing row → INSERT (idempotent on the (property_id, content_hash)
+  // 3. No existing row → INSERT (idempotent on the (property_id, file_name)
   //    unique index; a racing duplicate merges instead of erroring).
+  // Prompt 81 (item 4): the on_conflict list previously named
+  // (property_id, content_hash), but no such unique index exists — the only
+  // live unique index is (property_id, file_name) (uix_prop_doc /
+  // property_documents_property_file_unique). The mismatch raised 42P10 on
+  // every INSERT reached here. Matched to the real index.
   const row = {
     property_id,
     file_name: fileName,
@@ -140,7 +145,7 @@ export async function performDocumentNotify(args, deps = {}) {
     ...ptr,
   };
   const ins = await q(domain, 'POST',
-    'property_documents?on_conflict=property_id,content_hash', row,
+    'property_documents?on_conflict=property_id,file_name', row,
     { Prefer: 'return=representation,resolution=merge-duplicates' });
   if (!ins.ok) return { ok: false, status: 502, error: 'insert_failed', detail: ins.data };
   const inserted = Array.isArray(ins.data) ? ins.data[0] : ins.data;

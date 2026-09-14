@@ -49,7 +49,26 @@ import re
 from datetime import datetime, date
 from pathlib import Path
 from openpyxl import load_workbook
-from openpyxl.styles import PatternFill
+from openpyxl.styles import PatternFill, Alignment
+from openpyxl.utils import get_column_letter
+
+# Conformance validator — the independent CHECK that a produced workbook matches
+# the Briggs comps standard. populate_comps runs the STRUCTURAL checks (sheets,
+# headers, formula-protected columns, trim/AVG ranges) before returning so a
+# non-conforming workbook is an error, not a delivered file — even on the local
+# `populate_comps` fallback path. The recalc-error check runs post-recalc in the
+# caller (main.py::generate_comps). Guarded so the engine still boots if the
+# validator module is somehow absent.
+try:
+    from validate_comps_output import (
+        validate_comps_file, CompsConformanceError,
+        disp_len as _shared_disp_len, min_content_width as _shared_min_width,
+        target_column_width as _shared_target_width,
+    )
+    _VALIDATOR = True
+except Exception:  # noqa: BLE001
+    _VALIDATOR = False
+    _shared_disp_len = _shared_min_width = _shared_target_width = None
 
 DATA_START_ROW = 6
 
@@ -125,7 +144,7 @@ def _norm(h) -> str:
 
 # Row-key aliases → canonical Briggs header token. Lets a caller pass the comps-engine /
 # query_comps field names straight through to the master-order template columns
-# (TENANT, LAND, BUILT, RBA, CHAIRS, PATIENTS, RENT, EXP, EXPENSES, RENEWAL OPTIONS,
+# (TENANT, LAND, BUILT, RBA, CHAIRS, PATIENTS, RENT, EXP, EXPENSES, OPTIONS,
 #  SOLD PRICE, DATE, INITIAL/LAST PRICE, ON MARKET, DOM ...).
 _ALIASES = {
     "chair_count": "chairs", "chair_ct": "chairs",
@@ -142,6 +161,9 @@ _ALIASES = {
     "land_acres": "land", "land_area": "land",
     "list_date": "on_market", "on_market_date": "on_market", "listing_date": "on_market",
     "cur_price": "last_price",   # on-market current ask = LAST PRICE column
+    "init_cap": "initial_cap", "initial_cap_rate": "initial_cap",
+    "cur_cap": "last_cap", "current_cap": "last_cap", "current_cap_rate": "last_cap",
+    "last_cap_rate": "last_cap",
     "sold_sf": "sold_sf", "price_per_sf": "sold_sf",
 }
 
@@ -182,7 +204,7 @@ _DATE_KEYS = {"exp", "date", "on_market", "lease_exp", "list_date", "sale_date",
               "expir", "termin", "sold_date"}
 _NUM_KEYS = {
     "land", "built", "rba", "chairs", "patients", "rent",
-    "sold_price", "initial_price", "last_price",
+    "sold_price", "initial_price", "last_price", "initial_cap", "last_cap",
     "annual_noi", "init_price", "cur_price", "sale_price", "rba_sf",
     "sf_leased", "annual_rent", "ti_sf", "free_rent_mos", "yr_built", "renovated",
     # government sales tokens (GOV SF LEASED, GOV OCCP %, GROSS RENT, NOI, ASK history)
@@ -297,19 +319,35 @@ def _sort_rows(rows, sheet):
     return rows
 
 
+def _avg_bar_row(ws):
+    """Row index of the AVG/TOTALS bar (col A == 'AVG'), or None."""
+    for r in range(DATA_START_ROW, ws.max_row + 1):
+        if str(ws.cell(r, 1).value).strip().upper() == "AVG":
+            return r
+    return None
+
+
+def _row_capacity(ws):
+    """How many data rows the template holds between DATA_START_ROW and the AVG bar
+    (e.g. 100 for a bar at row 106). None when there is no bar."""
+    tot = _avg_bar_row(ws)
+    return None if tot is None else (tot - DATA_START_ROW)
+
+
 def _trim_to_totals(ws, n):
     """Delete the unused blank rows between the last written comp and the template's
     AVG/TOTALS bar so the bar sits directly beneath the data, and rewrite the bar's
-    AVERAGE/COUNT ranges to the trimmed row count (Workflow step 5)."""
-    tot = None
-    for r in range(DATA_START_ROW, ws.max_row + 1):
-        if str(ws.cell(r, 1).value).strip().upper() == "AVG":
-            tot = r
-            break
+    AVERAGE/COUNT ranges to the trimmed row count (Workflow step 5). `n` is the number
+    of comp rows actually written; callers cap `n` to `_row_capacity(ws)` BEFORE
+    writing so the grid never overflows the bar (Prompt 46)."""
+    tot = _avg_bar_row(ws)
     if tot is None:
         return
     old_last = tot - 1                       # last pre-filled data row (e.g. 105)
     capacity = old_last - DATA_START_ROW + 1
+    # n == capacity: data fills every slot, bar already sits directly below — no
+    # deletion needed. n > capacity should never happen (rows are capped upstream),
+    # but guard so a stray overflow can't leave blank/duplicate rows above the bar.
     if n <= 0 or n >= capacity:
         return
     del_start = DATA_START_ROW + n
@@ -322,19 +360,103 @@ def _trim_to_totals(ws, n):
             ws.cell(tot, c).value = v.replace(str(old_last), str(new_last))
 
 
+# --- Auto-fit + no-wrap (Prompt 43, reconciled with the validator in Prompt 46) --
+# Scott's export standard: every column is sized to its longest cell/header (no
+# wrapping), and a shared column shares ONE width across the On Market and Sold
+# sheets so the two tabs line up. The width math (padding, clamp, computed-column
+# floor) + the rendered-length measurement now live in ONE place —
+# validate_comps_output — so the renderer that SETS widths and the conformance
+# validator (Prompt 37) that CHECKS them can never disagree.
+_HEADER_ROW = 5
+
+# The measurement + width contract, imported from the validator (the authority).
+# A tiny local fallback keeps the engine bootable if the validator module is absent
+# (mirrors the pre-Prompt-46 behavior); when present, the shared helpers win.
+if _VALIDATOR:
+    _display_len = _shared_disp_len
+    _min_content_width = _shared_min_width
+    _target_width = _shared_target_width
+else:  # pragma: no cover — validator always ships alongside the renderer
+    def _display_len(cell) -> int:
+        v = cell.value
+        if v is None or v == "":
+            return 0
+        if isinstance(v, str) and v.startswith("="):
+            return 0
+        if isinstance(v, (datetime, date)):
+            return 10
+        if isinstance(v, (int, float)):
+            return len(("{:,.0f}".format(v)) if float(v).is_integer() else ("{:,.2f}".format(v)))
+        return len(str(v))
+
+    def _min_content_width(key: str) -> int:
+        return 0
+
+    def _target_width(longest, key: str) -> float:
+        return float(max(4, min(50, int(longest or 0) + 2)))
+
+
+def _autofit_no_wrap(sheets, header_row: int = _HEADER_ROW):
+    """Size every column to its longest header/cell (via the shared width contract),
+    turn OFF wrap on every cell, and share ONE width per header across all the given
+    sheets so shared columns line up. `sheets` is a list of worksheets.
+
+    Content is measured over the DATA region only (header row through the AVG bar) —
+    the same span the validator measures — so rows below the bar (disclaimers/notes)
+    can't inflate a column on one sheet and desync the shared width."""
+    # Pass 1 — per-sheet longest content per column index, keyed for sharing by
+    # the (normalized) header text so the same column lines up across sheets.
+    shared = {}                       # normalized header -> max content length anywhere
+    per_sheet = []                    # [(ws, {col_idx: norm_header})]
+    for ws in sheets:
+        avg = _avg_bar_row(ws)
+        measure_last = (avg or ws.max_row)   # header..AVG bar (matches the validator)
+        cols = {}
+        for c in range(1, ws.max_column + 1):
+            hdr = ws.cell(header_row, c).value
+            if hdr in (None, ""):
+                continue
+            key = _norm(hdr)
+            longest = _display_len(ws.cell(header_row, c))
+            # Kill wrap on EVERY cell in the column (full sheet), but only MEASURE
+            # the header..AVG data region for width.
+            for r in range(header_row, ws.max_row + 1):
+                cell = ws.cell(r, c)
+                if cell.alignment is not None and cell.alignment.wrap_text:
+                    cell.alignment = Alignment(
+                        horizontal=cell.alignment.horizontal,
+                        vertical=cell.alignment.vertical,
+                        wrap_text=False)
+                if r <= measure_last:
+                    longest = max(longest, _display_len(cell))
+            # Floor for computed columns whose formula result isn't measurable here.
+            longest = max(longest, _min_content_width(key))
+            cols[c] = key
+            shared[key] = max(shared.get(key, 0), longest)
+        per_sheet.append((ws, cols))
+    # Pass 2 — apply the SHARED width (via the one contract) to each column.
+    for ws, cols in per_sheet:
+        for c, key in cols.items():
+            ws.column_dimensions[get_column_letter(c)].width = _target_width(shared[key], key)
+
+
 def populate_comps(payload: dict, out_path: str, template_dir: Path = None) -> dict:
     """Fill the Briggs comps template from a structured payload. Returns a summary
     { comp_type, sheets:{name:count}, skipped_formula_keys, unknown_keys, out_path }.
     Does NOT recalc — the caller runs LibreOffice recalc (same as the BOV flow)."""
     tdir = Path(template_dir or TEMPLATE_DIR)
     comp_type = str(payload.get("comp_type", "")).lower()
+    vertical = None  # sales sub-vertical for the conformance validator
     if comp_type == "sales":
         if _is_government(payload):
             tpl = tdir / GOV_SALES_TEMPLATE
+            vertical = "government"
         elif _is_dialysis(payload):
             tpl = tdir / DIALYSIS_SALES_TEMPLATE
+            vertical = "dialysis"
         else:
             tpl = tdir / SALES_TEMPLATE
+            vertical = "sales"
     elif comp_type == "lease":
         tpl = tdir / LEASE_TEMPLATE
     else:
@@ -349,24 +471,57 @@ def populate_comps(payload: dict, out_path: str, template_dir: Path = None) -> d
     if comp_type == "sales":
         for sheet, key in (("On Market", "on_market"), ("Sold", "sold")):
             if sheet in wb.sheetnames and payload.get(key):
+                ws = wb[sheet]
+                # Cap to the template's data capacity so the grid never overflows the
+                # AVG bar (an overflow corrupts the sheet and blocks the trim — the
+                # Prompt-46 174-row failure). Rows arrive pre-ranked, so the cap keeps
+                # the most-aligned comps. The trim then seats the bar on both sheets.
                 rows = _sort_rows(payload[key], sheet)
-                n, sk, un = _write_rows(wb[sheet], rows)
-                _trim_to_totals(wb[sheet], n)
+                cap = _row_capacity(ws)
+                if cap is not None and len(rows) > cap:
+                    rows = rows[:cap]
+                n, sk, un = _write_rows(ws, rows)
+                _trim_to_totals(ws, n)
                 summary["sheets"][sheet] = n
                 skipped_all.update(sk); unknown_all.update(un)
     else:  # lease
         rows = _sort_rows(payload.get("comps") or payload.get("lease_comps") or [], "Lease Comps")
         if "Lease Comps" in wb.sheetnames and rows:
-            n, sk, un = _write_rows(wb["Lease Comps"], rows)
-            _trim_to_totals(wb["Lease Comps"], n)
+            ws = wb["Lease Comps"]
+            cap = _row_capacity(ws)
+            if cap is not None and len(rows) > cap:
+                rows = rows[:cap]
+            n, sk, un = _write_rows(ws, rows)
+            _trim_to_totals(ws, n)
             summary["sheets"]["Lease Comps"] = n
             skipped_all.update(sk); unknown_all.update(un)
 
     if not summary["sheets"]:
         raise CompsError("no comp rows supplied (sales: on_market/sold; lease: comps)")
 
+    # Auto-fit every written column to its contents + kill wrapping. For sales the
+    # On Market and Sold tabs SHARE one width per header so the two line up; the
+    # lease workbook has a single data sheet. (Prompt 43.)
+    if comp_type == "sales":
+        _autofit_no_wrap([wb[s] for s in ("On Market", "Sold") if s in wb.sheetnames])
+    elif "Lease Comps" in wb.sheetnames:
+        _autofit_no_wrap([wb["Lease Comps"]])
+
     wb.save(out_path)
     wb.close()
+
+    # Conformance gate — structural checks (sheets/headers/formula-protected
+    # columns/trim + AVG ranges) on the produced sales workbook BEFORE it is
+    # returned. Recalc-error conformance runs in the caller after LibreOffice
+    # recalc. A non-conforming workbook is an error, never a delivered file.
+    if _VALIDATOR and vertical is not None:
+        res = validate_comps_file(out_path, vertical=vertical, check_recalc_errors=False)
+        summary["conformance"] = res.as_dict()
+        if not res.ok:
+            raise CompsError(
+                "produced comps workbook failed conformance: " + "; ".join(res.violations),
+                status=500)
+
     summary["skipped_formula_keys"] = sorted(skipped_all)
     summary["unknown_keys"] = sorted(unknown_all)
     summary["out_path"] = out_path

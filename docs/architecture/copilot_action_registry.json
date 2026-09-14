@@ -773,6 +773,161 @@
       "idempotent": false,
       "wave": 2,
       "listing_driven_production_support": "Surfaces blockers to leadership so deals don't stall."
+    },
+    {
+      "action_name": "query_comps",
+      "user_goal": "Pull bounded, market-targeted sales comps with explicit filters",
+      "category": "read/query",
+      "owning_repo": "LCC",
+      "endpoint": "POST /api/query-comps",
+      "method": "POST",
+      "microsoft_surfaces": ["Teams", "Copilot Chat", "LCC Deal Agent", "Claude Northmarq"],
+      "inputs": {
+        "required": [],
+        "optional": [
+          { "name": "request", "location": "body", "type": "string" },
+          { "name": "tenant", "location": "body", "type": "string" },
+          { "name": "states", "location": "body", "type": "array" },
+          { "name": "metros", "location": "body", "type": "array" },
+          { "name": "property_types", "location": "body", "type": "array" },
+          { "name": "date_from", "location": "body", "type": "string", "format": "date" },
+          { "name": "date_to", "location": "body", "type": "string", "format": "date" },
+          { "name": "limit", "location": "body", "type": "integer", "default": 40, "maximum": 100 }
+        ]
+      },
+      "outputs": {
+        "fields": ["comps", "template_comps", "markdown", "meta"]
+      },
+      "risk_tier": 0,
+      "confirmation_required": "none",
+      "idempotent": true,
+      "idempotency_notes": "Read-only query through the shared LCC comps engine.",
+      "wave": 2,
+      "handler": "query_comps",
+      "listing_driven_production_support": "Gives field agents real Team Briggs comps from the engine instead of web/general-knowledge substitutes."
+    },
+    {
+      "action_name": "synthesize_comps",
+      "user_goal": "Parse a plain-language market request and return a bounded template-ready comp set",
+      "category": "read/query",
+      "owning_repo": "LCC",
+      "endpoint": "POST /api/synthesize-comps",
+      "method": "POST",
+      "microsoft_surfaces": ["Teams", "Copilot Chat", "LCC Deal Agent", "Claude Northmarq"],
+      "inputs": {
+        "required": [
+          { "name": "request", "location": "body", "type": "string" }
+        ],
+        "optional": [
+          { "name": "tenant", "location": "body", "type": "string" },
+          { "name": "states", "location": "body", "type": "array" },
+          { "name": "metros", "location": "body", "type": "array" },
+          { "name": "property_types", "location": "body", "type": "array" },
+          { "name": "include_on_market", "location": "body", "type": "boolean" },
+          { "name": "include_unreliable_noi", "location": "body", "type": "boolean" },
+          { "name": "limit", "location": "body", "type": "integer", "default": 25, "maximum": 50 }
+        ]
+      },
+      "outputs": {
+        "fields": ["interpreted_query", "comps", "template_comps", "markdown", "meta"]
+      },
+      "risk_tier": 0,
+      "confirmation_required": "none",
+      "idempotent": true,
+      "idempotency_notes": "Read-only synthesis through the shared LCC comps engine.",
+      "wave": 2,
+      "handler": "synthesize_comps",
+      "listing_driven_production_support": "Lets agents answer requests like DaVita, The Villages, FL from engine data with bounded output."
+    },
+    {
+      "action_name": "generate_comps",
+      "user_goal": "Generate a Team Briggs comps workbook from bounded template-ready comp rows",
+      "category": "export/generate",
+      "owning_repo": "LCC",
+      "endpoint": "POST /api/comps",
+      "method": "POST",
+      "microsoft_surfaces": ["Teams", "Copilot Chat", "LCC Deal Agent", "Claude Northmarq"],
+      "inputs": {
+        "required": [
+          { "name": "comp_type", "location": "body", "type": "string", "enum": ["sales", "lease"] }
+        ],
+        "optional": [
+          { "name": "on_market", "location": "body", "type": "array" },
+          { "name": "sold", "location": "body", "type": "array" },
+          { "name": "comps", "location": "body", "type": "array" },
+          { "name": "name", "location": "body", "type": "string" },
+          { "name": "client", "location": "body", "type": "string" }
+        ]
+      },
+      "outputs": {
+        "fields": ["status", "filename", "download_url", "comp_type", "rows_by_sheet"]
+      },
+      "risk_tier": 1,
+      "confirmation_required": "lightweight",
+      "idempotent": false,
+      "idempotency_notes": "Creates a new generated workbook artifact; source comp rows are not mutated.",
+      "wave": 2,
+      "handler": "generate_comps",
+      "listing_driven_production_support": "Exports the same bounded engine comps into the Team Briggs workbook template."
+    },
+    {
+      "action_name": "log_call_note",
+      "user_goal": "Log a phone/Teams call as a first-class call note on a deal from Copilot (Outlook/Teams)",
+      "category": "schedule/task",
+      "owning_repo": "LCC",
+      "endpoint": "POST /api/chat (copilot_action dispatch)",
+      "method": "POST",
+      "microsoft_surfaces": ["Teams", "Outlook", "Copilot Chat", "LCC"],
+      "inputs": {
+        "required": [
+          { "name": "notes", "location": "body", "type": "string" }
+        ],
+        "optional": [
+          { "name": "deal_or_contact_query", "location": "body", "type": "string" },
+          { "name": "direction", "location": "body", "type": "string", "enum": ["made", "received", "outbound", "inbound"] },
+          { "name": "contact_name", "location": "body", "type": "string" },
+          { "name": "occurred_at", "location": "body", "type": "string", "format": "date-time" }
+        ]
+      },
+      "outputs": {
+        "fields": ["ok", "wrote", "requires_pick", "candidates", "activity_id", "deal_entity_id", "message"]
+      },
+      "risk_tier": 1,
+      "confirmation_required": "lightweight",
+      "idempotent": true,
+      "idempotency_notes": "Dedup on (workspace, source_type='manual_call', external_id) — external_id is a deterministic hash of (actor, occurred_at, notes), so the same note re-submitted is a no-op. Deal resolution NEVER guesses: an ambiguous query returns candidates and writes nothing (requires_pick).",
+      "wave": 3,
+      "handler": "log_call_note",
+      "listing_driven_production_support": "Makes calls first-class comms — a logged call updates the deal summary and next steps exactly like an email (W7.3 → W7.2)."
+    },
+    {
+      "action_name": "tag_comm_to_deal",
+      "user_goal": "Manually attach an existing email/call to a deal (override lane for matcher misses)",
+      "category": "review/resolve",
+      "owning_repo": "LCC",
+      "endpoint": "POST /api/chat (copilot_action dispatch)",
+      "method": "POST",
+      "microsoft_surfaces": ["Teams", "Outlook", "Copilot Chat", "LCC"],
+      "inputs": {
+        "required": [
+          { "name": "deal_or_contact_query", "location": "body", "type": "string" }
+        ],
+        "optional": [
+          { "name": "internet_message_id", "location": "body", "type": "string" },
+          { "name": "subject", "location": "body", "type": "string" },
+          { "name": "sender", "location": "body", "type": "string" }
+        ]
+      },
+      "outputs": {
+        "fields": ["ok", "wrote", "already", "conflict", "activity_id", "deal_entity_id", "message"]
+      },
+      "risk_tier": 1,
+      "confirmation_required": "lightweight",
+      "idempotent": true,
+      "idempotency_notes": "Stamps deal_entity_id on the matched activity row. Re-stamping the SAME deal is a no-op (already); REFUSES to re-stamp a message already tied to a DIFFERENT deal (conflict is surfaced, never overwritten).",
+      "wave": 3,
+      "handler": "tag_comm_to_deal",
+      "listing_driven_production_support": "The manual override for zero-match deals and matcher misses — attaches the message so it propagates into the deal context (W7.3 → W7.2)."
     }
   ]
 }

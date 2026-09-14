@@ -48,3 +48,29 @@ verify_jwt = false
 # the new /api/lead-ingest?action=news_alert flow with a gateway 401.)
 [functions.lead-ingest]
 verify_jwt = false
+
+# intake-salesforce authenticates via X-PA-Webhook-Secret (authenticateWebhook) —
+# the hourly "SF -> LCC: Object Sync" Power Automate flow sends the PA secret, not a
+# Supabase JWT. Deployed verify_jwt = false since v1 (v23 live 2026-09-09, confirmed
+# via get_edge_function) but was never pinned here, so a bare `functions deploy`
+# would have re-enabled the gateway JWT check and 401'd every hourly sync — the same
+# trap intake-salesforce-files (2026-05-20) and lead-ingest (2026-07-20) fell into.
+# Pinned 2026-09-09 ahead of the DRIFT1-routing-gap redeploy (v23 -> v24).
+[functions.intake-salesforce]
+verify_jwt = false
+
+# ai-copilot has run verify_jwt = false since v1 (browser + PA callers, no Supabase JWT).
+# Pinned 2026-09-09 ahead of the COPILOT-OPEN-gate redeploy (v79 -> v80) so a plain
+# `supabase functions deploy` cannot silently flip it — same trap as the two above.
+[functions.ai-copilot]
+verify_jwt = false
+
+# salesforce-enrichment has run verify_jwt = false since v1 — deployed
+# verify_jwt = false, v26 live 2026-09-09 (confirmed via get_edge_function).
+# Its body was never in this repo until SFENRICH-gate committed it verbatim
+# and put the same log-only authenticateWebhook() door on it that
+# COPILOT-OPEN-gate put on ai-copilot. Pinned 2026-09-09 ahead of the
+# SFENRICH-gate redeploy (v26 -> v27) so a plain `supabase functions deploy`
+# cannot silently flip it — same trap as intake-salesforce and ai-copilot.
+[functions.salesforce-enrichment]
+verify_jwt = false

@@ -1,0 +1,242 @@
+> 📍 **CANONICAL ENTRY POINT: [`document-capture-ocr-and-deeds.md`](document-capture-ocr-and-deeds.md)** —
+> read that first for LIVE state, the blockers and the ceilings. **This file remains the 2026-08-12
+> narrative and the DocAI runbook** (processor id, the Custom-Extractor footgun, the env matrix) and is
+> still worth reading for those. ⚠️ **Its top is four nested "superseded" boxes; the counts below are
+> 2026-08-12 and have moved.**
+
+# Document capture-at-ingest & OCR — status + the one open loop
+
+> # ⚠️ HISTORICAL — FINAL STATE AS OF 2026-08-12 ONLY. This box is now SUPERSEDED by the canonical
+> entry point linked above (`document-capture-ocr-and-deeds.md`, current through DOC17/DOC18,
+> 2026-09-02). Flagged stale by CONSOLIDATE2 (2026-09-12): its imperative wording below reads as a
+> present-tense instruction and can be mistaken for current guidance. It is not — it is a snapshot.
+>
+> Everything below this box is the historical narrative of how it got here. The operating state
+> AS OF 2026-08-12 (also in `CLAUDE.md` → "OCR / document-text foundation" at that time):
+>
+> - **Google Document AI is the live cheap OCR tier, end-to-end verified.** Chain:
+>   `ocrPdfToTextTiered` (`api/_shared/document-text.js`) → `ocrCloudCheap` → **`docai-ocr`
+>   edge fn on LCC Opps** (v19; GET = no-spend health probe that echoes the processor) →
+>   **Enterprise Document OCR processor `projects/108926230693/locations/us/processors/5ecc6339861c88e1`**
+>   (GCP project `modular-conduit-450617-h5`). Verified live: deed tick → 2 docs, 8 pages,
+>   `ocr_tier:'cloud_cheap'`, `engine:'google_docai'`, ~95% confidence class. ~$1.50/1k pages.
+> - **Railway env was ALREADY set and needs nothing:** `OCR_CLOUD_OCR_URL` (→ the edge fn),
+>   `OCR_CLOUD_OCR_KEY` (== edge `DOCAI_SHARED_SECRET`), gpt-4o last resort enabled,
+>   `LEASE_EXTRACT_OCR` default-on. **Do NOT re-provision, re-wire, or recommend Azure/other
+>   OCR from scratch — the seam exists, is configured, and works.** Registry row:
+>   `feature_flags_registry.OCR_CLOUD_DOCAI` (state=on, kept current).
+> - **The 2026-07→08 outage root cause (for pattern-matching future breaks):** the edge secret
+>   `GOOGLE_DOCAI_PROCESSOR` pointed at a **Custom Extractor** (DocAI 400
+>   `entity_types: Must have at least one entity type`), so every call silently fell to gpt-4o
+>   (6–14× cost) while receipts still said "enriched". Fixed by repointing the secret to the
+>   OCR-type processor above. **Symptom→check:** `ocr_tier:'cloud'` (gpt-4o) showing up where
+>   `cloud_cheap` is expected ⇒ `GET /functions/v1/docai-ocr` and eyeball the processor; the
+>   fn logs the full DocAI error + processor name on failure.
+> - **Office files (docx/xlsx) never OCR** — `api/_shared/office-text.js` (zero-dep) extracts
+>   them in-process, sniffed from BYTES (the SharePoint PA flow lies about mime). Legacy OLE
+>   `.doc` → terminal `office_no_text:legacy_doc`. No selection knob; it's automatic.
+> - **Crons 160/167/169 ACTIVE** (deed + CRE doc-text drains, every 30 min, tiered OCR).
+> - **The lease corpus drain ran 2026-08-12 night** via temp cron 217 (+ self-cleanup cron 218
+>   that unschedules both at eligible=0). Office `needs_ocr` queue fully cleared. End-state
+>   outcomes live in `folder_feed_seen.subject_hint->'lease_backfill'`; `ambiguous` rows are
+>   the human disambiguation queue; conflicts sit in the Decision Center.
+> - **Known caps (deliberate):** DocAI *sync* ~15 pages (`over_page_cap` → gpt-4o last resort);
+>   server `INTAKE_OCR_MAX_BYTES` 12 MB default; big/over-cap scans go off-box via the
+>   `ocr_text` resubmit seam (`POST /api/intake?_route=lease-backfill&id=<id>`; Richardson 2840
+>   pattern: pdftoppm + tesseract w/ `--psm 0` rotation detect). Optional knobs (unset):
+>   `INTAKE_OCR_MAX_BYTES=20000000`, `AI_OCR_MODEL=gpt-4o-mini` (cheapens the gpt-4o tail).
+>   Future long-doc unlock: DocAI **batch** processing — ⚠️ **this line was written 2026-08-12 and
+>   is now half-corrected by DOC14 (2026-09-01), which read the contract from the live v1 discovery
+>   document.** The tail DID grow (9 leases at 31–59 pages, 100% of the over-cap population, ~45
+>   projected). **"needs GCS buckets" is right and understated: batch takes NO inline bytes**, so an
+>   INPUT bucket is mandatory as well as the output one, and the Document AI **service agent** — a
+>   second principal, not our SA — needs its own grants. `imagelessMode` does **not** exist on
+>   `BatchProcessRequest`, so DOC8's flag does not carry over. ⚠️ **The `500 pp` figure is carried
+>   from this 2026-08-12 note and has never been verified against Google's own docs** (their docs
+>   host is egress-blocked from the sandbox); it is not load-bearing, since our largest document is
+>   59 pages. 🛑 **BLOCKED, not built** — see `document-capture-ocr-and-deeds.md` DOC14 BLOCKED.
+
+> **⚠️ RECONCILED 2026-08-12 (evening session) — the "open loop" below was grounded and is
+> mostly CLOSED. The premise "lease OCR is config-gated / unconfigured" was WRONG:**
+>
+> - **Railway already carries the full OCR_CLOUD_* config and it WORKS.** `OCR_CLOUD_OCR_URL`
+>   points at the `docai-ocr` edge fn on LCC Opps (v18, `GET` health = `ready:true`,
+>   GCP SA + processor configured), the shared secret passes (Railway POSTs reach Document AI),
+>   and the **gpt-4o last resort is enabled and observed firing** (folder_feed_seen id 2848
+>   enriched 2026-08-12 21:57Z with `ocr_tier:'cloud'`; El Paso 5566 / Walterboro 2835 carry
+>   `cloud_cheap` from June). No env change was needed. `feature_flags_registry` row
+>   `OCR_CLOUD_DOCAI` added (state=on).
+> - **Why scanned leases still parked `needs_ocr`:** per-document limits, not config.
+>   The `needs_ocr` queue was 10 rows = **9 xlsx/doc/docx "Lease Abstract" files** (Document AI
+>   is PDF/image-only — these produced today's `docai_400` "PDF corrupted"/`entity_types` errors)
+>   **+ 1 real PDF** (Richardson 2840: 15.6 MB > `INTAKE_OCR_MAX_BYTES` 12 MB default → `over_ocr_cap`
+>   before any cloud call; 40 pages > the DocAI sync ~15-page cap anyway; image-only, rotated 270°).
+> - **Richardson 2840 is DONE** via the designed free tier (off-box tesseract + OSD rotation →
+>   `POST ?_route=lease-backfill&id=2840` with `ocr_text`) → `enriched`, dia property 37674,
+>   matched existing lease 21748, fills 0 / conflicts 0 (row already curated), `ocr_tier:'free_external'`.
+> - **Remaining:** ~214 pending eligible leases drain via repeated capped
+>   `POST /api/intake?_route=lease-backfill&limit=15` (scanned PDFs ≤12 MB/≤15 pages self-OCR via
+>   DocAI; bigger ones fall to gpt-4o where feasible, else park for the free tier). The only true
+>   build gap is the **xlsx/docx office-text extractor** (see "Not built" below) — the whole
+>   remaining `needs_ocr` queue is that format tail.
+> - Optional knobs (NOT set, deliberate): `INTAKE_OCR_MAX_BYTES=20000000` would let 12–20 MB PDFs
+>   reach the cloud tiers (they'd still hit the 15-page DocAI sync cap → gpt-4o, whose verbatim
+>   transcription degrades/truncates on very long docs — big scans are better served off-box).
+>
+> **⚠️ LATER SAME SESSION (historical — FIXED, see the FINAL STATE box at top) — the DocAI tier was BROKEN AT GCP:**
+> every `docai-ocr` POST 400s with `entity_types: "Must have at least one entity type"` — the
+> configured processor (`projects/modular-conduit-450617-h5/locations/us/processors/e1904ab5a10ddf4c`,
+> now visible on the fn's GET health probe, v19) is a **Custom Extractor, NOT the Enterprise
+> Document OCR processor**. It worked in June; broken since ~2026-07-17 (the docai-diag debugging
+> day). Consequence: **ALL cloud OCR silently falls to gpt-4o** (`ocr_tier:'cloud'`), 6–14× the
+> cost. **FIX (Scott, GCP + Supabase dashboard):** in GCP project `modular-conduit-450617-h5` →
+> Document AI → use/create an **Enterprise Document OCR** processor (type OCR_PROCESSOR, location
+> us) → set the LCC Opps edge secret `GOOGLE_DOCAI_PROCESSOR` (or `GOOGLE_DOCAI_PROCESSOR_ID`) to
+> it. Verify: `GET /functions/v1/docai-ocr` shows the new processor; next deed tick shows
+> `ocr_engine:'google_docai'`. Crons 160/167/169 were flipped ACTIVE 2026-08-12 (gate ticks clean:
+> 3 deeds parsed, sale verified + parties filled; gpt-4o tier carrying OCR until the processor fix).
+
+**Session 2026-08-12.** Handoff for the document byte-capture + OCR pipeline that
+feeds owner data (deeds) and firm-term coverage (leases). Sister docs: gov
+`docs/RUNBOOK_firm_term_coverage_ops_gates.md`; LCC `CLAUDE.md` → "OCR / document-text
+foundation".
+
+## TL;DR
+
+The **byte-capture** problem (the original ask — "store the bytes at ingestion so
+we don't fight CoStar auth later") is **solved and shipped**. The remaining open
+loop is a **config toggle**: the lease OCR path won't spend on cloud OCR until an
+`OCR_CLOUD_*` provider is enabled, so scanned lease PDFs park `needs_ocr`. Deeds
+already OCR fine (different, `OPENAI_API_KEY`-gated entrypoint).
+
+## What shipped (merged 2026-08-12)
+
+| Piece | PR | State |
+|---|---|---|
+| gov state-lease firm-term tier (t6) + per-state adapters + runbook | government-lease #373 | ✅ merged/live |
+| Durable capture-at-ingest: extension in-session + server backfill | life-command-center #1703 | ✅ merged/live |
+| Backfill keyset-cursor fix + SharePoint (`/sites/`) fetch branch | life-command-center #1707 | ✅ merged/live |
+
+### Capture mechanics (both domains)
+- **Forward (durable fix):** the extension (v1.0.39) fetches each captured doc's
+  bytes **in the authenticated CoStar tab** (`fetchDocBytesViaTab`) and POSTs them
+  to `POST /api/intake?_route=capture-doc-bytes` → `storeClientDocBytes`, keyed by
+  `(domain, source_url)`. Session-bound CDN links are only reachable this way.
+- **Backfill:** `POST /api/intake?_route=doc-bytes-backfill&domain=dia|gov&limit=&before=<cursor>&source=sharepoint|http`
+  → `backfillDocBytes`. Keyset cursor (terminates on an un-capturable backlog);
+  counts `bytes_captured` / `sharepoint_captured` / `session_bound_or_dead` honestly.
+- **SharePoint branch:** a server-relative `/sites/…` `source_url` is fetched via the
+  Power-Automate "Get Artifact" flow (`SHAREPOINT_FETCH_URL`), not HTTP.
+
+### Measured outcome (live)
+- Backfill run: **CoStar/http** 438 gov + 309 dia captured; **SharePoint** 272 gov +
+  441 dia captured. Backlog essentially cleared (5–6 SharePoint stragglers each; the
+  rest are `srsre.com` broker *pages*, not documents).
+- Result: **~1,548 domain `property_documents` now have durable bytes** and are
+  OCR-eligible (`storage_path` set, `raw_text` null). Includes 63 of the 82 gov
+  firm-term OCR-queue docs.
+
+## The two document→data consumers
+
+1. **Deeds → owner/grantee data.** `document-text-tick?doctype=deed` (LCC Opps cron
+   **160**). **Verified working** — OCRs via gpt-4o (`extractDocumentText`, gated on
+   `OPENAI_API_KEY`), runs the deed parser. Reactivate cron 160 to bank it.
+2. **Leases → firm term.** `lease-backfill` (`api/_handlers/lease-backfill.js` +
+   `lease-extractor.js`), which reads `folder_feed_seen` (SharePoint folder feed,
+   keyed by path), fetches from SharePoint, extracts terms → `leases` →
+   `gov_firm_term_fields`. ~222 leases queued. **Blocked by the OCR config below.**
+
+## ⚠️ The open loop — lease OCR is config-gated (NOT broken)
+
+Grounded in code (`api/_shared/document-text.js`):
+
+- **Deeds** use `extractDocumentText`, whose OCR fallback is gpt-4o vision **gated only
+  on `OPENAI_API_KEY`** (set) → works.
+- **Leases** use `ocrPdfToTextTiered` (`document-text.js:292`), a tiered path where
+  **gpt-4o is Tier-3 "last resort, explicit opt-in ONLY"** and Tier-2 (Google
+  Document AI / Azure DI / webhook) needs `OCR_CLOUD_OCR_URL` + `OCR_CLOUD_PROVIDER`.
+  With neither set, *"the paid tiers are inert and a free miss returns needs_ocr."*
+  → scanned lease PDFs (and xlsx/docx) park `needs_ocr`, `text_len: null`, `ocr_pages_total: 0`.
+
+Relevant env (from the code comments):
+- `OCR_CLOUD_ESCALATION` — master kill-switch (default on).
+- `OCR_CLOUD_PROVIDER` — `google_docai | azure_di | webhook (via OCR_CLOUD_OCR_URL) | gpt4o`.
+- `OCR_CLOUD_OCR_URL` — the cheap-cloud OCR HTTP seam (Document AI / Azure / webhook).
+- `OCR_CLOUD_GPT4O_LASTRESORT=true` (or `OCR_CLOUD_PROVIDER=gpt4o`) — enable the gpt-4o tier.
+- `LEASE_EXTRACT_OCR` (default true) — per-path on/off.
+
+### Assets we already have for OCR (to reconcile in the next chat)
+- **Google Document AI** — the `docai-ocr` edge function on LCC Opps (`xengecqvemvfknjvbvrq`);
+  likely configured on a prior task. The cheap-cloud primary (~$1.5/1k pages, 6–14× cheaper than gpt-4o).
+- **Microsoft Document Intelligence** — evaluated previously; a candidate `azure_di` provider.
+- **Ollama (local)** — the GaryBuilt residential box already serves Ollama over a CF Access
+  tunnel (`OLLAMA_URL`, live per LCC `feature_flags_registry.OLLAMA_EXTRACTION`); a potential
+  free vision-OCR tier for the `webhook` seam.
+- **gpt-4o vision** — already proven working for deeds (`OPENAI_API_KEY` set).
+
+## SCOPE (2026-08-12) — the xlsx/docx office-text extractor (the real remaining gap)
+
+The entire remaining lease `needs_ocr` queue (~11 rows) is office files. Scope, not built:
+
+- **Where:** new `api/_shared/office-text.js`, wired into `runLeaseExtraction` (lease-extractor)
+  and `extractDocumentText` (document-text) BEFORE the OCR branch, keyed on content-type /
+  extension (`.docx`, `.xlsx`; `.doc` best-effort). Replaces the current lossy ASCII
+  `binary_decode` salvage for these types. No new api/*.js; no OCR spend for these docs.
+- **How (zero new deps):** `.docx`/`.xlsx` are ZIPs — a ~50-line local-file-header reader +
+  `zlib.inflateRawSync` extracts `word/document.xml` (docx: strip tags, keep `<w:p>` breaks) and
+  `xl/sharedStrings.xml` + `xl/worksheets/sheet*.xml` (xlsx: emit rows as `label: value` lines,
+  resolving shared strings + inline strings; numbers/dates via cell `t`/`s` attrs, dates
+  best-effort). Output feeds the SAME `extractLeaseFromText` AI prompt — abstracts are
+  term-dense, so extraction quality should exceed scanned-PDF OCR.
+- **Legacy `.doc` (OLE/CFB, e.g. Pearland Estoppel.doc):** not worth a parser — route through the
+  existing off-box `ocr_text` resubmit seam (LibreOffice/Word on the workstation), or leave as a
+  1-2 doc human tail.
+- **Marks:** success → `source:'office_text'`, `text_len`; a office file that yields no text →
+  terminal `enrich_unprocessable:office_no_text` (NOT `needs_ocr` — OCR can never fix it; stops
+  these rows re-peppering the OCR queue and being POSTed to Document AI, which 400s on them).
+- **Size:** ~150 LOC + unit tests (fixture docx/xlsx). One Railway deploy (both services per the
+  deploy map). Interim workaround: the off-box seam already works for these (extract locally,
+  POST `ocr_text`).
+
+## Not built (surfaced, deliberate follow-ups)
+- **xlsx / docx lease abstracts** — the OCR path is PDF/image-only, so spreadsheet/Word
+  "Lease Abstract" files (often the most term-dense) return `needs_ocr`, `text_len null`.
+  Needs a spreadsheet/Word text extractor (`.xlsx` cell read / `.docx` text). Distinct build.
+- **A cron for non-deed domain docs** — cron 160 drains only `doctype=deed`; the captured
+  lease/OM domain docs have no scheduled `document-text-tick` pass (they're driven by
+  `lease-backfill` over the folder feed instead).
+
+---
+
+## Copy/paste prompt for the next chat (wire OCR to close the loop)
+
+> **Context:** Document byte-capture is shipped and ~1,548 `property_documents` (dia+gov)
+> now have durable bytes; ~222 leases are queued in `folder_feed_seen` for `lease-backfill`.
+> Deeds OCR fine via gpt-4o (`extractDocumentText`, `OPENAI_API_KEY`). But the **lease** OCR
+> path (`ocrPdfToTextTiered` in `api/_shared/document-text.js`) is config-gated: gpt-4o is
+> Tier-3 opt-in-only and Tier-2 needs `OCR_CLOUD_OCR_URL`+`OCR_CLOUD_PROVIDER`, so scanned
+> lease PDFs park `needs_ocr` (`text_len: null`, `ocr_pages_total: 0`). See
+> `docs/architecture/document-capture-and-ocr-status.md`.
+>
+> **Goal:** Reconcile what OCR is ALREADY built/configured and wire the best available engine
+> into the lease path so `lease-backfill ?id=<id>` (no `ocr_text`) actually OCRs a scanned
+> lease PDF end-to-end. Specifically:
+> 1. Audit the existing OCR seams: the `docai-ocr` edge function on LCC Opps
+>    (`xengecqvemvfknjvbvrq`) — is it deployed, what URL/contract; the Azure Document
+>    Intelligence option; and the local Ollama vision path (`OLLAMA_URL`, CF Access). Report
+>    which are live and callable, grounded against the code + Railway env
+>    (`GET /api/diag?kind=env`) + the edge-function list.
+> 2. Decide the tier order for `OCR_CLOUD_PROVIDER` (recommend cheapest-that-works;
+>    Document AI first if live, gpt-4o last resort). Confirm the exact env vars to set
+>    (`OCR_CLOUD_PROVIDER`, `OCR_CLOUD_OCR_URL`, `OCR_CLOUD_GPT4O_LASTRESORT`, `LEASE_EXTRACT_OCR`)
+>    and whether any code change is needed so `ocrPdfToTextTiered` actually reaches the chosen
+>    engine (verify the webhook/`ocrCloudCheap` contract matches the `docai-ocr` fn).
+> 3. Verify live: after enabling, `POST /api/intake?_route=lease-backfill&id=2840` (Richardson
+>    "Fully executed lease.pdf") should return `enriched` with `text_len > 0` and land firm-term
+>    fields. Then hand me a capped drain loop over the `ocr_queue` (`GET
+>    ?_route=lease-backfill&ocr_queue=1`), skipping the xlsx/docx abstracts.
+> 4. Separately, scope (don't necessarily build) an xlsx/docx text extractor for the
+>    "Lease Abstract" spreadsheets that the PDF-only OCR path can't read.
+>
+> Ground everything against the live LCC Opps DB + Railway before recommending. Keep changes
+> config-first; only touch code if the tiered-OCR seam genuinely needs it. Dry-run/verify each step.

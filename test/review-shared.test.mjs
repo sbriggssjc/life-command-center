@@ -156,13 +156,22 @@ describe('lane rationalization map', () => {
     }
   });
 
-  it('collapses 23 decision types into the 8 logical lanes', () => {
+  it('collapses decision types into the 8 logical lanes', () => {
     assert.equal(LCC_REVIEW_LANES.length, 8);
-    // 23 = 19 + Phase 1b contact_company_link (linkage, 2026-07-21)
+    // 26 = 19 + Phase 1b contact_company_link (linkage, 2026-07-21)
     //         + W3.2 owner_reconcile (entity_merge lane, 2026-07-30)
     //         + W3.4 comp_review (provenance lane, 2026-07)
-    //         + W4.3 sf_link_candidate (buyer_mapping lane, 2026-07-31).
-    assert.equal(Object.keys(LCC_DECISION_LANE_MAP).length, 23);
+    //         + W4.3 sf_link_candidate (buyer_mapping lane, 2026-07-31)
+    //         + 2 more added since (map grew to 25 on main; the count was stale)
+    //         + property_twin (property_merge lane, 2026-08-14)
+    //         + Prompt 114 owner_contact_attach_review (linkage lane, 2026-08-15)
+    //         + P188 tier0_owner_contact (linkage lane, 2026-08-26)
+    //         + OWN-T0e sponsor_family_confirm (ownership lane, 2026-09-09)
+    //         + C13g-min-lane entity_type_review (entity_merge lane, 2026-09-09)
+    //         + PDR1 / P13#1 ambiguous_entity_resolution (entity_merge lane, 2026-09-10).
+    assert.equal(Object.keys(LCC_DECISION_LANE_MAP).length, 31);
+    assert.equal(laneForDecisionType('sponsor_family_confirm'), 'ownership');
+    assert.equal(laneForDecisionType('entity_type_review'), 'entity_merge');
     // R43: cap-rate review + bad-rent leases group under the provenance lane.
     assert.equal(laneForDecisionType('caprate_review'), 'provenance');
     assert.equal(laneForDecisionType('bad_rent_lease'), 'provenance');

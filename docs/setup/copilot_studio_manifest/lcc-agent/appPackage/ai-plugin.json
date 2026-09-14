@@ -4,12 +4,13 @@
     "name_for_human": "Life Command Center",
     "namespace": "LifeCommandCenter",
     "description_for_human": "Access LCC deal intelligence, daily priorities, property context, and queue management.",
-    "description_for_model": "Call LCC to get daily briefings, search properties and contacts, retrieve full context packets, check research queue status, and monitor pipeline health. The data is REAL and current - always reference specific names and numbers from LCC responses.",
+    "description_for_model": "Call LCC to get daily briefings, search properties and contacts, retrieve full context packets, check research queue status, monitor pipeline health, query/synthesize bounded market comps, and generate Team Briggs comps workbooks. The data is REAL and current - always reference specific names and numbers from LCC responses. For comps, call queryComps or synthesizeComps first; never substitute web/general knowledge.",
     "runtimes": [
         {
             "type": "OpenApi",
             "auth": {
-                "type": "None"
+                "type": "ApiKeyPluginVault",
+                "reference_id": "lccApiKey"
             },
             "spec": {
                 "url": "openapi.json"

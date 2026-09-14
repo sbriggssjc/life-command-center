@@ -1,3 +1,9 @@
+-- ⚠️ HISTORICAL — DO NOT RE-APPLY. This directory does not own the government database;
+-- `government-lease` does (see supabase/migrations/government/README.md, 2026-09-12).
+-- This file is kept as a record of what this repo applied in the past. The live, correct
+-- copy of any object it defines may have since diverged -- read the deployed database or
+-- government-lease's committed source, never this file, before trusting its content.
+
 -- ============================================================================
 -- Item #6 Phase B-1 (gov, 2026-05-17): persist v_property_completeness
 -- scores as denormalized columns on the properties table + nightly refresh.

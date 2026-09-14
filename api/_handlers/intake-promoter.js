@@ -35,10 +35,11 @@ import { reconcilePropertyOwnership } from './sidebar-pipeline.js';
 //   - match.domain in { 'government', 'dialysis' }
 // ============================================================================
 
-import { domainQuery } from '../_shared/domain-db.js';
+import { domainQuery, domainPropertyExists } from '../_shared/domain-db.js';
 import { opsQuery, pgFilterVal } from '../_shared/ops-db.js';
 import { emitMatchDisambiguation } from './intake-matcher.js';
 import { normalizeState, ensureEntityLink, normalizeCanonicalName, canonicalIdentitySystem } from '../_shared/entity-link.js';
+import { ensureAssetEntityForProperty } from '../_shared/asset-entity.js';
 import { validateContactIngest, isFederalOwnerAntiPattern } from '../_shared/ingest-contract.js';
 import { isSalesforceConfigured, findSalesforceAccountByName, findSalesforceContactByEmail } from '../_shared/salesforce.js';
 import { estimateOmCreatedDate } from '../_shared/om-date-estimate.js';
@@ -49,8 +50,10 @@ import { sanitizeListingUrl } from '../_shared/listing-url-filter.js';
 import { writeListingCreatedSignal } from '../_shared/signals.js';
 import { runListingBdPipeline } from '../_shared/listing-bd.js';
 import { registerCreProperty } from '../_shared/cre-registry.js';
+import { deriveGovernmentCreditTier } from '../_shared/gov-credit-tier.js';
 import {
   LISTING_DOCUMENT_TYPES,
+  isExplicitNonListingType,
   normalizeDocType,
   snapshotLooksLikeListing,
   normalizeCapRate,
@@ -59,6 +62,17 @@ import {
 } from '../_shared/intake-classify.js';
 
 const MIN_CONFIDENCE_FOR_AUTO_PROMOTE = 0.85;
+
+function deriveGovTypeFromSnapshot(snapshot = {}) {
+  return deriveGovernmentCreditTier({
+    government_type: snapshot.government_type || snapshot.credit_tier || null,
+    agency: firstOf(snapshot.tenant_agency) || firstOf(snapshot.tenant_name) || null,
+    agency_full_name: snapshot.agency_full_name || null,
+    tenant_name: snapshot.tenant_name || null,
+    primary_tenant: snapshot.primary_tenant || null,
+    source_text: snapshot.government_type_evidence || snapshot.confidence_notes || null,
+  }).primaryType;
+}
 
 // ============================================================================
 // FIELD-LEVEL PROVENANCE RECORDER (Phase 2.1, 2026-04-25)
@@ -206,6 +220,14 @@ function buildGovListingRow(intakeId, snapshot, match, artifact, sourceEmailDate
   // gov stores cap rate as decimal (0.0644 = 6.44%). The extractor emits BOTH
   // decimal (0.055) and percent (7.75) — normalizeCapRate detects which.
   const capRateDecimal = normalizeCapRate(snapshot.cap_rate);
+  const currentAsk = Number(snapshot.asking_price) > 0 ? Number(snapshot.asking_price) : null;
+  const originalAsk = Number(snapshot.original_price || snapshot.list_price) > 0
+    ? Number(snapshot.original_price || snapshot.list_price)
+    : null;
+  const originalCapRate = normalizeCapRate(snapshot.original_cap_rate);
+  const hadPriceChange = originalAsk != null && currentAsk != null
+    ? Math.round(originalAsk) !== Math.round(currentAsk)
+    : null;
 
   // Round 76u (2026-04-27): infer OM date from lease metadata when the OM
   // doesn't have its own date. close_listing_on_sale uses listing_date <=
@@ -266,11 +288,20 @@ function buildGovListingRow(intakeId, snapshot, match, artifact, sourceEmailDate
     city:               snapshot.city || null,
     state:              state || null,
     square_feet:        snapshot.building_sf != null ? Math.round(snapshot.building_sf) : null,
-    asking_price:       snapshot.asking_price || null,
+    asking_price:       currentAsk,
     asking_cap_rate:    capRateDecimal,
-    asking_price_psf:   (snapshot.asking_price && snapshot.building_sf)
-                          ? Math.round((snapshot.asking_price / snapshot.building_sf) * 100) / 100
+    asking_price_psf:   (currentAsk && snapshot.building_sf)
+                          ? Math.round((currentAsk / snapshot.building_sf) * 100) / 100
                           : snapshot.price_per_sf || null,
+    original_price:     originalAsk,
+    original_price_source: originalAsk ? 'om_extraction' : null,
+    original_cap_rate:  originalCapRate,
+    initial_price:      originalAsk,
+    initial_cap_rate:   originalCapRate,
+    last_price:         currentAsk,
+    current_cap_rate:   capRateDecimal,
+    last_price_change:  snapshot.last_price_change || null,
+    price_change_count: hadPriceChange === true ? 1 : null,
     tenant_agency:      firstOf(snapshot.tenant_name) || null,
     annual_rent:        snapshot.annual_rent || null,
     lease_expiration:   snapshot.lease_expiration || null,
@@ -1237,7 +1268,7 @@ async function promoteProspectLead(domain, propertyId, snapshot, match, listingI
   const fields = {
     tenant_agency:        firstOf(snapshot.tenant_agency) || firstOf(snapshot.tenant_name) || null,
     agency_full_name:     snapshot.agency_full_name || null,
-    government_type:      snapshot.government_type || 'federal',
+    government_type:      deriveGovTypeFromSnapshot(snapshot),
     source_listing_id:    listingId || null,
     listing_status:       'active',
     listing_date:         snapshot.listing_date || today,
@@ -1699,11 +1730,17 @@ async function promoteUnifiedContact(domain, snapshot, domainContactId) {
         }
       );
       if (domainContactId) {
+        // Prompt 78 (U4 PGRST204): dia.contacts has no `sf_last_synced` column
+        // (its sync stamp is `contact_fields_synced_at`); only gov.contacts has
+        // sf_last_synced. The unconditional stamp 400'd every dia link.
+        const syncStamp = domain === 'dialysis'
+          ? { contact_fields_synced_at: new Date().toISOString() }
+          : { sf_last_synced: new Date().toISOString() };
         await domainQuery(
           domain,
           'PATCH',
           `contacts?contact_id=eq.${encodeURIComponent(domainContactId)}`,
-          { sf_contact_id: sfId, sf_last_synced: new Date().toISOString() }
+          { sf_contact_id: sfId, ...syncStamp }
         ).catch(() => {});
       }
       result.sf_linked = {
@@ -1775,6 +1812,8 @@ async function checkBrokerMergeCandidates(unifiedId, snapshot) {
   }
 
   const queued = [];
+  // Rejected inserts are reported, never swallowed — see the write below.
+  const failed = [];
   for (const cand of candidates.data) {
     let score  = 0;
     let reason = '';
@@ -1804,10 +1843,22 @@ async function checkBrokerMergeCandidates(unifiedId, snapshot) {
     }
 
     if (score >= 0.85 && reason) {
-      // Insert into the shared contact_merge_queue (lives on gov DB per
-      // existing convention in contacts-handler.js). contact_a / contact_b
-      // are unified_ids.
-      const insertRes = await domainQuery('government', 'POST', 'contact_merge_queue', {
+      // ⚠️ THIS WRITE USED TO GO TO **gov** WHILE THE CANDIDATE READ ABOVE GOES TO **ops**
+      // (2026-08-26). Three stacked failures, and `contact_merge_queue` has held ZERO rows
+      // on either project as a result:
+      //   1. SPLIT WRITE — `contact_a`/`contact_b` are `unified_id`s read from ops via
+      //      opsQuery above, posted into gov's table.
+      //   2. FK VIOLATION — gov's contact_merge_queue FKs gov's unified_contacts, and the
+      //      A9b cutover (CONTACTS_HUB=ops) means new contacts exist only on ops. The gov
+      //      copy is a frozen 2026-08-17 snapshot, so the referenced row is absent.
+      //   3. THE ERROR WAS SWALLOWED — `if (insertRes.ok)` discarded the failure with no
+      //      log. PostgREST reports an FK violation (23503) as **HTTP 409**, which reads
+      //      like a duplicate-key conflict and not like the routing bug it actually was
+      //      (the P116 lesson: never diagnose a 409 from the status code).
+      // The comment this replaces said the queue "lives on gov DB per existing convention
+      // in contacts-handler.js" — that convention was reversed by the A9b cutover and the
+      // comment was never updated. It now writes where it reads.
+      const insertRes = await opsQuery('POST', 'contact_merge_queue', {
         contact_a:    unifiedId,
         contact_b:    cand.unified_id,
         match_score:  score,
@@ -1816,11 +1867,21 @@ async function checkBrokerMergeCandidates(unifiedId, snapshot) {
       });
       if (insertRes.ok) {
         queued.push({ unified_id: cand.unified_id, reason, score });
+      } else {
+        // Never silent again: a rejected merge candidate is a finding, not a no-op.
+        console.warn('[intake-promoter] contact_merge_queue insert failed', {
+          status: insertRes.status,
+          detail: insertRes.data?.message || insertRes.data?.code || insertRes.data,
+          contact_a: unifiedId, contact_b: cand.unified_id, reason, score,
+        });
+        failed.push({ unified_id: cand.unified_id, reason, score, status: insertRes.status });
       }
     }
   }
 
-  return { ok: true, candidates_found: candidates.data.length, queued };
+  // `failed` is surfaced deliberately: a caller that sees queued:0 alongside failed:3 knows
+  // the matcher worked and the WRITE broke — the distinction this function lost for months.
+  return { ok: true, candidates_found: candidates.data.length, queued, failed };
 }
 
 // ============================================================================
@@ -2274,47 +2335,30 @@ async function promoteLccEntity(workspaceId, actorId, snapshot, match) {
     return { ok: true, skipped: 'lcc_entity_not_needed_for_domain', domain: match.domain };
   }
 
-  // R4-A: canonical domain source_system ('dia' | 'gov') + source_type 'asset'.
-  // ensureEntityLink canonicalizes anyway, but pass the canonical values so the
-  // intent is explicit and matches the sidebar/log_activity writers.
-  const sourceSystem = canonicalIdentitySystem(match.domain);
-  const externalId   = String(match.property_id);
-
-  const result = await ensureEntityLink({
+  // R-asset-linking: delegate to the single reusable path so the OM promoter,
+  // the post-close hook, the property panel, and generate_dossier all mint the
+  // SAME well-formed asset entity (name = street address, metadata populated
+  // from the domain DB) instead of each writing its own stub. ensureAssetEntity-
+  // ForProperty reads the domain property + its leases/sales/contacts/loans and
+  // enriches the entity fill-blanks; passing the OM snapshot as a seed hint
+  // keeps the address available even before the domain read returns.
+  const result = await ensureAssetEntityForProperty({
+    domain:      match.domain,
+    propertyId:  match.property_id,
     workspaceId,
-    userId:       actorId,
-    sourceSystem,
-    sourceType:   'asset',
-    externalId,
-    domain:       match.domain,
-    seedFields: {
-      address:  snapshot.address || null,
-      city:     snapshot.city || null,
-      state:    normalizeState(snapshot.state) || null,
-      zip:      snapshot.zip_code || null,
-      asset_type: snapshot.property_type || null,
-      description: firstOf(snapshot.tenant_name)
-        ? `${firstOf(snapshot.tenant_name)}${joinedOf(snapshot.listing_firm) ? ` — listed by ${joinedOf(snapshot.listing_firm)}` : ''}`
-        : null,
-      domain: match.domain,
-    },
-    metadata: {
-      // Preserve the back-reference to the domain property so downstream
-      // lookups can bridge LCC entity → domain-DB property. Matches the
-      // sidebar-pipeline convention for CoStar-sourced entities.
-      domain_property_id: match.property_id,
-      bridge_source:      'intake_promoter',
-    },
+    userId:      actorId,
+    deps:        { bridgeSource: 'intake_promoter' },
   });
 
   if (!result.ok) {
-    return { ok: false, skipped: 'ensure_link_failed', detail: result };
+    return { ok: false, skipped: result.skipped || 'ensure_link_failed', detail: result };
   }
   return {
     ok:           true,
-    entity_id:    result.entity?.id || result.entityId || null,
-    created:      !!result.createdEntity,
-    identity_created: !!result.createdIdentity,
+    entity_id:    result.entity_id || null,
+    created:      !!result.created,
+    identity_created: !!result.identity_created,
+    enriched:     !!result.enriched,
   };
 }
 
@@ -2465,15 +2509,19 @@ async function runEnrichOnlyPromotion(args) {
     // creating anything. emitMatchDisambiguation is idempotent on the intake
     // (subject_ref='match_disambig:'+intakeId), so this is safe even when the
     // matcher already opened the same decision on its ambiguous path.
+    // Prompt 91: emitMatchDisambiguation refuses to mint an empty-candidate card
+    // (unworkable, badge-inflating). When there are no candidates the enrich doc
+    // simply parks as enrich_unresolved (the doc is already attached as a
+    // property_document) rather than churning the lane with a "pick nothing" card.
     let emitted = false;
     try {
-      await emitMatchDisambiguation(
+      const r = await emitMatchDisambiguation(
         intakeId,
         snapshot?.address || null,
         firstOf(snapshot?.tenant_name) || null,
         Array.isArray(match?.candidates) ? match.candidates : []
       );
-      emitted = true;
+      emitted = !(r && r.emitted === false);
     } catch (err) {
       console.warn('[intake-promoter:enrich] disambiguation emit failed (non-fatal):', err?.message);
     }
@@ -2588,6 +2636,13 @@ export async function attachEnrichDocument(domain, propertyId, { fileName, docTy
     source_url:       sourceUrl || null,
     ingestion_status: 'enriched',
   };
+  // Prompt 81 (item 3): FK-parent guard — skip cleanly on a dangling
+  // property_id rather than aborting with 23503.
+  const parentOk = await domainPropertyExists(domain, base.property_id).catch(() => null);
+  if (parentOk === false) {
+    return { ok: false, status: 409, skipped: 'missing_property', domain,
+      detail: { property_id: base.property_id } };
+  }
   const attempts = [
     { ...base, source: 'folder_feed_enrich' },  // preferred — record the channel
     base,                                        // fallback — no source column
@@ -2606,8 +2661,13 @@ export async function attachEnrichDocument(domain, propertyId, { fileName, docTy
     }
     lastErr = { status: r.status, detail: r.data };
   }
-  // Last resort: plain insert (no on_conflict) for a table without that index.
-  const plain = await domainQuery(domain, 'POST', 'property_documents', base);
+  // Prompt 81 (item 2): last resort now folds a duplicate into the
+  // (property_id, file_name) dedup path instead of a bare INSERT that aborts
+  // with 23505 (uix_prop_doc). Handled duplicate suppressed from the surface.
+  const plain = await domainQuery(domain, 'POST',
+    'property_documents?on_conflict=property_id,file_name', base,
+    { Prefer: 'return=representation,resolution=merge-duplicates' },
+    { suppressFailureCodes: ['23505'] });
   if (plain.ok) {
     const inserted = Array.isArray(plain.data) ? plain.data[0] : plain.data;
     return { ok: true, document_id: inserted?.document_id || inserted?.id || null, domain };
@@ -2792,7 +2852,12 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
     effectiveMatch.property_id &&
     artifact &&
     typeof artifact.mime_type === 'string' &&
-    artifact.mime_type.toLowerCase().startsWith('text/')
+    artifact.mime_type.toLowerCase().startsWith('text/') &&
+    // Prompt 81 (item 3): the bridged effectiveMatch.property_id can point at
+    // an asset external_id with no live properties row — writing the doc then
+    // aborts with 23503. Confirm the FK parent exists first; skip the doc
+    // write cleanly when it doesn't (proceed on an unknown/null read result).
+    (await domainPropertyExists(effectiveMatch.domain, Number(effectiveMatch.property_id)).catch(() => null)) !== false
   ) {
     try {
       const artFull = await opsQuery(
@@ -2866,7 +2931,13 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
   }
 
   let inferredFromSnapshot = false;
-  if (!LISTING_DOCUMENT_TYPES.has(docType) && snapshotLooksLikeListing(snapshot)) {
+  // Prompt 61: never rescue an EXPLICIT non-listing deal doctype (psa /
+  // listing_agreement / valuation_proposal) to 'om' — those legal/advisory docs
+  // carry listing-shaped fields (address/price/cap) but are not on-market
+  // listings, so the heuristic would otherwise create a phantom listing.
+  if (!LISTING_DOCUMENT_TYPES.has(docType)
+      && !isExplicitNonListingType(docType)
+      && snapshotLooksLikeListing(snapshot)) {
     docType = 'om';
     inferredFromSnapshot = true;
   }

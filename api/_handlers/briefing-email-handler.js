@@ -59,9 +59,20 @@ import {
   fetchPipelineRollup,
   fetchMarketStats,
   fetchResearchProgress,
+  fetchDealPropagationDelta,
   fetchDormantCapabilities,
+  fetchLccHealthSnapshot,
   normalizePersonalContext,
 } from '../_shared/briefing-data.js';
+import { fetchFeatureFlag, flagEnabled } from '../_shared/feature-flag.js';
+import { buildAllLaneBriefContexts, freezeDailyIssue, LANE_LABELS } from '../_shared/market-brief-render.js';
+
+// MB-b — new surfaces (this email block + the homepage tab) ship flag-gated
+// per spec §7 build order ("each step flag-gated OFF until verified live").
+// Off by default: registered in the MB-b migration (feature_flags_registry),
+// flipped only after §5's live verify step (P-SQL tick run, block rendered
+// and reviewed, homepage tab loaded).
+export const MARKET_BRIEF_RENDER_FLAG = 'MARKET_BRIEF_RENDER';
 
 // ---------------------------------------------------------------------------
 // Brand tokens (mirror of public/reports/cm_brand_tokens.json)
@@ -897,6 +908,73 @@ function renderNewOnMarket({ newIntakes, newListings }) {
 }
 
 // ---------------------------------------------------------------------------
+// 7b. Lane Briefs — MB-b (spec §1/MB3). Sits above Sector Watch, which stays
+// below it (§1: "upgrades §8 Sector Watch; keep the news list beneath it").
+//
+// EVERY NUMBER HERE COMES VERBATIM FROM A FACT OBJECT (`fact.value` /
+// `fact.claim_text`, both written by a producer, never computed here — see
+// market-brief-render.js's own header comment). A lane with no live facts
+// is OMITTED entirely, never rendered as an empty section (spec §1 + the
+// payload contract's "the empty state is honest").
+// ---------------------------------------------------------------------------
+
+/** Freshness badge text for one fact — plain, never silently re-asserted (spec §1 "freshness badges"). */
+function laneFactAsOf(fact) {
+  const asOf = fact.source_date ? fmtMonthDay(fact.source_date) : null;
+  if (!asOf) return '';
+  return fact.is_stale
+    ? ` <span style="color:${BRAND.bad};">(stale — as of ${asOf})</span>`
+    : ` <span style="color:${BRAND.axis};">(as of ${asOf})</span>`;
+}
+
+function renderMarketBriefLanes({ marketBriefLanes, readFullBriefBaseUrl }) {
+  const lanes = Array.isArray(marketBriefLanes) ? marketBriefLanes : [];
+  if (!lanes.length) return ''; // every lane omitted (no live facts anywhere) — not an empty section
+
+  const laneBlock = (l) => {
+    const laneLabel = LANE_LABELS[l.lane] || l.lane;
+    const readMore = `${readFullBriefBaseUrl || ''}#/briefs/${encodeURIComponent(l.lane)}`;
+
+    const changedLine = (l.changedSinceYesterday || []).length
+      ? `<div style="${FONT}color:${BRAND.textMuted};font-size:11.5px;margin:2px 0 6px 0;">` +
+        `<strong style="color:${BRAND.text};">Changed since yesterday:</strong> ` +
+        `${(l.changedSinceYesterday || []).slice(0, 3).map((c) =>
+          `${c.action === 'added' ? 'New' : 'Updated'} — ${escapeHtml(truncate(c.claim_text, 90))}`).join('; ')}` +
+        `</div>`
+      : '';
+
+    const topFactRows = (l.topFacts || []).map((f) => (
+      `<tr><td style="${FONT}padding:5px 0;border-bottom:1px solid ${BRAND.bgAlt};` +
+      `font-size:12.5px;color:${BRAND.text};">` +
+      `${escapeHtml(f.claim_text)}${laneFactAsOf(f)}` +
+      `</td></tr>`
+    )).join('');
+
+    const gapRows = (l.gapFacts || []).map((f) => (
+      `<tr><td style="${FONT}padding:5px 0;font-size:12px;color:${BRAND.axis};font-style:italic;">` +
+      `${escapeHtml(f.claim_text)}` +
+      `</td></tr>`
+    )).join('');
+
+    return (
+      `<div style="margin-top:12px;">` +
+      `<div style="${FONT}font-size:12px;color:${BRAND.navy};font-weight:700;` +
+      `text-transform:uppercase;letter-spacing:0.5px;padding-bottom:3px;">${escapeHtml(laneLabel)}</div>` +
+      changedLine +
+      `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">` +
+      topFactRows + gapRows + `</table>` +
+      `<div style="margin-top:4px;"><a href="${escapeHtml(readMore)}" ` +
+      `style="${FONT}color:${BRAND.navy};font-size:11.5px;font-weight:600;text-decoration:none;">` +
+      `Read the full brief &rarr;</a></div>` +
+      `</div>`
+    );
+  };
+
+  return sectionHeader('Lane Briefs', 'What changed today, by swimlane — live, cited facts') +
+    bodyCell(`<div style="padding:6px 0 14px 0;">${lanes.map(laneBlock).join('')}</div>`);
+}
+
+// ---------------------------------------------------------------------------
 // 8. Sector Watch — news grouped by stream
 // ---------------------------------------------------------------------------
 
@@ -1049,8 +1127,9 @@ function renderWeeklyChanges({ intelSnapshot }) {
 // 10. Ops & Queue + footer
 // ---------------------------------------------------------------------------
 
-function renderOpsAndQueue({ workCounts, inboxSummary, syncHealth, newIntakes, processingSummary }) {
+function renderOpsAndQueue({ workCounts, inboxSummary, syncHealth, newIntakes, processingSummary, lccHealth }) {
   const s = syncHealth?.summary || {};
+  const hs = lccHealth || { overall_status: 'unknown', counts: { red: 0, amber: 0 }, top: [] };
   const ps = processingSummary || { filed: 0, needs_review: 0, duplicate: 0, pending_moves: 0 };
   const queueCells = [
     ['Open', workCounts.open || 0],
@@ -1058,7 +1137,7 @@ function renderOpsAndQueue({ workCounts, inboxSummary, syncHealth, newIntakes, p
     ['Due today', workCounts.due_today || 0],
     ['Inbox new', inboxSummary?.total_new || workCounts.inbox_new || 0],
     ['OM intakes 24h', newIntakes?.count || 0],
-    ['Connectors', `${s.healthy || 0}/${s.total_connectors || 0}`],
+    ['Health', String(hs.overall_status || 'unknown').toUpperCase()],
   ];
 
   const cells = queueCells.map(([label, val]) => (
@@ -1079,11 +1158,29 @@ function renderOpsAndQueue({ workCounts, inboxSummary, syncHealth, newIntakes, p
   if (ps.duplicate) autoBits.push(`${ps.duplicate} deduped`);
   if (ps.pending_moves) autoBits.push(`${ps.pending_moves} move${ps.pending_moves === 1 ? '' : 's'} pending`);
   const autoLine = autoBits.length ? ` · Email cleanup (24h): ${autoBits.join(', ')}` : '';
-  return sectionHeader('Ops & Queue', `Connectors: ${health}${autoLine}`) +
+  const healthLine = `LCC Health: ${String(hs.overall_status || 'unknown').toUpperCase()} ` +
+    `(${hs.counts?.red || 0} red, ${hs.counts?.amber || 0} amber)`;
+  const healthRows = (hs.top || []).slice(0, 5).map((it) => (
+    `<tr>` +
+    `<td style="${FONT}padding:6px 10px;border-bottom:1px solid ${BRAND.bgAlt};font-size:12px;color:${BRAND.text};">` +
+    `<strong>${escapeHtml(it.subsystem || '')}/${escapeHtml(it.check_name || '')}</strong>` +
+    `<span style="color:${it.status === 'red' ? BRAND.bad : BRAND.axis};font-weight:600;"> ` +
+    `${escapeHtml(String(it.status || '').toUpperCase())}</span>` +
+    `<div style="color:${BRAND.textMuted};font-size:11px;">${escapeHtml(truncate(it.last_error || '', 150))}</div>` +
+    `</td>` +
+    `<td style="${FONT}padding:6px 10px;border-bottom:1px solid ${BRAND.bgAlt};font-size:11px;color:${BRAND.axis};text-align:right;white-space:nowrap;">` +
+    `${it.first_seen ? 'since ' + escapeHtml(fmtMonthDay(it.first_seen)) : ''}</td>` +
+    `</tr>`
+  )).join('');
+  return sectionHeader('Ops & Queue', `Connectors: ${health} · ${healthLine}${autoLine}`) +
     bodyCell(
       `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" ` +
       `style="margin:14px 0;border:1px solid ${BRAND.bgAlt};background:#fafbfc;">` +
-      `<tr>${cells}</tr></table>`,
+      `<tr>${cells}</tr></table>` +
+      (healthRows
+        ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" ` +
+          `style="margin:0 0 14px 0;border:1px solid ${BRAND.bgAlt};">${healthRows}</table>`
+        : ''),
     );
 }
 
@@ -1091,6 +1188,52 @@ function renderOpsAndQueue({ workCounts, inboxSummary, syncHealth, newIntakes, p
 // per env-gated capability that is off (or partial) and has been so for more
 // than 30 days. "Half the automation found in this audit was silently off;
 // make 'off' visible."
+// W7.2c — "What changed on your deals" (last 24h propagation delta). One
+// deep-linked line per deal the tick touched. Deterministic; omitted when empty.
+function renderDealPropagationDelta({ dealPropagationDelta }) {
+  const items = dealPropagationDelta?.items || [];
+  if (!items.length) return '';
+  const base = process.env.LCC_BASE_URL || '';
+
+  const rows = items.slice(0, 20).map((it) => {
+    const name = escapeHtml(truncate(it.deal_name || 'Unnamed deal', 60));
+    const link = base ? `${base}/#/pipeline?d=entity:${encodeURIComponent(it.entity_id)}` : '';
+    const nameHtml = link
+      ? `<a href="${escapeHtml(link)}" style="color:${BRAND.navy};text-decoration:none;font-weight:600;">${name}</a>`
+      : `<span style="color:${BRAND.navy};font-weight:600;">${name}</span>`;
+
+    const bits = [];
+    bits.push(`${it.new_comms} new comm${it.new_comms === 1 ? '' : 's'}`);
+    if (it.summary_refreshed) bits.push('summary refreshed');
+    const ms = (it.milestones || []).filter((m) => (m.written || 0) + (m.rolled_up || 0) > 0);
+    if (ms.length) {
+      const parts = ms.map((m) => {
+        const w = m.written || 0, r = m.rolled_up || 0;
+        const tag = w && r ? `${w} new +${r} repeat` : w ? `${w} new` : `×${r} repeat`;
+        return `${escapeHtml(String(m.key).toUpperCase())} (${tag})`;
+      });
+      bits.push(`milestones: ${parts.join(', ')}`);
+    }
+    if (it.todos_generated) bits.push(`${it.todos_generated} to-do${it.todos_generated === 1 ? '' : 's'}`);
+    if (it.dossier_regenerated) bits.push('dossier regenerated');
+
+    return (
+      `<tr><td style="${FONT}padding:6px 10px;vertical-align:top;border-bottom:1px solid ${BRAND.bgAlt};` +
+      `font-size:13px;white-space:nowrap;">${nameHtml}</td>` +
+      `<td style="${FONT}padding:6px 10px;vertical-align:top;border-bottom:1px solid ${BRAND.bgAlt};` +
+      `font-size:12px;color:${BRAND.textMuted};">${escapeHtml(bits.join(' · '))}</td></tr>`
+    );
+  }).join('');
+
+  const n = items.length;
+  const subtitle = `${n} deal${n === 1 ? '' : 's'} moved in the last ${dealPropagationDelta.window_hours || 24}h — comms, summaries, milestones, to-dos`;
+  return sectionHeader('What Changed on Your Deals', subtitle) +
+    bodyCell(
+      `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" ` +
+      `style="margin:12px 0;border:1px solid ${BRAND.bgAlt};background:#fafbfc;">${rows}</table>`,
+    );
+}
+
 function renderDormantCapabilities({ dormantCapabilities }) {
   const items = dormantCapabilities?.items || [];
   if (!items.length) return '';
@@ -1167,7 +1310,9 @@ function renderHtml(ctx) {
     renderCapitalMarkets(ctx) +
     renderMarketStats(ctx) +
     renderWeeklyChanges(ctx) +
+    renderDealPropagationDelta(ctx) +
     renderResearchProgress(ctx) +
+    renderMarketBriefLanes(ctx) +
     renderSectorWatch(ctx) +
     renderReadingList(ctx) +
     renderOpsAndQueue(ctx) +
@@ -1236,6 +1381,24 @@ function renderText(ctx) {
   }
   lines.push('');
 
+  const delta = ctx.dealPropagationDelta?.items || [];
+  if (delta.length) {
+    lines.push(`WHAT CHANGED ON YOUR DEALS (last ${ctx.dealPropagationDelta.window_hours || 24}h)`);
+    delta.slice(0, 20).forEach((it) => {
+      const bits = [`${it.new_comms} new comm${it.new_comms === 1 ? '' : 's'}`];
+      if (it.summary_refreshed) bits.push('summary refreshed');
+      const ms = (it.milestones || []).filter((m) => (m.written || 0) + (m.rolled_up || 0) > 0);
+      if (ms.length) bits.push('milestones: ' + ms.map((m) => {
+        const w = m.written || 0, r = m.rolled_up || 0;
+        return `${String(m.key).toUpperCase()} (${w && r ? `${w} new +${r} repeat` : w ? `${w} new` : `×${r} repeat`})`;
+      }).join(', '));
+      if (it.todos_generated) bits.push(`${it.todos_generated} to-do${it.todos_generated === 1 ? '' : 's'}`);
+      if (it.dossier_regenerated) bits.push('dossier regenerated');
+      lines.push(`  - ${it.deal_name}: ${bits.join(' · ')}`);
+    });
+    lines.push('');
+  }
+
   const today = ctx.priorities?.today_priorities || [];
   const strategic = today.filter((i) => (i.tier || i._tier) === 'strategic');
   const stratList = (strategic.length ? strategic : today.slice(0, 5)).slice(0, 5);
@@ -1251,6 +1414,19 @@ function renderText(ctx) {
     intakes.slice(0, 6).forEach((it) => {
       const loc = [it.city, it.state].filter(Boolean).join(', ');
       lines.push(`  - ${it.address || it.tenant_agency || 'untitled'}  ${loc}`);
+    });
+    lines.push('');
+  }
+
+  const laneBriefs = Array.isArray(ctx.marketBriefLanes) ? ctx.marketBriefLanes : [];
+  if (laneBriefs.length) {
+    lines.push('LANE BRIEFS');
+    laneBriefs.forEach((l) => {
+      lines.push(`  ${LANE_LABELS[l.lane] || l.lane}`);
+      (l.changedSinceYesterday || []).slice(0, 3).forEach((c) =>
+        lines.push(`    changed: ${c.claim_text}`));
+      (l.topFacts || []).forEach((f) => lines.push(`    - ${f.claim_text}`));
+      (l.gapFacts || []).forEach((f) => lines.push(`    - ${f.claim_text}`));
     });
     lines.push('');
   }
@@ -1272,6 +1448,16 @@ function renderText(ctx) {
   lines.push(`  Open: ${wc.open || 0}  Overdue: ${wc.overdue || 0}  Due today: ${wc.due_today || 0}`);
   lines.push(`  Inbox new: ${ctx.inboxSummary?.total_new || 0}  OM intakes 24h: ${ctx.newIntakes?.count || 0}`);
   lines.push('');
+
+  if (ctx.lccHealth) {
+    const h = ctx.lccHealth;
+    lines.push('LCC HEALTH');
+    lines.push(`  ${String(h.overall_status || 'unknown').toUpperCase()}: ${h.counts?.red || 0} red, ${h.counts?.amber || 0} amber`);
+    (h.top || []).slice(0, 5).forEach((it) => {
+      lines.push(`  - ${it.subsystem}/${it.check_name}: ${String(it.status || '').toUpperCase()} (${it.count || 0})${it.last_error ? ' - ' + truncate(it.last_error, 100) : ''}`);
+    });
+    lines.push('');
+  }
 
   const dormant = ctx.dormantCapabilities?.items || [];
   if (dormant.length) {
@@ -1437,12 +1623,18 @@ export async function briefingEmailHandler(req, res) {
                disconnected: 0, pending: 0, outbound_success_rate_24h: null },
     unresolved_errors: [], queue_drift: null,
   };
+  const defaultLccHealth = {
+    overall_status: 'unknown',
+    counts: { red: 0, amber: 0, green: 0, unknown: 0 },
+    top: [],
+  };
 
   const [
     workCounts, myWork, inboxSummary, unassignedWork, syncHealth,
     sfActivity, hotContacts, diaPipeline, newIntakes,
     intelSnapshot, salesComps, expirations, newListings, pipelineRollup,
     marketStats, researchProgress, processingSummary, dormantCapabilities,
+    lccHealth, dealPropagationDelta, marketBriefRenderEnabled,
   ] = await Promise.all([
     safe(() => fetchWorkCounts(workspaceId, userId), defaultWorkCounts, 'fetchWorkCounts'),
     safe(() => fetchMyWork(workspaceId, userId, 15), [], 'fetchMyWork'),
@@ -1472,7 +1664,29 @@ export async function briefingEmailHandler(req, res) {
       'fetchProcessingSummary'),
     safe(() => fetchDormantCapabilities(30),
       { min_days_off: 30, count: 0, items: [] }, 'fetchDormantCapabilities'),
+    safe(fetchLccHealthSnapshot, defaultLccHealth, 'fetchLccHealthSnapshot'),
+    safe(() => fetchDealPropagationDelta(24),
+      { window_hours: 24, count: 0, items: [] }, 'fetchDealPropagationDelta'),
+    safe(async () => flagEnabled(MARKET_BRIEF_RENDER_FLAG, await fetchFeatureFlag(MARKET_BRIEF_RENDER_FLAG)),
+      false, 'fetchMarketBriefRenderFlag'),
   ]);
+
+  // MB-b: the Lane Briefs block ships flag-gated (spec §7). When off, the
+  // block is simply absent from the render — no gap message, no fabricated
+  // section — matching the same "new surface flagged off is invisible until
+  // verified" contract every other MB producer follows.
+  const marketBriefLanes = marketBriefRenderEnabled
+    ? await safe(() => buildAllLaneBriefContexts(ctNow().toISOString().slice(0, 10)), [], 'buildAllLaneBriefContexts')
+    : [];
+  if (marketBriefRenderEnabled && marketBriefLanes.length) {
+    // Freeze one issue row per lane, per day (idempotent — the unique index
+    // on (lane, issue_type, issue_date) means a same-day re-render upserts
+    // the SAME row rather than accumulating). Fire-and-forget-safe: a freeze
+    // failure must never block the email itself from rendering.
+    const issueDate = ctNow().toISOString().slice(0, 10);
+    await Promise.all(marketBriefLanes.map((l) =>
+      freezeDailyIssue({ lane: l.lane, issueDate, factIds: l.factIds }).catch(() => null)));
+  }
 
   let priorities;
   try {
@@ -1529,6 +1743,8 @@ export async function briefingEmailHandler(req, res) {
     priorities, syncHealth, workCounts, inboxSummary, newIntakes,
     salesComps, expirations, newListings, pipelineRollup,
     marketStats, researchProgress, processingSummary, dormantCapabilities,
+    lccHealth, dealPropagationDelta,
+    marketBriefLanes, readFullBriefBaseUrl: process.env.LCC_BASE_URL || '',
     weather: personalContext.weather,
   };
 
@@ -1564,3 +1780,9 @@ export async function briefingEmailHandler(req, res) {
     _cache: { hit: false, ttl_seconds: RENDER_CACHE_TTL_MS / 1000 },
   });
 }
+
+// MB-b — pure-render internals exposed for the snapshot test (test/market-
+// brief-lane-briefs-email.test.mjs). No DB, no network — mirrors the
+// `__internal` export pattern already used by market-brief-psql-tick.js /
+// market-brief-rss-tick.js.
+export const __internal = { renderMarketBriefLanes, renderHtml, renderText };

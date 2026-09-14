@@ -21,6 +21,15 @@ scripts/availability-checker-samples.results.json
 # (linked project ref, CLI version cache) and shouldn't be in git.
 supabase/.temp/
 
+# Local production integration exports. Power Automate packages may contain
+# tenant, endpoint, connection-reference, or secret metadata. Keep the raw
+# packages beside the architecture docs for local AI review, but never commit.
+/private/power-automate/
+/private/healthcare-discovery/
+
+# Healthcare tests create and delete these manifests during each run.
+test/fixtures/healthcare-discovery/*.tmp.json
+
 
 # QA-32: prevent truncation-investigation artifacts from leaking back
 audit/lcc-*-test*.txt
@@ -44,3 +53,19 @@ docs/capital-markets/sf-exports/
 _to_delete/
 # Runtime logs.
 logs/
+# Personal mailbox exports — never commit. A 475 MB
+# email_export/sabriggs@northmarq.com.pst was committed 2026-08-19 and GitHub's
+# pre-receive hook rejected the push (100 MB limit). Beyond size, a .pst is
+# personal correspondence and does not belong in a code repo at all.
+email_export/
+*.pst
+*.ost
+
+# OCR1 bake-off inputs — client lease text, never committed
+bakeoff/
+
+# Claude Code agent worktrees — local scratch checkouts, never committed
+# (see Dialysis repo CLAUDE.md B6e-worktree-gitlinks: a committed worktree
+# gitlink points at a commit that doesn't exist in this repo and breaks
+# every git invocation in CI).
+.claude/worktrees/

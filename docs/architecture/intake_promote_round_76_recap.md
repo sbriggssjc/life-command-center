@@ -1,5 +1,10 @@
 # Round 76 Recap — Intake Promotion Restoration
 
+> 🗄️ **HISTORICAL (DOCMAP1, 2026-09-08).** Round-numbered recap of a completed round; superseded by current CLAUDE.md OM-intake invariants + om_intake_pipeline.md.
+>
+> Kept for the record — nothing below was edited; treat any status/data claim in it as a
+> point-in-time snapshot, not current state.
+
 **Period:** 2026-04-26 → 2026-04-27
 **Final outcome:** 226/230 stalled OM intakes recovered (98.3%) → fully end-to-end after the parseCurrency follow-up (Bug Z #8).
 

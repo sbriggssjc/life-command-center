@@ -18,7 +18,15 @@
 // Calibri family, intl-formatted axes (currency / percent / integer).
 // ============================================================================
 
-import { heatRampColors, fitDataAxisRange, minYearForTemplate } from './cm-native-chart-injector.js';
+import {
+  NATIVE_CHART_TEMPLATES,
+  buildInjectionSpec,
+  heatRampColors,
+  fitDataAxisRange,
+  minYearForTemplate,
+  fitPercentAxis,
+} from './cm-native-chart-injector.js';
+import { getChartColumnsForTemplate, getTabNameForTemplate } from './cm-excel-export.js';
 
 // R2-A2 (2026-06-30) — templates whose PNG window must mirror the native
 // injector's MIN_YEAR_BY_TEMPLATE floor so both surfaces plot the identical
@@ -37,6 +45,16 @@ const QUICKCHART_URL =
 const RENDER_DEFAULT_WIDTH  = 900;
 const RENDER_DEFAULT_HEIGHT = 480;
 const RENDER_TIMEOUT_MS     = 15_000;
+
+// Marketing chart-formatting feedback (2026-08, ChartEdits.docx) — keep the
+// PNG/QuickChart fallback consistent with the native Excel charts: Futura PT
+// typeface, NM-Blue bold title. (QuickChart falls back to a default face if
+// Futura PT is not installed server-side; the native Excel charts are the
+// authoritative branded surface.) Kept as constants here so the two renderers
+// stay in sync — mirror any change to public/reports/cm-brand.json.
+const CM_PNG_FONT       = 'Futura PT';
+const CM_PNG_TITLE_HEX  = '#003DA5'; // NM Blue
+const CM_PNG_TITLE_SIZE = 14;
 
 // Recent-window crop. User wants charts back to ~2001. Original Round 1
 // bumped to 100/288/24, Round D4 to 104/312/26 after extending dialysis
@@ -86,8 +104,8 @@ function paletteSeries(brand) {
 // (gov p.13). Hard-coded here so they survive brand-token overrides.
 const PDF_COLORS = {
   // Cap_by_Term cohort lines (dialysis p.22)
-  cap_long_term:    '#7E6BAD', // purple — 12+ Year (longest term)
-  cap_mid_long:     '#4CB582', // sage green — 8-12 Year (or 6-10)
+  cap_long_term:    '#9B88A5', // purple — 12+ Year (longest term)
+  cap_mid_long:     '#8FC49E', // sage green — 8-12 Year (or 6-10)
   cap_mid:          '#62B5E5', // sky blue — 6-8 Year (or <5)
   cap_short:        '#003DA5', // dark navy — ≤5 Year (or outside firm)
   cap_outside_firm: '#6A748C', // gray — Outside Firm (gov p.13)
@@ -162,7 +180,7 @@ function buildAnnotations(rows, getter, labelFn, xKey = 'period_end') {
   const labelStyle = (bgColor) => ({
     backgroundColor: bgColor,
     color: PDF_COLORS.annotation_text,
-    font: { size: 10, family: 'Calibri', weight: 'bold' },
+    font: { size: 10, family: CM_PNG_FONT, weight: 'bold' },
     padding: { top: 2, bottom: 2, left: 5, right: 5 },
     borderRadius: 3,
     z: 100,  // above everything
@@ -289,7 +307,7 @@ function commonOpts({ yAxisFormat, yAxisRange, yAxisTitle, xMaxTicks = 12, legen
     plugins: {
       legend: {
         position: legendPosition,
-        labels: { color: '#191919', font: { family: 'Calibri', size: 11 } },
+        labels: { color: '#191919', font: { family: CM_PNG_FONT, size: 11 } },
       },
       // Round 6c — QuickChart v4 ships chartjs-plugin-datalabels enabled
       // by default, drawing a label on every data point. That's the
@@ -310,7 +328,7 @@ function commonOpts({ yAxisFormat, yAxisRange, yAxisTitle, xMaxTicks = 12, legen
       x: {
         ticks: {
           color: '#6A748C',
-          font: { family: 'Calibri', size: 9 },
+          font: { family: CM_PNG_FONT, size: 7 },
           maxTicksLimit: xMaxTicks,
           autoSkip: true,
         },
@@ -319,7 +337,7 @@ function commonOpts({ yAxisFormat, yAxisRange, yAxisTitle, xMaxTicks = 12, legen
       y: {
         ticks: {
           color: '#6A748C',
-          font: { family: 'Calibri', size: 9 },
+          font: { family: CM_PNG_FONT, size: 7 },
           ...(yAxisFormat || {}),
         },
         grid: { color: '#E7E6E6' },
@@ -334,7 +352,7 @@ function commonOpts({ yAxisFormat, yAxisRange, yAxisTitle, xMaxTicks = 12, legen
   if (yAxisTitle) {
     opts.scales.y.title = {
       display: true, text: yAxisTitle,
-      color: '#6A748C', font: { family: 'Calibri', size: 10 },
+      color: '#6A748C', font: { family: CM_PNG_FONT, size: 10 },
     };
   }
   return opts;
@@ -355,7 +373,7 @@ function comboOpts({ yLeftFormat, yRightFormat, xMaxTicks = 12, yLeftRange, yRig
     position: 'right',
     ticks: {
       color: '#6A748C',
-      font: { family: 'Calibri', size: 9 },
+      font: { family: CM_PNG_FONT, size: 7 },
       ...(yRightFormat || {}),
     },
     grid: { display: false },
@@ -400,8 +418,267 @@ const PCT_OF_ASK_RANGE = { min: 0.85, max: 1.05 };
 // Per-template Chart.js v3 config builders
 // ============================================================================
 
-function buildChartConfig(chart, brand) {
+function hexColor(color, fallback = '#003DA5') {
+  if (!color) return fallback;
+  const s = String(color);
+  return s.startsWith('#') ? s : `#${s}`;
+}
+
+function axisFormatFromNumFmt(numFmt) {
+  const f = String(numFmt || '');
+  if (/%/.test(f)) {
+    if (/0\.00%/.test(f)) return AXIS_FORMAT_PERCENT_2DP;
+    if (/0\.0%/.test(f)) return AXIS_FORMAT_PERCENT_1DP;
+    return AXIS_FORMAT_PERCENT_0DP;
+  }
+  if (/"\$"/.test(f) || /\$/.test(f)) return AXIS_FORMAT_CURRENCY_COMPACT;
+  if (/bps/i.test(f)) return AXIS_FORMAT_INTEGER;
+  return AXIS_FORMAT_INTEGER;
+}
+
+function buildNativeRowsAndSpec(chart, brand) {
+  if (!NATIVE_CHART_TEMPLATES.has(chart.chart_template_id)) return null;
+  const baseCols = getChartColumnsForTemplate(chart.chart_template_id);
+  const tabName = getTabNameForTemplate(chart.chart_template_id);
+  const rows = Array.isArray(chart.rows) ? chart.rows : [];
+  if (!baseCols || !tabName || rows.length === 0) return null;
+
+  const dataStart = 5;
+  const dataEnd = dataStart + rows.length - 1;
+  const colsWithLetter = baseCols.map((c, i) => ({
+    ...c,
+    col: String.fromCharCode(65 + i),
+  }));
+  const built = buildInjectionSpec({
+    chart_template_id: chart.chart_template_id,
+    tabName,
+    cols: colsWithLetter,
+    dataStart,
+    dataEnd,
+    brand,
+    rows,
+    title: chart.name,
+    injectPeriodLabel: true,
+    vertical: chart.vertical,
+  });
+  if (!built?.spec) return null;
+
+  const helperCols = Array.isArray(built.helperCols) ? built.helperCols : [];
+  const allCols = colsWithLetter.slice();
+  const enrichedRows = rows.map((row) => ({ ...row }));
+  helperCols.forEach((helper, i) => {
+    const col = String.fromCharCode(65 + baseCols.length + i);
+    allCols.push({ ...helper, col });
+    for (const r of enrichedRows) {
+      r[helper.key] = typeof helper.getValue === 'function' ? helper.getValue(r) : r[helper.key];
+    }
+  });
+
+  const offset = Math.max(0, (Number(built.spec.dataStart) || dataStart) - dataStart);
+  const plottedRows = enrichedRows.slice(offset);
+  return { spec: built.spec, rows: plottedRows, cols: allCols };
+}
+
+function nativeValueGetter(cols, colLetter) {
+  const col = cols.find(c => c.col === colLetter);
+  if (!col) return () => null;
+  return (row) => row[col.key];
+}
+
+function nativeSeriesTitle(cols, colLetter) {
+  const col = cols.find(c => c.col === colLetter);
+  return col?.header || col?.key || colLetter;
+}
+
+function nativeLabels(rows, cols, catCol) {
+  const getCat = nativeValueGetter(cols, catCol);
+  const labels = rows.map((row) => {
+    const v = getCat(row);
+    if (v != null && v !== '') return String(v);
+    return periodEndLabel(row.period_end || row.year);
+  });
+  return labels;
+}
+
+function nativeOptions(spec, { yFormat, y1Format, legendPosition = 'bottom' } = {}) {
+  const opts = commonOpts({
+    yAxisFormat: yFormat || axisFormatFromNumFmt(spec.valAxNumFmt || spec.yLeftNumFmt),
+    yAxisRange: spec.yAxisRange || spec.yLeftRange,
+    yAxisTitle: spec.yLeftAxisTitle,
+    legendPosition,
+  });
+  if (spec.yRightRange || spec.yRightNumFmt || spec.yRightAxisTitle) {
+    opts.scales.y1 = {
+      position: 'right',
+      ticks: {
+        color: '#6A748C',
+        font: { family: CM_PNG_FONT, size: 7 },
+        ...(y1Format || axisFormatFromNumFmt(spec.yRightNumFmt)),
+      },
+      grid: { display: false },
+    };
+    if (spec.yRightRange?.min != null) opts.scales.y1.min = spec.yRightRange.min;
+    if (spec.yRightRange?.max != null) opts.scales.y1.max = spec.yRightRange.max;
+    if (spec.yRightAxisTitle) {
+      opts.scales.y1.title = {
+        display: true,
+        text: spec.yRightAxisTitle,
+        color: '#6A748C',
+        font: { family: CM_PNG_FONT, size: 10 },
+      };
+    }
+  }
+  opts.plugins.title = {
+    display: !!spec.title,
+    text: spec.title || '',
+    color: CM_PNG_TITLE_HEX,
+    font: { family: CM_PNG_FONT, size: CM_PNG_TITLE_SIZE, weight: 'bold' },
+  };
+  return opts;
+}
+
+function buildNativeChartConfig(chart, brand) {
+  const native = buildNativeRowsAndSpec(chart, brand);
+  if (!native) return null;
+  const { spec, rows, cols } = native;
+  if (!rows.length) return null;
+  const labels = nativeLabels(rows, cols, spec.catCol);
+
+  const lineDataset = (s, axisId = 'y') => {
+    const getVal = nativeValueGetter(cols, s.valCol);
+    return {
+      type: 'line',
+      label: nativeSeriesTitle(cols, s.titleCol || s.valCol),
+      data: rows.map(r => getVal(r)),
+      borderColor: hexColor(s.color),
+      backgroundColor: hexColor(s.color),
+      borderDash: s.dashed ? [5, 4] : undefined,
+      fill: false,
+      tension: 0.15,
+      pointRadius: s.showMarker ? (s.markerSize || 3) : 0,
+      // markerOnly → dot/scatter overlay (no connecting line), mirroring the
+      // native Excel chart. markerShape 'diamond' maps to Chart.js 'rectRot'.
+      showLine: s.markerOnly ? false : undefined,
+      pointStyle: s.markerShape === 'dash' ? 'line'
+                : s.markerShape === 'diamond' ? 'rectRot'
+                : 'circle',
+      borderWidth: 2,
+      yAxisID: axisId,
+    };
+  };
+
+  const barDataset = (s, axisId = 'y') => {
+    const getVal = nativeValueGetter(cols, s.valCol);
+    return {
+      type: 'bar',
+      label: nativeSeriesTitle(cols, s.titleCol || s.valCol),
+      data: rows.map(r => getVal(r)),
+      backgroundColor: s.noFill ? 'rgba(0,0,0,0)' : hexColor(s.color, '#62B5E5'),
+      borderColor: s.borderColor ? hexColor(s.borderColor) : hexColor(s.color, '#62B5E5'),
+      borderWidth: s.noFill ? 0 : 1,
+      yAxisID: axisId,
+    };
+  };
+
+  if (spec.type === 'line') {
+    return {
+      type: 'line',
+      data: { labels, datasets: [lineDataset(spec)] },
+      options: nativeOptions(spec),
+    };
+  }
+
+  if (spec.type === 'bar') {
+    return {
+      type: 'bar',
+      data: { labels, datasets: [barDataset(spec)] },
+      options: nativeOptions(spec),
+    };
+  }
+
+  if (spec.type === 'stacked-bar') {
+    return {
+      type: 'bar',
+      data: { labels, datasets: (spec.series || []).map(s => ({ ...barDataset(s), stack: 'stack' })) },
+      options: (() => {
+        const opts = nativeOptions(spec);
+        opts.scales.x.stacked = true;
+        opts.scales.y.stacked = true;
+        return opts;
+      })(),
+    };
+  }
+
+  if (spec.type === 'multi-line') {
+    const datasets = [];
+    if (spec.upDownBars && (spec.series || []).length >= 2) {
+      const lowSeries = spec.series[0];
+      const highSeries = spec.series[spec.series.length - 1];
+      const getLow = nativeValueGetter(cols, lowSeries.valCol);
+      const getHigh = nativeValueGetter(cols, highSeries.valCol);
+      datasets.push({
+        type: 'bar',
+        label: 'Bid-Ask Spread',
+        data: rows.map((r) => {
+          const low = Number(getLow(r));
+          const high = Number(getHigh(r));
+          return Number.isFinite(low) && Number.isFinite(high) ? [low, high] : null;
+        }),
+        backgroundColor: 'rgba(201,206,214,0.55)',
+        borderColor: '#C9CED6',
+        borderWidth: 1,
+        barPercentage: 0.8,
+        categoryPercentage: 0.9,
+        order: 2,
+      });
+    }
+    datasets.push(...(spec.series || []).map(s => ({ ...lineDataset(s), order: 1 })));
+    return {
+      type: 'bar',
+      data: { labels, datasets },
+      options: nativeOptions(spec),
+    };
+  }
+
+  if (spec.type === 'combo') {
+    const shared = !!spec.sharedAxis;
+    const datasets = [
+      ...(spec.barSeries || []).map(s => barDataset(s, spec.swapAxes && !shared ? 'y1' : 'y')),
+      ...(spec.lineSeries || []).map(s => lineDataset(s, shared || spec.swapAxes ? 'y' : 'y1')),
+    ];
+    const opts = nativeOptions(spec);
+    if (spec.barGrouping === 'stacked') {
+      opts.scales.x.stacked = true;
+      opts.scales.y.stacked = true;
+    }
+    return { type: 'bar', data: { labels, datasets }, options: opts };
+  }
+
+  if (spec.type === 'doughnut') {
+    const series = spec.series || [];
+    const value = series[0] || spec;
+    const getVal = nativeValueGetter(cols, value.valCol);
+    return {
+      type: 'doughnut',
+      data: {
+        labels,
+        datasets: [{
+          label: spec.title || chart.name,
+          data: rows.map(r => getVal(r)),
+          backgroundColor: rows.map((_, i) => paletteSeries(brand)[i % paletteSeries(brand).length]),
+        }],
+      },
+      options: nativeOptions(spec),
+    };
+  }
+
+  return null;
+}
+
+export function buildChartConfig(chart, brand) {
   if (!chart || !chart.rows || chart.rows.length === 0) return null;
+  const nativeConfig = buildNativeChartConfig(chart, brand);
+  if (nativeConfig) return nativeConfig;
   const palette = paletteSeries(brand);
 
   // Crop to recent window for legibility. Annual templates (year column)
@@ -651,7 +928,7 @@ function buildChartConfig(chart, brand) {
       // Series colors per the PDF deck:
       //   • Private (Individual): dark navy #003DA5 (bottom of stack)
       //   • Institutional/Fund:   sky blue  #62B5E5 (middle)
-      //   • REIT:                 sage      #4CB582 (top)
+      //   • REIT:                 sage      #8FC49E (top)
       return {
         type: 'bar',
         data: {
@@ -835,9 +1112,9 @@ function buildChartConfig(chart, brand) {
       // indices (1/0/2) gave sky-blue/navy/pale-blue — three blues that
       // blend at the screen sizes in the workbook export. Switch to
       // distinct hues from the PDF deck:
-      //   • Top Quartile    → purple #7E6BAD  (cap_long_term)
+      //   • Top Quartile    → purple #9B88A5  (cap_long_term)
       //   • Median          → dark navy #003DA5 (cap_short — anchor)
-      //   • Bottom Quartile → sage #4CB582    (cap_mid_long)
+      //   • Bottom Quartile → sage #8FC49E    (cap_mid_long)
       // Top + Bottom thinner; Median emphasized.
       return {
         type: 'line',
@@ -874,8 +1151,8 @@ function buildChartConfig(chart, brand) {
       //
       // Colors per PDF (kept consistent across both schemes so the legend
       // reads the same chart family):
-      //   • Long-term:  purple   #7E6BAD
-      //   • Mid-long:   sage     #4CB582
+      //   • Long-term:  purple   #9B88A5
+      //   • Mid-long:   sage     #8FC49E
       //   • Mid:        sky      #62B5E5
       //   • Short:      navy     #003DA5
       //   • Outside:    gray     #6A748C (gov only)
@@ -903,18 +1180,18 @@ function buildChartConfig(chart, brand) {
           borderColor: PDF_COLORS.cap_short, backgroundColor: 'transparent',
           stepped: 'before', pointRadius: 0, borderWidth: 2 },
       ] : [
-        { label: '10+ Year',       data: rows.map(r => r.cap_10plus),
+        // Gov value-of-firm-term THREE-BUCKET scheme (2026-08-13): 6+ / 1.5–6 /
+        // sub-1.5 yr — monotonic, continuous, and folds the old thin/jagged
+        // "Outside Firm" holdover line into sub-1.5. Reads cm_gov_cap_by_term_m.
+        { label: '6+ Year Firm',      data: rows.map(r => r.cap_6plus),
           borderColor: PDF_COLORS.cap_long_term, backgroundColor: 'transparent',
           stepped: 'before', pointRadius: 0, borderWidth: 2.5 },
-        { label: '6-10 Year',      data: rows.map(r => r.cap_6to10),
+        { label: '1.5–6 Year Firm',   data: rows.map(r => r.cap_1_5to6),
           borderColor: PDF_COLORS.cap_mid_long, backgroundColor: 'transparent',
           stepped: 'before', pointRadius: 0, borderWidth: 2 },
-        { label: '< 6 Year',       data: rows.map(r => r.cap_less5),    // T9 — bucket boundary 5->6 (contiguous 10+/6-10/<6)
+        { label: 'Sub-1.5 Year Firm', data: rows.map(r => r.cap_sub1_5),
           borderColor: PDF_COLORS.cap_short, backgroundColor: 'transparent',
           stepped: 'before', pointRadius: 0, borderWidth: 2 },
-        { label: 'Outside Firm',   data: rows.map(r => r.cap_outside_firm),
-          borderColor: PDF_COLORS.cap_outside_firm, backgroundColor: 'transparent',
-          stepped: 'before', pointRadius: 0, borderWidth: 1.5, borderDash: [3, 3] },
       ];
       return {
         type: 'line',
@@ -1010,11 +1287,29 @@ function buildChartConfig(chart, brand) {
         // marker at the bottom (Last Ask) and a navy dash marker at the top (Achieved).
         // Now that the spread data is real (~30-284 bps; Achieved reaches ~9.8%), the
         // axis is 5.5-10% so the bar tops + top markers are visible.
-        const isGovBA = chart.vertical === 'gov' || chart.vertical === 'government_leased';
         const achievedOf = (r) => (r.achieved_last_ask_cap != null)
           ? r.achieved_last_ask_cap
           : ((r.avg_last_ask_cap != null && r.avg_bid_ask_spread != null)
               ? Number(r.avg_last_ask_cap) + Number(r.avg_bid_ask_spread) : null);
+        // CM close-out item 3 (bid-ask, final) — the PNG image artifact shares the
+        // SAME per-axis fit+assert as the native XLSX injector (fitPercentAxis over
+        // the cap axis's assigned series: Last-Ask + Achieved). The bid-ask SPREAD
+        // is NOT a cap-axis series here either — the gray bar is a floating high-low
+        // bar valued [last_ask, achieved], so the axis fits ~6–8% and never floors
+        // at 0. Falls back to the literal only when < 2 finite points.
+        const baPlotVals = [];
+        for (const r of rows) {
+          const la = Number(r.avg_last_ask_cap);
+          if (Number.isFinite(la)) {
+            baPlotVals.push(la);
+            const ach = Number(achievedOf(r));
+            if (Number.isFinite(ach)) baPlotVals.push(ach);
+          }
+        }
+        const baFit = fitPercentAxis(
+          `image:${chart.chart_template_id || 'bid_ask'}:cap%(last_ask+achieved)`,
+          baPlotVals, { minAbsFloor: 0.01 }
+        ) || { min: 0.055, max: 0.10 };
         return {
           type: 'bar',
           data: {
@@ -1037,7 +1332,7 @@ function buildChartConfig(chart, brand) {
           },
           options: commonOpts({
             yAxisFormat: AXIS_FORMAT_PERCENT_2DP,
-            yAxisRange:  isGovBA ? { min: 0.055, max: 0.10 } : { min: 0.055, max: 0.10 },
+            yAxisRange:  baFit,
           }),
         };
       }
@@ -1117,8 +1412,9 @@ function buildChartConfig(chart, brand) {
               data: rows.map(r => r.pct_price_change_all),
               backgroundColor: PDF_COLORS.sentiment_bar_all, borderRadius: 1,
               yAxisID: 'y1', order: 2 },
-            { type: 'bar',  label: `${govLike ? '6+' : '10+'} Yr Term Price Change %`,
-              data: rows.map(r => r.pct_price_change_long_term),
+            { type: 'bar',  label: `${govLike ? '6+' : '10+'} Yr Term Price Change %${govLike ? '' : ' (trailing 8-qtr)'}`,
+              // B3 — core bar binds to the trailing-8-quarter column when present.
+              data: rows.map(r => r.pct_price_change_long_term_8q ?? r.pct_price_change_long_term),
               backgroundColor: PDF_COLORS.sentiment_bar_long, borderRadius: 1,
               yAxisID: 'y1', order: 2 },
             // Lines (cap rate) on the LEFT axis, order=0 → drawn on top.
@@ -1127,8 +1423,9 @@ function buildChartConfig(chart, brand) {
               borderColor: palette[0], backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2.5,
               yAxisID: 'y', order: 0 },
-            { type: 'line', label: `Last Asking Cap (${govLike ? '6+' : '10+'} yr)`,
-              data: rows.map(r => r.last_ask_cap_long_term),
+            { type: 'line', label: `Last Asking Cap (${govLike ? '6+' : '10+'} yr${govLike ? '' : ', trailing 8-qtr'})`,
+              // B3 — core cap line binds to the trailing-8-quarter column when present.
+              data: rows.map(r => r.last_ask_cap_long_term_8q ?? r.last_ask_cap_long_term),
               borderColor: palette[1], backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2,
               yAxisID: 'y', order: 0 },
@@ -1364,6 +1661,53 @@ function buildChartConfig(chart, brand) {
       };
     }
 
+    case 'clinic_econ_revenue_census': {
+      // dia annual reconciled economics, avg per clinic (2011-2024).
+      // Stacked bars (left axis): operating cost (navy) + operating profit
+      // (sky) = average revenue per clinic. Dot overlay (right axis): average
+      // patient census per clinic (slate diamonds, no connecting line).
+      const yearLabels = rows.map(r => String(r.year));
+      const censusVals = rows
+        .map(r => Number(r.avg_patient_census_per_clinic))
+        .filter(v => Number.isFinite(v));
+      const cMin = censusVals.length ? Math.min(...censusVals) : 0;
+      const cMax = censusVals.length ? Math.max(...censusVals) : 100;
+      const censusRange = {
+        min: Math.max(0, Math.floor((cMin - 5) / 10) * 10),
+        max: Math.ceil((cMax + 5) / 10) * 10,
+      };
+      const opts = comboOpts({
+        yLeftFormat:  AXIS_FORMAT_CURRENCY_COMPACT,
+        yRightFormat: AXIS_FORMAT_INTEGER,
+        yRightRange:  censusRange,
+      });
+      opts.scales.x.stacked = true;
+      opts.scales.y.stacked = true;
+      return {
+        type: 'bar',
+        data: {
+          labels: yearLabels,
+          datasets: [
+            { type: 'bar', label: 'Avg Operating Cost / Clinic',
+              data: rows.map(r => r.avg_operating_cost_per_clinic),
+              backgroundColor: palette[0], stack: 'econ',
+              borderRadius: 2, yAxisID: 'y', order: 2 },
+            { type: 'bar', label: 'Avg Operating Profit / Clinic',
+              data: rows.map(r => r.avg_operating_profit_per_clinic),
+              backgroundColor: palette[1], stack: 'econ',
+              borderRadius: 2, yAxisID: 'y', order: 2 },
+            { type: 'scatter', label: 'Avg Patient Census / Clinic',
+              data: rows.map((r, i) => ({ x: i, y: r.avg_patient_census_per_clinic })),
+              backgroundColor: PDF_COLORS.cap_outside_firm,
+              borderColor: PDF_COLORS.cap_outside_firm,
+              pointRadius: 6, pointStyle: 'rectRot',
+              showLine: false, yAxisID: 'y1', order: 0 },
+          ],
+        },
+        options: opts,
+      };
+    }
+
     // ────────────────────────────────────────────────────────────────────
     // Inventory analysis charts (deliverable p.30-31)
     // ────────────────────────────────────────────────────────────────────
@@ -1408,7 +1752,7 @@ function buildChartConfig(chart, brand) {
               yAxisID: 'y1', order: 0 },
             { type: 'line', label: '10+ Year Term — Avg Asking Cap',
               data: rows.map(r => r.avg_cap_core_10plus),
-              borderColor: '#D97706', backgroundColor: 'transparent',
+              borderColor: '#9EA9B7', backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2.5,
               yAxisID: 'y1', order: 0 },
           ],
@@ -1479,7 +1823,7 @@ function buildChartConfig(chart, brand) {
       // too so its hard to tell a difference." Use Active_Cap_Quart-style
       // solid/dashed split so the eye groups Total vs Core 10+ by hue
       // similarity but distinguishes them by line style.
-      const COLOR_DARK_BLUE_DPC  = '#1F4E79';
+      const COLOR_DARK_BLUE_DPC  = '#003DA5';
       return {
         type: 'bar',
         data: {
@@ -1542,7 +1886,7 @@ function buildChartConfig(chart, brand) {
                 const lo = r.lower_quartile, hi = r.upper_quartile;
                 return (lo != null && hi != null) ? [lo, hi] : null;
               }),
-              backgroundColor: 'rgba(126,107,173,0.30)',  // amethyst #7E6BAD @30%
+              backgroundColor: 'rgba(155,136,165,0.30)',  // amethyst #9B88A5 @30%
               borderColor: PDF_COLORS.cap_long_term,       // amethyst border
               borderWidth: 1,
               borderSkipped: false,
@@ -1612,19 +1956,19 @@ function buildChartConfig(chart, brand) {
       // 5%–26% (with outliers); typical band is 5.5%–9.5%. Use the
       // standard CAP_RATE_RANGE (5%–10%) for headroom without letting
       // outliers dominate the visual.
-      // R76 E2 (2026-06-10) — state + municipal ARE present now (303 / 81
-      // eligible sales → 76 / 29 charted quarters); the stale "0 state" note
-      // is retired. They are just SPARSE (muni ~<1 sale/quarter).
-      // R2-B Unit 5 (2026-06-29, Scott) — markers on the DENSE Federal line read
-      // as clutter ("now has dots in the lines"); markers belong only where they
-      // ADD value — the SPARSE State + Municipal series, whose isolated points a
-      // markerless line cannot draw across the surrounding null gaps. Federal is
-      // a CLEAN line (pointRadius 0); State + Municipal carry a circle marker on
-      // every present quarter so each available reading shows. spanGaps:false
-      // keeps real gaps broken (never fabricate a connection across a hole). The
-      // genuine State/Municipal scarcity is annotated honestly in the worksheet
-      // caption (CHART_CAPTIONS.cap_rate_by_credit) — gaps read as real scarcity,
-      // not a broken pull; no points are fabricated.
+      // R76 E2 (2026-06-10) — state + municipal ARE present now; formerly SPARSE.
+      // 2026-08-12 (Scott) — the gov credit-tier resolver + classifier widening
+      // densified them (verified live: State 99 quarters, Municipal 73, of
+      // Federal's 121; only 2 State + 1 Municipal isolated 1-quarter points). The
+      // sparse-series premise for markers is gone, so ALL THREE now render as
+      // clean flush lines (pointRadius 0) — matching Federal and the brand line
+      // spec (Scott: "state and municipal include markers while federal is flush
+      // — match them"). spanGaps:false keeps real gaps broken (never fabricate a
+      // connection across a hole); the 3 isolated islands are a negligible,
+      // honest loss, still annotated in CHART_CAPTIONS.cap_rate_by_credit.
+      // Colors mesh into the brand BLUE family (Scott: "mesh with our color
+      // schemes"): Federal = NM Blue (heavier), State = Sky, Municipal = Blue-85
+      // (#265AB2) — replacing the off-family Slate gray.
       return {
         type: 'line',
         data: {
@@ -1632,13 +1976,13 @@ function buildChartConfig(chart, brand) {
           datasets: [
             { label: 'Federal',   data: rows.map(r => r.federal_cap),
               borderColor: PDF_COLORS.cap_short,    backgroundColor: PDF_COLORS.cap_short,
-              tension: 0.3, borderWidth: 2.5, pointRadius: 0, spanGaps: false },
+              tension: 0.3, borderWidth: 3, pointRadius: 0, spanGaps: false },
             { label: 'State',     data: rows.map(r => r.state_cap),
               borderColor: PDF_COLORS.cap_mid,      backgroundColor: PDF_COLORS.cap_mid,
-              tension: 0.3, borderWidth: 2.5, pointRadius: 3, pointStyle: 'circle', spanGaps: false },
+              tension: 0.3, borderWidth: 2.5, pointRadius: 0, spanGaps: false },
             { label: 'Municipal', data: rows.map(r => r.municipal_cap),
-              borderColor: PDF_COLORS.cap_mid_long, backgroundColor: PDF_COLORS.cap_mid_long,
-              tension: 0.3, borderWidth: 2.5, pointRadius: 3, pointStyle: 'circle', spanGaps: false },
+              borderColor: '#265AB2', backgroundColor: '#265AB2',
+              tension: 0.3, borderWidth: 2.5, pointRadius: 0, spanGaps: false },
           ],
         },
         options: commonOpts({ yAxisFormat: AXIS_FORMAT_PERCENT_2DP, yAxisRange: CAP_RATE_RANGE, yAxisTitle: 'Cap rate' }),   // R76 E4
@@ -1725,7 +2069,7 @@ function buildChartConfig(chart, brand) {
         { key: 'renewed_leases',                 label: 'Renewed',                        color: PDF_COLORS.cap_short, sign: +1 },
         { key: 'succeeding_superseding_leases',  label: 'Succeeding/Superseding',         color: palette[2],           sign: +1 },
         { key: 'non_renewed_expirations',        label: 'Expired (Not Renewed)',          color: PDF_COLORS.cap_mid,   sign: -1 },
-        { key: 'terminated_leases',              label: 'Terminated',                     color: '#D97706',            sign: -1 },
+        { key: 'terminated_leases',              label: 'Terminated',                     color: '#9EA9B7',            sign: -1 },
       ];
       const netData = rows.map(r => {
         let net = 0; let seen = false;
@@ -1823,7 +2167,7 @@ function buildChartConfig(chart, brand) {
       if (hasSoftTermRate) {
         datasets.push({ type: 'line', label: 'Soft-Term Termination Rate (% of leases past firm term)',
           data: softTermRate,
-          borderColor: '#D97706', backgroundColor: 'transparent',
+          borderColor: '#9EA9B7', backgroundColor: 'transparent',
           tension: 0.3, pointRadius: 1, borderWidth: 2.5,
           yAxisID: 'y1', stack: 'rate', order: 0 });
       }
@@ -2068,14 +2412,14 @@ function buildChartConfig(chart, brand) {
     }
 
     case 'case_for_renewal': {
-      // Bar: commencement_count by year + line: avg_rent_per_sf.
+      // Bar: TTM commencement_count by month + line: avg_rent_per_sf.
       //
       // Round 6c — user feedback 2026-05-09: "outlier commencements in
       // 2026 and 2019 that need to be investigated and the y-axis needs
       // to be adjusted to show the movement in the average rent figure.
       // Let's add low high and most recent labels too." Outliers were
-      // bulk-import sentinel dates in gsa_lease_events — fixed in the
-      // _y view via Round 6e sentinel filter. Renderer-side: tighten
+      // bulk-import sentinel dates in gsa_lease_events. The source is now
+      // gsa_leases.latest_action='New' monthly TTM; renderer-side: tighten
       // right-axis around the rent line + 3-point annotations.
       const rentVals = rows.map(r => Number(r.avg_rent_per_sf)).filter(Number.isFinite);
       const rentMin = rentVals.length ? Math.min(...rentVals) : null;
@@ -2087,7 +2431,7 @@ function buildChartConfig(chart, brand) {
       return {
         type: 'bar',
         data: {
-          labels: rows.map(r => String(r.year)),
+          labels: rows.map(r => r.period_end ? periodEndLabel(r.period_end) : String(r.year)),
           datasets: [
             { type: 'bar',  label: 'New Lease Commencements',
               data: rows.map(r => r.commencement_count),
@@ -2106,8 +2450,12 @@ function buildChartConfig(chart, brand) {
             yRightFormat: AXIS_FORMAT_CURRENCY,
             yRightRange:  rentRange,  // tighter so rent movement is visible
           });
-          // Annotations on rent series (year axis, not period_end).
-          const ann = buildAnnotations(rows, r => r.avg_rent_per_sf, fmtCurrencyPerSf, 'year');
+          const ann = buildAnnotations(
+            rows,
+            r => r.avg_rent_per_sf,
+            fmtCurrencyPerSf,
+            rows.some(r => r.period_end) ? 'period_end' : 'year'
+          );
           if (Object.keys(ann).length) o.plugins.annotation = { annotations: ann };
           return o;
         })(),
@@ -2145,7 +2493,7 @@ function buildChartConfig(chart, brand) {
               order: 1 },
             { type: 'line', label: 'Cost of Capital YoY Δ',
               data: rows.map(r => r.pace_cost),
-              borderColor: '#D97706',  // amber/orange
+              borderColor: '#9EA9B7',  // amber/orange
               backgroundColor: 'transparent',
               tension: 0.3, pointRadius: 0, borderWidth: 2.5,
               order: 0 },
@@ -2178,7 +2526,7 @@ function buildChartConfig(chart, brand) {
               type: 'label',
               backgroundColor: bg,
               color: PDF_COLORS.annotation_text,
-              font: { size: 10, family: 'Calibri', weight: 'bold' },
+              font: { size: 10, family: CM_PNG_FONT, weight: 'bold' },
               padding: { top: 2, bottom: 2, left: 5, right: 5 },
               borderRadius: 3,
               z: 100,
@@ -2275,7 +2623,7 @@ function buildChartConfig(chart, brand) {
           o.scales.x = {
             type: 'time',
             time: { unit: 'year' },
-            ticks: { color: '#6A748C', font: { family: 'Calibri', size: 9 } },
+            ticks: { color: '#191919', font: { family: CM_PNG_FONT, size: 7 } },
             grid: { display: false },
           };
           return o;
@@ -2348,8 +2696,8 @@ function buildChartConfig(chart, brand) {
             position: 'bottom',
             min: xMin,
             max: xMax,
-            title: { display: true, text: axisTitle, color: '#6A748C', font: { family: 'Calibri', size: 10 } },
-            ticks: { color: '#6A748C', font: { family: 'Calibri', size: 9 } },
+            title: { display: true, text: axisTitle, color: '#6A748C', font: { family: CM_PNG_FONT, size: 10 } },
+            ticks: { color: '#191919', font: { family: CM_PNG_FONT, size: 7 } },
             grid: { color: 'rgba(0,0,0,0.05)' },
           };
           return o;
@@ -2808,12 +3156,77 @@ function buildChartConfig(chart, brand) {
           o.scales.x = {
             type: 'linear', position: 'bottom', min: xMin, max: xMax,
             title: { display: true, text: 'Firm Lease Term Remaining at Sale (Years)',
-                     color: '#6A748C', font: { family: 'Calibri', size: 10 } },
-            ticks: { color: '#6A748C', font: { family: 'Calibri', size: 9 } },
+                     color: '#6A748C', font: { family: CM_PNG_FONT, size: 10 } },
+            ticks: { color: '#191919', font: { family: CM_PNG_FONT, size: 7 } },
             grid: { color: 'rgba(0,0,0,0.05)' },
           };
           return o;
         })(),
+      };
+    }
+
+    case 'market_share_pie_ttm': {
+      // Broker/firm market-share breakdown for the latest reported period.
+      // Rows span many periods × many buckets (period_end, bucket_label,
+      // volume_dollars, deal_count, share_pct, rank); pick the newest period,
+      // rank by volume, keep the top 8 and fold the tail into "Other". Use the
+      // uncropped chart.rows (recentRows would clip this non-time-series shape).
+      const allRows = chart.rows || [];
+      if (!allRows.length) return null;
+      const latest = allRows.reduce(
+        (mx, r) => (String(r.period_end || '') > mx ? String(r.period_end || '') : mx), '');
+      const periodRows = allRows
+        .filter(r => String(r.period_end || '') === latest)
+        .sort((a, b) => (Number(b.volume_dollars) || 0) - (Number(a.volume_dollars) || 0));
+      if (!periodRows.length) return null;
+      const TOP_N = 8;
+      const head = periodRows.slice(0, TOP_N);
+      const tail = periodRows.slice(TOP_N);
+      const segments = head.map(r => ({
+        label: r.bucket_label || 'Unknown',
+        value: Number(r.volume_dollars) || 0,
+      }));
+      const tailVol = tail.reduce((s, r) => s + (Number(r.volume_dollars) || 0), 0);
+      if (tailVol > 0) segments.push({ label: 'Other', value: tailVol });
+      const totalValue = segments.reduce((s, seg) => s + seg.value, 0);
+      const preLabels = segments.map((seg) => {
+        if (!seg.value || !totalValue) return '';
+        const share = (seg.value / totalValue) * 100;
+        if (share < 4) return '';
+        const mm = seg.value / 1_000_000;
+        const lbl = mm >= 1000 ? `$${(mm / 1000).toFixed(1)}B` : `$${mm.toFixed(1)}M`;
+        return `${lbl}\n${share.toFixed(1)}%`;
+      });
+      const pieColors = paletteSeries(brand);
+      return {
+        type: 'doughnut',
+        data: {
+          labels: segments.map(seg => seg.label),
+          datasets: [{
+            label: 'Volume by Firm',
+            data: segments.map(seg => seg.value),
+            dataLabels: preLabels,
+            backgroundColor: segments.map((_, i) => pieColors[i % pieColors.length]),
+            borderColor: '#FFFFFF',
+            borderWidth: 2,
+          }],
+        },
+        options: {
+          plugins: {
+            legend: { position: 'right', labels: { font: { size: 11 } } },
+            title: {
+              display: true,
+              text: `Market Share by Firm — ${periodEndLabel(latest)}`,
+              font: { size: 14, weight: 'bold' },
+              color: PDF_COLORS.cap_short,
+            },
+            datalabels: {
+              color: '#FFFFFF',
+              font: { family: CM_PNG_FONT, size: 9, weight: 'bold' },
+              formatter: (_v, ctx) => ctx.dataset.dataLabels?.[ctx.dataIndex] ?? '',
+            },
+          },
+        },
       };
     }
 

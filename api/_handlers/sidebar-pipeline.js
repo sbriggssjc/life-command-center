@@ -16,16 +16,19 @@
 //   - On-demand via POST /api/entities?action=process_sidebar_extraction
 // ============================================================================
 
-import { ensureEntityLink, normalizeCanonicalName, normalizeAddress, stripStreetSuffix, stripListingStatusPrefix, canonicalIdentitySystem, canonicalEntityDomain, isJunkEntityName, normalizeEmail, isGenericInboxEmail, looksLikeContactPhone } from '../_shared/entity-link.js';
+import { ensureEntityLink, normalizeCanonicalName, normalizeAddress, stripStreetSuffix, stripListingStatusPrefix, canonicalIdentitySystem, canonicalEntityDomain, isJunkEntityName, normalizeEmail, isGenericInboxEmail, looksLikeContactPhone, recordContactFieldWrites, hasFirmSuffix } from '../_shared/entity-link.js';
 import { isCompetitorBroker } from '../_shared/sf-nm-classifier.js';
 import { opsQuery, insertEntityRelationship, fetchWithTimeout } from '../_shared/ops-db.js';
 import { uploadArtifactToStorage } from '../_shared/artifact-storage.js';
+import { fetchSharepointBytes } from '../_shared/storage-adapter.js';
 import { writeSignal, writeListingCreatedSignal } from '../_shared/signals.js';
 import { runListingBdPipeline } from '../_shared/listing-bd.js';
-import { getCadenceState, entityHasBdSignal } from '../_shared/cadence-engine.js';
+import { getCadenceState, cadenceSeedDecision } from '../_shared/cadence-engine.js';
 import { domainQuery, getDomainCredentials } from '../_shared/domain-db.js';
 import { recalculateSaleCapRates } from '../_shared/rent-projection.js';
+import { reconcileLatestEvidence } from '../_shared/rent-reconcile-hook.js';
 import { isOwnFirmAddress } from '../_shared/own-firm-addresses.js';
+import { findContactOfficeAddressBleed } from '../_shared/contact-address-bleed-guard.js';
 // Round 76co: BEFORE-write priority gate. filterByFieldPriority drops
 // fields whose strict-mode rules block this source from updating; the
 // existing after-the-fact provenance recorder (recordCoStarFieldsProvenance)
@@ -39,12 +42,24 @@ import { canonicalizeTenant } from '../_shared/tenant-canonical.js';
 // cross-module bindings are hoisted function declarations resolved at call
 // time (runtime), never at module-load time.
 import { validateSaleIngest, validateContactIngest } from '../_shared/ingest-contract.js';
+// Prompt 89 — TrafficMetrix misparse guard. A property page's traffic-count table
+// was once parsed as a contact list (street names / column labels minted as person
+// contacts, all stamped with the page's one real email). Reject misparse names and
+// cap one-email fan-out at the contact-extraction path (belt+braces even though
+// the misparse capture path is dormant).
+import { isMisparseName, planContactMinting } from '../_shared/tm-misparse.js';
+import {
+  partitionReviewForNotification,
+  recoverFanoutOwner,
+  reviewDedupeKey,
+} from '../_shared/misparse-disposition.js';
 // Round 77d (2026-06-02): listing_date derivation moved to a shared module so
 // the CoStar sidebar and the OM-intake promoter stay consistent. Re-exported
 // here for the existing test/derive-listing-date.test.js import path.
 import { deriveListingDate, deriveOnMarketDate } from '../_shared/listing-date.js';
 export { deriveListingDate };
 import { cleanLenderName } from '../_shared/lender-name.js';
+import { deriveGovernmentCreditTier } from '../_shared/gov-credit-tier.js';
 
 // ============================================================================
 // FIELD-LEVEL PROVENANCE RECORDER (Phase 2.2, 2026-04-25)
@@ -503,6 +518,42 @@ const ROLE_TO_RELATIONSHIP = {
   true_seller_contact: 'associated_with',
 };
 
+function canonicalGraphAddress(value) {
+  const s = normalizeAddress(value || '');
+  return s
+    .replace(/[^a-z0-9]/g, '')
+    .trim();
+}
+
+function saleHistoryRowAddress(sale) {
+  return sale?.property_address
+    || sale?.address
+    || sale?.street_address
+    || sale?.asset_address
+    || sale?.listing_address
+    || sale?.comp_address
+    || sale?.sale_address
+    || null;
+}
+
+export function saleHistoryBelongsToAsset(entity, sale) {
+  const rowAddress = saleHistoryRowAddress(sale);
+  if (!rowAddress) return true;
+  const entityAddress = entity?.address || entity?.street_address || entity?.name || null;
+  if (!entityAddress) return false;
+  const rowCanon = canonicalGraphAddress(rowAddress);
+  const entityCanon = canonicalGraphAddress(entityAddress);
+  if (!rowCanon || !entityCanon) return false;
+  return rowCanon === entityCanon || rowCanon.includes(entityCanon) || entityCanon.includes(rowCanon);
+}
+
+export function lenderNameForGraphFinance(rawName) {
+  const cleaned = cleanLenderName(rawName);
+  if (cleaned.skip) return null;
+  if (cleaned.reason === 'lender_arm') return cleaned.clean;
+  return lenderNamePasses(cleaned.clean);
+}
+
 // ── Domain classification keywords ──────────────────────────────────────────
 // Word-boundary regexes prevent false positives (e.g. 'ice' matching 'office').
 // Short acronyms use \b boundaries; multi-word phrases use plain includes via
@@ -777,9 +828,15 @@ function parseCurrency(val) {
   // — Bug Z follow-up #8, 2026-04-27).
   if (typeof val === 'number') return Number.isFinite(val) ? val : null;
   if (typeof val !== 'string') return null;
-  const cleaned = val.replace(/[$,\s]/g, '');
-  const num = parseFloat(cleaned);
-  return isNaN(num) ? null : num;
+  const m = val.trim().match(/^\$?\s*([\d,]+(?:\.\d+)?)\s*([KMB])?\b/i);
+  if (!m) return null;
+  let num = parseFloat(m[1].replace(/,/g, ''));
+  if (isNaN(num)) return null;
+  const suffix = (m[2] || '').toUpperCase();
+  if (suffix === 'K') num *= 1e3;
+  else if (suffix === 'M') num *= 1e6;
+  else if (suffix === 'B') num *= 1e9;
+  return num;
 }
 
 /** Parse SF string: "8,750 SF" → 8750 */
@@ -816,24 +873,192 @@ function parseCapRateDecimal(val) {
   return dec;
 }
 
-/** Parse acres string: "0.54 AC" → 0.54 */
-function parseAcres(val) {
-  if (val == null) return null;
-  if (typeof val === 'number') return val;
-  const cleaned = String(val).replace(/,/g, '').replace(/\s*AC\s*/gi, '').trim();
-  const num = parseFloat(cleaned);
-  return isNaN(num) ? null : num;
+function normalizePriceChangeHistory(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const row of raw) {
+    if (!row || typeof row !== 'object') continue;
+    const price = parseCurrency(row.price);
+    const date = parseDate(row.change_date || row.date || row.changed_at)?.split('T')[0] || null;
+    if (!price || price < 25000 || !date) continue;
+    out.push({
+      change_date: date,
+      price,
+      cap_rate: parseCapRateDecimal(row.cap_rate),
+      change_reason: row.change_reason || row.reason || 'vendor_price_history',
+    });
+  }
+  return out
+    .sort((a, b) => String(a.change_date).localeCompare(String(b.change_date)))
+    .filter((row, idx, arr) => {
+      const prior = arr[idx - 1];
+      return !prior || prior.change_date !== row.change_date || Math.round(prior.price) !== Math.round(row.price);
+    })
+    .slice(0, 25);
 }
 
-/** Parse lot SF: handles "2.49 AC" → acres-to-SF conversion, or standard SF parse */
-function parseLotSF(rawLotSize) {
-  if (!rawLotSize) return null;
-  // If value contains AC/Acres, convert to SF
-  const acMatch = String(rawLotSize).match(/([\d.]+)\s*AC/i);
-  if (acMatch) return Math.round(parseFloat(acMatch[1]) * 43560);
-  // Otherwise try standard SF parse
-  return parseSF(rawLotSize);
+export function deriveListingAskHistory(metadata = {}) {
+  const history = normalizePriceChangeHistory(metadata.price_change_history);
+  const first = history[0] || null;
+  const last = history[history.length - 1] || null;
+  const originalPrice = parseCurrency(metadata.original_price)
+    || parseCurrency(metadata.list_price)
+    || first?.price
+    || null;
+  const currentPrice = parseCurrency(metadata.asking_price)
+    || parseCurrency(metadata.last_price)
+    || last?.price
+    || null;
+  const originalCap = parseCapRateDecimal(metadata.original_cap_rate)
+    || first?.cap_rate
+    || null;
+  const currentCap = parseCapRateDecimal(metadata.current_cap_rate)
+    || parseCapRateDecimal(metadata.asking_cap_rate)
+    || parseCapRateDecimal(metadata.cap_rate)
+    || last?.cap_rate
+    || null;
+  const lastPriceChange = parseDate(metadata.last_price_change)?.split('T')[0]
+    || (history.length > 1 ? last?.change_date : null);
+  return {
+    history,
+    originalPrice,
+    currentPrice,
+    originalCap,
+    currentCap,
+    lastPriceChange,
+    priceChangeCount: Math.max(0, history.length - 1),
+  };
 }
+
+/**
+ * Parse a captured lot size into SQUARE FEET, reporting the unit it was
+ * expressed in.
+ *
+ * ⚠️ I12 (docs/architecture/public-records-source-lane.md §4): `lot_sf` is
+ * square feet and `land_area` is acres — 3,702 paired dia rows, 0 equal, ratio
+ * 43,560 on 91.1%. A lot size that is not UNIT-parsed is a unit error waiting
+ * to be stored as a measurement, so this returns the basis alongside the
+ * number and refuses rather than guessing.
+ *
+ * Measured over the 2,477 live CoStar captures carrying a lot_size (LCC Opps
+ * entities.metadata, 2026-09-02) there are exactly three real shapes plus two
+ * ambiguous strays:
+ *
+ *   "1.00 (43,560 sf)"  1,679 (68%)  acres, with the SF already computed
+ *   "0.86 AC"             528 (21%)  acres
+ *   "12,400 SF"           268 (11%)  square feet
+ *   "19,998"                2        bare — refused, see below
+ *
+ * ⚠️ THE DOMINANT SHAPE IS THE ONE THE PREVIOUS PARSER GOT WRONG. The old
+ * body looked for /([\d.]+)\s*AC/i, which "1.00 (43,560 sf)" does not contain,
+ * then fell through to parseSF — which strips the "sf" token and parseFloats
+ * the LEADING number, returning **1** square foot for a one-acre lot. It is
+ * the parenthetical that carries square feet; the leading number is acres.
+ * (Measured 2026-09-02: dia.properties has 0 rows below 100 sq ft, so this had
+ * not contaminated the curated column — it was latent, and it is exactly the
+ * defect that would have shipped into parcel_records.lot_sf.)
+ *
+ * A BARE number is refused for `lot_size` and accepted for a key that names
+ * its own unit (`land_sf` / `lot_sf` → square feet, `acreage` → acres): the
+ * unit rides the key when the value does not carry it, and where neither does,
+ * 19,998 acres and 19,998 sq ft are both sayable. Refusing costs 2 rows;
+ * guessing risks a 43,560× error.
+ *
+ * @param {string|number|null} raw
+ * @param {'unknown'|'sf'|'acres'} keyUnit unit implied by the key it came from
+ * @returns {{ sf: number|null, acres: number|null, basis: string }}
+ */
+export function parseLotSize(raw, keyUnit = 'unknown') {
+  const NONE = { sf: null, acres: null, basis: 'absent' };
+  if (raw == null || raw === '') return NONE;
+
+  // ⚠️ CoStar renders "no lot size on file" as **"0.00 (1 sf)"** / "0.00 (2 sf)"
+  // — a zero acreage with a rounding artefact in the parenthetical. Storing
+  // that is the PR1a defect exactly: a no-data sentinel written into a numeric
+  // column reads as a measurement ("this parcel is one square foot"), where a
+  // NULL would have been honest. Measured 2026-09-02: 10 captures fleet-wide
+  // render that shape, and EVERY parenthetical below 100 sq ft is one of them,
+  // so the floor refuses the sentinels and nothing real (the smallest genuine
+  // lot in the population is 3,528 sq ft).
+  const MIN_PLAUSIBLE_LOT_SF = 100;
+  const fromAcres = (ac) => (Number.isFinite(ac) && ac > 0
+    ? { sf: Math.round(ac * 43560), acres: Math.round(ac * 100) / 100, basis: 'acres' }
+    : NONE);
+  const fromSf = (sf, basis) => {
+    if (!Number.isFinite(sf) || sf <= 0) return NONE;
+    if (sf < MIN_PLAUSIBLE_LOT_SF) return { sf: null, acres: null, basis: 'implausible_lot_size' };
+    return { sf: Math.round(sf), acres: Math.round((sf / 43560) * 100) / 100, basis };
+  };
+
+  if (typeof raw === 'number') {
+    if (keyUnit === 'acres') return fromAcres(raw);
+    if (keyUnit === 'sf') return fromSf(raw, 'sf_from_key');
+    return { sf: null, acres: null, basis: 'ambiguous_bare_number' };
+  }
+  if (typeof raw !== 'string') return NONE;
+  const s = raw.trim();
+  if (!s) return NONE;
+
+  // A) "1.00 (43,560 sf)" — the parenthetical is the assessor's own square
+  //    footage and needs no conversion of ours.
+  const paren = s.match(/\(\s*([\d,]+(?:\.\d+)?)\s*(?:sf|sq\.?\s*ft)\s*\)/i);
+  if (paren) return fromSf(parseFloat(paren[1].replace(/,/g, '')), 'parenthetical_sf');
+
+  // B) "0.86 AC" / "2.49 Acres"
+  const ac = s.match(/^\s*([\d,]+(?:\.\d+)?)\s*(?:ac\b|acres?\b)/i);
+  if (ac) return fromAcres(parseFloat(ac[1].replace(/,/g, '')));
+
+  // C) "12,400 SF"
+  const sf = s.match(/^\s*([\d,]+(?:\.\d+)?)\s*(?:sf\b|sq\.?\s*ft)/i);
+  if (sf) return fromSf(parseFloat(sf[1].replace(/,/g, '')), 'sf');
+
+  // D) bare — the key decides, or nobody does.
+  const bare = s.match(/^\s*([\d,]+(?:\.\d+)?)\s*$/);
+  if (bare) {
+    const n = parseFloat(bare[1].replace(/,/g, ''));
+    if (keyUnit === 'acres') return fromAcres(n);
+    if (keyUnit === 'sf') return fromSf(n, 'sf_from_key');
+    return { sf: null, acres: null, basis: 'ambiguous_bare_number' };
+  }
+  return { sf: null, acres: null, basis: 'unparseable' };
+}
+
+/**
+ * Resolve a capture's lot size in square feet from every key that can carry
+ * it, preferring the keys that name their own unit. Single owner — the parcel
+ * writer, the property writer and the PR2 backfill all read this one function
+ * so they cannot drift on units.
+ */
+export function lotSizeFromMetadata(metadata = {}) {
+  // ⚠️ `metadata.lot_sf` IS EXCLUDED, AND THAT IS A MEASUREMENT, NOT AN
+  // OVERSIGHT. The key names square feet and holds BOTH units: live values
+  // include 78300 / 43560 / 100000 / 41817.6 (square feet) alongside 1.71 /
+  // 0.94 / 1.24 / 0.7 (acres). Reading it as its name promises turned a
+  // 1.71-acre lot into "2 square feet" in this backfill's own dry run — caught
+  // by auditing the parsed outliers, not by reading the code. A key whose
+  // contents are mixed does not carry a unit, so it is not a unit source.
+  // 41 rows fleet-wide; `lot_size` covers the same captures with the unit in
+  // the value. (I12, one level up: the KEY can lie about the unit too.)
+  const attempts = [
+    [metadata.land_sf, 'sf'],       // measured: 850 rows, every one "N SF"
+    [metadata.lot_size, 'unknown'], // unit rides the value
+    [metadata.acreage, 'acres'],    // measured: 41 rows, all plain acre decimals
+  ];
+  let refused = null;
+  for (const [raw, unit] of attempts) {
+    const parsed = parseLotSize(raw, unit);
+    if (parsed.sf != null) return parsed;
+    if (parsed.basis !== 'absent' && !refused) refused = parsed;
+  }
+  return refused || { sf: null, acres: null, basis: 'absent' };
+}
+
+// NOTE: `parseAcres` and `parseLotSF` were REMOVED here, not left as thin
+// wrappers. Both encoded the acres/square-feet rule a second time, and this
+// repo has paid repeatedly for two implementations of one normalisation
+// (lcc_normalize_entity_name, ownerCore, strictOwnerCore). `parseLotSize` /
+// `lotSizeFromMetadata` above are the single owner; every lot-size read in
+// this file goes through them.
 
 /** Parse parking ratio: "2.28/1,000 SF" → 2.28, "32 Spaces (5.82 Spaces per 1,000 SF)" → 5.82 */
 function parseParkingRatio(raw) {
@@ -938,7 +1163,71 @@ export function parseSaleNotes(text) {
     extracted.lease_type = leaseMatch[2];
   }
 
+  // Lease TERM + COMMENCEMENT — the common gov phrasing that carries the term
+  // without a "N years remaining" clause: "a new 15-year lease commencing in
+  // September 2024", "under a 20 year lease that commenced March 1, 2019".
+  // Captured so the at-sale remaining term can be derived (commencement + term
+  // − sale_date) when no explicit "remaining" figure is stated.
+  const termYrsMatch = text.match(/(\d+)[-\s]year\s+lease/i) ||
+                       text.match(/lease\s+(?:for|of|with)\s+(?:a\s+)?(?:term\s+of\s+)?(\d+)\s+years?/i);
+  if (termYrsMatch && extracted.lease_term_years == null) {
+    extracted.lease_term_years = parseInt(termYrsMatch[1]);
+  }
+  const commenceMatch =
+    text.match(/commenc(?:ing|ed|es|ement)\s+(?:in\s+|on\s+|as\s+of\s+)?([A-Z][a-z]+\.?\s+\d{1,2},?\s+\d{4})/i) ||
+    text.match(/commenc(?:ing|ed|es|ement)\s+(?:in\s+|on\s+)?([A-Z][a-z]+\.?\s+\d{4})/i);
+  if (commenceMatch) {
+    const iso = normalizeNoteDate(commenceMatch[1]);
+    if (iso) extracted.lease_commencement_iso = iso;
+  }
+
   return extracted;
+}
+
+// Normalize a free-text month/date ("September 2024", "March 1, 2019", "Sep. 2024")
+// to an ISO date. Month-only defaults to the first of the month. Returns null on
+// anything unparseable (never fabricates).
+export function normalizeNoteDate(s) {
+  if (!s) return null;
+  // Collapse punctuation ("Sep." / commas) to spaces. "Month YYYY" → "Month 1 YYYY"
+  // so Date parses it as the first of the month; "Month DD YYYY" parses as-is.
+  const t = String(s).replace(/[.,]/g, ' ').replace(/\s+/g, ' ').trim();
+  const monthYearOnly = /^[A-Za-z]+\s+\d{4}$/.test(t);
+  const d = new Date(`${monthYearOnly ? `${t.split(' ')[0]} 1 ${t.split(' ')[1]}` : t} UTC`);
+  if (isNaN(d.getTime())) return null;
+  const y = d.getUTCFullYear();
+  if (y < 1970 || y > 2100) return null;
+  return `${y}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+}
+
+/**
+ * Derive the at-event remaining lease term (years) from a parsed Sale-Notes
+ * object, preferring the most explicit signal. Priority:
+ *   1. an explicit "N years remaining" figure (extracted.years_remaining)
+ *   2. commencement + total term − event date (from the narrative)
+ *   3. the structured lease_expiration − event date (CoStar usually carries this)
+ * Bounded to (0, 25]; returns null when nothing plausible is available (never
+ * fabricates). Pure — takes ISO date strings, no DB/clock access.
+ */
+export function deriveSaleNotesYearsRemaining({ extracted, saleDateISO, leaseExpirationISO } = {}) {
+  const x = extracted || {};
+  const bound = (y) => (typeof y === 'number' && isFinite(y) && y > 0 && y <= 25
+    ? Math.round(y * 10000) / 10000 : null);
+  if (typeof x.years_remaining === 'number') {
+    const b = bound(x.years_remaining);
+    if (b != null) return b;
+  }
+  const saleMs = saleDateISO ? new Date(saleDateISO).getTime() : NaN;
+  if (x.lease_commencement_iso && typeof x.lease_term_years === 'number' && !isNaN(saleMs)) {
+    const endMs = new Date(x.lease_commencement_iso).getTime() + x.lease_term_years * 365.25 * 86400000;
+    const b = bound((endMs - saleMs) / (365.25 * 86400000));
+    if (b != null) return b;
+  }
+  if (leaseExpirationISO && !isNaN(saleMs)) {
+    const b = bound((new Date(leaseExpirationISO).getTime() - saleMs) / (365.25 * 86400000));
+    if (b != null) return b;
+  }
+  return null;
 }
 
 // ── Sale-Notes → gov enrichment helpers (pure; unit-tested) ─────────────────
@@ -1169,6 +1458,43 @@ function selectPrimaryTenant(metadata, domain) {
     || null;
 }
 
+function tenantNamesFromMetadata(metadata = {}) {
+  const names = [];
+  const push = (v) => {
+    const name = unwrapTenantValue(v);
+    if (name && !names.some((n) => n.toLowerCase() === name.toLowerCase())) names.push(name);
+  };
+  push(metadata.tenant_name);
+  push(metadata.primary_tenant);
+  if (Array.isArray(metadata.tenants)) {
+    for (const t of metadata.tenants) {
+      if (t && typeof t === 'object') push(t.name);
+      else push(t);
+    }
+  }
+  return names;
+}
+
+function deriveGovCreditForMetadata(metadata = {}, extra = {}) {
+  return deriveGovernmentCreditTier({
+    government_type: metadata.government_type,
+    agency: metadata.agency,
+    agency_full_name: metadata.agency_full_name,
+    tenant_name: metadata.tenant_name,
+    primary_tenant: metadata.primary_tenant,
+    tenantNames: tenantNamesFromMetadata(metadata),
+    sale_notes_raw: metadata.sale_notes_raw,
+    saleNotes: Array.isArray(metadata.sales_history)
+      ? metadata.sales_history
+          .map((s) => s && (s.sale_notes_raw || s.comments || s.notes))
+          .filter(Boolean)
+      : null,
+    source_text: metadata.marketing_description || metadata.description || null,
+    lease_number: metadata.lease_number,
+    ...extra,
+  });
+}
+
 // ── Junk tenant filter (module-level; shared by the leases writer and the
 // entity bridge) ──────────────────────────────────────────────────────────
 // Hoisted from upsertDomainLeases (2026-06-07) so unpackTenant's entity-mint
@@ -1299,15 +1625,47 @@ async function domainPatch(domain, path, data, label) {
 
 /**
  * Infer entity_type for a contact entry from the sidebar metadata.
+ *
+ * C13g: the vendor-supplied `contact.type` is trusted when present (RCA/CoStar
+ * capture code that computes its own person/org classification, e.g. CoStar's
+ * `looksLikePerson()` in `_forsale-contacts-parse.js`, stamps `type` before
+ * this ever runs). Where no `type` arrives at all — RCA's deed-party `owner`
+ * slot never sets one — this is the SOLE signal, and a narrow LLC/INC/CORP-only
+ * regex was measured (C13c) to miss the majority of real org names in this
+ * population (Trust, Holdings, Properties, Capital, Realty, Company, REIT …).
+ * `hasFirmSuffix` is the shared, already-graded org-marker guard used for the
+ * same person-vs-org judgement elsewhere (entity-link.js) — reuse it rather
+ * than maintaining a second, narrower copy that drifts (the P189/A2/N15c
+ * "hazard travels with the technique" class).
+ *
+ * C13g-costar-stoplist (2026-09-10): the CoStar for-sale/for-lease scanner
+ * (`extension/content/_forsale-contacts-parse.js::looksLikePerson`) always
+ * sets `contact.type` explicitly, so its verdict wins here and `hasFirmSuffix`
+ * is never consulted for that path — but that scanner's stoplist is NOT a
+ * superset of `hasFirmSuffix`'s: it carries brand names (newmark/cbre/jll/
+ * colliers) and a few terms `hasFirmSuffix` lacks, while it is MISSING
+ * `hasFirmSuffix` terms (Fund, Ptnrs, Cos, Property [singular], Development,
+ * Developers, Investments, Investors, Enterprises, Bancorp, Bank, Mgmt).
+ * A name like "Sentinel Bancorp" or "Meridian Investments" trips
+ * `hasFirmSuffix` but NOT the extension's list, so the extension stamps
+ * `type:'person'` and — before this fix — that verdict was trusted verbatim,
+ * silently minting the firm as a person. The safe direction is one-way: an
+ * explicit `type:'organization'`/`'entity'` is never second-guessed (nothing
+ * downgrades an org to a person on a name heuristic — that would repeat the
+ * P158a `&`-is-a-couple mistake), but an explicit `type:'person'` IS checked
+ * against `hasFirmSuffix` and overridden when it disagrees, because a firm
+ * suffix in the name is stronger, unambiguous evidence a vendor's own
+ * classifier can still miss. This does not create a second stoplist — it is
+ * the SAME shared guard already used for the no-type fallback, now also
+ * applied as a floor under an explicit but firm-suffixed 'person' verdict.
  */
-function contactEntityType(contact) {
+export function contactEntityType(contact) {
   if (contact.type === 'entity' || contact.type === 'organization') return 'organization';
-  if (contact.type === 'person') return 'person';
-  // Heuristic: if name looks like a company (all-caps, contains LLC/Inc, etc.)
   const name = (contact.name || '').trim();
-  if (/\b(LLC|INC|CORP|LTD|LP|LLP|PARTNERS|GROUP|ASSOCIATES|ADVISORS)\b/i.test(name)) {
-    return 'organization';
+  if (contact.type === 'person') {
+    return hasFirmSuffix(name) ? 'organization' : 'person';
   }
+  if (hasFirmSuffix(name)) return 'organization';
   return 'person';
 }
 
@@ -1666,6 +2024,16 @@ let _lastClassifierDiag = null;
 // propagateToDomainDbDirect into the propagation result, then reset on the
 // next call.
 let _lastDomainPropertyError = null;
+
+// ADDR1 (2026-09-03): count of contact-office-address-bleed refusals since
+// process start — read-only observability, never reset (mirrors no other
+// counter in this file resetting; a restart is the only "reset").
+// Exported for tests/diagnostics; not persisted.
+let _contactOfficeAddressBleedRefusals = 0;
+export function getContactOfficeAddressBleedRefusalCount() {
+  return _contactOfficeAddressBleedRefusals;
+}
+
 function classifyDomainWithDiag(metadata, entityFields) {
   const result = classifyDomain(metadata, entityFields);
   // Build diagnostic snapshot
@@ -1713,6 +2081,141 @@ function classifyDomainWithDiag(metadata, entityFields) {
 
 // ── Step 1: Unpack Contacts ─────────────────────────────────────────────────
 
+// Prompt 89 — route misparse/fan-out-suspect contacts to a human review inbox
+// item instead of minting them. Best-effort + recoverable: the raw rejected
+// contacts ride in metadata so a real one that got swept up can be re-created.
+// A sidebar path that skips the bridge gate lands here with no workspaceId — then
+// there is no inbox to write to, so we only log (the mint is still correctly
+// suppressed by the caller).
+// HP1-P2misparse (2026-09-12) — the keys already sitting on an OPEN review row
+// for this property. Used to notify once per (property, name, reason) instead of
+// once per capture. Fails OPEN: a failed probe returns an empty set, so the
+// worst case is the pre-HP1-P2misparse behaviour (a duplicate notification),
+// never a silently swallowed first-ever block.
+async function fetchNotifiedMisparseKeys(propertyEntityId) {
+  try {
+    const q = 'inbox_items?select=entity_id,metadata&source_type=eq.contact_misparse_review'
+      + '&status=eq.new&limit=200&order=received_at.desc'
+      + (propertyEntityId ? `&entity_id=eq.${propertyEntityId}` : '&entity_id=is.null');
+    const res = await opsQuery('GET', q);
+    if (!res?.ok || !Array.isArray(res.data)) return new Set();
+    const keys = new Set();
+    for (const row of res.data) {
+      const rejected = row?.metadata?.rejected_contacts;
+      if (!Array.isArray(rejected)) continue;
+      for (const r of rejected) keys.add(reviewDedupeKey(row.entity_id ?? null, r?.name, r?.reason));
+    }
+    return keys;
+  } catch {
+    return new Set();
+  }
+}
+
+// HP1-P2misparse — B6a, correctly applied: a suppressed block must still EMIT,
+// to a counter a human can read, not to the homepage. Reuses the existing
+// `producer_runs` ledger (HP1-P1d made facts_written/skip_reason live) rather
+// than minting a second ledger. Read it with:
+//   select detail, started_at from producer_runs
+//    where producer='sidebar_contact_guard' order by run_id desc;
+async function recordContactGuardBlocks(counts) {
+  try {
+    const total = Object.values(counts.by_reason || {}).reduce((a, b) => a + b, 0);
+    await opsQuery('POST', 'producer_runs', {
+      producer: 'sidebar_contact_guard',
+      lane: 'misparse_block',
+      status: counts.notified > 0 ? 'ok' : 'skipped',
+      // A run that blocked only page furniture / a repeat is a NAMED skip, never
+      // a silent zero.
+      skip_reason: counts.notified > 0 ? null
+        : (counts.silent_chrome > 0 || counts.duplicate > 0 ? 'blocks_all_chrome_or_duplicate' : 'no_blocks'),
+      trigger_source: 'sidebar_capture',
+      finished_at: new Date().toISOString(),
+      facts_written: counts.notified,
+      detail: { blocked_total: total, ...counts },
+    }, { headers: { Prefer: 'return=minimal' } });
+  } catch (e) {
+    console.warn('[sidebar misparse] producer_runs counter failed:', e?.message || e);
+  }
+}
+
+async function routeMisparseContactsToReview(reviewItems, ctx) {
+  const { propertyEntityId, workspaceId, userId, domain, source, extractedAt } = ctx || {};
+  const allNames = reviewItems.map((r) => r?.contact?.name).filter(Boolean);
+  const allReasons = [...new Set(reviewItems.map((r) => r.reason))];
+  console.warn('[sidebar misparse] suppressed', reviewItems.length,
+    'suspect contact(s) [' + allReasons.join(',') + ']:', allNames.slice(0, 20).join(' | '));
+
+  // HP1-P2misparse — the guard's DECISIONS are unchanged above this line. What
+  // follows decides only who is TOLD: page furniture is counted, never
+  // notified; a (property, name, reason) already on an open row is counted,
+  // never re-notified.
+  const already = await fetchNotifiedMisparseKeys(propertyEntityId);
+  const { notify, silentChrome, duplicate } = partitionReviewForNotification(reviewItems, {
+    propertyEntityId: propertyEntityId ?? null,
+    alreadyNotified: already,
+  });
+  const byReason = {};
+  for (const r of reviewItems) byReason[r.reason] = (byReason[r.reason] || 0) + 1;
+  await recordContactGuardBlocks({
+    by_reason: byReason,
+    notified: notify.length,
+    silent_chrome: silentChrome.length,
+    duplicate: duplicate.length,
+    property_entity_id: propertyEntityId || null,
+    source: source || 'costar',
+  });
+
+  if (!notify.length) return 0;
+  reviewItems = notify;
+  const names = notify.map((r) => r?.contact?.name).filter(Boolean);
+  const reasons = [...new Set(notify.map((r) => r.reason))];
+  if (!workspaceId) return 0;
+  try {
+    const fanout = reviewItems.find((r) => r.reason === 'email_fanout');
+    const label = reasons.includes('person_junk_name') ? 'junk person name'
+      : (reasons.includes('misparse_name') ? 'street/label misparse' : 'one-email fan-out');
+    const title = 'Suspect contacts blocked (' + reviewItems.length + ') — ' + label;
+    const bodyLines = [
+      'Captured from ' + (source || 'costar') + ' on ' + new Date(extractedAt || Date.now()).toLocaleDateString() + '.',
+      'These candidate contacts were NOT minted — they look like a TrafficMetrix-style'
+        + ' table-as-contact-list misparse (street names / column labels, or one page'
+        + ' email fanned out across many parsed contacts).',
+      '',
+      ...reviewItems.slice(0, 40).map((r) => '• ' + String(r.contact?.name || '').slice(0, 80)
+        + ' — ' + r.reason + (r.reason === 'email_fanout' ? (' (' + r.email + ' ×' + r.fanout + ')') : '')),
+      '',
+      'Confirm any that are genuine contacts to re-add them manually.',
+    ];
+    const res = await opsQuery('POST', 'inbox_items', {
+      workspace_id: workspaceId,
+      source_user_id: userId || null,
+      visibility: 'private',
+      title,
+      body: bodyLines.join('\n'),
+      source_type: 'contact_misparse_review',
+      status: 'new',
+      priority: 'normal',
+      entity_id: propertyEntityId || null,
+      domain: domain || null,
+      metadata: {
+        source: (source || 'costar') + '_sidebar',
+        reasons,
+        suppressed_count: reviewItems.length,
+        fanout_email: fanout ? fanout.email : null,
+        fanout_count: fanout ? fanout.fanout : null,
+        rejected_contacts: reviewItems.map((r) => ({ name: r.contact?.name || null, email: r.contact?.email || null, reason: r.reason })),
+        property_entity_id: propertyEntityId || null,
+        extracted_at: extractedAt || null,
+      },
+    }, { 'Prefer': 'return=minimal' });
+    if (!res?.ok) console.warn('[sidebar misparse] inbox_items POST failed:', res?.status, res?.data);
+    return reviewItems.length;
+  } catch (e) {
+    console.warn('[sidebar misparse] review-route exception:', e?.message || e);
+    return 0;
+  }
+}
+
 async function unpackContacts(propertyEntityId, metadata, workspaceId, userId, domain) {
   const contacts = metadata.contacts;
   if (!Array.isArray(contacts) || contacts.length === 0) return 0;
@@ -1721,7 +2224,46 @@ async function unpackContacts(propertyEntityId, metadata, workspaceId, userId, d
   const source = metadata.source || 'costar';
   const extractedAt = metadata.extracted_at || new Date().toISOString();
 
-  for (const contact of contacts) {
+  // Prompt 89 — TrafficMetrix misparse guard. Split contacts into mint vs review:
+  // a candidate whose NAME trips the street/label detector, OR whose email is part
+  // of a suspect one-email fan-out (> threshold parsed contacts sharing it), is
+  // routed to review (recoverable) rather than minted as a phantom person.
+  // ENTC (2026-09-03) — person-only junk-name gate at the ENTITY mint. The domain
+  // `contacts` write has always dropped these (upsertSidebarContacts); the entity
+  // mint did not, which is how 80 live person entities came to hold a real broker's
+  // mailbox under a name like "View Less" / "Debt Service" / a CoStar verification
+  // sentence. Routed to REVIEW (recoverable), never dropped silently.
+  const mintPlan = planContactMinting(contacts, {
+    personJunkName: (c) => (contactEntityType(c) === 'person' && isJunkContactName(c.name)
+      ? 'junk_contact_name' : null),
+  });
+  // HP1-P2misparse (2026-09-12) — class D recovery. A fan-out batch is one
+  // broker's mailbox stapled onto every name on the page; blocking the batch is
+  // correct, but the name matching the mailbox's LOCAL PART is that mailbox's
+  // true owner and was being discarded with the collateral. Recover exactly one
+  // per email, under a strict whole-string rule, never on a tie, never for an
+  // organization-shaped candidate. Every OTHER name in the batch stays blocked.
+  let fanoutRecovered = [];
+  if (mintPlan.review.length) {
+    const rec = recoverFanoutOwner(mintPlan.review, {
+      isOrganization: (c) => contactEntityType(c) !== 'person',
+    });
+    fanoutRecovered = rec.recovered;
+    if (fanoutRecovered.length) {
+      const recoveredItems = new Set(fanoutRecovered.map((h) => h.item));
+      mintPlan.review = mintPlan.review.filter((r) => !recoveredItems.has(r));
+      for (const h of fanoutRecovered) mintPlan.mint.push(h.contact);
+      console.warn('[sidebar misparse] fan-out owner recovered:',
+        fanoutRecovered.map((h) => `${h.contact.name} <= ${h.email} (${h.rule})`).join(' | '));
+    }
+  }
+  if (mintPlan.review.length) {
+    await routeMisparseContactsToReview(mintPlan.review, {
+      propertyEntityId, workspaceId, userId, domain, source, extractedAt,
+    }).catch((e) => console.warn('[sidebar misparse] review-route failed:', e?.message || e));
+  }
+
+  for (const contact of mintPlan.mint) {
     if (!contact.name) continue;
 
     const entityType = contactEntityType(contact);
@@ -1775,8 +2317,15 @@ async function unpackContacts(propertyEntityId, metadata, workspaceId, userId, d
         //    inbox triage below; Scott promotes it to a real target (open an
         //    opp / SF-link / portfolio value), and a cadence then grows from the
         //    real outreach he logs (the sf-activity grow path).
+        //    P112 extends that gate twice: a bare Salesforce identity no longer
+        //    counts as the BD signal (it admitted the whole SF contact book —
+        //    930 of 1,113 prospecting cadences passed on that arm alone, 897 of
+        //    them never touched), and an entity with no contact method and no
+        //    named person is not seeded at all, because such a cadence can
+        //    never advance and only ages into "overdue".
         let cadenceRes = null;
-        if (await entityHasBdSignal(link.entityId)) {
+        const seedDecision = await cadenceSeedDecision(link.entityId);
+        if (seedDecision.seed) {
           // Initialize touchpoint_cadence at touch 0 (idempotent — an existing
           // row for this entity_id is returned unchanged).
           cadenceRes = await getCadenceState(
@@ -1863,6 +2412,20 @@ async function unpackContacts(propertyEntityId, metadata, workspaceId, userId, d
           `entities?id=eq.${link.entityId}&workspace_id=eq.${workspaceId}`,
           updates
         );
+        // CONTACT1b — this is the UPDATE-path twin of ensureEntityLink's
+        // CREATE-path recordFieldWrites (entity-link.js). ensureEntityLink
+        // never PATCHes email/phone onto a pre-existing entity, so a SECOND
+        // capture of a contact already minted here (the common CoStar
+        // sidebar shape: mint on first sight, enrich on a later re-visit)
+        // landed with NO field_provenance row at all — one producer, two
+        // write paths, one ledger entry. Audit-only, same as CONTACT1a:
+        // both rungs are `record_only`, so this never blocks the write.
+        await recordContactFieldWrites({
+          recordPk: link.entityId,
+          source,
+          workspaceId,
+          fields: updates,
+        });
       }
     }
 
@@ -2061,8 +2624,18 @@ async function unpackSalesHistory(propertyEntityId, metadata, workspaceId, userI
 
     if (eventResult.ok) recorded++;
 
+    const graphRowMatchesAsset = saleHistoryBelongsToAsset(entity, sale);
+    if (!graphRowMatchesAsset) {
+      console.warn('[unpackSalesHistory] skipped cross-asset graph edges', {
+        asset_entity_id: propertyEntityId,
+        asset_address: entity?.address || entity?.name || null,
+        row_address: saleHistoryRowAddress(sale),
+        source,
+      });
+    }
+
     // Create buyer entity if present (and not already handled by contacts)
-    if (sale.buyer) {
+    if (graphRowMatchesAsset && sale.buyer) {
       const buyerType = /\b(LLC|INC|CORP|LTD|LP|LLP|PARTNERS|GROUP)\b/i.test(sale.buyer)
         ? 'organization' : 'person';
       const buyerSeed = { name: sale.buyer };
@@ -2105,7 +2678,7 @@ async function unpackSalesHistory(propertyEntityId, metadata, workspaceId, userI
     }
 
     // Create seller entity if present
-    if (sale.seller) {
+    if (graphRowMatchesAsset && sale.seller) {
       const sellerType = /\b(LLC|INC|CORP|LTD|LP|LLP|PARTNERS|GROUP)\b/i.test(sale.seller)
         ? 'organization' : 'person';
 
@@ -2132,15 +2705,23 @@ async function unpackSalesHistory(propertyEntityId, metadata, workspaceId, userI
     }
 
     // Create lender entity if present
-    if (sale.lender) {
+    const graphLender = lenderNameForGraphFinance(sale.lender);
+    if (graphRowMatchesAsset && sale.lender && !graphLender) {
+      console.warn('[unpackSalesHistory] skipped non-lender finance edge', {
+        asset_entity_id: propertyEntityId,
+        raw_lender: sale.lender,
+        source,
+      });
+    }
+    if (graphRowMatchesAsset && graphLender) {
       const lenderLink = await ensureEntityLink({
         workspaceId,
         userId,
         sourceSystem: source,
         sourceType: 'company',
-        externalId: normalizeCanonicalName(sale.lender),
+        externalId: normalizeCanonicalName(graphLender),
         domain,
-        seedFields: { name: sale.lender, org_type: 'lender' },
+        seedFields: { name: graphLender, org_type: 'lender' },
       });
 
       if (lenderLink.ok) {
@@ -2237,6 +2818,30 @@ async function classifyAndUpdateDomain(entity, metadata, workspaceId) {
 // data into the correct domain-specific Supabase backend (dialysis or gov).
 
 /**
+ * Normalize a domain value to the LONG form the propagation router
+ * (getDomainCredentials / propagateToDomainDbDirect) requires.
+ *
+ * Fix (2026-08-06 alert triage §3A, alert 983): `entities.domain` holds the
+ * SHORT canonical codes EXCLUSIVELY (gov/dia/lcc/cre) — the CHECK constraint
+ * `chk_entities_domain` enforces short form, and `canonicalEntityDomain()`
+ * (api/_shared/entity-link.js) normalizes every write down to short form, which
+ * is why zero rows carry the long names. But `classifyAndUpdateDomain`'s
+ * preserve-existing branch returns the STORED short code (`entity.domain`),
+ * which then reached this dispatcher and only accepted 'dialysis'/'government'
+ * → every sidebar RE-capture of an existing dia/gov entity silently skipped
+ * domain-DB propagation with reason 'unknown_domain'. Accept both forms here so
+ * the short code the data actually uses routes correctly. `lcc`/`cre`/anything
+ * else stays on the unknown_domain path (they have no domain DB). Pure —
+ * unit-tested.
+ */
+export function normalizePropagationDomain(domain) {
+  const d = String(domain || '').trim().toLowerCase();
+  if (d === 'dialysis' || d === 'dia') return 'dialysis';
+  if (d === 'government' || d === 'gov') return 'government';
+  return null;
+}
+
+/**
  * Main domain propagation dispatcher.
  * Routes to the correct domain backend based on classified domain.
  */
@@ -2244,9 +2849,10 @@ async function propagateToDomainDb(entity, metadata, domain, opts = {}) {
   if (!domain) return { propagated: false, reason: 'no_domain' };
 
   try {
-    if (domain === 'dialysis' || domain === 'government') {
-      if (!getDomainCredentials(domain)) return { propagated: false, reason: 'domain_db_not_configured' };
-      return await propagateToDomainDbDirect(domain, entity, metadata, opts);
+    const routeDomain = normalizePropagationDomain(domain);
+    if (routeDomain) {
+      if (!getDomainCredentials(routeDomain)) return { propagated: false, reason: 'domain_db_not_configured' };
+      return await propagateToDomainDbDirect(routeDomain, entity, metadata, opts);
     }
     return { propagated: false, reason: 'unknown_domain' };
   } catch (err) {
@@ -2327,6 +2933,11 @@ export function isJunkContactName(name) {
   if (typeof name !== 'string') return true;
   const trimmed = name.trim();
   if (trimmed.length < 3 || trimmed.length > 80) return true;
+
+  // Prompt 89 — TrafficMetrix / street-label misparse. A street name or a
+  // traffic-count column label ("Collection Street", "Traffic Vol", "Made with
+  // TrafficMetrix") is not a contact — reject it before it mints a phantom person.
+  if (isMisparseName(trimmed)) return true;
 
   // Class A: firm-name suffix patterns. Real person names don't end with these.
   // R4-6 (2026-05-20): added `Investors` (was missing alongside Investments?)
@@ -2430,12 +3041,35 @@ export function documentObjectPath({ domain, documentType, propertyId, docId, fi
  * @returns {Promise<{ok:true, storage_path, storage_bucket, bytes}
  *                  | {ok:false, reason, status?, detail?}>}
  */
+/** A server-relative SharePoint ref (`/sites/TeamBriggs20/...`), not an http URL. */
+function isSharepointRef(u) {
+  return typeof u === 'string' && /^\/(sites|personal)\//i.test(u.trim());
+}
+
 export async function fetchAndStoreDocBytes(domain, { docId, propertyId, sourceUrl, documentType, fileName }, deps = {}) {
   if (docId == null) return { ok: false, reason: 'no_doc_id' };
-  if (!sourceUrl || !/^https?:\/\//i.test(String(sourceUrl))) return { ok: false, reason: 'no_absolute_url' };
   const getCreds = deps.getDomainCredentials || getDomainCredentials;
   const creds = getCreds(domain);
   if (!creds) return { ok: false, reason: 'domain_db_not_configured' };
+
+  // SharePoint-filed docs carry a server-relative source_url (no http host). They
+  // are fetched via the Power Automate "Get Artifact" flow (SHAREPOINT_FETCH_URL),
+  // NOT an HTTP GET — the source_url IS the server_relative_url. Honest no-op when
+  // the PA flow isn't configured (mirrors the SAM/SOS credential-gated pattern).
+  if (isSharepointRef(sourceUrl)) {
+    const spFetch = deps.fetchSharepointBytes || fetchSharepointBytes;
+    const sp = await spFetch({ storageRef: sourceUrl, fetchImpl: deps.spFetchImpl });
+    if (!sp.ok) {
+      const unset = /SHAREPOINT_FETCH_URL unset|missing storage_ref/i.test(sp.detail || '');
+      return { ok: false, reason: unset ? 'sharepoint_fetch_unset' : 'sharepoint_fetch_failed', detail: sp.detail };
+    }
+    return uploadDocBuffer(domain, creds, {
+      docId, propertyId, documentType, fileName, sourceUrl, buffer: sp.buffer,
+      mimeType: sp.contentType || 'application/pdf',
+    }, deps);
+  }
+
+  if (!sourceUrl || !/^https?:\/\//i.test(String(sourceUrl))) return { ok: false, reason: 'no_absolute_url' };
 
   const doFetch = deps.fetchImpl || ((u, o) => fetchWithTimeout(u, o, DOC_BYTES_TIMEOUT));
   let res;
@@ -2455,16 +3089,136 @@ export async function fetchAndStoreDocBytes(domain, { docId, propertyId, sourceU
   if (!buffer.length) return { ok: false, reason: 'empty' };
   if (buffer.length > DOC_BYTES_MAX) return { ok: false, reason: 'too_large', detail: `bytes=${buffer.length}` };
 
+  return uploadDocBuffer(domain, creds, {
+    docId, propertyId, documentType, fileName, sourceUrl, buffer,
+    mimeType: res.headers?.get?.('content-type') || 'application/pdf',
+  }, deps);
+}
+
+/**
+ * Upload an already-in-hand document buffer to the domain `property-documents`
+ * bucket and return the storage descriptor. Shared by the server-side re-fetch
+ * (fetchAndStoreDocBytes) AND the client-provided-bytes path (storeClientDocBytes,
+ * where the EXTENSION fetched the bytes in the authenticated CoStar tab — the only
+ * way to get a session-bound CDN link). Does NOT write property_documents.
+ */
+export async function uploadDocBuffer(domain, creds, { docId, propertyId, documentType, fileName, sourceUrl, buffer, mimeType }, deps = {}) {
+  if (!buffer || !buffer.length) return { ok: false, reason: 'empty' };
+  if (buffer.length > DOC_BYTES_MAX) return { ok: false, reason: 'too_large', detail: `bytes=${buffer.length}` };
   const objectPath = documentObjectPath({ domain, documentType, propertyId, docId, fileName, sourceUrl });
   const upload = deps.uploadImpl || uploadArtifactToStorage;
   const up = await upload({
     opsUrl: creds.url, opsKey: creds.key, bucket: PROPERTY_DOC_BUCKET,
-    objectPath, mimeType: res.headers?.get?.('content-type') || 'application/pdf', buffer,
+    objectPath, mimeType: mimeType || 'application/pdf', buffer,
     fetchImpl: deps.uploadFetchImpl || ((u, o) => fetchWithTimeout(u, o, DOC_BYTES_TIMEOUT)),
   });
   if (!up.ok) return { ok: false, reason: 'upload_failed', status: up.status || 0, detail: up.detail };
-
   return { ok: true, storage_path: objectPath, storage_bucket: PROPERTY_DOC_BUCKET, bytes: buffer.length };
+}
+
+const CLIENT_DOC_B64_MAX = Number(process.env.DOC_CAPTURE_MAX_BYTES || 25_000_000);
+
+/**
+ * Store CLIENT-provided document bytes (base64 fetched in the authenticated
+ * browser tab by the extension) onto the already-upserted property_documents row
+ * for `source_url`. This is the durable capture path for session-bound CoStar CDN
+ * links that a server-side re-fetch (fetchAndStoreDocBytes) can never reach.
+ *
+ * Keyed on (domain, source_url) so the extension needs no domain property_id
+ * (resolved server-side). The row already exists — processSidebarExtraction awaits
+ * upsertDocumentLinks before responding, so the extension calls this AFTER that 200.
+ * Idempotent (a row that already carries storage_path is a no-op). Best-effort:
+ * never throws; a bad row is reported, never fatal. Bytes NEVER touch entity.metadata.
+ *
+ * @returns {Promise<{ok:boolean, outcome:string, ...}>}
+ */
+export async function storeClientDocBytes(domain, { source_url, content_base64, mime_type }, deps = {}) {
+  if (!source_url || !/^https?:\/\//i.test(String(source_url))) return { ok: false, outcome: 'no_absolute_url' };
+  if (!content_base64 || typeof content_base64 !== 'string') return { ok: false, outcome: 'no_bytes' };
+  const getCreds = deps.getDomainCredentials || getDomainCredentials;
+  const creds = getCreds(domain);
+  if (!creds) return { ok: false, outcome: 'domain_db_not_configured' };
+
+  let buffer;
+  try { buffer = Buffer.from(content_base64, 'base64'); }
+  catch { return { ok: false, outcome: 'decode_failed' }; }
+  if (!buffer.length) return { ok: false, outcome: 'empty' };
+  if (buffer.length > CLIENT_DOC_B64_MAX) return { ok: false, outcome: 'too_large', bytes: buffer.length };
+
+  const q = deps.domainQuery || domainQuery;
+  // Find the just-upserted row for this source_url (newest wins if duplicated).
+  const sel = await q(domain, 'GET',
+    `property_documents?source_url=eq.${encodeURIComponent(source_url)}` +
+    `&select=document_id,property_id,document_type,file_name,storage_path&order=document_id.desc&limit=1`);
+  if (!sel.ok) return { ok: false, outcome: 'lookup_failed', status: sel.status };
+  const row = Array.isArray(sel.data) ? sel.data[0] : sel.data;
+  if (!row || row.document_id == null) return { ok: false, outcome: 'row_not_found' };
+  if (row.storage_path) return { ok: true, outcome: 'already_stored', document_id: row.document_id };
+
+  const stored = await uploadDocBuffer(domain, creds, {
+    docId: row.document_id, propertyId: row.property_id, documentType: row.document_type,
+    fileName: row.file_name, sourceUrl: source_url, buffer,
+    mimeType: mime_type || 'application/pdf',
+  }, deps);
+  if (!stored.ok) return { ok: false, outcome: 'upload_failed', reason: stored.reason, detail: stored.detail };
+
+  const patch = await q(domain, 'PATCH', `property_documents?document_id=eq.${row.document_id}`,
+    { storage_path: stored.storage_path, storage_bucket: stored.storage_bucket, ingestion_status: 'bytes_captured' },
+    { Prefer: 'return=minimal' });
+  if (!patch.ok) return { ok: false, outcome: 'patch_failed', status: patch.status, storage_path: stored.storage_path };
+  return { ok: true, outcome: 'bytes_captured', document_id: row.document_id, storage_path: stored.storage_path, bytes: stored.bytes };
+}
+
+/**
+ * Backfill worker — re-capture bytes for url-only property_documents (no
+ * storage_path) via the SERVER-SIDE re-fetch. Handles the re-fetchable subset
+ * (public county/CDN links that are not session-bound). Session-bound CoStar
+ * links honestly stay url-only (they need the extension re-capture / an
+ * authenticated egress) and are counted, never silently "done". Value-ranked
+ * (usable-cap / recent first via document_id desc), bounded, idempotent.
+ */
+export async function backfillDocBytes(domain, { limit = 25, documentType = null, before = null, source = null } = {}, deps = {}) {
+  const q = deps.domainQuery || domainQuery;
+  const cap = Math.max(1, Math.min(200, Number(limit) || 25));
+  // KEYSET CURSOR on document_id (descending): each call walks strictly OLDER
+  // rows than `before`, so the backlog is traversed exactly ONCE and the caller
+  // terminates deterministically — even when a row can't be captured (the common
+  // case: session-bound CoStar links). Without this, an un-capturable row is
+  // re-selected forever and a `while scanned>0` loop never ends.
+  let filter = `storage_path=is.null&source_url=not.is.null`;
+  if (documentType) filter += `&document_type=eq.${encodeURIComponent(documentType)}`;
+  // `source` targets a URL class so a run can drain one kind without re-walking
+  // the others: 'sharepoint' = server-relative /sites/ docs (fetched via the PA
+  // flow); 'http' = absolute CDN/web links (the CoStar re-fetch subset).
+  if (source === 'sharepoint') filter += `&source_url=like./sites/*`;
+  else if (source === 'http') filter += `&source_url=like.http*`;
+  if (before != null && Number.isFinite(Number(before))) filter += `&document_id=lt.${Number(before)}`;
+  const sel = await q(domain, 'GET',
+    `property_documents?${filter}&select=document_id,property_id,source_url,document_type,file_name&order=document_id.desc&limit=${cap}`);
+  if (!sel.ok) return { ok: false, outcome: 'scan_failed', status: sel.status };
+  const rows = Array.isArray(sel.data) ? sel.data : [];
+  const out = { ok: true, domain, source: source || 'all', scanned: rows.length, bytes_captured: 0,
+                sharepoint_captured: 0, session_bound_or_dead: 0, skipped: 0,
+                reasons: {}, next_cursor: null, done: rows.length < cap };
+  for (const row of rows) {
+    if (row.document_id != null) out.next_cursor = row.document_id; // smallest id (rows are desc)
+    let r;
+    try {
+      r = await captureDocumentBytesAtIngest(domain, {
+        document_id: row.document_id, property_id: row.property_id, source_url: row.source_url,
+        document_type: row.document_type, file_name: row.file_name, storage_path: null,
+      }, deps);
+    } catch (e) { r = { ok: false, outcome: 'threw', reason: e?.message?.slice(0, 120) }; }
+    if (r.ok && r.outcome === 'bytes_captured') {
+      out.bytes_captured++;
+      if (isSharepointRef(row.source_url)) out.sharepoint_captured++;
+    }
+    else if (r.reason === 'fetch_non_ok' || r.reason === 'fetch_threw') out.session_bound_or_dead++;
+    else out.skipped++;
+    const key = r.reason || r.outcome || 'unknown';
+    out.reasons[key] = (out.reasons[key] || 0) + 1;
+  }
+  return out;
 }
 
 /**
@@ -2522,10 +3276,16 @@ async function upsertDocumentLinks(domain, propertyId, metadata, provCollect) {
       { 'Prefer': 'return=representation,resolution=merge-duplicates' }
     );
 
-    // If upsert fails, try plain insert (may be first time)
+    // If upsert fails, retry via the (property_id, file_name) dedup path.
+    // Prompt 81 (item 2): a bare INSERT here aborted with 23505 (uix_prop_doc)
+    // on a re-ingest; use on_conflict merge so a known row folds into the
+    // dedup path, and suppress the handled duplicate from the failure surface.
     if (!r.ok) {
-      console.warn(`[doc-links] upsert failed for ${fileName} (${r.status}), trying plain insert`);
-      r = await domainQuery(domain, 'POST', 'property_documents', row);
+      console.warn(`[doc-links] upsert failed for ${fileName} (${r.status}), retrying via dedup merge`);
+      r = await domainQuery(domain, 'POST',
+        'property_documents?on_conflict=property_id,file_name', row,
+        { Prefer: 'return=representation,resolution=merge-duplicates' },
+        { suppressFailureCodes: ['23505'] });
     }
 
     if (r.ok) {
@@ -2602,6 +3362,84 @@ async function registerExternalListingPages(domain, propertyId, metadata) {
     console.log(`[external-pages] ${normDomain}/${propertyId}: ${registered} registered / ${skipped} skipped`);
   }
   return { registered, skipped };
+}
+
+// ── Prompt 81 (items 2 & 5): dedup-respect contact writers ──────────────────
+// contacts carries GLOBAL partial-unique indexes on email/phone plus a name
+// key. The sidebar deliberately INSERTs a fresh person when its name-affinity
+// check rejects a firm-pool-email match (findExisting), but the email/phone is
+// globally unique, so that INSERT is guaranteed to abort with 23505
+// (contacts_email_idx / contacts_phone_idx) — the row was simply LOST and the
+// failure logged (~1,600/mo). These helpers fold the collision into the
+// existing row (R37 dedup-respect): resolve the row by the colliding key and
+// fill-blanks-patch the NON-unique descriptive fields only, so the recovery
+// write can never itself re-collide. Handled duplicates are suppressed from
+// the ingest_write_failures surface.
+
+// Non-unique, safe-to-fill descriptive columns (email/phone/name are unique-ish
+// and never written on a recovery path).
+function _contactFillFields(col) {
+  return ['company', 'title', 'website', 'address', 'city', 'state', col.role];
+}
+
+async function insertContactOrReuse(domain, col, row) {
+  const r = await domainQuery(domain, 'POST', 'contacts', row, {},
+    { suppressFailureCodes: ['23505'], callerFile: 'sidebar-pipeline.js',
+      label: 'upsertSidebarContacts:insert' });
+  if (r.ok) {
+    const inserted = Array.isArray(r.data) ? r.data[0] : r.data;
+    return { ok: true, reused: false, id: inserted?.[col.id] ?? null };
+  }
+  if (String(r?.data?.code) !== '23505') return { ok: false, reused: false, id: null, data: r.data };
+  // Identify the colliding unique key from the PG error details, e.g.
+  //   "Key (contact_email)=(a@b.com) already exists."
+  const details = String(r?.data?.details || '');
+  const m = details.match(/Key \(([^)]+)\)=\(/);
+  const collidedCol = m ? m[1] : null;
+  let filter = null;
+  if (collidedCol === col.email && row[col.email]) filter = `${col.email}=eq.${encodeURIComponent(row[col.email])}`;
+  else if (collidedCol === col.phone && row[col.phone]) filter = `${col.phone}=eq.${encodeURIComponent(row[col.phone])}`;
+  else if (row[col.name]) filter = `${col.name}=eq.${encodeURIComponent(row[col.name])}`;
+  if (!filter) return { ok: false, reused: false, id: null, data: r.data };
+  const found = await domainQuery(domain, 'GET', `contacts?${filter}&select=*&limit=1`);
+  if (!found.ok || !found.data?.length) return { ok: false, reused: false, id: null, data: r.data };
+  const existing = found.data[0];
+  const existingId = existing[col.id];
+  const patch = {};
+  for (const f of _contactFillFields(col)) {
+    if (f && row[f] != null && row[f] !== '' && (existing[f] == null || existing[f] === '')) {
+      patch[f] = row[f];
+    }
+  }
+  if (Object.keys(patch).length) {
+    patch.updated_at = new Date().toISOString();
+    patch.data_source = row.data_source || 'costar_sidebar';
+    await domainQuery(domain, 'PATCH', `contacts?${col.id}=eq.${existingId}`, patch, {},
+      { suppressFailureCodes: ['23505'], callerFile: 'sidebar-pipeline.js',
+        label: 'upsertSidebarContacts:collisionReuse' }).catch(() => {});
+  }
+  return { ok: true, reused: true, id: existingId ?? null };
+}
+
+// PATCH an existing contact, tolerating a 23505 when the patch sets a unique
+// column (email/phone) whose value already belongs to a DIFFERENT row. On
+// collision, retry without the unique columns (fill only descriptive fields) —
+// fill-blanks discipline says we should not clobber another contact's identity
+// anyway. Handled collisions are suppressed from the failure surface.
+async function patchContactSafe(domain, col, existingId, patch, label) {
+  let res = await domainQuery(domain, 'PATCH', `contacts?${col.id}=eq.${existingId}`, patch, {},
+    { label, callerFile: 'sidebar-pipeline.js', suppressFailureCodes: ['23505'] });
+  if (!res.ok && String(res?.data?.code) === '23505') {
+    const { [col.email]: _e, [col.phone]: _p, [col.name]: _n, ...safe } = patch;
+    if (Object.keys(safe).length) {
+      res = await domainQuery(domain, 'PATCH', `contacts?${col.id}=eq.${existingId}`, safe, {},
+        { label: `${label}:deconflict`, callerFile: 'sidebar-pipeline.js',
+          suppressFailureCodes: ['23505'] });
+    } else {
+      res = { ok: true };
+    }
+  }
+  return res;
 }
 
 async function upsertSidebarContacts(domain, propertyId, entity, metadata, provCollect) {
@@ -2788,10 +3626,8 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata, provC
             console.warn('[upsertSidebarContacts] field-priority filter failed:', err?.message);
             return patch;
           });
-          await domainPatch(domain,
-            `contacts?${col.id}=eq.${existingId}`, filteredPatch,
-            'upsertSidebarContacts:personUpdate'
-          );
+          await patchContactSafe(domain, col, existingId, filteredPatch,
+            'upsertSidebarContacts:personUpdate');
           // Provenance must mirror what was actually patched. The PATCH
           // path doesn't touch the name column (matched-by-email rows
           // already have an authoritative name), so don't claim we
@@ -2812,12 +3648,13 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata, provC
             [col.role]:  role,
             data_source: 'costar_sidebar',
           };
-          const r = await domainQuery(domain, 'POST', 'contacts', row);
-          if (r.ok) {
-            count++;
-            const inserted = Array.isArray(r.data) ? r.data[0] : r.data;
-            // INSERT path actually wrote name + role — record those.
-            collectContactProv(inserted?.[col.id], {
+          const res = await insertContactOrReuse(domain, col, row);
+          if (res.ok) {
+            if (!res.reused) count++;
+            // INSERT path actually wrote name + role — record those. A reuse
+            // fold only fill-blanks-patched descriptive fields, so don't claim
+            // a name/email write on that path.
+            collectContactProv(res.id, res.reused ? {} : {
               [col.name]: person.name.trim(),
               [col.email]: email, [col.phone]: phone, company,
               [col.role]: role,
@@ -2839,10 +3676,8 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata, provC
         if (phone) patch[col.phone] = phone;
         if (company) patch.company = company;
         if (roleStr) patch[col.role] = roleStr;
-        await domainPatch(domain,
-          `contacts?${col.id}=eq.${existingId}`, patch,
-          'upsertSidebarContacts:personUpdate'
-        );
+        await patchContactSafe(domain, col, existingId, patch,
+          'upsertSidebarContacts:personUpdate');
         // Same as the gov branch: dia PATCH path doesn't touch the name
         // column on existing rows. Don't fabricate name-write provenance.
         const provFields = {};
@@ -2861,11 +3696,10 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata, provC
           [col.role]:  roleStr,
           data_source: 'costar_sidebar',
         };
-        const r = await domainQuery(domain, 'POST', 'contacts', row);
-        if (r.ok) {
-          count++;
-          const inserted = Array.isArray(r.data) ? r.data[0] : r.data;
-          collectContactProv(inserted?.[col.id], {
+        const res = await insertContactOrReuse(domain, col, row);
+        if (res.ok) {
+          if (!res.reused) count++;
+          collectContactProv(res.id, res.reused ? {} : {
             [col.name]: person.name.trim(),
             [col.email]: email, [col.phone]: phone, company,
             [col.role]: roleStr,
@@ -2922,10 +3756,8 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata, provC
           if (ent.address) patch.address = ent.address;
           if (ent.city)    patch.city = ent.city;
           if (ent.state)   patch.state = ent.state;
-          await domainPatch(domain,
-            `contacts?${col.id}=eq.${existingId}`, patch,
-            'upsertSidebarContacts:entityUpdate'
-          );
+          await patchContactSafe(domain, col, existingId, patch,
+            'upsertSidebarContacts:entityUpdate');
           collectContactProv(existingId, {
             [col.name]: ent.name.trim(),
             [col.email]: email, [col.phone]: phone,
@@ -2946,11 +3778,10 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata, provC
             state:       ent.state || null,
             data_source: 'costar_sidebar',
           };
-          const r = await domainQuery(domain, 'POST', 'contacts', row);
-          if (r.ok) {
-            count++;
-            const inserted = Array.isArray(r.data) ? r.data[0] : r.data;
-            collectContactProv(inserted?.[col.id], {
+          const res = await insertContactOrReuse(domain, col, row);
+          if (res.ok) {
+            if (!res.reused) count++;
+            collectContactProv(res.id, res.reused ? {} : {
               [col.name]: ent.name.trim(),
               [col.email]: email, [col.phone]: phone,
               [col.role]: mappedRole, website,
@@ -2975,10 +3806,8 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata, provC
         if (ent.city)    patch.city = ent.city;
         if (ent.state)   patch.state = ent.state;
         if (roleStr)     patch[col.role] = roleStr;
-        await domainPatch(domain,
-          `contacts?${col.id}=eq.${existingId}`, patch,
-          'upsertSidebarContacts:entityUpdate'
-        );
+        await patchContactSafe(domain, col, existingId, patch,
+          'upsertSidebarContacts:entityUpdate');
         collectContactProv(existingId, {
           [col.name]: ent.name.trim(),
           [col.email]: email, [col.phone]: phone,
@@ -2999,11 +3828,10 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata, provC
           state:       ent.state || null,
           data_source: 'costar_sidebar',
         };
-        const r = await domainQuery(domain, 'POST', 'contacts', row);
-        if (r.ok) {
-          count++;
-          const inserted = Array.isArray(r.data) ? r.data[0] : r.data;
-          collectContactProv(inserted?.[col.id], {
+        const res = await insertContactOrReuse(domain, col, row);
+        if (res.ok) {
+          if (!res.reused) count++;
+          collectContactProv(res.id, res.reused ? {} : {
             [col.name]: ent.name.trim(),
             [col.email]: email, [col.phone]: phone,
             [col.role]: roleStr, website,
@@ -3032,6 +3860,7 @@ async function upsertSidebarContacts(domain, propertyId, entity, metadata, provC
 export function collectOwnerAddressObservations(metadata) {
   const contacts = Array.isArray(metadata?.contacts) ? metadata.contacts : [];
   const sales    = Array.isArray(metadata?.sales_history) ? metadata.sales_history : [];
+  const brokerInfo = collectBrokerContactInfo(metadata);
   const obs = [];
   const push = (name, address, surface, kind) => {
     const nm = (typeof name === 'string' ? name.trim() : '');
@@ -3042,6 +3871,7 @@ export function collectOwnerAddressObservations(metadata) {
   };
   for (const c of contacts) {
     if (!c || !c.address) continue;
+    if (isCapturedBrokerContact(c, brokerInfo)) continue; // broker card bled into the owner panel — not an owner address
     if (c.role === 'owner')       push(c.name, c.address, 'costar_owner_panel', 'notice');
     else if (c.role === 'true_buyer' || c.role === 'true_seller')
                                   push(c.name, c.address, 'costar_contacts', 'notice');
@@ -3340,6 +4170,20 @@ async function propagateToDomainDbDirect(domain, entity, metadata, opts = {}) {
       results.records.cap_rate_recalc = { updated, skipped };
     } catch (err) {
       console.error('[cap-rate-recalc] post-propagate error:', err?.message || err);
+    }
+
+    // Step 5g2 (Rent Intelligence Phase 3): post-ingest rent reconciliation.
+    // NON-BLOCKING — a reconciliation failure never fails this ingest; conflicts
+    // queue to rent_reconcile_queue and surface via Teams. Reconciles the freshest
+    // evidence (confirmed anchor OR latest sale) against the modeled rent curve.
+    try {
+      const rc = await reconcileLatestEvidence('dialysis', propertyId, domainQuery);
+      if (rc?.ok) {
+        console.log(`[rent-reconcile] property=${propertyId} verdict=${rc.verdict} forked=${rc.forked} queued=${rc.queued}`);
+        results.records.rent_reconcile = rc;
+      }
+    } catch (err) {
+      console.error('[rent-reconcile] post-propagate error (non-blocking):', err?.message || err);
     }
   }
 
@@ -3796,6 +4640,26 @@ export async function upsertDomainProperty(domain, entity, metadata) {
     return null;
   }
 
+  // ADDR1 (2026-09-03): refuse a property address that literally matches a
+  // CONTACT's own office address captured on this SAME page, when that
+  // contact's city/state differs from the property's — the server-side belt
+  // for the "Sales Company"/broker/buyer-entity office bleed
+  // (api/_shared/contact-address-bleed-guard.js has the full mechanism +
+  // live evidence). Narrow and role-agnostic: a same-address SAME-city/state
+  // contact (an owner genuinely at the property) is left untouched.
+  const bleedContact = findContactOfficeAddressBleed(
+    address, entity.city, entity.state, metadata?.contacts,
+  );
+  if (bleedContact) {
+    _lastDomainPropertyError = `contact_office_address_bleed_rejected:${address}`;
+    _contactOfficeAddressBleedRefusals++;
+    console.warn(
+      `[upsertDomainProperty] Refusing property address "${address}" — matches contact ` +
+      `"${bleedContact.name || '(unnamed)'}"'s own office at ${bleedContact.city || '?'}, ${bleedContact.state || '?'} (${domain})`,
+    );
+    return null;
+  }
+
   // Round 76y (2026-04-27): trust the matcher's authoritative property_id
   // when present. handleIntakePromote stamps metadata.matcher_property_id
   // after intake-matcher resolves a numeric dia/gov property_id with
@@ -3891,6 +4755,37 @@ export async function upsertDomainProperty(domain, entity, metadata) {
     }
   }
 
+  // Prompt 31 recurrence guard: if all PostgREST equality/fallback lookups
+  // missed, ask the domain DB to compare with its own canonical address
+  // normalizer before INSERTing a new property. This catches cases where JS
+  // normalization and dia/gov SQL normalization drift. If the DB sees multiple
+  // candidates, stop here instead of creating another duplicate property_id.
+  if (!lookup.data?.length) {
+    try {
+      const p31Lookup = await domainQuery(domain, 'POST',
+        'rpc/p31_find_existing_property_by_address',
+        { p_address: address, p_state: entity.state || null, p_city: entity.city || null }
+      );
+      const p31Data = Array.isArray(p31Lookup?.data) ? p31Lookup.data[0] : p31Lookup?.data;
+      if (p31Lookup.ok && p31Data?.status === 'matched' && p31Data.property_id) {
+        console.log(`[upsertDomainProperty] Prompt31 DB-normalized fallback matched property_id=${p31Data.property_id} (${domain})`);
+        lookup = { ok: true, data: [{ property_id: p31Data.property_id, [sizeCol]: null }] };
+      } else if (p31Lookup.ok && p31Data?.status === 'ambiguous') {
+        _lastDomainPropertyError = {
+          status: 'ambiguous_property_match',
+          message: `Prompt31 DB-normalized lookup found ${p31Data.candidate_count || 'multiple'} candidates; refusing to create a duplicate property.`,
+          domain,
+          address,
+          candidates: p31Data.candidates || [],
+        };
+        console.warn(`[upsertDomainProperty] Prompt31 DB-normalized lookup ambiguous for "${address}" (${domain}); refusing create.`);
+        return null;
+      }
+    } catch (err) {
+      console.warn('[upsertDomainProperty] Prompt31 DB-normalized fallback unavailable:', err?.message || err);
+    }
+  }
+
   // Anchored ^...$ regex of values that are CoStar UI text or section
   // labels we never want as a property tenant. Audit 2026-04-29 added
   // "my data" (8 conflicts/7d), "show" (4), "more", "less" — all
@@ -3904,6 +4799,13 @@ export async function upsertDomainProperty(domain, entity, metadata) {
   const primaryTenant = (rawTenant && rawTenant.length > 2 && !INVALID_TENANT_VALUES.test(rawTenant))
     ? canonicalizeTenant(cleanTenantValue(rawTenant))
     : null;
+  const govCredit = domain === 'government'
+    ? deriveGovCreditForMetadata(metadata, {
+        agency: primaryTenant || metadata.agency || null,
+        agency_full_name: primaryTenant || metadata.agency_full_name || null,
+      })
+    : null;
+  const derivedGovType = govCredit?.primaryType || null;
   // Round 76ek.i: filter out federal-government anti-pattern owner candidates
   // when a private alternative exists (e.g. CoStar surfacing "U S A" because
   // ICE has personal property recorded at the address — not the real owner).
@@ -3912,7 +4814,7 @@ export async function upsertDomainProperty(domain, entity, metadata) {
   // (means there was no private alternative; the data may need manual review).
   if (ownerContact && isFederalOwnerAntiPattern(ownerContact.name)) {
     console.warn(
-      `[upsertDomainProperty] property ${propertyId || '<new>'} ` +
+      '[upsertDomainProperty] ' +
       `recorded_owner_name="${ownerContact.name}" — federal anti-pattern accepted ` +
       `(no private alternative). Verify this is actually federally-owned.`
     );
@@ -3958,6 +4860,10 @@ export async function upsertDomainProperty(domain, entity, metadata) {
     console.log(`[upsertDomainProperty] historical-sale-comp capture detected (comp_id=${metadata._comp_id}); suppressing tenant/rent/lease writes onto property row`);
   }
 
+  // I12 single owner: square feet and acres both come from one unit-aware
+  // parse of whichever key the capture used (land_sf / lot_sf / acreage /
+  // lot_size). An ambiguous bare lot_size is refused, not guessed.
+  const capturedLot = lotSizeFromMetadata(metadata);
   const propertyData = stripNulls({
     // Store the NORMALIZED address (e.g. "599 ct st") so the address=ilike.<normAddr>
     // lookup at the top of this function can find this row on the next promote.
@@ -3978,7 +4884,7 @@ export async function upsertDomainProperty(domain, entity, metadata) {
     zoning: metadata.zoning || null,
     occupancy_percent: parsePercent(metadata.occupancy),
     parking_ratio: parseParkingRatio(metadata.parking),
-    lot_sf: parseLotSF(metadata.land_sf) || parseLotSF(metadata.lot_size),
+    lot_sf: capturedLot.sf,
     assessed_value: parseCurrency(metadata.assessed_value),
     is_single_tenant: metadata.tenancy_type === 'Single' ? true : metadata.tenancy_type === 'Multi' ? false : null,
     property_ownership_type: metadata.ownership_type || null,
@@ -3990,7 +4896,11 @@ export async function upsertDomainProperty(domain, entity, metadata) {
     // when the FK is still null (a not-yet-resolved owner). recorded_owner_id (FK)
     // is the single source of truth; do NOT rely on this column being independent.
     recorded_owner_name: ownerContact?.name || null,
-    land_area: metadata.lot_size && /AC/i.test(metadata.lot_size) ? parseAcres(metadata.lot_size) : null,
+    // I12: ONE parse decides both columns. Previously `lot_sf` ran through a
+    // parser that read CoStar's dominant "1.00 (43,560 sf)" as 1 sq ft while
+    // `land_area` tested for a literal "AC" and so wrote nothing for that same
+    // shape — two writers on one fact, disagreeing about its unit.
+    land_area: capturedLot.acres,
     // Coordinates from CoStar Public Record tab (shared across both domains)
     latitude:  parseCoord(metadata.public_record?.latitude) || parseCoord(metadata.location?.latitude) || parseCoord(metadata.property?.latitude) || parseCoord(metadata.latitude),
     longitude: parseCoord(metadata.public_record?.longitude) || parseCoord(metadata.location?.longitude) || parseCoord(metadata.property?.longitude) || parseCoord(metadata.longitude),
@@ -4006,11 +4916,14 @@ export async function upsertDomainProperty(domain, entity, metadata) {
   });
 
   if (domain === 'government') {
-    // Government properties schema uses different column names
-    const lotSF = parseSF(metadata.land_sf) || parseSF(metadata.lot_size);
-    const lotAcres = lotSF ? Math.round(lotSF / 43560 * 100) / 100 : null;
-    const landAcresRaw = metadata.lot_size && /AC/i.test(metadata.lot_size)
-      ? parseAcres(metadata.lot_size) : null;
+    // Government properties schema uses different column names.
+    // I12: read the SAME unit-aware parse the dia branch uses. The previous
+    // `parseSF(metadata.lot_size)` had the identical acres-as-square-feet
+    // defect — it strips the "sf" token and parseFloats the leading number, so
+    // CoStar's dominant "1.00 (43,560 sf)" returned 1.
+    const lotSF = capturedLot.sf;
+    const lotAcres = capturedLot.acres;
+    const landAcresRaw = capturedLot.basis === 'acres' ? capturedLot.acres : null;
 
     // Mirror most-recent sale fields onto properties so v_sales_comps /
     // portfolio dashboards don't have to JOIN sales_transactions for
@@ -4070,6 +4983,7 @@ export async function upsertDomainProperty(domain, entity, metadata) {
       sf_leased:         isHistoricalCompCapture ? null : parseSF(metadata.sf_leased),
       agency:            isHistoricalCompCapture ? null : (primaryTenant || null),
       agency_full_name:  isHistoricalCompCapture ? null : (primaryTenant || null),
+      government_type:   isHistoricalCompCapture ? null : derivedGovType,
       // Mirror latest deed / sale from sales_history — these columns live
       // on the gov properties row independently of sales_transactions.
       latest_deed_date:  latestDeedDate,
@@ -4537,6 +5451,79 @@ async function linkPublicRecord(domain, propertyId, recordType, recordId) {
   }
 }
 
+/**
+ * The `parcel_records` physical stats a capture carries, parsed and bounded.
+ *
+ * SINGLE OWNER. `upsertPublicRecords` (forward captures) and
+ * scripts/pr2-backfill-sidebar-parcel-stats.mjs (the 932 rows written before
+ * the writer carried them) both call this, so the shipped parse and the
+ * backfilled parse cannot disagree — the normaliser-drift hazard this repo has
+ * paid for repeatedly.
+ *
+ * `land_use` is deliberately NOT mapped from `metadata.property_type`. On a
+ * county-assessor capture that key holds a use code, but on a CoStar capture it
+ * holds the CRE property type ("Medical Office"); one key, two meanings, and
+ * writing the wrong one into a land-use column is a fact nobody stated.
+ */
+export function parcelStatsFromMetadata(metadata = {}) {
+  const lot = lotSizeFromMetadata(metadata);
+  const buildingSf = parseSF(metadata.square_footage);
+  return {
+    // A building of 0 sq ft is the no-data sentinel PR1a spent a round
+    // removing, not a measurement — refuse it rather than assert it.
+    building_sf:    Number.isFinite(buildingSf) && buildingSf > 0 ? Math.round(buildingSf) : null,
+    lot_sf:         lot.sf,
+    year_built:     parseYearSafe(metadata.year_built),
+    year_renovated: parseYearSafe(metadata.year_renovated),
+    zoning:         metadata.zoning ? String(metadata.zoning).trim().slice(0, 64) || null : null,
+    land_use:       metadata.land_use ? String(metadata.land_use).trim().slice(0, 128) || null : null,
+    owner_name:     assessorOwnerName(metadata),
+  };
+}
+
+/**
+ * Keep only the offered fields the existing row leaves blank.
+ *
+ * Fill-blanks is the discipline for every sidebar write (CLAUDE.md,
+ * Data-write discipline) and it cannot be delegated to the priority registry
+ * here: these rungs ship `record_only`, under which `lcc_merge_field` records
+ * a `skip` and the writer proceeds anyway. So the blank test is explicit.
+ */
+function blankFieldsOnly(existingRow, offered) {
+  const out = {};
+  if (!offered) return out;
+  for (const [k, v] of Object.entries(offered)) {
+    if (v == null) continue;
+    const current = existingRow ? existingRow[k] : null;
+    if (current == null || current === '') out[k] = v;
+  }
+  return out;
+}
+
+/**
+ * The owner name an ASSESSOR page states for this parcel, or null.
+ *
+ * ⚠️ `parcel_records.owner_name` means "the party the county names on this
+ * parcel". It must NEVER be filled from the CoStar owner panel or from the
+ * ownerContact this pipeline already resolved: that restates a value we hold as
+ * if a county had said it, which is precisely the gov ORE Phase A1 finding —
+ * gov's 9,749 parcel `owner_name` values are the recorded owner we fed the
+ * prompt, echoed back, and they read as independent corroboration ever since.
+ *
+ * The only key that carries a genuine assessor owner is the county-assessor
+ * scanner's own `owner_name` (extension/content/public-records.js
+ * scanAssessor). Measured 2026-09-02: that key has never appeared on any of
+ * 55,901 entity captures, so this returns null today — wired, with a ceiling of
+ * zero stated rather than a gap left silent.
+ */
+function assessorOwnerName(metadata = {}) {
+  const raw = metadata.public_record?.owner_name ?? metadata.owner_name;
+  if (raw == null) return null;
+  const name = String(raw).trim();
+  if (!name) return null;
+  return name.slice(0, 200);
+}
+
 async function upsertPublicRecords(domain, propertyId, entity, metadata, provCollect) {
   // ── Diagnostic: log what the extension actually sent ──────────────────
   const pubRecFields = {
@@ -4551,6 +5538,11 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
     legal_description: metadata.legal_description || null,
     latitude: metadata.latitude || null,
     longitude: metadata.longitude || null,
+    // PR2: these arrive on the capture and were being dropped on the floor.
+    square_footage: metadata.square_footage || null,
+    year_built: metadata.year_built || null,
+    lot_size: metadata.lot_size || metadata.land_sf || null,
+    zoning: metadata.zoning || null,
   };
   console.log(`[PublicRecords] domain=${domain} property=${propertyId} input:`, JSON.stringify(pubRecFields));
 
@@ -4569,11 +5561,37 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
                     || (landVal && impVal ? landVal + impVal : null);
   const taxYear   = new Date().getFullYear();
 
+  // ── PR2: the physical stats the capture has always carried ───────────────
+  // `parcel_records` has held building_sf / lot_sf / year_built / land_use /
+  // zoning / owner_name since it was created, and the CoStar Public Record tab
+  // sends them (extension/content/public-records.js findValue('Building Size'),
+  // 'Year Built', 'Lot Size', 'Zoning'). Nothing wrote them: the INSERT below
+  // carried apn/county/state/assessed_value/raw_payload only, so the ONE
+  // genuine public-record source in dia produced 932 rows with 931 real APNs
+  // and ZERO building stats (measured 2026-09-02), while the gpt-4o leg's
+  // APN-less rows were the only ones carrying any.
+  //
+  // Ceiling, measured on the captures behind those rows (LCC Opps entity
+  // metadata for the 888 dia properties, 815 still resolvable): square_footage
+  // 765 · year_built 712 · lot_size 733 · zoning 228 · land_use 0 ·
+  // owner_name 0 · tax_amount 0. The last three are absent from EVERY capture
+  // — see `capturedTaxAmount` below — so they are wired and will stay empty
+  // until the extension sends them. That is a stated ceiling, not a silent gap.
+  const capturedLot = lotSizeFromMetadata(metadata);
+  const parcelStats = parcelStatsFromMetadata(metadata);
+  const capturedTaxAmount = parseCurrency(metadata.tax_amount);
+  const statsSeen = Object.entries(parcelStats).filter(([, v]) => v != null).map(([k]) => k);
+  console.log(`[PublicRecords] parcel stats parsed: [${statsSeen.join(', ')}]` +
+    ` lot_basis=${capturedLot.basis} tax_amount=${capturedTaxAmount == null ? 'absent' : capturedTaxAmount}`);
+
   // ── parcel_records ──────────────────────────────────────────────────────
   if (domain === 'dialysis') {
     const parcelHash = Buffer.from(`parcel|${apn}|${entity.state || ''}`).toString('base64');
     const parcelLookup = await domainQuery('dialysis', 'GET',
-      `parcel_records?apn=eq.${encodeURIComponent(apn)}&select=id&limit=1`
+      // PR2: select the stat columns too — the PATCH branch below is
+      // fill-blanks and needs to know which of them the row already holds.
+      `parcel_records?apn=eq.${encodeURIComponent(apn)}` +
+      `&select=id,building_sf,lot_sf,year_built,year_renovated,zoning,land_use,owner_name&limit=1`
     );
     if (!parcelLookup.ok || !parcelLookup.data?.length) {
       const parcelData = stripNulls({
@@ -4581,6 +5599,8 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
         county,
         state:          entity.state || null,
         assessed_value: assessed,
+        ...parcelStats,          // PR2 — building_sf / lot_sf / year_built /
+                                 // year_renovated / zoning / land_use / owner_name
         raw_payload:    {
           source: 'costar_sidebar', property_id: propertyId,
           census_tract: metadata.census_tract || null,
@@ -4589,6 +5609,11 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
           far: metadata.far || null,
           assessment_years: metadata.assessment_years || null,
           tax_amount: metadata.tax_amount || null,
+          // I12: say which unit the stored lot_sf was derived FROM, so a future
+          // reader can tell a parenthetical square footage from our own
+          // acres->sf conversion without re-parsing the capture.
+          lot_size_raw: metadata.lot_size || metadata.land_sf || null,
+          lot_size_basis: capturedLot.basis,
         },
         fetched_at:     metadata.extracted_at || new Date().toISOString(),
         data_hash:      parcelHash,
@@ -4614,16 +5639,25 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
       // CoStar's parcel data is aggregator-quality; county-records and OM
       // promoter both outrank it for these fields when they're present.
       const existingParcelId = parcelLookup.data[0]?.id;
+      // FILL-BLANKS: a stat is offered only where the row does not already
+      // hold one. `costar_sidebar` is an aggregator read of the assessor's
+      // page; it must never displace a value a higher-authority source put
+      // there, and the registry's enforce_mode on these rungs is
+      // `record_only`, so the registry alone would not stop it.
+      const blankOnly = blankFieldsOnly(parcelLookup.data[0], parcelStats);
       const filteredParcelPatch = await filterByFieldPriority({
         targetDb:    'dia_db',
         targetTable: 'dia.parcel_records',
         recordPk:    existingParcelId || apn,
         source:      'costar_sidebar',
         confidence:  0.6,
-        fields:      { assessed_value: assessed, county },
+        // stripNulls FIRST: filterByFieldPriority passes a null value straight
+        // through to the PATCH, which would NULL a column the capture simply
+        // did not carry. Fill-blanks means we only ever send what we have.
+        fields:      stripNulls({ assessed_value: assessed, county, ...blankOnly }),
       }).catch(err => {
         console.warn('[upsertPublicRecords:dia:parcel] field-priority filter failed (proceeding with full patch):', err?.message);
-        return { assessed_value: assessed, county };
+        return stripNulls({ assessed_value: assessed, county, ...blankOnly });
       });
       let _parcelPatchRes = { ok: true }; // default: nothing to patch → no failure
       if (filteredParcelPatch && Object.keys(filteredParcelPatch).length > 0) {
@@ -4646,8 +5680,21 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
   }
 
   if (domain === 'government') {
+    // gov.parcel_records names the same facts differently, and it carries BOTH
+    // land_area_sf AND land_area_acres — I12 says derive one from the other
+    // rather than writing whichever unit the source happened to express.
+    const govParcelStats = {
+      building_sf:     parcelStats.building_sf,
+      land_area_sf:    parcelStats.lot_sf,
+      land_area_acres: capturedLot.acres,
+      year_built:      parcelStats.year_built,
+      zoning:          parcelStats.zoning,
+      property_class:  parcelStats.land_use,
+      owner_name:      parcelStats.owner_name,
+    };
     const parcelLookup = await domainQuery('government', 'GET',
-      `parcel_records?apn=eq.${encodeURIComponent(apn)}&select=parcel_id&limit=1`
+      `parcel_records?apn=eq.${encodeURIComponent(apn)}` +
+      `&select=parcel_id,building_sf,land_area_sf,land_area_acres,year_built,zoning,property_class,owner_name&limit=1`
     );
     if (!parcelLookup.ok || !parcelLookup.data?.length) {
       const parcelHash = Buffer.from(`parcel|${apn}|${entity.state || ''}`).toString('base64');
@@ -4660,6 +5707,7 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
         total_assessed_value: assessed,
         assessment_year:      taxYear,
         situs_address:        entity.address || null,
+        ...govParcelStats,    // PR2
         raw_payload:          {
           source: 'costar_sidebar', property_id: propertyId,
           census_tract: metadata.census_tract || null,
@@ -4669,6 +5717,8 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
           far: metadata.far || null,
           assessment_years: metadata.assessment_years || null,
           tax_amount: metadata.tax_amount || null,
+          lot_size_raw: metadata.lot_size || metadata.land_sf || null,
+          lot_size_basis: capturedLot.basis,
         },
         fetched_at:           metadata.extracted_at || new Date().toISOString(),
         data_hash:            parcelHash,
@@ -4697,6 +5747,7 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
         improvement_value:    impVal,
         total_assessed_value: assessed,
         assessment_year:      taxYear,
+        ...blankFieldsOnly(parcelLookup.data[0], govParcelStats),   // PR2, fill-blanks
       });
       const filteredGovParcelPatch = await filterByFieldPriority({
         targetDb:    'gov_db',
@@ -4739,7 +5790,10 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
     }
     console.log(`[PublicRecords] Multi-year assessment data: ${taxYears.length} years from extension`);
   }
-  if (taxYears.length === 0 && assessed) {
+  // PR2: a capture carrying only a tax bill (no assessment) still deserves a
+  // current-year tax row — otherwise the one figure the tax table is named for
+  // has nowhere to land.
+  if (taxYears.length === 0 && (assessed || capturedTaxAmount)) {
     taxYears.push({ year: taxYear, assessed, land: landVal, imp: impVal });
   }
 
@@ -4747,7 +5801,7 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
     for (const ty of taxYears) {
       const taxHash = Buffer.from(`tax|${apn}|${ty.year}`).toString('base64');
       const taxLookup = await domainQuery('dialysis', 'GET',
-        `tax_records?apn=eq.${encodeURIComponent(apn)}&tax_year=eq.${ty.year}&select=id&limit=1`
+        `tax_records?apn=eq.${encodeURIComponent(apn)}&tax_year=eq.${ty.year}&select=id,tax_amount&limit=1`
       );
       if (!taxLookup.ok || !taxLookup.data?.length) {
         const taxData = stripNulls({
@@ -4756,6 +5810,12 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
           state:          entity.state || null,
           tax_year:       ty.year,
           assessed_value: ty.assessed,
+          // PR2: the captured tax figure belongs in the COLUMN, not stashed in
+          // the parcel's raw_payload where nothing reads it. Only ever on the
+          // current year — a multi-year assessment row carries assessed values
+          // per year, never a per-year tax bill, so stamping one figure onto
+          // every year would manufacture history.
+          tax_amount:     ty.year === taxYear ? capturedTaxAmount : null,
           raw_payload:    { source: 'costar_sidebar', land_value: ty.land, improvement_value: ty.imp },
           fetched_at:     metadata.extracted_at || new Date().toISOString(),
           data_hash:      taxHash,
@@ -4783,7 +5843,11 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
           recordPk:    existingTaxId || `${apn}|${ty.year}`,
           source:      'costar_sidebar',
           confidence:  0.6,
-          fields:      { assessed_value: ty.assessed },
+          fields:      stripNulls({
+            assessed_value: ty.assessed,
+            ...blankFieldsOnly(taxLookup.data[0],
+              { tax_amount: ty.year === taxYear ? capturedTaxAmount : null }),
+          }),
         }).catch(err => {
           console.warn('[upsertPublicRecords:dia:tax] field-priority filter failed (proceeding with full patch):', err?.message);
           return { assessed_value: ty.assessed };
@@ -4817,7 +5881,7 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
     for (const ty of taxYears) {
       const taxLookup = parcelId
         ? await domainQuery('government', 'GET',
-            `tax_records?parcel_id=eq.${parcelId}&tax_year=eq.${ty.year}&select=tax_record_id&limit=1`)
+            `tax_records?parcel_id=eq.${parcelId}&tax_year=eq.${ty.year}&select=tax_record_id,tax_amount&limit=1`)
         : { ok: false, data: [] };
 
       if (!taxLookup.ok || !taxLookup.data?.length) {
@@ -4828,6 +5892,7 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
           state_code:     entity.state || 'XX',
           tax_year:       ty.year,
           assessed_value: ty.assessed,
+          tax_amount:     ty.year === taxYear ? capturedTaxAmount : null,   // PR2
           raw_payload:    { source: 'costar_sidebar', land_value: ty.land, improvement_value: ty.imp },
           fetched_at:     metadata.extracted_at || new Date().toISOString(),
           data_hash:      taxHash,
@@ -4853,7 +5918,11 @@ async function upsertPublicRecords(domain, propertyId, entity, metadata, provCol
           recordPk:    existingTaxRecordId || `${parcelId}|${ty.year}`,
           source:      'costar_sidebar',
           confidence:  0.6,
-          fields:      { assessed_value: ty.assessed },
+          fields:      stripNulls({
+            assessed_value: ty.assessed,
+            ...blankFieldsOnly(taxLookup.data[0],
+              { tax_amount: ty.year === taxYear ? capturedTaxAmount : null }),
+          }),
         }).catch(err => {
           console.warn('[upsertPublicRecords:gov:tax] field-priority filter failed (proceeding with full patch):', err?.message);
           return { assessed_value: ty.assessed };
@@ -5040,9 +6109,12 @@ async function routeListingMisroute(domain, propertyId, saleRow, reasons) {
   const listPrice = Number.isFinite(rawPrice) && rawPrice > 0 ? rawPrice : null;
   const notesVal = saleRow?.notes || null;
 
+  // Prompt 78 (U4 PGRST204): available_listings has no `list_price` column
+  // (dia uses initial_price/last_price) so the misroute 400'd. Write the
+  // captured ask to `last_price` (the current-ask column).
   const record = {
     property_id: domain === 'dialysis' ? parseInt(propertyId, 10) : propertyId,
-    list_price: listPrice,
+    last_price: listPrice,
     status: 'off_market',
     notes: notesVal,
     data_source: 'costar_sidebar',
@@ -5637,9 +6709,12 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
     const loStr = lo.toISOString().split('T')[0];
     const hiStr = hi.toISOString().split('T')[0];
 
+    // SALE1 (2026-09-03): cap_rate_notes rides along on both domains so the
+    // price-disagreement guard below (matched-row branch) can flag a
+    // clobber attempt without a second lookup.
     const lookupSelect = domain === 'government'
-      ? 'sale_id,sale_date,sold_price,firm_term_years_at_sale,firm_term_locked'
-      : 'sale_id,sale_date,sold_price,stated_cap_rate,calculated_cap_rate,cap_rate_confidence';
+      ? 'sale_id,sale_date,sold_price,firm_term_years_at_sale,firm_term_locked,cap_rate_notes'
+      : 'sale_id,sale_date,sold_price,stated_cap_rate,calculated_cap_rate,cap_rate_confidence,cap_rate_notes';
 
     let lookup = { ok: false, data: [] };
 
@@ -5797,13 +6872,18 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
     // guard + manual_override below keep curated values from being clobbered.
     const govListingHistory = {};
     if (domain === 'government' && isMostRecentSale) {
-      const lastAsk  = parseCurrency(metadata.asking_price);
-      const origAsk  = parseCurrency(metadata.list_price);
+      const askHistory = deriveListingAskHistory(metadata);
+      const lastAsk  = askHistory.currentPrice;
+      const origAsk  = askHistory.originalPrice;
+      const lastAskCap = askHistory.currentCap;
+      const origAskCap = askHistory.originalCap;
       const onMarket = parseDate(metadata.listing_date)?.split('T')[0] || null;
       const domRaw   = parseInt(metadata.days_on_market, 10);
       const domDays  = Number.isFinite(domRaw) ? domRaw : null;
       if (lastAsk != null && lastAsk > 0) govListingHistory.last_price = lastAsk;
       if (origAsk != null && origAsk > 0) govListingHistory.initial_price = origAsk;
+      if (lastAskCap != null) govListingHistory.last_cap_rate = lastAskCap;
+      if (origAskCap != null) govListingHistory.initial_cap_rate = origAskCap;
       if (onMarket && onMarket <= datePart) govListingHistory.on_market_date = onMarket;
       if (domDays != null && domDays >= 0 && domDays <= 1825) govListingHistory.days_on_market = domDays;
       const ip = govListingHistory.initial_price ?? null;
@@ -5815,6 +6895,9 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
         const pct = soldPrice / ip;
         if (pct >= 0.5 && pct <= 1.05) govListingHistory.pct_of_initial = Math.round(pct * 10000) / 10000;
       }
+      if (lastAskCap != null && capRateVal != null && Math.abs(capRateVal - lastAskCap) <= 0.05) {
+        govListingHistory.bid_ask_spread = Math.round((capRateVal - lastAskCap) * 10000) / 10000;
+      }
     }
 
     // Sale-Notes-derived at-sale firm term (gov, most-recent sale only). The
@@ -5823,9 +6906,34 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
     // views (which COALESCE it first) can use it. Fill-blank only — the gov
     // term-reconcile pass (firm_term_locked) stays authoritative (the PATCH
     // branch strips this when the existing row is locked or already set).
+    // Derive the at-sale remaining term from the narrative when CoStar's
+    // structured fields omit it: an explicit "N years remaining" figure, else
+    // commencement + term from the "new 15-year lease commencing <date>"
+    // phrasing, else the structured lease_expiration − sale_date (mirrors the
+    // dia derivation below). Only the most-recent sale — the one the current
+    // lease describes. Seeds firm_term_years_at_sale (source costar_sale_notes),
+    // which the gov firm-term resolver/trigger OVERRIDES the moment a covering
+    // lease/GSA/FRPP row exists, and which survives (fill-blank) for the
+    // off-inventory tail that has no federal-register lease.
     const govSaleNotesFields = (domain === 'government' && isMostRecentSale)
-      ? govSaleNotesTermFields(saleNotesExtracted)
+      ? govSaleNotesTermFields({
+          years_remaining: deriveSaleNotesYearsRemaining({
+            extracted: saleNotesExtracted,
+            saleDateISO: datePart,
+            leaseExpirationISO: parseDate(metadata.lease_expiration)?.split('T')[0] || null,
+          }),
+        })
       : {};
+    const govCreditForSale = domain === 'government'
+      ? deriveGovCreditForMetadata(metadata, {
+          agency: primaryTenant || metadata.agency || null,
+          agency_full_name: metadata.agency_full_name || primaryTenant || null,
+          tenant_name: primaryTenant || metadata.tenant_name || null,
+          sale_notes_raw: sale.sale_notes_raw || saleNotesRaw || null,
+          saleNotes: [sale.comments, sale.notes, sale.sale_notes_extracted, saleNotesRaw].filter(Boolean),
+        })
+      : null;
+    const govTypeForSale = govCreditForSale?.primaryType || null;
 
     const domainSaleFields = domain === 'government'
       ? {
@@ -5838,7 +6946,7 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
           city:             entity.city    || null,
           state:            entity.state   || null,
           agency:           primaryTenant  || null,
-          government_type:  metadata.government_type || null,
+          government_type:  govTypeForSale,
           // Compute sold_price_psf when both price and SF are known.
           // QA1: a nulled portfolio-aggregate price yields no per-SF figure.
           sold_price_psf:   (writeSoldPrice && parsedSF && parsedSF > 0)
@@ -5944,11 +7052,20 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
             : (saleBleed.overCeiling
               ? `[oversized-sale-review] sold_price ${soldPrice} exceeds the $${SALE_PRICE_BLEED_CEILING.dialysis.toLocaleString()} dia ceiling; flagged for human review (price retained)`
               : null),
-          saleNotesRaw ? `--- Sale Notes ---\n${saleNotesRaw}` : null,
+          // SALE1 (2026-09-03): saleNotesRaw is a PAGE-LEVEL field (one
+          // marketing blurb per property capture) — it describes whichever
+          // sale CoStar is currently displaying, not every historical deed
+          // row in the loop. Writing it unconditionally stamped the CURRENT
+          // listing's narrative onto 2009/2024 deed entries verbatim
+          // (dia property 35612). Gov already gated this to the most-recent
+          // sale only (line ~6887); dia now matches.
+          (isMostRecentSale && saleNotesRaw) ? `--- Sale Notes ---\n${saleNotesRaw}` : null,
         ].filter(Boolean).join('; ') || null,
-        sale_notes_raw: saleNotesRaw,
-        sale_notes_extracted: Object.keys(saleNotesForRow).length > 0
-          ? saleNotesForRow : null,
+        ...(isMostRecentSale ? {
+          sale_notes_raw: saleNotesRaw,
+          sale_notes_extracted: Object.keys(saleNotesForRow).length > 0
+            ? saleNotesForRow : null,
+        } : {}),
       } : {}),
       // Gov audit-retention parity (2026-06-20): retain the raw narrative +
       // structured extract on the most-recent sale only (the notes describe the
@@ -6146,6 +7263,38 @@ async function upsertDomainSales(domain, propertyId, entity, metadata, provColle
           ? Number(existing.stated_cap_rate) : null;
         if (newStated == null || existingStated === Number(newStated)) {
           delete patchData.stated_cap_rate;
+        }
+      }
+
+      // SALE1 (2026-09-03): never let a re-match silently overwrite an
+      // already-recorded sold_price with a DIFFERENT one. The lookup above
+      // only proves "same sale" within a ±5%/±14d (or ±$1,000/±60d) window —
+      // it does not prove the incoming price is more correct than what's
+      // already there, and a later capture is not automatically the truth
+      // (CoStar's own deed popup can show "Not Disclosed" on a re-scrape of
+      // a row that was previously priced, or show the CURRENT listing's
+      // price bled onto a historical deed entry — both observed live on
+      // dia property 35612). Filling a BLANK is always fine; overwriting a
+      // NON-NULL price that disagrees by more than 1% is not — surface it
+      // on cap_rate_notes instead of clobbering it. Same tolerance as the
+      // Stage-3 "close enough to be the same observation" dedup collapse.
+      if (existing.sold_price != null && patchData.sold_price != null) {
+        const existingPrice = Number(existing.sold_price);
+        const incomingPrice = Number(patchData.sold_price);
+        if (Number.isFinite(existingPrice) && existingPrice > 0
+            && Number.isFinite(incomingPrice)
+            && Math.abs(incomingPrice - existingPrice) / existingPrice > 0.01) {
+          console.warn(`[upsertDomainSales] sold_price disagreement on sale_id=${existing.sale_id} property=${propertyId} date=${datePart}: recorded=${existingPrice} incoming=${incomingPrice} — keeping recorded value, flagging for review`);
+          patchData = { ...patchData };
+          delete patchData.sold_price;
+          if (domain === 'dialysis') delete patchData.sold_price_psf;
+          const existingNotes = existing.cap_rate_notes || '';
+          if (!existingNotes.includes('[price-disagreement')) {
+            const flag = `[price-disagreement ${new Date().toISOString().split('T')[0]}] recapture proposed $${incomingPrice.toLocaleString()} vs recorded $${existingPrice.toLocaleString()} — kept recorded value, needs review`;
+            patchData.cap_rate_notes = [existingNotes, flag].filter(Boolean).join(' | ');
+          } else {
+            delete patchData.cap_rate_notes;
+          }
         }
       }
 
@@ -6526,16 +7675,21 @@ async function createSaleAlert(propertyId, saleData) {
   const capRate = saleData.stated_cap_rate ? ` at ${saleData.stated_cap_rate}% cap` : '';
   const buyer = saleData.buyer_name || 'unknown buyer';
 
+  // Prompt 78 (U4 PGRST204): the previous payload used title/message/
+  // data_source/is_resolved — none of which exist on alerts_unified — so every
+  // sale alert 400'd (dia 61 / 30d). Map to the real columns: alert_reason
+  // (title + message folded), source, resolved. Keys pinned by
+  // WRITER_COLUMN_SETS['sidebar:createSaleAlert'] (domain-writer-columns.js).
   await domainQuery('dialysis', 'POST', 'alerts_unified', {
-    entity_type:   'property',
-    entity_id:     String(propertyId),
-    alert_type:    'new_sale',
-    priority:      'high',
-    title:         `New sale captured via CoStar`,
-    message:       `Sold to ${buyer} for ${price}${capRate} on ${saleData.sale_date}`,
-    data_source:   'costar_sidebar',
-    is_resolved:   false,
-    created_at:    new Date().toISOString(),
+    entity_type:  'property',
+    entity_id:    String(propertyId),
+    property_id:  parseInt(propertyId, 10),
+    alert_type:   'new_sale',
+    priority:     'high',
+    alert_reason: `New sale captured via CoStar — sold to ${buyer} for ${price}${capRate} on ${saleData.sale_date}`,
+    source:       'costar_sidebar',
+    resolved:     false,
+    created_at:   new Date().toISOString(),
   });
 }
 
@@ -7708,12 +8862,79 @@ export function isFederalOwnerAntiPattern(name) {
 // a malformed phone (no real digits) and a generic/role inbox (info@/sales@ — a
 // firm mailbox, not the owner decision-maker) are NOT carried. The owner NAME is
 // already federal/junk-guarded upstream.
-function ownerReachableDetails(contact) {
+// Broker-email-attribution guard (2026-08-05): CoStar's for-sale detail page
+// renders the listing-broker contact card immediately adjacent to the owner
+// panel, so the DOM's nearest-mailto/nearest-tel enrichment can splatter the
+// listing broker's reachable details across the "Current Owner" rows. Observed
+// live: a Newmark broker's `…@nmrk.com` email attributed to three separate
+// Current-Owner contacts (and re-stamped onto the listing-broker row itself).
+// An owner is NEVER reachable at a brokerage inbox — so we (a) drop a broker's
+// email/phone off any owner reachable detail and (b) never write a captured
+// broker person as a recorded/true owner. Two nets: a cross-reference against
+// the page's own captured listing/buyer-broker contacts (the general case), and
+// a national-brokerage inbox-domain fallback (catches a leak whose matching
+// broker contact carried no email of its own).
+const BROKERAGE_EMAIL_DOMAIN_RE =
+  /@(?:nmrk|newmark|cbre|jll|colliers|cushwake|cushmanwakefield|marcusmillichap|matthews|avisonyoung|kellerwilliams|kw|svn|naiop)\.[a-z.]{2,}$/i;
+
+// Collect the normalized emails + last-10-digit phones of every listing/buyer
+// broker contact captured in this metadata payload.
+function collectBrokerContactInfo(metadata) {
+  const emails = new Set();
+  const phones = new Set();
+  const contacts = Array.isArray(metadata?.contacts) ? metadata.contacts : [];
+  for (const c of contacts) {
+    if (!c) continue;
+    const roles = Array.isArray(c.roles) ? c.roles : (c.role ? [c.role] : []);
+    if (!roles.some(r => /^(?:listing_broker|buyer_broker)$/.test(r))) continue;
+    const e = normalizeEmail(c.email);
+    if (e) emails.add(e);
+    const ps = Array.isArray(c.phones) ? c.phones : (c.phone ? [c.phone] : []);
+    for (const p of ps) {
+      const d = String(p || '').replace(/\D/g, '');
+      if (d.length >= 7) phones.add(d.slice(-10));
+    }
+  }
+  return { emails, phones };
+}
+
+function isBrokerLeakEmail(email, brokerInfo) {
+  if (!email) return false;
+  if (brokerInfo && brokerInfo.emails.has(email)) return true;
+  return BROKERAGE_EMAIL_DOMAIN_RE.test(email);
+}
+
+function isBrokerLeakPhone(phone, brokerInfo) {
+  if (!phone || !brokerInfo) return false;
+  const d = String(phone).replace(/\D/g, '');
+  return d.length >= 7 && brokerInfo.phones.has(d.slice(-10));
+}
+
+// True when an owner-role contact is really one of the captured listing/buyer
+// broker contacts (CoStar re-lists the broker under the owner panel). Keyed on
+// the broker's email — the strongest identity signal — so a real owner who
+// merely shares a name with the broker is never suppressed.
+function isCapturedBrokerContact(contact, brokerInfo) {
+  if (!contact || !brokerInfo) return false;
+  const e = normalizeEmail(contact.email);
+  return !!(e && brokerInfo.emails.has(e));
+}
+
+function ownerReachableDetails(contact, brokerInfo = null) {
   if (!contact || typeof contact !== 'object') return { phone: null, email: null, address: null };
   const phones = Array.isArray(contact.phones) ? contact.phones : (contact.phone ? [contact.phone] : []);
-  const phone = phones.map(p => (typeof p === 'string' ? p.trim() : '')).find(p => looksLikeContactPhone(p)) || null;
+  let phone = phones.map(p => (typeof p === 'string' ? p.trim() : '')).find(p => looksLikeContactPhone(p)) || null;
   const normEmail = normalizeEmail(contact.email);
-  const email = (normEmail && !isGenericInboxEmail(normEmail)) ? normEmail : null;
+  let email = (normEmail && !isGenericInboxEmail(normEmail)) ? normEmail : null;
+  // Never attribute a listing/buyer broker's email or phone to an owner record.
+  if (email && isBrokerLeakEmail(email, brokerInfo)) {
+    console.warn(`[ownerReachableDetails] dropped broker-attributed email "${email}" from owner "${contact.name || '?'}"`);
+    email = null;
+  }
+  if (phone && isBrokerLeakPhone(phone, brokerInfo)) {
+    console.warn(`[ownerReachableDetails] dropped broker-attributed phone from owner "${contact.name || '?'}"`);
+    phone = null;
+  }
   const address = (typeof contact.address === 'string' && contact.address.trim()) ? contact.address.trim() : null;
   return { phone, email, address };
 }
@@ -7721,16 +8942,20 @@ function ownerReachableDetails(contact) {
 // Decorate the chosen owner contact with normalized reachable details so every
 // downstream consumer (recorded_owners write, owner-entity link) gets a uniform
 // `{ phone, email, address }` regardless of the raw capture shape.
-function withOwnerDetails(contact) {
+function withOwnerDetails(contact, brokerInfo = null) {
   if (!contact) return contact;
-  return { ...contact, ...ownerReachableDetails(contact) };
+  return { ...contact, ...ownerReachableDetails(contact, brokerInfo) };
 }
 
 export function selectAuthoritativeOwner(metadata) {
   const contacts = Array.isArray(metadata?.contacts) ? metadata.contacts : [];
-  const owners = contacts.filter(c => c && c.role === 'owner' && c.name);
+  const brokerInfo = collectBrokerContactInfo(metadata);
+  // Drop owner rows that are actually the captured broker before ranking, so a
+  // broker mislabeled "owner" can never win the authoritative-owner slot.
+  const owners = contacts.filter(c => c && c.role === 'owner' && c.name
+    && !isCapturedBrokerContact(c, brokerInfo));
   const privateOwner = owners.find(c => !isFederalOwnerAntiPattern(c.name));
-  if (privateOwner) return withOwnerDetails(privateOwner);
+  if (privateOwner) return withOwnerDetails(privateOwner, brokerInfo);
 
   // No private owner contact — try sales_history buyers (most recent first).
   // A sale buyer carries no reachable contact details (name only).
@@ -7756,7 +8981,7 @@ export function selectAuthoritativeOwner(metadata) {
         `Verify this property is actually federally-owned (USPS / GSA-titled).`
       );
     }
-    return withOwnerDetails(owners[0]);
+    return withOwnerDetails(owners[0], brokerInfo);
   }
   return null;
 }
@@ -8388,7 +9613,9 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata, provColl
       ...addrFields,
     });
 
-    const result = await domainQuery(domain, 'POST', 'recorded_owners', ownerData);
+    const result = await domainQuery(domain, 'POST', 'recorded_owners', ownerData,
+      {}, { suppressFailureCodes: ['23505'], callerFile: 'sidebar-pipeline.js',
+        label: 'upsertDomainOwners:ensureRecordedOwner' });
     if (result.ok && result.data) {
       const created = Array.isArray(result.data) ? result.data[0] : result.data;
       const id = created?.recorded_owner_id || null;
@@ -8420,15 +9647,41 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata, provColl
     // pre-fetch and this POST. Re-query by the dedup column, cache, and reuse
     // the existing UUID — same semantics as the pre-fetch cache hit.
     if (result.status === 409 && result.data?.code === '23505') {
-      const stateForLookup = addrFields.state || (addrFields.contact_info && addrFields.contact_info.state) || null;
-      const lookupParams = domain === 'government'
-        ? `canonical_name=eq.${encodeURIComponent(normalizedName)}` +
-          (stateForLookup ? `&state=eq.${encodeURIComponent(stateForLookup)}` : '&state=is.null')
-        : `normalized_name=eq.${encodeURIComponent(normalizedName)}`;
-      const refetch = await domainQuery(domain, 'GET',
-        `recorded_owners?${lookupParams}&merged_into_recorded_owner_id=is.null&select=recorded_owner_id&limit=1`);
-      if (refetch.ok && refetch.data?.length) {
-        const existingId = refetch.data[0].recorded_owner_id;
+      // Prompt 81 (item 2): the pre-fetch cache and the fallback refetch key on
+      // the normalized/canonical column, but the unique CONSTRAINT that fired
+      // is on the RAW name (dia recorded_owners_name_key) or (canonical_name,
+      // state) (gov uq_recorded_owners_canonical). When the stored normalized
+      // value diverges from the current normalization (an owner written by
+      // another path with older normalization), the normalized refetch misses
+      // and the known row is "lost". Refetch by the EXACT colliding key parsed
+      // from the Postgres error first, then fall back to the prior logic.
+      let existingId = null;
+      const details = String(result.data?.details || '');
+      const km = details.match(/Key \(([^)]+)\)=\(([^)]*)\)/);
+      if (km) {
+        const cols = km[1].split(',').map(s => s.trim());
+        // A single-column key value can itself contain ", " (e.g. "Brandon
+        // Square, LLC") — only split the value list for a genuine composite key.
+        const vals = cols.length > 1 ? km[2].split(', ').map(s => s.trim()) : [km[2]];
+        const parts = cols.map((c, i) => {
+          const v = vals[i];
+          return (v === undefined || v === '') ? `${c}=is.null` : `${c}=eq.${encodeURIComponent(v)}`;
+        });
+        const byKey = await domainQuery(domain, 'GET',
+          `recorded_owners?${parts.join('&')}&select=recorded_owner_id&limit=1`);
+        if (byKey.ok && byKey.data?.length) existingId = byKey.data[0].recorded_owner_id;
+      }
+      if (!existingId) {
+        const stateForLookup = addrFields.state || (addrFields.contact_info && addrFields.contact_info.state) || null;
+        const lookupParams = domain === 'government'
+          ? `canonical_name=eq.${encodeURIComponent(normalizedName)}` +
+            (stateForLookup ? `&state=eq.${encodeURIComponent(stateForLookup)}` : '&state=is.null')
+          : `normalized_name=eq.${encodeURIComponent(normalizedName)}`;
+        const refetch = await domainQuery(domain, 'GET',
+          `recorded_owners?${lookupParams}&merged_into_recorded_owner_id=is.null&select=recorded_owner_id&limit=1`);
+        if (refetch.ok && refetch.data?.length) existingId = refetch.data[0].recorded_owner_id;
+      }
+      if (existingId) {
         ownerIds.set(normalizedName, existingId);
         return existingId;
       }
@@ -8441,7 +9694,17 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata, provColl
   // Round 76ek.i: skip federal-government anti-pattern names (USA, U S A,
   // Government, etc.) when there's a private alternative — those almost
   // always come from CoStar's personal-property record bleed-through.
-  const allOwnerContacts = (metadata.contacts || []).filter(c => c.role === 'owner');
+  // Broker-attribution guard (2026-08-05): drop owner rows that are actually
+  // the captured listing/buyer broker (matched by the broker's email) before any
+  // federal-anti-pattern ranking, so a broker mislabeled "Current Owner" is never
+  // written as a recorded owner.
+  const brokerInfo = collectBrokerContactInfo(metadata);
+  const captureOwnerContacts = (metadata.contacts || []).filter(c => c.role === 'owner');
+  const allOwnerContacts = captureOwnerContacts.filter(c => !isCapturedBrokerContact(c, brokerInfo));
+  if (allOwnerContacts.length < captureOwnerContacts.length) {
+    const dropped = captureOwnerContacts.filter(c => isCapturedBrokerContact(c, brokerInfo)).map(c => c.name);
+    console.warn(`[upsertDomainOwners] property=${propertyId} dropped broker-attributed owner contacts: ${dropped.join(', ')}`);
+  }
   const hasPrivateOwner = allOwnerContacts.some(c => c.name && !isFederalOwnerAntiPattern(c.name));
   const ownerContacts = hasPrivateOwner
     ? allOwnerContacts.filter(c => c.name && !isFederalOwnerAntiPattern(c.name))
@@ -8453,7 +9716,8 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata, provColl
   for (const contact of ownerContacts) {
     // ORE Phase 1 Unit D: carry the owner's reachable phone/email onto the
     // recorded_owner (gov contact_info) — fill-blanks, guarded inside the helper.
-    await ensureRecordedOwner(contact.name, contact.address, ownerReachableDetails(contact));
+    // brokerInfo strips a broker's email/phone that CoStar bled onto the owner.
+    await ensureRecordedOwner(contact.name, contact.address, ownerReachableDetails(contact, brokerInfo));
   }
 
   // Process buyers and sellers from sales history to build ownership chain
@@ -8689,15 +9953,23 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata, provColl
             state: ro.state || null,
             owner_type: 'investor',
           });
-          const toResult = await domainQuery(domain, 'POST', 'true_owners', toData);
+          const toResult = await domainQuery(domain, 'POST', 'true_owners', toData,
+            {}, { suppressFailureCodes: ['23505'], callerFile: 'sidebar-pipeline.js',
+              label: 'upsertDomainOwners:recordedToTrue' });
           if (toResult.ok && toResult.data) {
             const created = Array.isArray(toResult.data) ? toResult.data[0] : toResult.data;
             trueOwnerId = created?.true_owner_id || null;
-          } else if (toResult.status === 409 && toResult.data?.code === '23505') {
-            // C4 race: another writer just landed the same true_owner. Re-fetch by key.
-            const refetch = await domainQuery(domain, 'GET',
+          } else if (String(toResult.data?.code) === '23505') {
+            // C4 race: another writer landed the same true_owner. Re-fetch by the
+            // normalized key, then (Prompt 81 item 2) fall back to the RAW name
+            // the true_owners_name_key constraint is actually on.
+            let refetch = await domainQuery(domain, 'GET',
               `true_owners?normalized_name=eq.${encodeURIComponent(normalizedName)}` +
               `&merged_into_true_owner_id=is.null&select=true_owner_id&limit=1`);
+            if (!(refetch.ok && refetch.data?.length)) {
+              refetch = await domainQuery(domain, 'GET',
+                `true_owners?name=eq.${encodeURIComponent(ro.name)}&select=true_owner_id&limit=1`);
+            }
             if (refetch.ok && refetch.data?.length) {
               trueOwnerId = refetch.data[0].true_owner_id;
             }
@@ -8897,9 +10169,25 @@ export async function reconcilePropertyOwnership(domain, propertyId) {
 // owner-facts mirror sync / R47 cron. Used by the deed-writer path (forward,
 // new captures) AND the R51 Unit-3 high-confidence auto-fix worker.
 
-// Reusable guard: a brokerage / junk / federal-antipattern / deal-string
-// grantee must NEVER become the recorded owner. Reuses the same write-time
-// guards the entity graph and contact pipeline use.
+// RO2b (2026-09-08 audit, fixed 2026-09-11): named capture artifacts that pass
+// every guard above and get proposed as a recorded owner, sized at 9 rows across
+// the whole 598-row deed arm -- too few to earn a generalized regex class, so
+// they are named literally instead of pattern-matched:
+//   - RMR / "The RMR Group" -- the property MANAGER of GPT/OPI-portfolio assets
+//     (7 of the 9 rows). A deed never conveys title to a manager; this is a
+//     capture artifact where the manager's name sits where the grantee should.
+//   - USPS -- the federal TENANT (1 row), not a grantee.
+// The hedge-phrase class ("... or affiliated/related ...", 1 of the 9 rows) is
+// NOT a one-off -- OWN-T0i sized it fleet-wide in LCC `entities` (57 live rows,
+// 2026-09-11) as an extractor's stated uncertainty written as a name, never a
+// real party. Reused here as a real regex class, unlike RMR/USPS.
+const KNOWN_NOT_A_GRANTEE_RE = /^(the\s+)?rmr(\s+group)?$|^u\.?s\.?\s*postal\s*service$|^usps$/i;
+const HEDGE_PHRASE_OWNER_RE = /\b(or|and\/or)\s+(affiliated|related)\b/i;
+
+// Reusable guard: a brokerage / junk / federal-antipattern / deal-string /
+// manager-or-tenant-capture-artifact / hedge-phrase grantee must NEVER become
+// the recorded owner. Reuses the same write-time guards the entity graph and
+// contact pipeline use.
 export function granteePassesOwnerGuards(name) {
   if (!name || typeof name !== 'string') return false;
   const clean = sanitizeOwnerName(name); // strips " by <Brokerage>" suffix
@@ -8908,6 +10196,8 @@ export function granteePassesOwnerGuards(name) {
   if (isFederalOwnerAntiPattern(clean)) return false; // personal-property bleed-through
   if (isJunkEntityName(clean)) return false;          // structural garbage (org-safe:
                                                       // does NOT reject firm suffixes)
+  if (KNOWN_NOT_A_GRANTEE_RE.test(clean)) return false; // RO2b: manager/tenant capture artifact
+  if (HEDGE_PHRASE_OWNER_RE.test(clean)) return false;  // RO2b/OWN-T0i: extractor uncertainty, not a name
   return true;
 }
 
@@ -9076,7 +10366,11 @@ export async function writeLoanFromDeed(args, deps) {
     const { domain, propertyId, lenderName, borrowerName = null,
             loanAmount = null, originationDate = null, documentId = null, sourceUrl = null } = args || {};
     if (!domain || propertyId == null || !lenderName) { out.skipped = 'missing_input'; return out; }
-    const lender = lenderNamePasses(lenderName);
+    const cleanedLender = cleanLenderName(lenderName);
+    if (cleanedLender.skip) { out.skipped = 'lender_failed_guards'; return out; }
+    const lender = cleanedLender.reason === 'lender_arm'
+      ? cleanedLender.clean
+      : lenderNamePasses(cleanedLender.clean);
     if (!lender) { out.skipped = 'lender_failed_guards'; return out; }
 
     // Normalize the lender into the `lenders` entity table (dedup across loans) and
@@ -9599,9 +10893,10 @@ async function upsertTrueOwners(domain, propertyId, metadata) {
       // incoming owner is created fresh and the fuzzy existing owner is filed to
       // entity_match_candidates (the W3.2 owner-reconcile lane) for a human merge.
       const createFreshTrueOwner = async () => {
+        const canonical = owner.name.toUpperCase();
         const r = await domainQuery('government', 'POST', 'true_owners', {
           name:           owner.name,
-          canonical_name: owner.name.toUpperCase(),
+          canonical_name: canonical,
           entity_type:    'buyer',
           contact_info:   JSON.stringify({
             address: owner.address || null,
@@ -9609,10 +10904,23 @@ async function upsertTrueOwners(domain, propertyId, metadata) {
             state:   owner.state   || null,
             phone:   owner.phone   || null,
           }),
-        });
-        return r.ok && r.data
-          ? (Array.isArray(r.data) ? r.data[0] : r.data)?.true_owner_id
-          : null;
+        }, {}, { suppressFailureCodes: ['23505'], callerFile: 'sidebar-pipeline.js',
+          label: 'ensureTrueOwner:createFresh' });
+        if (r.ok && r.data) {
+          return (Array.isArray(r.data) ? r.data[0] : r.data)?.true_owner_id;
+        }
+        // Prompt 81 (item 2): a bounded candidate fetch (leading-token ilike,
+        // limit 40) or a strict-core divergence can miss an existing row whose
+        // canonical_name is identical, so the "create fresh" POST collides on
+        // uq_true_owners_canonical. Fold into the existing row instead of losing
+        // it: refetch by the exact canonical_name that collided.
+        if (String(r?.data?.code) === '23505') {
+          const back = await domainQuery('government', 'GET',
+            `true_owners?canonical_name=eq.${encodeURIComponent(canonical)}` +
+            `&merged_into_true_owner_id=is.null&select=true_owner_id&limit=1`);
+          if (back.ok && back.data?.length) return back.data[0].true_owner_id;
+        }
+        return null;
       };
 
       const incomingCore = govOwnerStrictCoreJS(owner.name);
@@ -9693,10 +11001,22 @@ async function upsertTrueOwners(domain, propertyId, metadata) {
       is_prospect:       true,
       updated_at:        new Date().toISOString(),
     });
-    const r = await domainQuery('dialysis', 'POST', 'true_owners', trueOwnerData);
-    return r.ok && r.data
-      ? (Array.isArray(r.data) ? r.data[0] : r.data)?.true_owner_id
-      : null;
+    const r = await domainQuery('dialysis', 'POST', 'true_owners', trueOwnerData,
+      {}, { suppressFailureCodes: ['23505'], callerFile: 'sidebar-pipeline.js',
+        label: 'ensureTrueOwner:dia' });
+    if (r.ok && r.data) {
+      return (Array.isArray(r.data) ? r.data[0] : r.data)?.true_owner_id;
+    }
+    // Prompt 81 (item 2): the pre-insert lookup keys on normalized_name, but the
+    // unique constraint (true_owners_name_key) is on the RAW name. When the
+    // stored normalized_name diverges, the lookup misses and the POST collides.
+    // Fold into the existing row: refetch by the exact raw name.
+    if (String(r?.data?.code) === '23505') {
+      const back = await domainQuery('dialysis', 'GET',
+        `true_owners?name=eq.${encodeURIComponent(owner.name)}&select=true_owner_id&limit=1`);
+      if (back.ok && back.data?.length) return back.data[0].true_owner_id;
+    }
+    return null;
   }
 
   // Write true buyer
@@ -9872,13 +11192,17 @@ async function upsertGovernmentLeases(propertyId, metadata, provCollect) {
   const rentPsf     = parseCurrency(metadata.rent_per_sf);
   const commence    = parseDate(metadata.lease_commencement)?.split('T')[0] || null;
   const expire      = parseDate(metadata.lease_expiration)?.split('T')[0] || null;
-  const govType     = metadata.government_type || null;
   const expense     = metadata.expense_structure || metadata.lease_type || null;
   const renewal     = metadata.renewal_options || null;
 
   let writes = 0;
   for (const t of tenantInputs) {
     const tenantAgency = t.name;
+    const govType = deriveGovCreditForMetadata(metadata, {
+      agency: tenantAgency,
+      agency_full_name: tenantAgency,
+      tenant_name: tenantAgency,
+    }).primaryType;
 
     // Look up an existing costar_sidebar-sourced row keyed on
     // (property_id, data_source='costar_sidebar', tenant_agency,
@@ -10530,10 +11854,24 @@ async function upsertDomainLeases(domain, propertyId, metadata, provCollect) {
       // For OMs the rent-effective date is lease_commencement when known
       // (the rent figure is anchored to the documented start of the lease);
       // otherwise fall back to today (the OM as-of date).
-      const rawDate = anchorRecord.lease_start
+      let rawDate = anchorRecord.lease_start
         || parseDate(metadata.lease_commencement)
         || new Date().toISOString();
-      const anchorDate = typeof rawDate === 'string' ? rawDate.split('T')[0] : null;
+      let anchorDate = typeof rawDate === 'string' ? rawDate.split('T')[0] : null;
+      // Guard (property 35724): never anchor the current in-place rent to a date
+      // in the FUTURE. A superseded/placeholder lease can carry a bogus future
+      // lease_start (e.g. 2028-08-28); dia_compute_cap_rate rejects an anchor
+      // dated >12mo after the valuation event and then silently falls back to
+      // projecting from the live lease's commencement, over-escalating the cap.
+      // If the derived anchor date is in the future, use today (the OM as-of).
+      const todayIso = new Date().toISOString().split('T')[0];
+      if (anchorDate && anchorDate > todayIso) {
+        console.warn(
+          `[promotePropertyAnchorRent] property=${propertyId}: derived anchor_rent_date ` +
+          `${anchorDate} is in the future; clamping to OM as-of date ${todayIso}.`
+        );
+        anchorDate = todayIso;
+      }
       await promotePropertyAnchorRent(domain, propertyId, {
         anchor_rent:        Number(anchorRecord.annual_rent),
         anchor_rent_date:   anchorDate,
@@ -11128,8 +12466,9 @@ async function upsertDialysisListings(propertyId, metadata) {
  *        create a new Active listing. If none exist, INSERT.
  */
 async function upsertGovListings(propertyId, entity, metadata) {
+  const askHistory = deriveListingAskHistory(metadata);
   // Trigger guard
-  const hasAskingPrice = !!metadata.asking_price;
+  const hasAskingPrice = !!metadata.asking_price || askHistory.currentPrice != null || askHistory.originalPrice != null;
   const hasCurrentSale = Array.isArray(metadata.sales_history)
     && metadata.sales_history.some(s => s.is_current === true);
   if (!hasAskingPrice && !hasCurrentSale) return { count: 0, insertedListingId: null };
@@ -11177,8 +12516,8 @@ async function upsertGovListings(propertyId, entity, metadata) {
   const rawGovPricePsf = parseCurrency(metadata.price_per_sf);
   const govPricePsf = (rawGovPricePsf && rawGovPricePsf >= 50 && rawGovPricePsf <= 2000)
     ? rawGovPricePsf : null;
-  const computedGovPricePsf = (!govPricePsf && parseCurrency(metadata.asking_price) && sfInt)
-    ? Math.round(parseCurrency(metadata.asking_price) / sfInt * 100) / 100
+  const computedGovPricePsf = (!govPricePsf && askHistory.currentPrice && sfInt)
+    ? Math.round(askHistory.currentPrice / sfInt * 100) / 100
     : null;
   const safeGovPricePsf = govPricePsf || computedGovPricePsf || null;
 
@@ -11195,7 +12534,7 @@ async function upsertGovListings(propertyId, entity, metadata) {
   // a historical sale's sold_cap_rate or calculated_cap_rate. Named
   // distinctly from the sales-context capRate to keep the source
   // unambiguous in code review.
-  const listingCapRate = parseCapRateDecimal(metadata.cap_rate);
+  const listingCapRate = askHistory.currentCap;
 
   const record = stripNulls({
     property_id: propertyId,
@@ -11204,9 +12543,18 @@ async function upsertGovListings(propertyId, entity, metadata) {
     city: entity.city || null,
     state: entity.state || null,
     square_feet: sfInt != null ? Math.round(sfInt) : null,
-    asking_price: parseCurrency(metadata.asking_price),
+    asking_price: askHistory.currentPrice,
     asking_cap_rate: listingCapRate,
     asking_price_psf: safeGovPricePsf,
+    original_price: askHistory.originalPrice,
+    original_price_source: askHistory.originalPrice ? 'costar_sidebar_price_history' : null,
+    original_cap_rate: askHistory.originalCap,
+    initial_price: askHistory.originalPrice,
+    initial_cap_rate: askHistory.originalCap,
+    last_price: askHistory.currentPrice,
+    current_cap_rate: askHistory.currentCap,
+    last_price_change: askHistory.lastPriceChange,
+    price_change_count: askHistory.priceChangeCount || null,
     listing_date: listingDate,
     on_market_date: om.on_market_date,
     on_market_date_source: om.source,
@@ -11227,6 +12575,18 @@ async function upsertGovListings(propertyId, entity, metadata) {
   // Always keep property_id and listing_status even after stripNulls
   record.property_id = propertyId;
   record.listing_status = 'Active';
+
+  const preserveExistingAskHistory = (patchData, existing = {}) => {
+    const next = { ...patchData };
+    for (const key of ['original_price', 'original_price_source', 'original_cap_rate', 'initial_price', 'initial_cap_rate']) {
+      if (existing[key] != null) delete next[key];
+    }
+    if (existing.last_price_change != null && next.last_price_change == null) delete next.last_price_change;
+    if (existing.price_change_count != null && Number(existing.price_change_count) > 0 && !next.price_change_count) {
+      delete next.price_change_count;
+    }
+    return next;
+  };
 
   // Dedup: the 2026-04-23 migration adds a partial unique index on
   // (property_id, listing_source, listing_status, listing_date). Use
@@ -11250,31 +12610,87 @@ async function upsertGovListings(propertyId, entity, metadata) {
   const activeLookup = await domainQuery('government', 'GET',
     `available_listings?property_id=eq.${propertyId}` +
     `&is_active=eq.true` +
-    `&select=listing_id&order=listing_date.desc.nullslast&limit=1`
+    `&select=listing_id,original_price,original_price_source,original_cap_rate,initial_price,initial_cap_rate,last_price_change,price_change_count&order=listing_date.desc.nullslast&limit=1`
   );
   if (activeLookup.ok && activeLookup.data?.length) {
-    const existingId = activeLookup.data[0].listing_id;
+    const existingRow = activeLookup.data[0];
+    const existingId = existingRow.listing_id;
     const { property_id: _pid, ...patchData } = record;
     await domainPatch('government',
       `available_listings?listing_id=eq.${existingId}`,
-      patchData, 'upsertGovListings:updateActive'
+      preserveExistingAskHistory(patchData, existingRow), 'upsertGovListings:updateActive'
     );
     // Fall through to the auto-close-on-sale check below so a fresh sale
     // still flips this row to Sold in one round of work.
     var _existingActiveId = existingId;  // eslint-disable-line no-var
   }
 
-  // Upsert using the compound unique index. If no Active row matched above,
-  // this INSERTs; otherwise the PATCH above already ran and this becomes a
-  // no-op conflict-merge against the row we just updated.
-  const result = !(typeof _existingActiveId !== 'undefined' && _existingActiveId)
-    ? await domainQuery('government', 'POST',
-        'available_listings?on_conflict=property_id,listing_source,listing_status,listing_date',
-        record,
-        { Prefer: 'return=representation,resolution=merge-duplicates' }
-      )
-    : { ok: true };
+  // Insert the new listing. If an Active row matched above, the PATCH already
+  // ran and this is a no-op.
+  //
+  // Prompt 81 (item 4): the compound unique index
+  // available_listings_property_source_status_date_uniq is a PARTIAL index
+  // (WHERE property_id, listing_source, listing_status, listing_date ALL IS NOT
+  // NULL). PostgREST cannot infer a partial index from a bare on_conflict list,
+  // so the former on_conflict upsert aborted with 42P10 on EVERY new-listing
+  // INSERT reached here (223 gov failures, 0 rows actually written). The
+  // activeLookup pre-check above already handles the common dedup case, so a
+  // plain INSERT is correct on this path. On the rare concurrent-insert race
+  // that trips the partial unique index (23505), re-converge onto the active
+  // row and PATCH it — folding the collision into the dedup path (R37) — and
+  // suppress the handled duplicate from the failure surface.
+  let result;
+  if (typeof _existingActiveId !== 'undefined' && _existingActiveId) {
+    result = { ok: true };
+  } else {
+    result = await domainQuery('government', 'POST', 'available_listings', record,
+      { Prefer: 'return=representation' }, { suppressFailureCodes: ['23505'] });
+    if (!result.ok && String(result?.data?.code) === '23505') {
+      const raceLookup = await domainQuery('government', 'GET',
+        `available_listings?property_id=eq.${propertyId}` +
+        `&is_active=eq.true` +
+        `&select=listing_id,original_price,original_price_source,original_cap_rate,initial_price,initial_cap_rate,last_price_change,price_change_count&order=listing_date.desc.nullslast&limit=1`
+      );
+      if (raceLookup.ok && raceLookup.data?.length) {
+        const raceRow = raceLookup.data[0];
+        const { property_id: _pidRace, ...patchRace } = record;
+        result = await domainPatch('government',
+          `available_listings?listing_id=eq.${raceRow.listing_id}`,
+          preserveExistingAskHistory(patchRace, raceRow), 'upsertGovListings:raceMerge');
+      }
+    }
+  }
   if (!result.ok) return { count: 0, insertedListingId: null };
+
+  let effectiveListingId = (typeof _existingActiveId !== 'undefined' && _existingActiveId) ? _existingActiveId : null;
+  if (!effectiveListingId) {
+    if (Array.isArray(result.data) && result.data.length && result.data[0].listing_id != null) {
+      effectiveListingId = result.data[0].listing_id;
+    } else if (result.data?.listing_id != null) {
+      effectiveListingId = result.data.listing_id;
+    }
+  }
+  if (effectiveListingId && askHistory.history.length) {
+    const existingHist = await domainQuery('government', 'GET',
+      `listing_price_history?listing_id=eq.${encodeURIComponent(effectiveListingId)}` +
+      `&select=change_date,price&limit=100`
+    );
+    const seen = new Set((existingHist.ok && Array.isArray(existingHist.data) ? existingHist.data : [])
+      .map((r) => `${String(r.change_date).slice(0, 10)}|${Math.round(Number(r.price) || 0)}`));
+    const rows = askHistory.history
+      .filter((r) => !seen.has(`${r.change_date}|${Math.round(r.price)}`))
+      .map((r) => ({
+        listing_id: effectiveListingId,
+        price: r.price,
+        cap_rate: r.cap_rate,
+        change_date: r.change_date,
+        change_reason: r.change_reason || 'vendor_price_history',
+      }));
+    if (rows.length) {
+      await domainQuery('government', 'POST', 'listing_price_history', rows,
+        { Prefer: 'return=minimal' }, { label: 'upsertGovListings:priceHistory' });
+    }
+  }
 
   // Post-insert check: if a closed sale already exists for this property
   // within the last 2 years, immediately close the listing so we don't
@@ -11360,6 +12776,32 @@ export function pipelinePromoteOutcome({ propagated, domain, reason } = {}) {
       ? (reason || (domain ? 'propagation_failed' : 'no_domain_classified'))
       : null,
   };
+}
+
+/**
+ * Fix (2026-08-06 alert triage §3A): decide whether a pipeline-failed promote
+ * warrants a per-capture lcc_health_alerts row.
+ *
+ * A `no_domain` failure on a THIN capture — a CoStar contact-page fragment with
+ * almost no text, no sale notes, no PDFs — is a page the classifier declined
+ * CORRECTLY (legitimately out of domain scope). A warn alert per such capture is
+ * noise that buries real signal (8 of 9 open `sidebar_promote_pipeline_failed`
+ * alerts were exactly this: searchTextLen 56–97, no sale notes, no PDFs).
+ *
+ * So: suppress the alert for a thin `no_domain` (count it instead). A SUBSTANTIVE
+ * capture (rich text ≥150 chars, OR sale notes, OR PDFs) that still lands
+ * `no_domain` KEEPS its alert — those are potential classifier gaps worth a look.
+ * `unknown_domain` and every other failure reason ALWAYS alert. Pure —
+ * unit-tested.
+ */
+export function shouldAlertPipelineFailure({ reason, classifierDiag } = {}) {
+  if (reason !== 'no_domain') return true;
+  const d = classifierDiag || {};
+  const thin =
+    (Number(d.searchTextLen) || 0) < 150 &&
+    !d.hasSaleNotes &&
+    !d.hasPdfTexts;
+  return !thin;
 }
 
 /**
@@ -11567,13 +13009,22 @@ export async function processSidebarExtraction(entityId, workspaceId, userId, op
     domain,
     reason: propagation.reason,
   });
+  let thinNoDomainSuppressed = false;
   if (promoteOutcome.pipeline_failed) {
-    recordSidebarPipelineFailure({
-      entityId, workspaceId, domain,
-      reason: promoteOutcome.pipeline_reason,
-      classifierDiag: _lastClassifierDiag,
-      propagation,
-    }).catch((e) => console.warn('[sidebar-pipeline] alert record failed (suppressed):', e?.message || e));
+    if (shouldAlertPipelineFailure({ reason: propagation.reason, classifierDiag: _lastClassifierDiag })) {
+      recordSidebarPipelineFailure({
+        entityId, workspaceId, domain,
+        reason: promoteOutcome.pipeline_reason,
+        classifierDiag: _lastClassifierDiag,
+        propagation,
+      }).catch((e) => console.warn('[sidebar-pipeline] alert record failed (suppressed):', e?.message || e));
+    } else {
+      // Thin no_domain capture — the classifier declined a legitimately
+      // out-of-scope page. Count it (surfaced in the response diagnostics)
+      // instead of opening a per-capture warn alert that would bury real signal.
+      thinNoDomainSuppressed = true;
+      console.log(`[Sidebar pipeline] thin no_domain capture — alert suppressed (entity=${entityId}, searchTextLen=${_lastClassifierDiag?.searchTextLen ?? 'n/a'})`);
+    }
   }
 
   console.log(`[Sidebar pipeline] Done: entity=${entityId}, domain=${domain}, contacts=${totalContacts}, sales=${salesCount}, propagated=${propagation.propagated}`);
@@ -11596,6 +13047,11 @@ export async function processSidebarExtraction(entityId, workspaceId, userId, op
     // W1.4-L3b: explicit promote status so the sidebar can render a failure
     // inline instead of a false "success" toast on a no-domain / no-write run.
     ...promoteOutcome,
+    // Fix (2026-08-06 alert triage §3A): true when this failed promote was a
+    // thin no_domain capture whose per-capture health alert was suppressed as
+    // noise (counted here instead). Substantive no_domain / unknown_domain /
+    // other failures still open an alert and leave this false.
+    thin_no_domain_suppressed: thinNoDomainSuppressed,
     processed_at: new Date().toISOString(),
   };
 }

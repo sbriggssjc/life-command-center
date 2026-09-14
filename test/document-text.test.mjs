@@ -36,7 +36,10 @@ describe('document-text foundation (R58 Unit 1)', () => {
       {
         fetchDocBytes: okFetch,
         pdfTextFromBuffer: async () => 'DEED 12345',                 // thin junk text layer
-        ocrPdfToText: async () => ({ ok: true, text: 'OCR transcribed full deed text from the scan' }),
+        // OCR2: the tiered chain is the ONLY PDF OCR route out of extractDocumentText
+        // now, so the fallback is injected there. What this test asserts is unchanged —
+        // a thin text layer must route to OCR rather than being taken at face value.
+        ocrPdfToTextTiered: async () => ({ ok: true, text: 'OCR transcribed full deed text from the scan' }),
       }
     );
     assert.equal(r.method, 'ocr');
@@ -79,7 +82,8 @@ describe('document-text foundation (R58 Unit 1)', () => {
       {
         fetchDocBytes: okFetch,
         pdfTextFromBuffer: async () => '',                       // no text layer
-        ocrPdfToText: async () => ({ ok: true, text: 'OCR transcribed deed text' }),
+        // OCR2: injected on the tiered seam — the gpt-4o-direct branch no longer exists.
+        ocrPdfToTextTiered: async () => ({ ok: true, text: 'OCR transcribed deed text' }),
       }
     );
     assert.equal(r.method, 'ocr');

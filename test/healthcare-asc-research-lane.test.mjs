@@ -1,0 +1,1420 @@
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import test from 'node:test';
+
+import {
+  ASC_RESEARCH_SAMPLE_SIZE,
+  assertAscPropertyReview,
+  assertAscResearchImport,
+  buildAscStructuredCapture,
+  diagnoseAscIdentityMatch,
+  normalizeAscAddressToken,
+} from '../api/_shared/asc-research-lane.js';
+import {
+  safeEvidenceUrl,
+  summarizeCapture,
+  validatePrimaryDraft,
+} from '../asc-review-presentation.js';
+
+const sha = (digit) => digit.repeat(64);
+
+test('ASC property review contract accepts only exact governed scorecards', () => {
+  const base = {
+    run_id: '11111111-1111-4111-8111-111111111111', candidate_fingerprint: sha('a'), mode: 'primary',
+    clinical_verified: true, property_form: 'minority_mob', landlord_owner: 'Example Owner LLC',
+    ownership_evidence: [{ source: 'public_record' }], landlord_addressable: null,
+    economics_bounded: false, reviewer_confidence: 'medium', second_review_required: true,
+    research_minutes: { clinical: 1, property: 2, ownership: 3, economics: 4, contact: 5 },
+    evidence_citations: [{ source: 'capture' }], notes: 'Evidence-bound review.',
+  };
+  assert.equal(assertAscPropertyReview(base).property_form, 'minority_mob');
+  assert.throws(() => assertAscPropertyReview({ ...base, property_form: 'multi_tenant' }), /property_form/);
+  assert.throws(() => assertAscPropertyReview({ ...base, canonical_write_authorized: true }), /unsupported review fields/);
+  assert.deepEqual(assertAscPropertyReview({
+    run_id: base.run_id, candidate_fingerprint: base.candidate_fingerprint,
+    mode: 'second', verdict: 'disagree', notes: 'Conflict retained.',
+  }, 'second'), { verdict: 'disagree', notes: 'Conflict retained.' });
+});
+
+test('ASC review presentation makes licensed evidence readable without trusting unsafe source links', () => {
+  const summary = summarizeCapture({
+    source: 'rca', source_url: 'https://app.rcanalytics.com/property/123', captured_at: '2026-09-12T00:00:00Z',
+    address: '1101 Professional Blvd', city: 'Evansville', state: 'IN', zip: '47714',
+    structured_payload: { building_class: 'B', square_footage: 12345, tenants: [{ name: 'Example ASC' }] },
+    reconciliation: { asc_identity_match: { mode: 'approved_alias', second_review_required: true, corroboration_basis: 'same parcel' } },
+  });
+  assert.equal(summary.sourceUrl, 'https://app.rcanalytics.com/property/123');
+  assert.equal(summary.address, '1101 Professional Blvd, Evansville, IN, 47714');
+  assert.equal(summary.identity.secondReviewRequired, true);
+  assert.ok(summary.fields.some((field) => field.label === 'Building class' && field.value === 'B'));
+  assert.equal(safeEvidenceUrl('javascript:alert(1)'), null);
+});
+
+test('ASC review presentation explains every primary save blocker and accepts governed unresolved values', () => {
+  const blank = validatePrimaryDraft({ researchMinutes: {}, ownershipEvidence: '{', citations: '{}' });
+  assert.ok(blank.some((item) => item.includes('clinical identity')));
+  assert.ok(blank.some((item) => item.includes('property form')));
+  assert.ok(blank.some((item) => item.includes('Ownership evidence is not valid JSON')));
+  assert.ok(blank.some((item) => item.includes('Evidence citations must be a JSON array')));
+  assert.deepEqual(validatePrimaryDraft({
+    clinicalVerified: false, propertyForm: 'unknown',
+    researchMinutes: { clinical: 0, property: 0, ownership: 0, economics: 0, contact: 0 },
+    ownershipEvidence: '[]', citations: '[]',
+  }), []);
+});
+
+function candidates(count = ASC_RESEARCH_SAMPLE_SIZE) {
+  return Array.from({ length: count }, (_, index) => ({
+    candidate_fingerprint: index.toString(16).padStart(64, '0'),
+    sampling_cell: index % 2 ? 'south__single_site' : 'midwest__single_site',
+    cms_identity: {
+      ccn: String(100000 + index),
+      npis: [String(9000000000 + index)],
+      facility_name: `Synthetic ASC ${index}`,
+      address: `${index + 1} Main Street Suite ${index}`,
+      city: 'Tulsa',
+      state: 'OK',
+      zip: '74103',
+    },
+    cms_evidence: { pos_certified: true },
+  }));
+}
+
+test('frozen ASC import requires exactly 50 unique release-bound candidates', () => {
+  const input = {
+    release_id: sha('a'),
+    selection_fingerprint: sha('b'),
+    candidate_pool_fingerprint: sha('c'),
+    candidates: candidates(),
+  };
+  const normalized = assertAscResearchImport(input);
+  assert.equal(normalized.length, 50);
+  assert.equal(normalized[0].sample_ordinal, 1);
+  assert.equal(normalized[49].sample_ordinal, 50);
+  assert.match(normalized[0].address_token, /^1 MAIN ST\|TULSA\|OK\|74103$/);
+  assert.throws(() => assertAscResearchImport({ ...input, candidates: candidates(49) }), /exactly 50/);
+  const duplicate = candidates(); duplicate[49].candidate_fingerprint = duplicate[0].candidate_fingerprint;
+  assert.throws(() => assertAscResearchImport({ ...input, candidates: duplicate }), /duplicates/);
+});
+
+test('sidebar evidence capture is structured-only and bound to the exact active address', () => {
+  const target = {
+    candidate_fingerprint: sha('d'),
+    address_token: normalizeAscAddressToken({ address: '1200 South Main St.', city: 'Tulsa', state: 'OK', zip: '74119' }),
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://example.costar.com/property/123',
+    address: '1200 S Main Street, Suite 400',
+    city: 'Tulsa', state: 'OK', zip: '74119-1234',
+    square_footage: '18,500',
+    year_built: '2018',
+    tenant_name: 'Synthetic Surgery Center',
+    contacts: [{ name: 'Synthetic Owner Contact' }],
+    raw_html: '<html>must never be captured</html>',
+    cookies: 'must never be captured',
+  };
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.capture.source, 'costar');
+  assert.equal(built.capture.structured_payload.square_footage, '18,500');
+  assert.equal(Object.hasOwn(built.capture.structured_payload, 'raw_html'), false);
+  assert.equal(Object.hasOwn(built.capture.structured_payload, 'cookies'), false);
+  assert.ok(built.evidence.some((row) => row.field_name === 'tenant_name'));
+  assert.throws(() => buildAscStructuredCapture(target, { ...context, address: '999 Other Road' }), /does not match/);
+});
+
+test('CoStar full display addresses bind to the same frozen street-only target', () => {
+  const target = {
+    candidate_fingerprint: sha('e'),
+    address_token: normalizeAscAddressToken({
+      address: '1101 Professional Blvd', city: 'Evansville', state: 'IN', zip: '47714',
+    }),
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://product.costar.com/detail/lookup/858677/summary',
+    address: '1101 Professional Blvd, Evansville, IN 47714',
+    city: 'Evansville', state: 'IN', zip: '47714',
+    square_footage: '24,072',
+  };
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.capture.address_token, target.address_token);
+  assert.equal(built.capture.structured_payload.square_footage, '24,072');
+});
+
+test('multi-token CMS suite suffixes bind to building-level research pages', () => {
+  const cmsToken = normalizeAscAddressToken({
+    address: '302 W 14TH ST STE 100 B',
+    city: 'JEFFERSONVILLE',
+    state: 'IN',
+    zip: '47130',
+  });
+  const costarToken = normalizeAscAddressToken({
+    address: '302 W 14th St',
+    city: 'Jeffersonville',
+    state: 'IN',
+    zip: '47130',
+  });
+  assert.equal(cmsToken, '302 W 14TH ST|JEFFERSONVILLE|IN|47130');
+  assert.equal(cmsToken, costarToken);
+});
+
+test('Circle and Cir normalize to the same exact frozen building address', () => {
+  const target = {
+    candidate_fingerprint: sha('6'),
+    // This literal reproduces a row frozen before CIRCLE/CIR normalization
+    // existed. Runtime comparison must not require rewriting it.
+    address_token: '1120 RAINTREE CIRCLE|ALLEN|TX|75013',
+    cms_identity: {
+      facility_name: 'Texas Health Spine Surgery Center Allen LLC',
+      address: '1120 Raintree Circle Suite 100', city: 'Allen', state: 'TX', zip: '75013',
+    },
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://example.costar.com/property/allen-medical-plaza',
+    address: '1120 Raintree Cir', city: 'Allen', state: 'TX', zip: '75013',
+    square_footage: '44,761',
+    tenants: [{ name: 'Texas Health Spine Surgery Center', occupied_sf: '15,718' }],
+  };
+
+  assert.equal(normalizeAscAddressToken(target.cms_identity), '1120 RAINTREE CIR|ALLEN|TX|75013');
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.capture.address_token, '1120 RAINTREE CIRCLE|ALLEN|TX|75013');
+  assert.equal(built.capture.address, context.address);
+  assert.equal(built.identity_match.mode, 'normalized_frozen_identity_address');
+  assert.equal(built.identity_match.frozen_address_token_preserved, target.address_token);
+  assert.equal(built.identity_match.normalized_comparison_token, '1120 RAINTREE CIR|ALLEN|TX|75013');
+
+  for (const mismatch of [
+    { address: '1122 Raintree Cir' },
+    { city: 'Plano' },
+    { state: 'OK' },
+    { zip: '75002' },
+  ]) {
+    assert.throws(
+      () => buildAscStructuredCapture(target, { ...context, ...mismatch }),
+      /does not match/,
+    );
+  }
+});
+
+test('USPS Cove and Cv equivalence preserves raw addresses and requires second review', () => {
+  const target = {
+    candidate_fingerprint: sha('4'),
+    // Reproduce a row frozen before USPS COVE/CV normalization existed.
+    address_token: '4100 CEDAR COVE|TULSA|OK|74103',
+    cms_identity: {
+      facility_name: 'Synthetic Ambulatory Center',
+      address: '4100 Cedar Cove', city: 'Tulsa', state: 'OK', zip: '74103',
+    },
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://example.costar.com/property/cedar-cove',
+    address: '4100 Cedar Cv', city: 'Tulsa', state: 'OK', zip: '74103',
+    square_footage: '6,390',
+    tenant_name: 'Synthetic Plastic Surgery and Spa',
+  };
+
+  assert.equal(normalizeAscAddressToken(target.cms_identity), '4100 CEDAR CV|TULSA|OK|74103');
+  assert.equal(normalizeAscAddressToken(context), '4100 CEDAR CV|TULSA|OK|74103');
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.capture.address_token, target.address_token);
+  assert.equal(built.capture.address, context.address);
+  assert.equal(built.identity_match.mode, 'usps_cove_suffix_equivalence');
+  assert.equal(built.identity_match.cms_address_preserved, target.cms_identity.address);
+  assert.equal(built.identity_match.captured_address_preserved, context.address);
+  assert.equal(built.identity_match.second_review_required, true);
+
+  for (const mismatch of [
+    { address: '4101 Cedar Cv' },
+    { city: 'Oklahoma City' },
+    { state: 'AR' },
+    { zip: '74104' },
+  ]) {
+    assert.throws(
+      () => buildAscStructuredCapture(target, { ...context, ...mismatch }),
+      /does not match/,
+    );
+  }
+});
+
+test('a single compound street split requires exact facility corroboration', () => {
+  const target = {
+    candidate_fingerprint: sha('5'),
+    address_token: '131 SUMMERPLACE DR|WEST COLUMBIA|SC|29169',
+    cms_identity: {
+      facility_name: 'South Carolina Endoscopy Center',
+      address: '131 Summerplace Drive', city: 'West Columbia', state: 'SC', zip: '29169',
+    },
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://example.costar.com/property/south-carolina-endoscopy-center',
+    address: '131 Summer Place Dr', city: 'West Columbia', state: 'SC', zip: '29169',
+    building_name: 'South Carolina Endoscopy Center',
+    square_footage: '20,519',
+    tenant_name: 'Consultants In Gstrntrlgy',
+  };
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.capture.address_token, target.address_token);
+  assert.equal(built.capture.address, context.address);
+  assert.equal(built.identity_match.mode, 'facility_corroborated_compound_street_split');
+  assert.equal(built.identity_match.frozen_compound_token, 'SUMMERPLACE');
+  assert.deepEqual(built.identity_match.captured_street_parts, ['SUMMER', 'PLACE']);
+  assert.equal(built.identity_match.corroboration_basis, 'building_name');
+  assert.equal(built.identity_match.second_review_required, true);
+
+  for (const mismatch of [
+    { building_name: 'Unrelated Medical Plaza' },
+    { address: '133 Summer Place Dr' },
+    { address: '131 Summer Park Dr' },
+    { city: 'Columbia' },
+    { state: 'NC' },
+    { zip: '29170' },
+  ]) {
+    assert.throws(
+      () => buildAscStructuredCapture(target, { ...context, ...mismatch }),
+      /does not match/,
+    );
+  }
+});
+
+test('shared-address parent buildings require explicit ASC tenant corroboration', () => {
+  const target = {
+    candidate_fingerprint: sha('f'),
+    address_token: '100 CAMPUS DR 1ST FLOOR|TESTVILLE|MI|48000',
+    cms_identity: {
+      facility_name: 'Synthetic Endoscopy Center at Research Campus',
+      address: '100 Campus Dr, 1st Floor, Suite D110',
+      city: 'Testville', state: 'MI', zip: '48000',
+    },
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://example.costar.com/property/shared-campus',
+    address: '100 Campus Dr', city: 'Testville', state: 'MI', zip: '48000',
+    building_name: 'Synthetic Medical Center',
+    square_footage: '193,678',
+    tenants: [
+      { name: 'Synthetic Health System', occupied_sf: '193,678' },
+      { name: 'Synthetic Endoscopy Center', occupied_sf: '5,000' },
+    ],
+  };
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.capture.address_token, target.address_token);
+  assert.equal(built.identity_match.mode, 'tenant_corroborated_parent_building');
+  assert.equal(built.identity_match.cms_sublocation_preserved, target.cms_identity.address);
+
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, tenants: [{ name: 'Synthetic Health System' }] }),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, address: '100 Campus Dr', city: 'Other City' }),
+    /does not match/,
+  );
+});
+
+test('parent buildings allow a missing street suffix only with corroborated enrollment organization tenancy', () => {
+  const target = {
+    candidate_fingerprint: sha('a'),
+    address_token: '100 W CENTRAL|TESTVILLE|KS|67000',
+    cms_identity: {
+      facility_name: 'Synthetic Surgery Center',
+      address: '100 West Central, Suite One',
+      city: 'Testville', state: 'KS', zip: '67000',
+    },
+    cms_evidence: {
+      enrollment_corroborated: true,
+      enrollment_org_names: ['Synthetic Family Physicians, P.A.'],
+    },
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://example.costar.com/property/enrollment-org-campus',
+    address: '100 W Central Ave', city: 'Testville', state: 'KS', zip: '67000',
+    square_footage: '50,000',
+    tenant_name: 'Synthetic Family Physicians, P.A.',
+  };
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.capture.address_token, target.address_token);
+  assert.equal(built.identity_match.mode, 'enrollment_org_corroborated_parent_building');
+  assert.equal(built.identity_match.corroboration_basis, 'cms_enrollment_organization');
+
+  assert.throws(
+    () => buildAscStructuredCapture({
+      ...target,
+      cms_evidence: { ...target.cms_evidence, enrollment_corroborated: false },
+    }, context),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, tenant_name: 'Unrelated Medical Group' }),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, address: '102 W Central Ave' }),
+    /does not match/,
+  );
+});
+
+test('terminal Township municipality aliases require exact location and explicit tenant corroboration', () => {
+  const target = {
+    candidate_fingerprint: sha('8'),
+    address_token: '1000 GALLOPING HILL RD|UNION|NJ|07083',
+    cms_identity: {
+      facility_name: 'Atlantic Surgery Center at Union',
+      address: '1000 Galloping Hill Road', city: 'Union', state: 'NJ', zip: '07083',
+    },
+    cms_evidence: {
+      enrollment_corroborated: true,
+      enrollment_org_names: ['Union Surgery Center, LLC'],
+    },
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://example.costar.com/property/union-medical-park',
+    address: '1000 Galloping Hill Rd', city: 'Union Township', state: 'NJ', zip: '07083',
+    square_footage: '150,400',
+    tenants: [{ name: 'Union Surgery Center', occupied_sf: '15,722' }],
+  };
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.capture.address_token, target.address_token);
+  assert.equal(built.identity_match.mode, 'tenant_corroborated_municipality_alias');
+  assert.equal(built.identity_match.corroboration_basis, 'cms_enrollment_organization');
+  assert.equal(built.identity_match.cms_city_preserved, 'Union');
+  assert.equal(built.identity_match.captured_city, 'Union Township');
+  assert.equal(built.identity_match.second_review_required, true);
+
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, tenants: [{ name: 'Unrelated Medical Group' }] }),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, address: '1002 Galloping Hill Rd' }),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, city: 'Union City' }),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, state: 'PA' }),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, zip: '07084' }),
+    /does not match/,
+  );
+});
+
+test('captured directional and street type extensions require a CMS sublocation and exact tenant corroboration', () => {
+  const target = {
+    candidate_fingerprint: sha('7'),
+    address_token: '2704 GALLOWAY|MESQUITE|TX|75150',
+    cms_identity: {
+      facility_name: 'Texas GI Endoscopy Center',
+      address: '2704 Galloway Suite 102', city: 'Mesquite', state: 'TX', zip: '75150',
+    },
+    cms_evidence: {
+      enrollment_corroborated: true,
+      enrollment_org_names: ['Mesquite TX Endoscopy ASC LLC'],
+    },
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://example.costar.com/property/americana-medical-plaza',
+    address: '2704 N Galloway Ave', city: 'Mesquite', state: 'TX', zip: '75150',
+    square_footage: '18,844',
+    tenants: [{ name: 'Texas GI Endoscopy Center', occupied_sf: '4,750' }],
+  };
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.capture.address_token, target.address_token);
+  assert.equal(built.identity_match.mode, 'tenant_corroborated_directional_street_type_extension');
+  assert.equal(built.identity_match.added_directional, 'N');
+  assert.equal(built.identity_match.added_street_type, 'AVE');
+  assert.equal(built.identity_match.corroboration_basis, 'facility_name');
+  assert.equal(built.identity_match.cms_sublocation_preserved, '2704 Galloway Suite 102');
+  assert.equal(built.identity_match.captured_building_address, '2704 N Galloway Ave');
+  assert.equal(built.identity_match.second_review_required, true);
+
+  for (const mismatch of [
+    { tenants: [{ name: 'Unrelated Medical Group' }] },
+    { address: '2706 N Galloway Ave' },
+    { address: '2704 N Other Ave' },
+    { address: '2704 N N Galloway Ave' },
+    { city: 'Garland' },
+    { state: 'OK' },
+    { zip: '75149' },
+  ]) {
+    assert.throws(
+      () => buildAscStructuredCapture(target, { ...context, ...mismatch }),
+      /does not match/,
+    );
+  }
+  assert.throws(
+    () => buildAscStructuredCapture({
+      ...target,
+      cms_identity: { ...target.cms_identity, address: '2704 Galloway' },
+    }, context),
+    /does not match/,
+  );
+});
+
+test('adjacent civic numbers require an evidence-backed candidate alias and tenant corroboration', () => {
+  const alias = {
+    status: 'approved',
+    reason_code: 'same_physical_building_dedicated_entry',
+    address_token: '12 RESEARCH LN|TESTVILLE|IL|60000',
+    authorized_by: 'research_owner',
+    authorized_at: '2026-08-27T12:00:00Z',
+    evidence_citations: [
+      { source: 'official_operator', url: 'https://example.org/operator-location' },
+      { source: 'property_manager', url: 'https://example.org/property-address-alias' },
+    ],
+  };
+  const target = {
+    candidate_fingerprint: sha('b'),
+    address_token: '10 RESEARCH LN|TESTVILLE|IL|60000',
+    cms_identity: {
+      facility_name: 'Synthetic Surgical Center Inc',
+      address: '10 Research Lane', city: 'Testville', state: 'IL', zip: '60000',
+    },
+    cms_evidence: {
+      enrollment_corroborated: true,
+      enrollment_org_names: ['Synthetic Surgical Center LLC'],
+      approved_parent_address_aliases: [alias],
+    },
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://example.costar.com/property/research-campus',
+    address: '12 Research Ln', city: 'Testville', state: 'IL', zip: '60000',
+    square_footage: '60,000', tenant_name: 'Synthetic Surgical Center Inc',
+  };
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.capture.address_token, target.address_token);
+  assert.equal(built.identity_match.mode, 'evidence_backed_parent_address_alias');
+  assert.equal(built.identity_match.second_review_required, true);
+
+  assert.throws(
+    () => buildAscStructuredCapture({
+      ...target,
+      cms_evidence: { ...target.cms_evidence, approved_parent_address_aliases: [] },
+    }, context),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture({
+      ...target,
+      cms_evidence: {
+        ...target.cms_evidence,
+        approved_parent_address_aliases: [{ ...alias, evidence_citations: [alias.evidence_citations[0]] }],
+      },
+    }, context),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, tenant_name: 'Unrelated Tenant' }),
+    /does not match/,
+  );
+});
+
+test('evidence-backed aliases allow only terminal legal-entity suffix differences in tenant names', () => {
+  const target = {
+    candidate_fingerprint: sha('c'),
+    address_token: '10 RESEARCH LN|TESTVILLE|IL|60000',
+    cms_identity: {
+      facility_name: 'Synthetic Surgical Center Inc',
+      address: '10 Research Lane', city: 'Testville', state: 'IL', zip: '60000',
+    },
+    cms_evidence: {
+      enrollment_corroborated: true,
+      enrollment_org_names: ['Synthetic Surgical Center LLC'],
+      approved_parent_address_aliases: [{
+        status: 'approved',
+        reason_code: 'same_physical_building_dedicated_entry',
+        address_token: '12 RESEARCH LN|TESTVILLE|IL|60000',
+        authorized_by: 'research_owner',
+        authorized_at: '2026-08-27T12:00:00Z',
+        evidence_citations: [
+          { source: 'official_operator', url: 'https://example.org/operator-location' },
+          { source: 'property_manager', url: 'https://example.org/property-address-alias' },
+        ],
+      }],
+    },
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://example.costar.com/property/research-campus',
+    address: '12 Research Ln', city: 'Testville', state: 'IL', zip: '60000',
+    square_footage: '60,000', tenant_name: 'Synthetic Surgical Center',
+  };
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.identity_match.mode, 'evidence_backed_parent_address_alias');
+  assert.equal(built.identity_match.corroborated_name, 'SYNTHETIC SURGICAL CENTER');
+
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, tenant_name: 'Synthetic Surgical Center East' }),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, tenant_name: 'Synthetic Surgery Center' }),
+    /does not match/,
+  );
+});
+
+test('approved operating identity aliases bind a CMS sublocation to its parent building', () => {
+  const operatingAlias = {
+    status: 'approved',
+    reason_code: 'legal_entity_operating_identity_same_site',
+    cms_facility_name: 'Synthetic Hudes Endoscopy Center LLC',
+    operating_names: ['Synthetic Johns Creek Endoscopy', 'Synthetic Atlanta Gastroenterology'],
+    address_token: '4275 JOHNS CREEK PKWY|TESTVILLE|GA|30024',
+    authorized_by: 'research_owner',
+    authorized_at: '2026-09-01T12:00:00Z',
+    evidence_citations: [
+      { source: 'official_operator', url: 'https://operator.example/location/endoscopy' },
+      { source: 'official_operator', url: 'https://parent.example/locations/endoscopy' },
+    ],
+  };
+  const target = {
+    candidate_fingerprint: sha('d'),
+    address_token: '4275 JOHNS CREEK PARKWAY BUILDING E|TESTVILLE|GA|30024',
+    cms_identity: {
+      facility_name: 'Synthetic Hudes Endoscopy Center LLC',
+      address: '4275 Johns Creek Parkway, Building E, Suite A',
+      city: 'Testville', state: 'GA', zip: '30024',
+    },
+    cms_evidence: {
+      enrollment_corroborated: true,
+      enrollment_org_names: ['Synthetic Hudes Endoscopy Center LLC'],
+      approved_operating_identity_aliases: [operatingAlias],
+    },
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://example.costar.com/property/johns-creek',
+    address: '4275 Johns Creek Pky', city: 'Testville', state: 'GA', zip: '30024',
+    square_footage: '13,791', tenant_name: 'Synthetic Atlanta Gastroenterology',
+  };
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.capture.address_token, target.address_token);
+  assert.equal(built.capture.address, context.address);
+  assert.equal(built.identity_match.mode, 'approved_operating_identity_parent_building');
+  assert.equal(built.identity_match.second_review_required, true);
+  assert.equal(built.identity_match.captured_operating_name, 'SYNTHETIC ATLANTA GASTROENTEROLOGY');
+
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, tenant_name: 'Unrelated Medical Group' }),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, address: '4277 Johns Creek Pky' }),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, zip: '30025' }),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture({
+      ...target,
+      cms_evidence: {
+        ...target.cms_evidence,
+        approved_operating_identity_aliases: [{
+          ...operatingAlias,
+          evidence_citations: [operatingAlias.evidence_citations[0]],
+        }],
+      },
+    }, context),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture({
+      ...target,
+      cms_evidence: {
+        ...target.cms_evidence,
+        approved_operating_identity_aliases: [{
+          ...operatingAlias,
+          evidence_citations: [
+            operatingAlias.evidence_citations[0],
+            { source: 'official_operator', url: 'https://operator.example/second-page' },
+          ],
+        }],
+      },
+    }, context),
+    /does not match/,
+  );
+});
+
+test('approved operating identity aliases bind an exact CoStar record inside a building range', () => {
+  const operatingAlias = {
+    status: 'approved',
+    reason_code: 'legal_entity_operating_identity_same_site',
+    cms_facility_name: '436 Synthetic Hills LLC',
+    operating_names: ['436 Synthetic Hills Surgery Center'],
+    address_token: '428 444 N BEDFORD DR|TESTVILLE|CA|90210',
+    costar_property_id: '251984',
+    parcel_number: '4343-022-029',
+    authorized_by: 'research_owner',
+    authorized_at: '2026-09-03T12:00:00Z',
+    second_review_required: true,
+    evidence_citations: [
+      { source: 'official_operator', url: 'https://operator.example/436-surgery-center' },
+      { source: 'official_operator', url: 'https://facility.example/about-436' },
+    ],
+  };
+  const target = {
+    candidate_fingerprint: sha('f'),
+    address_token: '436 N BEDFORD|TESTVILLE|CA|90210',
+    cms_identity: {
+      facility_name: '436 Synthetic Hills LLC',
+      address: '436 N Bedford, Suite 103',
+      city: 'Testville', state: 'CA', zip: '90210',
+    },
+    cms_evidence: {
+      enrollment_corroborated: true,
+      enrollment_org_names: ['436 Synthetic Hills LLC'],
+      approved_operating_identity_aliases: [operatingAlias],
+    },
+  };
+  const context = {
+    source: 'costar',
+    costar_property_id: '251984',
+    parcel_number: '4343-022-029',
+    page_url: 'https://example.costar.com/property/251984',
+    address: '428-444 N Bedford Dr', city: 'Testville', state: 'CA', zip: '90210',
+    square_footage: '75,400',
+    tenant_name: 'Unrelated Primary Tenant',
+    tenants: [{ name: '436 Synthetic Hills Surgery Center' }],
+  };
+
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.identity_match.mode, 'approved_operating_identity_range_containment');
+  assert.equal(built.identity_match.frozen_street_number, 436);
+  assert.equal(built.identity_match.captured_range_start, 428);
+  assert.equal(built.identity_match.captured_range_end, 444);
+  assert.equal(built.identity_match.captured_operating_name, '436 SYNTHETIC HILLS SURGERY CENTER');
+  assert.equal(built.identity_match.costar_property_id, '251984');
+  assert.equal(built.identity_match.parcel_number, '4343-022-029');
+  assert.equal(built.identity_match.second_review_required, true);
+
+  const diagnostics = diagnoseAscIdentityMatch(target, context);
+  assert.equal(diagnostics.tenant_count, 2);
+  assert.deepEqual(diagnostics.checks, {
+    approved_alias_found: true,
+    captured_address_matches_alias: true,
+    frozen_number_inside_captured_range: true,
+    costar_source: true,
+    costar_property_id_matches: true,
+    parcel_number_matches: true,
+    approved_operating_tenant_observed: true,
+    two_independent_official_hosts: true,
+    authorization_metadata_present: true,
+    second_review_required: true,
+  });
+  assert.equal(
+    diagnoseAscIdentityMatch(target, { ...context, tenants: [{ name: 'Unrelated Surgery Center' }] })
+      .checks.approved_operating_tenant_observed,
+    false,
+  );
+
+  const blockedContexts = [
+    { ...context, address: '428-434 N Bedford Dr' },
+    { ...context, address: '428-444 N Camden Dr' },
+    { ...context, zip: '90211' },
+    { ...context, tenants: [{ name: 'Unrelated Surgery Center' }] },
+    { ...context, costar_property_id: '251985' },
+    { ...context, parcel_number: '4343-022-030' },
+    { ...context, source: 'rca' },
+  ];
+  for (const blocked of blockedContexts) {
+    assert.throws(() => buildAscStructuredCapture(target, blocked), /does not match/);
+  }
+
+  for (const evidenceCitations of [
+    [operatingAlias.evidence_citations[0]],
+    [
+      operatingAlias.evidence_citations[0],
+      { source: 'official_operator', url: 'https://operator.example/second-page' },
+    ],
+  ]) {
+    assert.throws(() => buildAscStructuredCapture({
+      ...target,
+      cms_evidence: {
+        ...target.cms_evidence,
+        approved_operating_identity_aliases: [{
+          ...operatingAlias,
+          evidence_citations: evidenceCitations,
+        }],
+      },
+    }, context), /does not match/);
+  }
+});
+
+test('approved same-parcel conflicts preserve service and mailing addresses with exact tenant corroboration', () => {
+  const conflict = {
+    status: 'approved',
+    reason_code: 'service_location_mailing_address_same_parcel',
+    frozen_address_token: '5058 S FLORIDA AVE|TESTVILLE|FL|33813',
+    captured_address_token: '5050 S FLORIDA AVE|TESTVILLE|FL|33813',
+    parcel_number: '23-29-12-000000-021160',
+    authorized_by: 'research_owner',
+    authorized_at: '2026-09-02T12:00:00Z',
+    evidence_citations: [
+      { source: 'official_facility_registry', url: 'https://registry.example/asc-location' },
+      { source: 'licensed_property_public_record', url: 'https://property.example/public-record' },
+    ],
+  };
+  const target = {
+    candidate_fingerprint: sha('e'),
+    address_token: conflict.frozen_address_token,
+    cms_identity: {
+      facility_name: 'Synthetic Ospine Surgical Center',
+      address: '5058 S Florida Ave', city: 'Testville', state: 'FL', zip: '33813',
+    },
+    cms_evidence: {
+      enrollment_corroborated: true,
+      enrollment_org_names: ['Synthetic Ospine LLC'],
+      approved_same_parcel_address_conflicts: [conflict],
+    },
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://example.costar.com/property/ospine',
+    address: '5050 S Florida Ave', city: 'Testville', state: 'FL', zip: '33813',
+    parcel_number: '23-29-12-000000-021160',
+    tenant_name: 'Synthetic Ospine Surgical Center',
+    square_footage: '3,500',
+  };
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.capture.address_token, target.address_token);
+  assert.equal(built.capture.address, context.address);
+  assert.equal(built.identity_match.mode, 'approved_same_parcel_address_conflict');
+  assert.equal(built.identity_match.parcel_number, context.parcel_number);
+  assert.equal(built.identity_match.second_review_required, true);
+
+  for (const mismatch of [
+    { parcel_number: '23-29-12-000000-021161' },
+    { parcel_number: '' },
+    { tenant_name: 'Unrelated Surgical Center' },
+    { address: '5052 S Florida Ave' },
+    { city: 'Other City' },
+    { zip: '33814' },
+  ]) {
+    assert.throws(
+      () => buildAscStructuredCapture(target, { ...context, ...mismatch }),
+      /does not match/,
+    );
+  }
+  assert.throws(
+    () => buildAscStructuredCapture({
+      ...target,
+      cms_evidence: {
+        ...target.cms_evidence,
+        approved_same_parcel_address_conflicts: [{
+          ...conflict,
+          evidence_citations: [conflict.evidence_citations[0]],
+        }],
+      },
+    }, context),
+    /does not match/,
+  );
+});
+
+test('candidate-scoped CoStar record and parcel pin resolves a tenantless same-address conflict', () => {
+  const conflict = {
+    status: 'approved',
+    reason_code: 'service_location_mailing_address_same_parcel_source_record',
+    frozen_address_token: '5058 S FLORIDA AVE|TESTVILLE|FL|33813',
+    captured_address_token: '5050 S FLORIDA AVE|TESTVILLE|FL|33813',
+    parcel_number: '23-29-12-000000-021160',
+    costar_property_id: '11349159',
+    authorized_by: 'research_owner',
+    authorized_at: '2026-09-02T12:00:00Z',
+    evidence_citations: [
+      { source: 'official_facility_registry', url: 'https://registry.example/asc-location' },
+      { source: 'licensed_property_public_record', url: 'https://property.example/public-record' },
+    ],
+  };
+  const target = {
+    candidate_fingerprint: sha('f'),
+    address_token: conflict.frozen_address_token,
+    cms_identity: {
+      facility_name: 'Synthetic Ospine Surgical Center',
+      address: '5058 S Florida Ave', city: 'Testville', state: 'FL', zip: '33813',
+    },
+    cms_evidence: {
+      enrollment_corroborated: true,
+      enrollment_org_names: ['Synthetic Ospine LLC'],
+      approved_same_parcel_address_conflicts: [conflict],
+    },
+  };
+  const medicalRecord = {
+    source: 'costar',
+    page_url: 'https://product.costar.com/detail/all-properties/11349159/public-record',
+    costar_property_id: '11349159',
+    address: '5050 S Florida Ave', city: 'Testville', state: 'FL', zip: '33813',
+    parcel_number: '23-29-12-000000-021160',
+    square_footage: '3,500',
+  };
+  const built = buildAscStructuredCapture(target, medicalRecord);
+  assert.equal(built.identity_match.mode, 'approved_same_parcel_address_conflict');
+  assert.equal(built.identity_match.corroboration_basis, 'costar_source_record_and_parcel_pin');
+  assert.equal(built.identity_match.costar_property_id, '11349159');
+  assert.equal(built.identity_match.second_review_required, true);
+
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...medicalRecord, costar_property_id: '49694' }),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture(target, {
+      ...medicalRecord,
+      parcel_number: '23-29-12-000000-021150',
+    }),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...medicalRecord, source: 'rca' }),
+    /does not match/,
+  );
+});
+
+test('candidate-scoped multi-address parcel binds an approved operating tenant to one CoStar record', () => {
+  const conflict = {
+    status: 'approved',
+    reason_code: 'service_location_multi_address_same_parcel_operating_identity',
+    cms_facility_name: 'Synthetic Risser Surgery Center LLC',
+    operating_names: ['Synthetic Risser Orthopedic Group'],
+    frozen_address_token: '2615 E WASHINGTON BLVD|TESTVILLE|CA|91107',
+    assessor_address_token: '2611 E WASHINGTON BLVD|TESTVILLE|CA|91107',
+    captured_address_token: '2627 WASHINGTON BLVD|TESTVILLE|CA|91107',
+    parcel_number: '5751-005-004',
+    costar_property_id: '5750756',
+    authorized_by: 'research_owner',
+    authorized_at: '2026-09-10T12:00:00Z',
+    second_review_required: true,
+    evidence_citations: [
+      { source: 'official_facility_registry', url: 'https://registry.example/asc-location' },
+      { source: 'licensed_property_public_record', url: 'https://property.example/public-record' },
+    ],
+  };
+  const target = {
+    candidate_fingerprint: sha('4'),
+    address_token: conflict.frozen_address_token,
+    cms_identity: {
+      facility_name: conflict.cms_facility_name,
+      address: '2615 E Washington Blvd', city: 'Testville', state: 'CA', zip: '91107',
+    },
+    cms_evidence: {
+      enrollment_corroborated: true,
+      enrollment_org_names: ['Synthetic Risser Surgery Center'],
+      approved_same_parcel_address_conflicts: [conflict],
+    },
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://product.costar.com/detail/all-properties/5750756/tenant',
+    costar_property_id: '5750756',
+    address: '2627 Washington Blvd', city: 'Testville', state: 'CA', zip: '91107',
+    parcel_number: '5751-005-004',
+    tenant_name: 'Unrelated Primary Tenant',
+    tenants: [{ name: 'Synthetic Risser Orthopedic Group' }],
+    square_footage: '6,964',
+  };
+
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.identity_match.mode, 'approved_same_parcel_address_conflict');
+  assert.equal(built.identity_match.corroboration_basis,
+    'approved_operating_identity_multi_address_parcel');
+  assert.equal(built.identity_match.assessor_address_preserved,
+    conflict.assessor_address_token);
+  assert.equal(built.identity_match.costar_property_id, '5750756');
+  assert.equal(built.identity_match.second_review_required, true);
+
+  const blockedContexts = [
+    { ...context, costar_property_id: '5750757' },
+    { ...context, parcel_number: '5751-005-005' },
+    { ...context, address: '2629 Washington Blvd' },
+    { ...context, city: 'Other City' },
+    { ...context, zip: '91108' },
+    { ...context, tenants: [{ name: 'Unrelated Orthopedic Group' }] },
+    { ...context, source: 'rca' },
+  ];
+  for (const blocked of blockedContexts) {
+    assert.throws(() => buildAscStructuredCapture(target, blocked), /does not match/);
+  }
+
+  for (const invalidEvidence of [
+    { assessor_address_token: '' },
+    { assessor_address_token: conflict.frozen_address_token },
+    { assessor_address_token: '2611 E WASHINGTON BLVD|OTHER CITY|CA|91107' },
+    { cms_facility_name: 'Unrelated Surgery Center LLC' },
+    { second_review_required: false },
+    { evidence_citations: [conflict.evidence_citations[0]] },
+  ]) {
+    assert.throws(() => buildAscStructuredCapture({
+      ...target,
+      cms_evidence: {
+        ...target.cms_evidence,
+        approved_same_parcel_address_conflicts: [{ ...conflict, ...invalidEvidence }],
+      },
+    }, context), /does not match/);
+  }
+});
+
+test('candidate-scoped multi-address parcel accepts exact CMS recorded-owner identity without tenant identity', () => {
+  const conflict = {
+    status: 'approved',
+    reason_code: 'service_location_multi_address_same_parcel_recorded_owner_identity',
+    frozen_address_token: '155 TIMBERWOLF PKWY|KALISPELL|MT|59901',
+    assessor_address_token: '155 TIMBERWOLF PKWY|KALISPELL|MT|59901',
+    captured_address_token: '165 TIMBERWOLF PKWY|KALISPELL|MT|59901',
+    owner_mailing_address_token: '175 TIMBERWOLF PKWY|KALISPELL|MT|59901',
+    recorded_owner_name: 'GLACIER SURGICAL INC',
+    parcel_number: '07-4077-36-1-10-31-4321',
+    costar_property_id: '19297271',
+    authorized_by: 'research_owner',
+    authorized_at: '2026-09-11T12:00:00Z',
+    capture_authorized: true,
+    second_review_required: true,
+    evidence_citations: [
+      { source: 'official_facility_registry', url: 'https://registry.example/glacier-surgical' },
+      { source: 'licensed_property_public_record', url: 'https://product.costar.com/detail/all-properties/19297271/map' },
+    ],
+  };
+  const target = {
+    candidate_fingerprint: sha('5'),
+    address_token: conflict.frozen_address_token,
+    cms_identity: {
+      facility_name: 'GLACIER SURGICAL INC',
+      address: '155 Timberwolf Parkway', city: 'Kalispell', state: 'MT', zip: '59901',
+    },
+    cms_evidence: {
+      enrollment_corroborated: true,
+      enrollment_org_names: ['GLACIER SURGICAL INC.'],
+      approved_same_parcel_address_conflicts: [conflict],
+    },
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://product.costar.com/detail/all-properties/19297271/map',
+    costar_property_id: '19297271',
+    address: '165 Timberwolf Pky', city: 'Kalispell', state: 'MT', zip: '59901',
+    parcel_number: '07-4077-36-1-10-31-4321',
+    tenants: [{ name: 'Torrent Technologies, Inc' }, { name: 'Marsh McLennan' }],
+    square_footage: '17,359',
+  };
+
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.identity_match.mode, 'approved_same_parcel_address_conflict');
+  assert.equal(built.identity_match.corroboration_basis,
+    'approved_recorded_owner_identity_multi_address_parcel');
+  assert.equal(built.identity_match.assessor_address_preserved,
+    conflict.assessor_address_token);
+  assert.equal(built.identity_match.owner_mailing_address_preserved,
+    conflict.owner_mailing_address_token);
+  assert.equal(built.identity_match.recorded_owner_name_preserved,
+    conflict.recorded_owner_name);
+  assert.equal(built.identity_match.costar_property_id, '19297271');
+  assert.equal(built.identity_match.second_review_required, true);
+
+  for (const blocked of [
+    { ...context, costar_property_id: '19297272' },
+    { ...context, parcel_number: '07-4077-36-1-10-31-4322' },
+    { ...context, address: '166 Timberwolf Pky' },
+    { ...context, source: 'rca' },
+  ]) assert.throws(() => buildAscStructuredCapture(target, blocked), /does not match/);
+
+  for (const invalidEvidence of [
+    { assessor_address_token: '156 TIMBERWOLF PKWY|KALISPELL|MT|59901' },
+    { owner_mailing_address_token: '' },
+    { owner_mailing_address_token: conflict.captured_address_token },
+    { recorded_owner_name: 'UNRELATED OWNER LLC' },
+    { capture_authorized: false },
+    { second_review_required: false },
+    { evidence_citations: [conflict.evidence_citations[0]] },
+  ]) {
+    assert.throws(() => buildAscStructuredCapture({
+      ...target,
+      cms_evidence: {
+        ...target.cms_evidence,
+        approved_same_parcel_address_conflicts: [{ ...conflict, ...invalidEvidence }],
+      },
+    }, context), /does not match/);
+  }
+});
+
+test('building ranges contain a frozen street number only with exact location and tenant corroboration', () => {
+  const target = {
+    candidate_fingerprint: sha('9'),
+    address_token: '120 RESEARCH DR NW|TESTVILLE|OH|44000',
+    cms_identity: {
+      facility_name: 'Synthetic Gastroenterology Center Inc',
+      address: '120 Research Drive NW', city: 'Testville', state: 'OH', zip: '44000',
+    },
+    cms_evidence: {
+      enrollment_corroborated: true,
+      enrollment_org_names: ['Synthetic Gastroenterology Center LLC'],
+    },
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://example.costar.com/property/research-range',
+    address: '100-120 Research Dr NW', city: 'Testville', state: 'OH', zip: '44000',
+    square_footage: '25,000', tenant_name: 'Synthetic Gastroenterology Center',
+  };
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.capture.address_token, target.address_token);
+  assert.equal(built.capture.address, context.address);
+  assert.equal(built.identity_match.mode, 'tenant_corroborated_range_containment');
+  assert.equal(built.identity_match.frozen_street_number, 120);
+  assert.equal(built.identity_match.captured_range_start, 100);
+  assert.equal(built.identity_match.captured_range_end, 120);
+  assert.equal(built.identity_match.second_review_required, true);
+
+  const interior = buildAscStructuredCapture({
+    ...target,
+    address_token: '110 RESEARCH DR NW|TESTVILLE|OH|44000',
+    cms_identity: { ...target.cms_identity, address: '110 Research Drive NW' },
+  }, context);
+  assert.equal(interior.identity_match.mode, 'tenant_corroborated_range_containment');
+  assert.equal(interior.identity_match.frozen_street_number, 110);
+  for (const addressToken of [
+    '99 RESEARCH DR NW|TESTVILLE|OH|44000',
+    '121 RESEARCH DR NW|TESTVILLE|OH|44000',
+  ]) {
+    assert.throws(
+      () => buildAscStructuredCapture({ ...target, address_token: addressToken }, context),
+      /does not match/,
+    );
+  }
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, address: '100-120 Other Dr NW' }),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, zip: '44001' }),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, tenant_name: 'Synthetic Gastroenterology Center East' }),
+    /does not match/,
+  );
+});
+
+test('building ranges accept a controlled ASC identity alias only with owner enrollment corroboration', () => {
+  const target = {
+    candidate_fingerprint: sha('d'),
+    address_token: '1720 DAVIE AVE|STATESVILLE|NC|28677',
+    cms_identity: {
+      facility_name: 'Iredell Ambulatory Surgery Center',
+      address: '1720 Davie Avenue', city: 'Statesville', state: 'NC', zip: '28677',
+    },
+    cms_evidence: {
+      enrollment_corroborated: true,
+      enrollment_org_names: ['Iredell Physician Network LLC', 'Iredell Surgical Associates, LLP'],
+    },
+  };
+  const context = {
+    source: 'costar',
+    page_url: 'https://example.costar.com/property/davie-ave-medical-center',
+    address: '1714-1726 Davie Ave', city: 'Statesville', state: 'NC', zip: '28677',
+    square_footage: '7,290',
+    tenancy_type: 'Multi',
+    tenants: [
+      { name: 'Iredell Surgical Center', occupied_sf: '3,645' },
+      { name: 'Iredell Wound Care & Hyperbaric Center', occupied_sf: '3,645' },
+    ],
+    contacts: [
+      { role: 'owner', name: 'M & P Associates' },
+      { role: 'owner', name: 'IREDELL SURGICAL ASSOC LLP', address: '1720 Davie Ave' },
+    ],
+  };
+  const built = buildAscStructuredCapture(target, context);
+  assert.equal(built.capture.address_token, target.address_token);
+  assert.equal(built.capture.address, context.address);
+  assert.equal(built.identity_match.mode, 'controlled_multisignal_range_identity');
+  assert.equal(built.identity_match.organization_core, 'IREDELL');
+  assert.equal(built.identity_match.captured_tenant_name_preserved, 'Iredell Surgical Center');
+  assert.equal(built.identity_match.captured_owner_name_preserved, 'IREDELL SURGICAL ASSOC LLP');
+  assert.equal(built.identity_match.enrollment_organization_preserved, 'Iredell Surgical Associates, LLP');
+  assert.equal(built.identity_match.second_review_required, true);
+
+  for (const mismatch of [
+    { tenants: [{ name: 'Unrelated Surgical Center' }] },
+    { contacts: [{ role: 'owner', name: 'Unrelated Surgical Associates LLP' }] },
+    { contacts: [{ role: 'listing_broker', name: 'Iredell Surgical Assoc LLP' }] },
+    { address: '1727-1730 Davie Ave' },
+    { city: 'Charlotte' },
+    { state: 'SC' },
+    { zip: '28678' },
+  ]) {
+    assert.throws(
+      () => buildAscStructuredCapture(target, { ...context, ...mismatch }),
+      /does not match/,
+    );
+  }
+  assert.throws(
+    () => buildAscStructuredCapture({
+      ...target,
+      cms_evidence: { ...target.cms_evidence, enrollment_corroborated: false },
+    }, context),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture({
+      ...target,
+      cms_identity: { ...target.cms_identity, facility_name: 'Ambulatory Surgery Center' },
+    }, {
+      ...context,
+      tenants: [{ name: 'Surgical Center' }],
+    }),
+    /does not match/,
+  );
+});
+
+test('migration is private, RLS-protected, exact-50, and hard-blocks prohibited writes', async () => {
+  const sql = await readFile(new URL('../supabase/migrations/20261001120000_lcc_asc_research_swim_lane.sql', import.meta.url), 'utf8');
+  for (const table of ['runs', 'candidates', 'captures', 'evidence', 'reviews']) {
+    assert.match(sql, new RegExp(`healthcare_research_${table} enable row level security`, 'i'));
+    assert.match(sql, new RegExp(`revoke all on public\\.healthcare_research_${table} from public, anon, authenticated`, 'i'));
+  }
+  assert.match(sql, /sample_size\s+integer[^;]+check \(sample_size = 50\)/is);
+  assert.match(sql, /jsonb_array_length\(p_candidates\)[\s\S]+v_count <> 50/is);
+  assert.match(sql, /canonical_write_authorized[^;]+check \(canonical_write_authorized = false\)/is);
+  assert.match(sql, /salesforce_write_authorized[^;]+check \(salesforce_write_authorized = false\)/is);
+  assert.match(sql, /outreach_authorized[^;]+check \(outreach_authorized = false\)/is);
+  assert.doesNotMatch(sql, /grant\s+.+healthcare_research_.+\s+to\s+(anon|authenticated)/i);
+  assert.match(sql, /revoke all on public\.healthcare_research_evidence from service_role/i);
+  assert.doesNotMatch(sql, /grant\s+(update|delete)[^;]+healthcare_research_(captures|evidence)/i);
+});
+
+test('ASC routes are mounted and never invoke the dialysis/government propagator', async () => {
+  const [server, intake, handler, sidepanel] = await Promise.all([
+    readFile(new URL('../server.js', import.meta.url), 'utf8'),
+    readFile(new URL('../api/intake.js', import.meta.url), 'utf8'),
+    readFile(new URL('../api/_handlers/asc-research-handler.js', import.meta.url), 'utf8'),
+    readFile(new URL('../extension/sidepanel.js', import.meta.url), 'utf8'),
+  ]);
+  for (const route of ['asc-research-import', 'asc-research-target', 'asc-research-capture', 'asc-research-complete', 'asc-research-review']) {
+    assert.match(server, new RegExp(`/api/${route}`));
+    assert.match(intake, new RegExp(`case '${route}'`));
+  }
+  assert.doesNotMatch(handler, /propagateToDomainDb|processSidebarExtraction|sf_sync_queue|bd_opportunities|touchpoint_cadence/);
+  assert.match(sidepanel, /sessionCtx\?\.address\s*&&\s*sessionCtx\?\.state\s*\?\s*sessionCtx\s*:\s*ctx/);
+  assert.match(sidepanel, /toErrorMessage\(\s*capture\.data\?\.detail/);
+});
+
+test('ASC review workbench preserves reviewer separation and prohibited-write boundary', async () => {
+  const [sql, handler, html, client] = await Promise.all([
+    readFile(new URL('../supabase/migrations/20261002130000_lcc_asc_property_review_workbench.sql', import.meta.url), 'utf8'),
+    readFile(new URL('../api/_handlers/asc-research-handler.js', import.meta.url), 'utf8'),
+    readFile(new URL('../asc-review.html', import.meta.url), 'utf8'),
+    readFile(new URL('../asc-review.js', import.meta.url), 'utf8'),
+  ]);
+  assert.match(sql, /primary_reviewer uuid/i);
+  assert.match(sql, /if v_primary = p_reviewer then raise exception 'second reviewer must differ/i);
+  assert.match(sql, /second_review_verdict[^;]+\('agree','disagree'\)/is);
+  assert.match(sql, /second_review_required = healthcare_research_reviews\.second_review_required or excluded\.second_review_required/i);
+  assert.doesNotMatch(sql, /insert\s+into\s+public\.(entities|external_identities|bd_opportunities)/i);
+  assert.doesNotMatch(sql, /delete\s+from/i);
+  assert.match(handler, /assertAscPropertyReview/);
+  assert.match(handler, /'lcc_save_asc_second_review'\s*:\s*'lcc_save_asc_primary_review'/);
+  assert.match(handler, /`rpc\/\$\{rpc\}`/);
+  assert.match(html, /Independent second review/);
+  assert.match(html, /Insufficient evidence is a valid result/);
+  assert.match(html, /Raw structured capture \(audit view\)/);
+  assert.match(html, /id="validation-summary"/);
+  assert.match(client, /summarizeCapture/);
+  assert.match(client, /Your signed-in identity is visible in the sticky blue header/);
+  assert.doesNotMatch(client, /entities|external_identities|bd_opportunities|salesforce/i);
+});
+
+test('capture retries receive only the column update privilege required by the invoker RPC', async () => {
+  const sql = await readFile(
+    new URL('../supabase/migrations/20261001120500_lcc_asc_capture_retry_privilege.sql', import.meta.url),
+    'utf8',
+  );
+  assert.match(sql, /grant\s+update\s*\(\s*source_url\s*\)\s+on\s+public\.healthcare_research_captures\s+to\s+service_role/is);
+  assert.doesNotMatch(sql, /grant\s+update\s+on\s+public\.healthcare_research_captures/i);
+  assert.doesNotMatch(sql, /security\s+definer/i);
+});
+
+test('dual-source missingness advances without fabricating a capture and remains fail closed', async () => {
+  const [sql, handler, sidepanel] = await Promise.all([
+    readFile(new URL('../supabase/migrations/20261001120600_lcc_asc_dual_source_missingness.sql', import.meta.url), 'utf8'),
+    readFile(new URL('../api/_handlers/asc-research-handler.js', import.meta.url), 'utf8'),
+    readFile(new URL('../extension/sidepanel.js', import.meta.url), 'utf8'),
+  ]);
+  assert.match(sql, /p_source_dispositions\s+is\s+distinct\s+from\s+'\{"costar":"not_found","rca":"not_found"\}'::jsonb/is);
+  assert.match(sql, /if\s+v_capture_count\s+<>\s+0\s+then[\s\S]+captured candidates must use normal evidence completion/is);
+  assert.match(sql, /final_disposition[\s\S]+licensed_sources_not_found/is);
+  assert.match(sql, /second_review_required[\s\S]+true/is);
+  assert.match(sql, /set\s+status\s*=\s*'reviewed',[^;]+reviewed_at/is);
+  assert.doesNotMatch(sql, /insert\s+into\s+public\.healthcare_research_(captures|evidence)/i);
+  assert.doesNotMatch(sql, /delete\s+from/i);
+  assert.match(handler, /Object\.keys\(source_dispositions\)\.length\s*!==\s*2/);
+  assert.match(handler, /rpc\/lcc_complete_asc_candidate_missingness/);
+  assert.match(sidepanel, /Complete: CoStar \+ RCA not found/);
+  assert.match(sidepanel, /window\.confirm\(/);
+  assert.match(sidepanel, /source_dispositions:\s*\{\s*costar:\s*'not_found',\s*rca:\s*'not_found'\s*\}/s);
+});
+
+test('dual-source missingness upsert uses the named primary key to avoid output-column ambiguity', async () => {
+  const sql = await readFile(
+    new URL('../supabase/migrations/20261002090100_lcc_asc_missingness_conflict_target.sql', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    sql,
+    /on\s+conflict\s+on\s+constraint\s+healthcare_research_reviews_pkey\s+do\s+update/is,
+  );
+  assert.doesNotMatch(sql, /on\s+conflict\s*\(\s*run_id\s*,\s*candidate_fingerprint\s*\)/i);
+  assert.match(sql, /security\s+invoker/i);
+  assert.doesNotMatch(sql, /delete\s+from/i);
+});
+
+test('captured pending ASC targets keep their normal completion control after a refresh', async () => {
+  const [handler, sidepanel] = await Promise.all([
+    readFile(new URL('../api/_handlers/asc-research-handler.js', import.meta.url), 'utf8'),
+    readFile(new URL('../extension/sidepanel.js', import.meta.url), 'utf8'),
+  ]);
+  assert.match(handler, /healthcare_research_captures\?run_id=eq/);
+  assert.match(handler, /countMode:\s*'exact'/);
+  assert.match(handler, /capture_count:\s*captureCount/);
+  assert.match(sidepanel, /Number\(target\.capture_count\)\s*>\s*0/);
+  assert.match(sidepanel, /data-asc-capture-complete/);
+  assert.match(sidepanel, /Complete property capture/);
+  assert.match(sidepanel, /missing\.disabled\s*=\s*true/);
+});
+
+test('single-tenant organization family corroborates an exact parent building with a preserved CMS typo', () => {
+  const target = {
+    candidate_fingerprint: 'a'.repeat(64),
+    address_token: '30 TUSCAN BLFD FL 3|SALEM|NH|03079',
+    cms_identity: {
+      address: '30 Tuscan BLFD Fl 3',
+      city: 'Salem',
+      state: 'NH',
+      zip: '03079',
+      facility_name: 'MASS General Brigham Amsurg Inc',
+    },
+    cms_evidence: {
+      enrollment_corroborated: true,
+      enrollment_org_names: ['MASS GENERAL BRIGHAM AMSURG, INC.'],
+    },
+  };
+  const context = {
+    source: 'costar',
+    address: '30 Tuscan Blvd',
+    city: 'Salem',
+    state: 'NH',
+    zip: '03079',
+    tenancy_type: 'Single',
+    primary_tenant: 'Mass General Brigham Healthcare Center',
+    square_footage: 70000,
+  };
+  const result = buildAscStructuredCapture(target, context);
+  assert.equal(result.identity_match.mode, 'single_tenant_organization_family_parent_building');
+  assert.equal(result.identity_match.organization_family, 'MASS GENERAL BRIGHAM');
+  assert.equal(result.identity_match.second_review_required, true);
+  assert.equal(result.identity_match.cms_sublocation_preserved, '30 Tuscan BLFD Fl 3');
+
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, tenancy_type: 'Multi' }),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture(target, {
+      ...context,
+      primary_tenant: 'Mass General Healthcare Center',
+    }),
+    /does not match/,
+  );
+  assert.throws(
+    () => buildAscStructuredCapture(target, { ...context, address: '32 Tuscan Blvd' }),
+    /does not match/,
+  );
+});
+
+test('CoStar value-first tenancy cards preserve the explicit single-tenant gate', async () => {
+  const costar = await readFile(
+    new URL('../extension/content/costar.js', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    costar,
+    /\/\^\(single\|multi\)\$\/i\.test\(line\)[\s\S]+\/\^tenancy\$\/i\.test\(next\)[\s\S]+data\.tenancy_type\s*=\s*line/,
+  );
+});
+
+test('parcel-owner evidence completion advances with zero captures and mandatory second review', async () => {
+  const [migration, handler, sidepanel] = await Promise.all([
+    readFile(new URL('../supabase/migrations/20261002100000_lcc_asc_parcel_evidence_completion.sql', import.meta.url), 'utf8'),
+    readFile(new URL('../api/_handlers/asc-research-handler.js', import.meta.url), 'utf8'),
+    readFile(new URL('../extension/sidepanel.js', import.meta.url), 'utf8'),
+  ]);
+
+  assert.match(migration, /service_location_multi_address_same_parcel_recorded_owner_identity/);
+  assert.match(migration, /capture_authorized' = 'false'/);
+  assert.match(migration, /candidate_completion_authorized' = 'false'/);
+  assert.match(migration, /second_review_required' = 'true'/);
+  assert.match(migration, /regexp_replace\(upper\(c\.address_token\)[\s\S]*PARKWAY\|PKY[\s\S]*PKWY/);
+  assert.doesNotMatch(migration, /set\s+address_token\s*=/i);
+  assert.match(migration, /v_capture_count <> 0/);
+  assert.match(migration, /final_disposition[\s\S]*parcel_owner_evidence_only/);
+  assert.match(migration,
+    /on conflict on constraint healthcare_research_reviews_pkey do update/i);
+  assert.doesNotMatch(migration, /on conflict\s*\(run_id,\s*candidate_fingerprint\)/i);
+  assert.match(migration, /set status = 'reviewed'/);
+  assert.match(migration, /security invoker/i);
+  assert.match(migration, /revoke all[\s\S]*from public, anon, authenticated/i);
+  assert.doesNotMatch(migration, /insert into public\.healthcare_research_captures/i);
+  assert.doesNotMatch(migration, /canonical_write_authorized\s*=\s*true/i);
+
+  assert.match(handler, /completion_mode === 'parcel_evidence_only'/);
+  assert.match(handler, /lcc_complete_asc_candidate_parcel_evidence/);
+  assert.match(handler, /capture_created: false/);
+  assert.match(handler, /canonical_write_performed: false/);
+  assert.match(handler, /exact_parcel_evidence_completion_required/);
+
+  assert.match(sidepanel, /Complete parcel evidence only/);
+  assert.match(sidepanel, /completion_mode: 'parcel_evidence_only'/);
+  assert.match(sidepanel, /capture_authorized === false/);
+  assert.match(sidepanel, /second_review_required === true/);
+});
+
+test('parcel-situs evidence completion excludes adjacent CoStar property capture', async () => {
+  const [migration, handler, sidepanel] = await Promise.all([
+    readFile(new URL('../supabase/migrations/20261002110000_lcc_asc_parcel_situs_evidence_completion.sql', import.meta.url), 'utf8'),
+    readFile(new URL('../api/_handlers/asc-research-handler.js', import.meta.url), 'utf8'),
+    readFile(new URL('../extension/sidepanel.js', import.meta.url), 'utf8'),
+  ]);
+
+  assert.match(migration, /service_location_exact_parcel_situs_adjacent_context_record/);
+  assert.match(migration, /adjacent_context_only' = 'true'/);
+  assert.match(migration, /parcel_situs_address_token' = c\.address_token/);
+  assert.match(migration, /context_property_address_token'[\s\S]*<> c\.address_token/);
+  assert.match(migration, /context_parcel_number'[\s\S]*<>[\s\S]*parcel_number/);
+  assert.match(migration, /capture_authorized' = 'false'/);
+  assert.match(migration, /second_review_required' = 'true'/);
+  assert.match(migration, /v_capture_count <> 0/);
+  assert.match(migration, /parcel_situs_evidence_only/);
+  assert.match(migration, /on conflict on constraint healthcare_research_reviews_pkey do update/i);
+  assert.match(migration, /security invoker/i);
+  assert.match(migration, /revoke all[\s\S]*from public, anon, authenticated/i);
+  assert.doesNotMatch(migration, /insert into public\.healthcare_research_captures/i);
+  assert.doesNotMatch(migration, /canonical_write_authorized\s*=\s*true/i);
+
+  assert.match(handler, /completion_mode === 'parcel_situs_evidence_only'/);
+  assert.match(handler, /lcc_complete_asc_candidate_parcel_situs_evidence/);
+  assert.match(handler, /exact_parcel_situs_evidence_completion_required/);
+  assert.match(sidepanel, /Complete parcel situs evidence only/);
+  assert.match(sidepanel, /completion_mode: 'parcel_situs_evidence_only'/);
+  assert.match(sidepanel, /adjacent_context_only === true/);
+});

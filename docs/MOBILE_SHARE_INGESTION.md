@@ -1,5 +1,10 @@
 # iPhone Share Sheet → LCC Mobile Ingestion
 
+> 🚨 **STALE (DOCMAP2 reconcile, 2026-09-08): every `life-command-center-nine.vercel.app` URL in this procedure is the
+> RETIRED Vercel deployment (retired 2026-07-20, root `CLAUDE.md`). It still answers and still holds a service key
+> (P194), so following these steps would not fail — it would write against a frozen pre-cutover build.**
+> The live endpoint is the Railway host (`tranquil-delight-production-633f.up.railway.app`; `server.js` mounts every `/api/*` route). Original text preserved below as the record of the procedure at its date. Backlog **J13**. (Step 1 already hedges "or whichever host serves the live app" — the hedge is right, the URL it leads with is not.)
+
 One-tap capture of LinkedIn posts, articles, and any web page from the iPhone
 Share Sheet ("Send to LCC"). Covers the mobile gap the Chrome/Edge extension
 (desktop) and Google-Alert / forwarded-email channels (inbox) don't reach.

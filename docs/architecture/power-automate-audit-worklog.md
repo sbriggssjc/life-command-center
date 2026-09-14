@@ -1,5 +1,10 @@
 # Power Automate Audit Worklog
 
+> 🗄️ **HISTORICAL (DOCMAP1, 2026-09-08).** Named worklog; power-automate-flow-audit.md + power-automate-observability-standards.md are the living registry/standards.
+>
+> Kept for the record — nothing below was edited; treat any status/data claim in it as a
+> point-in-time snapshot, not current state.
+
 Last updated: 2026-05-14 (session 2)
 Project: Microsoft + Salesforce + LCC integration audit/remediation
 

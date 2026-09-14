@@ -1,0 +1,306 @@
+// Unit tests for the grounded dossier generator's no-fabrication contract.
+// Pure functions only — no DB / network. Run: node --test test/dossier-generator.test.mjs
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { generateDossier, __test__ } from '../api/_shared/dossier-generator.js';
+
+const { renderTag, sanitizeAnalysisFragment, NA } = __test__;
+
+test('absent field renders exactly "Not on file"', () => {
+  assert.equal(renderTag(undefined), NA);
+  assert.equal(renderTag(null), NA);
+  assert.equal(renderTag({ v: null }), NA);
+  assert.match(NA, /Not on file/);
+});
+
+test('tagged value carries provenance chip', () => {
+  const html = renderTag({ v: 181959, source: 'lease (documented)', as_of: '2018-06-06', confidence: 1 });
+  assert.match(html, /181959/);
+  assert.match(html, /source: lease \(documented\)/);
+  assert.match(html, /as-of 2018-06-06/);
+});
+
+test('derived value is labeled Derived with inputs', () => {
+  const html = renderTag({ v: '5.78%', derived: 'rent $181,959 ÷ sale $3,150,000' });
+  assert.match(html, /Derived:/);
+  assert.match(html, /181,959/);
+});
+
+test('conflict is surfaced, not silently resolved', () => {
+  const html = renderTag({ reconciled: 13, conflict: 'stations 171 vs 13' });
+  assert.match(html, /Conflict:/);
+  assert.match(html, /171 vs 13/);
+});
+
+test('analysis fragment sanitizer strips non-<li> tags and scripts', () => {
+  const raw = '<li>Derived: cap 5.78%</li><script>alert(1)</script><li>Second <b>point</b></li>';
+  const frag = sanitizeAnalysisFragment(raw);
+  assert.ok(!/script/i.test(frag));
+  assert.ok(!/<b>/i.test(frag));
+  assert.match(frag, /Derived: cap 5.78%/);
+  assert.match(frag, /Second point/);
+});
+
+test('analysis sanitizer returns null when no list items', () => {
+  assert.equal(sanitizeAnalysisFragment('just prose, no items'), null);
+  assert.equal(sanitizeAnalysisFragment(''), null);
+});
+
+test('generateDossier renders facts from packet and omits missing (LLM unavailable → no analysis, still valid)', async () => {
+  // No OLLAMA_URL / OPENAI_API_KEY in the test env → invokeExtractionAI fails →
+  // analysis is omitted but the fact dossier still renders.
+  const packet = {
+    meta: { title: '5247 Airways Blvd, Memphis, TN', subtitle: 'Shelby County · Dialysis', domain_label: 'Dialysis', footer_ids: 'property 23654 · CCN 442740' },
+    identity: {
+      property_type: { v: 'single-tenant medical', source: 'properties' },
+      building_sf: { v: 6308, source: 'properties' },
+      year_built: { v: 2016, source: 'properties' },
+      // land_acres OMITTED → must render "Not on file"
+      price_per_sf: { v: 497, derived: 'value 3137221 ÷ 6308 SF' },
+    },
+    ownership: {
+      owner_of_record: { v: 'Kingsbarn Realty', source: 'reconciled property owner', confidence: 'recorded deed owner' },
+      operator_tenant: { v: 'DaVita', source: 'operator (not the owner)' },
+    },
+    tenancy_lease: {
+      tenant: { v: 'DaVita Dialysis', source: 'leases' },
+      guarantor: { v: 'Total Renal Care, Inc.', source: 'leases' },
+      guaranty_scope: { v: 'Limited to Initial Term; excludes option periods.', source: 'leases' },
+      annual_base_rent: { v: 181959, source: 'lease (documented)', as_of: '2018-06-06' },
+      year1_rent_psf: { v: 28.85, derived: 'year-1 rent $181,959 ÷ building 6,308 SF' },
+      current_base_rent: { v: 200154.9, derived: 'anchor rent $181,959 as of 2018-06-06 × (1 + 10%)^1; 60 mo interval; as-of 2026-08-01' },
+      current_rent_psf: { v: 31.73, derived: 'current rent $200,155 ÷ building 6,308 SF' },
+      term_remaining_years: { v: '~6.8', derived: 'to 2033-06-06 from today (firm; excludes options)' },
+      roof_responsibility: { v: 'landlord', source: 'leases' },
+      structure_responsibility: { v: 'landlord', source: 'leases' },
+      parking_responsibility: { v: 'tenant', source: 'leases' },
+      hvac_responsibility: { v: 'shared', source: 'leases' },
+    },
+    operations: {
+      stations: { v: 13, source: 'CMS (medicare_clinics)' },
+      patient_count: { v: 33, source: 'CMS (medicare_clinics.latest_estimated_patients)' },
+      relocation: {
+        original_certification_date: { v: '2003-02-01', source: 'clinic relocation lineage' },
+        facility_certification_date: { v: '2017-10-27', source: 'CMS (medicare_clinics)' },
+        prior_address: undefined,
+        prior_stations: undefined,
+        current_stations: { v: 13, source: 'clinic_history_unified / CMS' },
+        distance_miles: undefined,
+      },
+      market_competition: [
+        {
+          medicare_id: '442735',
+          facility_name: 'FMC South Airways',
+          address: 'Not stated address',
+          city: 'Memphis',
+          state: 'TN',
+          distance_miles: 0.597,
+          operator: 'Fresenius',
+          stations: 16,
+          patients: 48,
+          rent_per_sf: null,
+        },
+        {
+          medicare_id: '442999',
+          facility_name: 'DaVita Comparable',
+          address: 'Nearby',
+          city: 'Memphis',
+          state: 'TN',
+          distance_miles: 2.1,
+          operator: 'DaVita',
+          stations: 14,
+          patients: 35,
+          rent_per_sf: 32.5,
+          rent_source: 'Derived: leases.annual_rent / properties.building_size',
+        },
+      ],
+      _conflicts: [{ field: 'stations', values: [{ v: 13, source: 'CMS' }, { v: 171, source: 'properties denorm' }], reconciled: 13 }],
+    },
+    valuation: { model_estimate: { v: 3137221, source: 'LCC valuation model', confidence: 'low' } },
+    debt_financing: [
+      {
+        lender: { v: 'JPMCC 2019-COR4', source: 'ops_asset_metadata_loan' },
+        cmbs_deal_name: { v: 'JPMCC 2019-COR4', source: 'ops_asset_metadata_loan' },
+        initial_balance: { v: 1800000, source: 'ops_asset_metadata_loan' },
+        current_balance_estimate: { v: 1800000, derived: 'Upper-bound estimate: no amortization schedule or servicer balance on file, so current balance is carried at initial balance.' },
+        rate: { v: 4.7, source: 'ops_asset_metadata_loan' },
+        maturity_date: { v: '2028-07-06', source: 'ops_asset_metadata_loan' },
+        origination_date: { v: '2018-06-08', source: 'ops_asset_metadata_loan' },
+        term_years: { v: 10, source: 'ops_asset_metadata_loan' },
+        ltv: { v: 57.4, source: 'ops_asset_metadata_loan' },
+        loan_type: { v: 'Acquisition', source: 'ops_asset_metadata_loan' },
+        special_servicer: { v: 'Midland Loan Services', source: 'ops_asset_metadata_loan' },
+      },
+    ],
+    location: {
+      address: { v: '5247 Airways Blvd, Memphis, TN 38116', source: 'properties' },
+      geocode: { v: '35.005382, -89.989957', source: 'properties' },
+      frontage: { v: '5247 Airways Blvd', source: 'properties' },
+      nearby_national_tenants: [],
+      radius_demographics: [
+        {
+          radius_miles: 1,
+          population: { v: 11234, source: 'property_demographics', as_of: '2026' },
+          num_households: { v: 4321, source: 'property_demographics', as_of: '2026' },
+          population_growth_pct: { v: 0.012, source: 'property_demographics', as_of: '2026' },
+          avg_hhi: { v: 51234, source: 'property_demographics', as_of: '2026' },
+        },
+      ],
+      zip_census: {
+        zip_code: { v: '38116', source: 'census_zcta_demographics' },
+        total_population: { v: 40212, source: 'census_zcta_demographics', as_of: '2022' },
+        median_household_income: { v: 42354, source: 'census_zcta_demographics', as_of: '2022' },
+        population_65_plus: { v: 6260, source: 'census_zcta_demographics', as_of: '2022' },
+        population_65_plus_pct: { v: 15.6, source: 'census_zcta_demographics', as_of: '2022' },
+        uninsured_rate: { v: 16.2, source: 'census_zcta_demographics', as_of: '2022' },
+        poverty_rate: { v: 28.4, source: 'census_zcta_demographics', as_of: '2022' },
+        data_year: 2022,
+      },
+      payer_mix: {
+        county: { v: 'Shelby County', source: 'v_payer_mix_geo_averages' },
+        state: { v: 'Tennessee', source: 'v_payer_mix_geo_averages' },
+        county_medicare_pct: { v: 27.9, source: 'v_payer_mix_geo_averages' },
+        county_medicaid_pct: { v: 45.4, source: 'v_payer_mix_geo_averages' },
+        county_private_pct: { v: 26.7, source: 'v_payer_mix_geo_averages' },
+        county_clinic_count: { v: 49, source: 'v_payer_mix_geo_averages' },
+        state_medicare_pct: { v: 31.3, source: 'v_payer_mix_geo_averages' },
+        state_medicaid_pct: { v: 39.3, source: 'v_payer_mix_geo_averages' },
+        state_private_pct: { v: 30.5, source: 'v_payer_mix_geo_averages' },
+        state_clinic_count: { v: 192, source: 'v_payer_mix_geo_averages' },
+      },
+    },
+    transactions: [{ date: '2018-06-01', grantor: 'DaVita HealthCare Partners', grantee: 'Kingsbarn Realty', price: 3150000, source: 'deed' }],
+    transaction_marketing_timeline: [
+      {
+        kind: 'listing',
+        date: '2017-07-17',
+        status: 'off-market',
+        event: 'Prior listing',
+        broker: { v: 'Marcus & Millichap · Cook', source: 'available_listings' },
+        asking_price: { v: 3137221, source: 'available_listings' },
+        portfolio_flag: { v: 'Single-asset listing', source: 'available_listings' },
+      },
+      {
+        kind: 'sale',
+        date: '2018-06-01',
+        status: 'live',
+        event: 'Sale',
+        party: { v: 'DaVita HealthCare Partners -> Kingsbarn Realty', source: 'sales_transactions' },
+        price: { v: 3150000, source: 'sales_transactions' },
+        stated_cap_rate: { v: 5.4, source: 'sales_transactions' },
+        calculated_cap_rate: { v: 5.78, source: 'sales_transactions' },
+        firm_term_years_at_sale: { v: 15.0, source: 'sales_transactions' },
+      },
+      {
+        kind: 'listing',
+        date: '2024-07-02',
+        status: 'active',
+        event: 'Listed for sale',
+        broker: { v: 'SRS · Mousavi, Luther, Sullivan', source: 'available_listings' },
+        asking_price: { v: 27136000, source: 'available_listings' },
+        price_per_sf: { v: 550, source: 'available_listings' },
+        cap_rate: { v: 5.25, source: 'available_listings' },
+        days_on_market: { v: 760, derived: 'from 2024-07-02 to 2026-08-01' },
+        portfolio_flag: { v: 'Portfolio listing', source: 'available_listings' },
+        portfolio_note: { v: 'Portfolio ask; do not present $27,136,000 as this property asking.', derived: '$550 per SF × 6,308 SF = $3,469,400 implied for this asset' },
+      },
+    ],
+    documents: [],
+  };
+  const out = await generateDossier({ kind: 'property', packet, entityId: 'test-entity' });
+  assert.match(out.html, /<!doctype html>/i);
+  assert.match(out.html, /Kingsbarn Realty/);
+  assert.match(out.html, /the operator, not the owner/);      // owner ≠ operator
+  assert.match(out.html, /Year-1 rent \+ \$\/SF/);
+  assert.match(out.html, /Guaranty scope/);
+  assert.match(out.html, /Limited to Initial Term; excludes option periods/);
+  assert.match(out.html, /Expense-structure prose/);
+  assert.match(out.html, /Responsibilities \(roof \/ structure \/ parking \/ HVAC\)/);
+  assert.match(out.html, /Roof: landlord/);
+  assert.match(out.html, /Current rent \+ \$\/SF/);
+  assert.match(out.html, /200,155/);
+  assert.match(out.html, /31\.73/);
+  assert.match(out.html, /Term remaining \(years\)/);
+  assert.match(out.html, /Not on file/);                       // land_acres omitted
+  assert.match(out.html, /Conflict/);                          // stations conflict surfaced
+  assert.match(out.html, /Relocation lineage/);
+  assert.match(out.html, /Operator prior certification/);
+  assert.match(out.html, /2003-02-01/);
+  assert.match(out.html, /Current facility certification/);
+  assert.match(out.html, /2017-10-27/);
+  assert.match(out.html, /Stations: <span class="na">Not on file<\/span> → 13/);
+  assert.match(out.html, /Market Competition/);
+  assert.match(out.html, /FMC South Airways/);
+  assert.match(out.html, /DaVita Comparable/);
+  assert.match(out.html, /\$32\.50\/SF/);
+  assert.match(out.html, /Debt \/ Financing/);
+  assert.match(out.html, /JPMCC 2019-COR4/);
+  assert.match(out.html, /\$1,800,000/);
+  assert.match(out.html, /4\.70%/);
+  assert.match(out.html, /2028-07-06/);
+  assert.match(out.html, /Midland Loan Services/);
+  assert.match(out.html, /Derived: value 3137221/);            // price/SF labeled derived
+  assert.match(out.html, /Location &amp; Trade Area/);
+  assert.match(out.html, /Map thumbnail is Not on file/);
+  assert.match(out.html, /Nearby national tenants[\s\S]*Not on file/);
+  assert.match(out.html, /Trade-area demographics \(1 \/ 3 \/ 5-mile radius\)/);
+  assert.match(out.html, /11,234/);
+  assert.match(out.html, /ZIP 38116 — interim proxy/);
+  assert.match(out.html, /40,212/);
+  assert.match(out.html, /Shelby County/);
+  assert.match(out.html, /Medicare 27\.90%/);
+  assert.match(out.html, /Transaction &amp; Marketing Timeline/);
+  assert.match(out.html, /5\.40% stated \/ 5\.78% calc/);
+  assert.match(out.html, /15\.0 yr firm at close/);
+  assert.match(out.html, /Portfolio listing/);
+  assert.match(out.html, /do not present \$27,136,000/);
+  assert.match(out.html, /must be verified against source documents/); // footer
+  assert.ok(typeof out.source_hash === 'string' && out.source_hash.length === 64);
+  assert.equal(out.analysis.ok, false); // no LLM configured in test → analysis omitted, dossier still valid
+});
+
+test('source_hash is stable across generated_date changes (true staleness key)', async () => {
+  const base = { meta: { title: 'X' }, identity: { year_built: { v: 2016 } }, transactions: [], documents: [] };
+  const a = await generateDossier({ kind: 'property', packet: { ...base, meta: { ...base.meta, generated_date: '2026-01-01' } }, entityId: 'e' });
+  const b = await generateDossier({ kind: 'property', packet: { ...base, meta: { ...base.meta, generated_date: '2026-12-31' } }, entityId: 'e' });
+  assert.equal(a.source_hash, b.source_hash);
+});
+
+// --- Deal-spine sections (prompt 02/06) — buildDealPacket → renderDealSections ---------
+test('deal spine: milestones, commission, diligence, documents, conflicts, connected sources', () => {
+  const { renderDealSections } = __test__;
+  const packet = {
+    identity: {}, ownership: {}, tenancy_lease: {},
+    deal: {
+      milestones: [
+        { milestone_key: 'marketing', date: '2026-06-04', status: 'past', summary: 'OM received', source: 'intake_om' },
+        { milestone_key: 'close', date: '2026-07-24', status: 'past', summary: 'Closed 6.00%', source: 'dia_sale' },
+      ],
+      commission: [],                                  // no ELA → Not on file
+      diligence: [],                                   // none → Not on file
+      documents: [{ type: 'OM', name: 'Offering Memorandum', date: '2026-06-04', reconciled: true, source: 'intake' }],
+      parties: [
+        { side: 'third_party', role: 'listing_broker', name: 'Chris Bodnar', flag: 'unverified role', source: 'dia_contact' },
+        { side: 'guarantor', role: 'guarantor', name: 'Fresenius Medical Care', source: 'folder_feed_lease' },
+      ],
+      conflicts: [{ field: 'listing_broker', values: [{ v: 'Chris Bodnar (CBRE Inc.)', source: 'costar' }, { v: 'unverified', source: 'our_systems' }], note: 'must not stand as our role', status: 'open' }],
+      correspondence_summary: { summary: 'OM + close; no Outlook thread linked yet.', thread_count: 4, source: 'activity_events' },
+      correspondence: [],
+      connected_sources: { costar: 'source', salesforce: 'no_opportunity', outlook: 'not_linked', sharefile: 'not_linked', deal_spine: 'entity d118b3a1' },
+    },
+  };
+  const html = renderDealSections(packet);
+  assert.match(html, /Transaction Story/);
+  assert.match(html, /OM received/);
+  assert.match(html, /Closed 6\.00%/);
+  assert.match(html, /Commission<\/h2>[\s\S]*Not on file/);     // no ELA → Not on file
+  assert.match(html, /Diligence[\s\S]*Not on file/);
+  assert.match(html, /Chris Bodnar/);
+  assert.match(html, /unverified role/);                        // CoStar broker not our verified role
+  assert.match(html, /Conflicts to reconcile/);
+  assert.match(html, /must not stand as our role/);
+  assert.match(html, /Offering Memorandum/);
+  assert.match(html, /Correspondence Summary/);
+  assert.match(html, /Connected Sources/);
+  assert.match(html, /no_opportunity/);                         // SF gap visible
+});

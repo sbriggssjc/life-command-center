@@ -12,27 +12,31 @@ or *historical* (kept for history; never edit/wire).
 
 | Capability | Canonical source | 
 |---|---|
+| **Current state (LIVE / flag-off / planned)** | `docs/os/CURRENT-STATE.md` |
+| **Consolidated backlog (everything unbuilt-but-intended)** | `docs/os/PLANNED-BACKLOG.md` |
 | OS entry point / map | `docs/os/README.md` |
 | Global invariants + canon version | `docs/os/canon/00-INDEX.md` |
 | Topic rules | `docs/os/canon/*.md` (comps, filing, email-and-routing, logging-and-touchpoints, writing-voice, bov, intake-triage, personal) |
 | Surface update procedure | `docs/os/SURFACE-SYNC-PROTOCOL.md` |
-| Agent/surface architecture | `docs/os/architecture/connected-agent-architecture.md` + `connected-agent-descriptions.md` |
+| Agent/surface architecture | `docs/architecture/connected-agent-architecture.md` + `connected-agent-descriptions.md` |
 | Instruction enforcement (render/parity) | `docs/os/RENDER-AND-PARITY.md`, `docs/os/tools/*`, `docs/os/canon/blocks/*`, `docs/os/render.manifest.json` |
-| Deployment / MCP unification (one URL) | `docs/os/architecture/mcp-server-unification.md` (the decision) + `docs/os/architecture/unification-changeset.md` (ready-to-apply changeset + cutover runbook) + `INFRASTRUCTURE.md` |
+| Deployment / MCP unification (one URL) | `docs/architecture/mcp-server-unification.md` (the decision) + `docs/architecture/unification-changeset.md` (ready-to-apply changeset + cutover runbook) + `docs/architecture/infrastructure-topology.md` |
 | Build status ("are we done") | `docs/os/BUILD-STATUS.md` |
 | Access & device topology | `docs/os/ACCESS-TOPOLOGY.md` |
-| Office Scripts (workbook edits) | `docs/os/architecture/office-scripts/` |
+| Office Scripts (workbook edits) | `docs/architecture/office-scripts/` |
 | Engine × surface parity | `docs/comps-rollout/SURFACE_CAPABILITY_PARITY.md` |
 | Deal Agent component map | `docs/copilot/DEAL-AGENT-SOURCE-OF-TRUTH.md` |
 | Deal Agent instructions | `docs/copilot/agent-instructions.md` |
 | Engines / data | `mcp/` + `api/` |
 | Knowledge (voice/frameworks/personal) | `_AI-Context/Copilot-Context/BRIGGS-*` (SharePoint) |
 | Write governance | `WRITE_SURFACE_POLICY.md` |
-| Infra topology | `INFRASTRUCTURE.md` |
+| Infra topology | `docs/architecture/infrastructure-topology.md` |
+| Database ownership (which repo owns which Supabase project's migrations) | `CLAUDE.md` → "ONE REPO OWNS EACH DATABASE'S OBJECTS" (ID3a-d, 2026-09-12) |
+| BD pipeline funnel: property → owner → ownership-chain → developer → contact (the audit/build lane, not a single feature) | `docs/architecture/ownership-history-lane.md` (the `establish_ownership_history` task/lane itself — action split, human-value floor, "what is left" table); `docs/architecture/connectivity-and-open-threads.md` (topic index for every route in the chain — read §0 first); `docs/architecture/public-records-source-lane.md` (assessor/recorder/SOS manual-research capture, PR-scanner family); `docs/architecture/research-workbench.md` (task-surface sizing notes, numbered §7x); `docs/architecture/account-based-contact-intelligence.md` (contact-side design). Backlog tracking lives in `docs/os/PLANNED-BACKLOG.md` §P0b ("BD PIPELINE FUNNEL") — B-, C2-, D1-series rows — kept distinct from §P0d's entity-identity sprint, a separate concurrent thread over the same tables. |
 
 ## B. Reference (stable context; not a rule source)
 - `docs/architecture/lcc_intelligent_operating_system_v2.md` — the founding OS vision (informs the canon).
-- `copilot_authoritative_architecture_plan.md` — LCC-orchestrates / domains-execute pattern.
+- `docs/architecture/copilot_authoritative_architecture_plan.md` — LCC-orchestrates / domains-execute pattern.
 - `docs/architecture/copilot_agent_catalog.md` — the 9 logical agent roles (realized as flows unless tool-heavy).
 - `docs/comps-rollout/*` setup guides, `northmarq-claude-project-setup.md`, `copilot-deal-agent-team-sharing-runbook.md`.
 - `docs/architecture/context_broker_api_spec.md`, `context_packet_schema.md`, `signal_table_schema.sql` — Cortex substrate.
@@ -56,7 +60,7 @@ body with a one-line redirect to the canonical source in §A (the stub pattern).
 3. Never let a rule live in two editable places. One source, many renderers.
 
 ## E. Open follow-ups (tracked, not yet done)
-- ✅ Relocated `connected-agent-*.md` into `docs/os/architecture/`; redirect stubs left in `docs/comps-rollout/`.
+- ✅ Relocated `connected-agent-*.md` into `docs/architecture/`; redirect stubs left in `docs/comps-rollout/`.
 - ✅ Migrated Copilot `docs/copilot/agent-instructions.md` to a canon-managed region (`render --write-live`;
   parity ✓). Publish it into Studio to make Copilot fully canon-driven.
 - ✅ ChatGPT canon-driven via a **Knowledge file** (Custom GPT instructions cap at 8000 chars): the persona

@@ -1,0 +1,376 @@
+// ============================================================================
+// W7.3 path C — Outlook category-tagging receiver
+// ----------------------------------------------------------------------------
+// Zero-UI capture that works at SEND time: the operator assigns an Outlook
+// CATEGORY to any message — `LCC` (auto-resolve the deal from the sender) or
+// `LCC:<deal hint>` (explicit) — and a Power Automate flow (category-assigned
+// trigger, works on SENT and RECEIVED mail) POSTs the message here. We resolve
+// the deal (hint → open-deal name/tenant+city core → else the W7.1
+// lcc_resolve_contact paths → else park in the tag_unresolved lane rather than
+// guessing), then log it DEAL-STAMPED on the activity spine via the same
+// appendActivityEvent the dual-anchor loggers use — so W7.2 propagates it with
+// zero new propagation code (the tick keys on metadata.deal_entity_id).
+//
+// Doctrine:
+//   - Deal resolution NEVER guesses (no LLM in the gate); ambiguity → the
+//     tag_unresolved My Work lane (a research_tasks row, idempotent).
+//   - Idempotent on internet_message_id (activity_events unique index
+//     (workspace, source_type='outlook_tagged', external_id)).
+//   - Flag-gated (TAGGED_COMM_INTAKE_ENABLED) like other intake routes; no-ops
+//     when unset. Auth: X-PA-Webhook-Secret (PA_WEBHOOK_SECRET) or a signed-in
+//     operator.
+//   - Best-effort side effects (next-step/cadence) never block the log.
+// ============================================================================
+
+import { appendActivityEvent } from '../_shared/activity-events.js';
+import { opsQuery, pgFilterVal, resolvePrimaryWorkspaceId } from '../_shared/ops-db.js';
+import { authenticate } from '../_shared/auth.js';
+import { resolveDealByQuery, parseLccCategoryHint } from '../_shared/deal-resolve.js';
+import { deriveNextStep } from '../_shared/next-step-ai.js';
+import { invokeExtractionAI } from '../_shared/ai.js';
+import { advanceOutboundTodos, findCrossPathDuplicate } from '../_shared/outbound-advance.js';
+import { maybeAttachActionSummary, touchedActionLabels } from '../_shared/action-summary.js';
+import { parseAddress, parseAddressList } from '../_shared/outlook-recipients.js';
+import { insertOperatorNote, validateOperatorNotePayload } from '../_shared/operator-notes.js';
+
+const PA_WEBHOOK_SECRET = process.env.PA_WEBHOOK_SECRET;
+function authenticateWebhook(req) {
+  if (!PA_WEBHOOK_SECRET) return true; // transitional: allow when unconfigured
+  const provided = req.headers['x-pa-webhook-secret'] || '';
+  if (!provided || provided.length !== PA_WEBHOOK_SECRET.length) return false;
+  let mismatch = 0;
+  for (let i = 0; i < PA_WEBHOOK_SECRET.length; i++) {
+    mismatch |= provided.charCodeAt(i) ^ PA_WEBHOOK_SECRET.charCodeAt(i);
+  }
+  return mismatch === 0;
+}
+
+const OPERATOR_NOTE_CATEGORY_RE = /^\s*lcc[\s_-]*note\s*$/i;
+const OPERATOR_NOTE_BRIEFING_SUBJECT_RE = /\b(daily briefing|market brief|analyst'?s? take|build brief)\b/i;
+
+/** Pure. See the "OC1 — the operator-note funnel's Outlook channel" comment
+ * at the call site for the dormancy diagnosis this fixes. Exported for
+ * direct unit testing (no live DB / handler invocation needed). */
+export function classifyOperatorNoteChannel(rawCategories, subject) {
+  const categoryList = Array.isArray(rawCategories) ? rawCategories : String(rawCategories || '').split(/[;,]/);
+  const isLccNoteCategory = categoryList.some((c) => OPERATOR_NOTE_CATEGORY_RE.test(String(c || '')));
+  const isBriefingReply = !isLccNoteCategory
+    && /^re:/i.test(String(subject || ''))
+    && OPERATOR_NOTE_BRIEFING_SUBJECT_RE.test(String(subject || ''));
+  return { isLccNoteCategory, isBriefingReply };
+}
+
+const firstNonEmpty = (...xs) => xs.find((x) => x != null && String(x).trim() !== '') ?? null;
+const SYSTEM_ACTOR = 'b0000000-0000-0000-0000-000000000001';
+
+// Resolve a deal for the tagged message. Order: explicit hint → sender/recipient
+// via lcc_resolve_contact → conversation-thread continuity. Returns
+// { deal_entity_id, party_entity_id, method, ambiguous, candidates }.
+async function resolveTaggedDeal({ hint, from, to, conversationId, workspaceId }, deps = {}) {
+  const q = deps.opsQuery || opsQuery;
+  const resolveDeal = deps.resolveDealByQuery || resolveDealByQuery;
+
+  // 1) Explicit `LCC:<hint>` — conservative name/tenant+city match.
+  if (hint) {
+    const r = await resolveDeal(hint, { opsQuery: q }).catch(() => null);
+    if (r && (r.matched === 'exact' || r.matched === 'unique')) {
+      return { deal_entity_id: r.deal_entity_id, party_entity_id: null, method: 'hint_' + r.matched, ambiguous: false };
+    }
+    if (r && r.matched === 'ambiguous') {
+      return { deal_entity_id: null, party_entity_id: null, method: 'hint_ambiguous', ambiguous: true, candidates: r.candidates };
+    }
+    // hint matched nothing → fall through to sender resolution
+  }
+
+  // 2) Sender / recipient via the W7.1 resolver.
+  let partyEntityId = null, dealEntityId = null;
+  const addrs = [from, ...(Array.isArray(to) ? to : [to])].filter(Boolean);
+  for (const a of addrs) {
+    const email = String(a).toLowerCase();
+    if (!email || email.includes('northmarq')) continue;
+    try {
+      const rc = await q('POST', 'rpc/lcc_resolve_contact', { p_email: email, p_phone: null });
+      const packet = Array.isArray(rc.data) ? rc.data[0] : rc.data;
+      if (packet?.party_entity_id && !partyEntityId) partyEntityId = packet.party_entity_id;
+      if (packet?.primary_deal) { dealEntityId = packet.primary_deal; break; }
+    } catch (_e) { /* best-effort */ }
+  }
+  if (dealEntityId) return { deal_entity_id: dealEntityId, party_entity_id: partyEntityId, method: 'sender_resolver', ambiguous: false };
+
+  // 3) Conversation-thread continuity — a prior deal-stamped message in the thread.
+  if (conversationId && workspaceId) {
+    try {
+      const r = await q('GET',
+        `activity_events?workspace_id=eq.${pgFilterVal(workspaceId)}` +
+        `&metadata->>conversation_id=eq.${encodeURIComponent(conversationId)}` +
+        `&entity_id=not.is.null&select=entity_id&order=occurred_at.desc&limit=1`);
+      const eid = r?.data?.[0]?.entity_id || null;
+      if (eid) return { deal_entity_id: eid, party_entity_id: partyEntityId, method: 'conversation', ambiguous: false };
+    } catch (_e) { /* best-effort */ }
+  }
+
+  return { deal_entity_id: null, party_entity_id: partyEntityId, method: 'unresolved', ambiguous: false };
+}
+
+// Park an unresolved / ambiguous tagged message in the tag_unresolved My Work
+// lane. Idempotent via the R21 research_tasks dedup index
+// (source_table, source_record_id, research_type, domain).
+async function parkUnresolved({ workspaceId, internetMsgId, subject, from, hint, candidates, reason }, deps = {}) {
+  const q = deps.opsQuery || opsQuery;
+  const row = {
+    workspace_id: workspaceId,
+    research_type: 'tag_unresolved',
+    title: ('Tag a deal for: ' + (subject || '(no subject)')).slice(0, 300),
+    instructions: 'An Outlook message was tagged for LCC but could not be matched to a single open deal ('
+      + reason + '). Pick the deal (Copilot: tag_comm_to_deal with the internet_message_id) or ignore.',
+    entity_id: null,
+    // research_tasks.domain is NOT NULL — an explicit null here made every park
+    // insert fail silently (caught 2026-08-06, session 36y). Tagged mail is
+    // deal-agnostic until resolved, so it parks under the generic 'lcc' domain.
+    domain: 'lcc',
+    status: 'queued',
+    priority: 30,
+    source_record_id: String(internetMsgId),
+    source_table: 'outlook_tagged',
+    metadata: {
+      internet_message_id: internetMsgId,
+      subject: subject || null,
+      from: from || null,
+      hint: hint || null,
+      candidates: Array.isArray(candidates) ? candidates.slice(0, 8) : null,
+      reason,
+    },
+  };
+  try {
+    const r = await q('POST', 'research_tasks?on_conflict=source_table,source_record_id,research_type,domain',
+      row, { headers: { Prefer: 'return=representation,resolution=ignore-duplicates' } });
+    const insertedId = Array.isArray(r.data) ? r.data[0]?.id : null;
+    return { parked: true, id: insertedId };
+  } catch (e) {
+    // Never report parked:true on a failed insert — a silently dropped park is a
+    // lost message in the never-guess lane. Log loudly instead.
+    console.error('[intake-tagged-comm] park insert FAILED', String(e?.message || e).slice(0, 300));
+    return { parked: false, park_error: String(e?.message || e).slice(0, 200) };
+  }
+}
+
+export async function handleTaggedComm(req, res) {
+  if (req.method !== 'POST') return res.status(405).json({ error: `Method ${req.method} not allowed` });
+
+  // Flag gate — inert until TAGGED_COMM_INTAKE_ENABLED is set in Railway.
+  if (process.env.TAGGED_COMM_INTAKE_ENABLED !== 'true' && req.query.force !== '1') {
+    return res.status(200).json({
+      ok: true, skipped: 'flag_off',
+      hint: 'Set TAGGED_COMM_INTAKE_ENABLED=true in Railway (feature_flags_registry: TAGGED_COMM_INTAKE) to enable, or call with ?force=1.',
+    });
+  }
+
+  // Auth: PA webhook secret OR a signed-in operator.
+  let user = null;
+  if (!authenticateWebhook(req)) {
+    user = await authenticate(req, res);
+    if (!user) return; // authenticate already responded
+  }
+
+  const p = req.body || {};
+  const internetMsgId = firstNonEmpty(p.internet_message_id, p.internetMessageId, p.message_id, p.id);
+  if (!internetMsgId) return res.status(400).json({ error: 'internet_message_id is required' });
+
+  const workspaceId = req.headers['x-lcc-workspace']
+    || user?.memberships?.[0]?.workspace_id
+    || process.env.LCC_PRIMARY_WORKSPACE_ID
+    || process.env.LCC_DEFAULT_WORKSPACE_ID
+    || (await resolvePrimaryWorkspaceId({ opsQuery }).catch(() => null));
+  if (!workspaceId) return res.status(400).json({ error: 'No workspace context' });
+
+  const subject = firstNonEmpty(p.subject, '(no subject)');
+  const bodyPreview = (firstNonEmpty(p.body_preview, p.bodyPreview, p.body, '') || '').toString().slice(0, 4000) || null;
+  const webLink = firstNonEmpty(p.web_link, p.webLink, null);
+  const occurredAt = firstNonEmpty(p.sent_at, p.sentAt, p.received_at, p.receivedAt, p.sent_date_time, p.received_date_time) || new Date().toISOString();
+  const conversationId = firstNonEmpty(p.conversation_id, p.conversationId, null);
+
+  const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+  const fromAddr = (String(firstNonEmpty(p.from, p.sender, '') || '').match(EMAIL_RE) || [])[0]?.toLowerCase() || null;
+  const toAddrs = [...new Set((String(firstNonEmpty(p.to, p.to_recipients, p.recipients, '') || '').match(EMAIL_RE) || []).map((e) => e.toLowerCase()))];
+  // Prompt 96 — preserve display names for the comms-harvest header-pair arm.
+  const fromName = parseAddress(firstNonEmpty(p.from, p.sender, null)).name || null;
+  const toNames = parseAddressList(firstNonEmpty(p.to, p.to_recipients, p.recipients, null))
+    .filter((x) => x.name).map((x) => ({ name: x.name, email: x.email }));
+
+  // OC1 — the operator-note funnel's Outlook channel. Two arms, BEFORE the
+  // deal-resolution LCC gate below, because a note is never a deal:
+  //   1. Category `LCC-Note` (any case/spacing) — an explicit operator note.
+  //      DORMANCY DIAGNOSIS (spec §6): the pre-existing `LCC`/`LCC:<hint>`
+  //      gate (parseLccCategoryHint) matches `^lcc$` or `^lcc[:=](.+)$` only
+  //      — a category literally named `LCC-Note` matches NEITHER pattern (the
+  //      hyphen fails both regexes), so every note tagged that way has always
+  //      fallen through to `no_lcc_category` and been silently dropped. This
+  //      is why the channel reads flag-on-but-dormant (contract note: "First
+  //      diagnose the dormancy... is the PA category flow off, erroring, or
+  //      just unused?") — for the NOTE category specifically it was neither:
+  //      the regex could never have matched it, so it never had a live path.
+  //      The 6-lifetime-rows dormancy documented in PLANNED-BACKLOG §P18 is
+  //      about the broader `LCC`/`LCC:<hint>` deal-tagging flow, which is a
+  //      SEPARATE, narrower dormancy question (whether the PA category-
+  //      assigned trigger itself still fires) — this fix only closes the
+  //      LCC-Note-specific gap, and does not by itself prove the PA flow is
+  //      alive; that needs a live post through the flow to confirm (§6).
+  //   2. A plain reply to a briefing email that never carried an LCC tag at
+  //      all (contract: "outlook_reply... replies to briefing emails, if the
+  //      flow can match them") — detected narrowly by subject: a reply
+  //      (`Re:`) whose ORIGINAL subject line is a recognizable briefing
+  //      subject. Never guessed beyond that; anything else still falls
+  //      through to the LCC deal gate below, unchanged.
+  const { isLccNoteCategory, isBriefingReply } = classifyOperatorNoteChannel(p.categories ?? p.category, subject);
+
+  if (isLccNoteCategory || isBriefingReply) {
+    const rawText = (bodyPreview || subject || '').toString();
+    const validated = validateOperatorNotePayload({
+      channel: isLccNoteCategory ? 'outlook_tagged' : 'outlook_reply',
+      raw_text: rawText,
+      context: { subject, thread_id: conversationId || null, original_message_id: internetMsgId },
+      received_from: fromAddr,
+      idempotency_key: String(internetMsgId),
+    });
+    if (!validated.ok) {
+      return res.status(200).json({ ok: true, logged: false, reason: 'operator_note_invalid_payload', detail: validated.error });
+    }
+    const result = await insertOperatorNote(validated.row, { idempotencyKey: validated.idempotencyKey });
+    return res.status(200).json({
+      ok: true, logged: !!result.ok, operator_note_id: result.id || null,
+      disposition: result.disposition || null, via: isLccNoteCategory ? 'lcc_note_category' : 'briefing_reply_subject',
+    });
+  }
+
+  // Category gate — a message with no LCC category is a mis-fire; ignore quietly.
+  const { tagged, hint } = parseLccCategoryHint(p.categories ?? p.category);
+  if (!tagged) return res.status(200).json({ ok: true, logged: false, reason: 'no_lcc_category' });
+
+  // Direction: a message the operator SENT vs one they RECEIVED. PA can pass it;
+  // otherwise infer from an internal sender.
+  const direction = firstNonEmpty(p.direction,
+    (fromAddr && fromAddr.includes('northmarq')) ? 'outbound' : 'inbound');
+
+  const resolved = await resolveTaggedDeal({ hint, from: fromAddr, to: toAddrs, conversationId, workspaceId });
+
+  // Ambiguous / unresolved → park, do NOT guess.
+  if (!resolved.deal_entity_id) {
+    const reason = resolved.ambiguous ? 'ambiguous_hint' : 'no_deal_match';
+    const park = await parkUnresolved({
+      workspaceId, internetMsgId, subject, from: fromAddr, hint,
+      candidates: resolved.candidates, reason,
+    });
+    return res.status(200).json({
+      ok: true, logged: false, parked: park.parked, reason,
+      candidates: resolved.candidates || undefined,
+      note: 'No single open deal matched — parked in the tag_unresolved lane. Use Copilot tag_comm_to_deal with this internet_message_id to attach it.',
+    });
+  }
+
+  // Cross-path de-dupe: a tagged SEND also lands in Sent Items, so the untagged
+  // sweep may have already logged this internet_message_id as `outlook_sent`
+  // (and already advanced its to-dos). The two paths use different source_type
+  // values, so the per-path unique index can't catch it — skip here so a to-do
+  // never advances twice for one send.
+  const priorSent = await findCrossPathDuplicate({
+    opsQuery, workspaceId, externalId: String(internetMsgId), sourceTypes: ['outlook_sent'],
+  });
+  if (priorSent) {
+    return res.status(200).json({
+      ok: true, logged: false, duplicate: true, cross_path: 'outlook_sent',
+      activity_id: priorSent.id, deal_entity_id: resolved.deal_entity_id,
+      note: 'Already logged via the Sent-Items sweep (outlook_sent) — skipped to avoid a double advance.',
+    });
+  }
+
+  const metadata = {
+    direction,
+    from: fromAddr,
+    from_name: fromName || null,
+    to: toAddrs.length ? toAddrs : null,
+    to_names: toNames.length ? toNames : null,
+    via: 'outlook_tagged',
+    categories: Array.isArray(p.categories) ? p.categories : (p.categories ? [p.categories] : null),
+    hint: hint || null,
+    conversation_id: conversationId,
+    resolution_method: resolved.method,
+    party_entity_id: resolved.party_entity_id,
+    deal_entity_id: resolved.deal_entity_id,
+  };
+
+  // Log deal-stamped on the spine (idempotent on internet_message_id).
+  const res2 = await appendActivityEvent({
+    workspaceId,
+    actorId: user?.id || user?.user_id || SYSTEM_ACTOR,
+    category: 'email',
+    title: ((direction === 'outbound' ? 'Sent (tagged): ' : 'Received (tagged): ') + subject).slice(0, 500),
+    body: bodyPreview,
+    entityId: resolved.deal_entity_id,
+    sourceType: 'outlook_tagged',
+    externalId: String(internetMsgId),
+    externalUrl: webLink,
+    occurredAt,
+    metadata,
+  });
+
+  // Best-effort self-updating to-do for an inbound tagged reply (mirror the
+  // inbound dual-anchor logger). Fresh insert only; never blocks.
+  if (res2?.inserted && direction === 'inbound') {
+    let ns = null;
+    try { ns = await deriveNextStep(subject, bodyPreview || '', null, { invokeExtractionAI, premise: 'seller' }); }
+    catch (_e) { ns = null; }
+    let inboundAdvance = null;
+    try {
+      const rr = await opsQuery('POST', 'rpc/lcc_advance_todos', {
+        p_entity_id: resolved.deal_entity_id, p_activity_id: res2.id || null,
+        p_party_entity_id: resolved.party_entity_id, p_channel: 'email', p_direction: 'inbound',
+        p_context: subject ? ('Tagged reply: ' + String(subject).slice(0, 160)) : null,
+        p_next_action: ns?.next_action ?? null, p_next_type: ns?.action_type ?? null,
+        p_next_due_offset: ns?.due_offset ?? null,
+      });
+      inboundAdvance = Array.isArray(rr.data) ? rr.data[0] : rr.data;
+    } catch (_e) { /* best-effort */ }
+    // W7.5 Part C — flag-gated action narration on the inbound advance too.
+    await maybeAttachActionSummary({
+      opsQuery, invokeExtractionAI, activityId: res2.id || null, metadata,
+      subject, body: bodyPreview || '', touchedLabels: touchedActionLabels(inboundAdvance),
+      direction: 'inbound',
+    }).catch(() => null);
+  }
+
+  // W7.5 — a tagged SEND completes the work a to-do asked for. Mirror the
+  // outbound branch of handleOutlookSent: advance the deal's offer_review /
+  // reach-out follow_ups (+ schedule the seller follow-up) and NON-DESTRUCTIVELY
+  // reconcile the open deal_next_step. Best-effort; never blocks the log.
+  let advanceResult = null;
+  if (res2?.inserted && direction === 'outbound') {
+    const adv = await advanceOutboundTodos({
+      opsQuery, dealEntityId: resolved.deal_entity_id, partyEntityId: resolved.party_entity_id,
+      activityId: res2.id || null, subject, occurredAt,
+      context: subject ? ('Tagged send: ' + String(subject).slice(0, 160)) : null,
+    });
+    advanceResult = adv.advance;
+    // W7.5 Part C — flag-gated one-line "action taken" narration (no-op unless
+    // W75_ACTION_SUMMARY=true). Never blocks / errors.
+    await maybeAttachActionSummary({
+      opsQuery, invokeExtractionAI, activityId: res2.id || null, metadata,
+      subject, body: bodyPreview || '', touchedLabels: touchedActionLabels(advanceResult),
+      direction: 'outbound',
+    }).catch(() => null);
+  }
+
+  return res.status(200).json({
+    ok: true,
+    logged: !!res2?.inserted,
+    duplicate: res2?.ok && !res2?.inserted,
+    activity_id: res2?.id || null,
+    deal_entity_id: resolved.deal_entity_id,
+    resolution_method: resolved.method,
+    direction,
+    advance: advanceResult || undefined,
+    note: 'Logged — the deal summary and next steps update within the hour.',
+  });
+}
+
+// Exported for unit tests.
+export { resolveTaggedDeal, parkUnresolved };

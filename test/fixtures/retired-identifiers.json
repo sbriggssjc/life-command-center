@@ -1,0 +1,23 @@
+[
+  {
+    "id": "life-command-center-nine.vercel.app",
+    "kind": "host",
+    "retired": "2026-07-20",
+    "replacement": "tranquil-delight-production-633f.up.railway.app (server.js mounts /api/*)",
+    "note": "The Vercel deployment retired when server.js became the single source of /api/* routing. Still live and still holds an LCC Opps service key, so it is a second writer, not just a dead link (P194)."
+  },
+  {
+    "id": "docs/os/architecture/",
+    "kind": "path",
+    "retired": "2026-09-08",
+    "replacement": "docs/architecture/",
+    "note": "Merged by DOCMAP1 — the split docs/os/architecture/ tree no longer exists; everything lives under docs/architecture/."
+  },
+  {
+    "id": "GOV_STATE_SIGNALS",
+    "kind": "symbol",
+    "retired": "2026-09",
+    "replacement": "GOV_SIGNALS",
+    "note": "Merged into GOV_SIGNALS. The constant had zero production consumers (DRIFT1-routing-gap) — a module import is not a symbol import."
+  }
+]

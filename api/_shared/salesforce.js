@@ -34,9 +34,22 @@
 // ============================================================================
 
 import { fetchWithTimeout } from './ops-db.js';
+import { isSfRecordLookupConfigured, lookupSfRecordsByIds } from './sf-record-lookup.js';
 
 export function isSalesforceConfigured() {
   return !!process.env.SF_LOOKUP_WEBHOOK_URL;
+}
+
+function normalizeSalesforceAccount(acct) {
+  if (!acct || typeof acct !== 'object') return null;
+  const id = acct.Id || acct.id;
+  if (!id) return null;
+  return {
+    Id: id,
+    Name: acct.Name || acct.name || null,
+    Type: acct.Type || acct.type || null,
+    Industry: acct.Industry || acct.industry || null,
+  };
 }
 
 /** Today in YYYY-MM-DD (UTC). */
@@ -297,32 +310,62 @@ export async function findSalesforceAccountByName(ownerName) {
 
 /**
  * Fetch a Salesforce Account by its 15/18-char Id, to confirm the name before
- * a manual map. Tries a `find_account_by_id` flow operation; tolerates flows
- * that don't implement it (returns ok:false so the UI can map unverified).
+ * a manual map. Tries the `find_account_by_id` lookup operation first, then
+ * falls back to the generic ID record-lookup flow if that operation is missing
+ * or returning a connector error.
  *
  * @param {string} accountId
  * @returns {Promise<{ok:boolean, account?:{Id,Name,Type,Industry}|null, reason?:string}>}
  */
-export async function getSalesforceAccountById(accountId) {
-  if (!isSalesforceConfigured()) return { ok: false, reason: 'sf_not_configured' };
+export async function getSalesforceAccountById(accountId, deps = {}) {
+  const lookupFlow = deps.lookupFlow || callSfLookupFlow;
+  const recordLookup = deps.recordLookup || lookupSfRecordsByIds;
+  const hasLookupFlow = isSalesforceConfigured() || deps.lookupFlow;
+  const hasRecordLookup = isSfRecordLookupConfigured() || deps.recordLookup;
+  if (!hasLookupFlow && !hasRecordLookup) return { ok: false, reason: 'sf_not_configured' };
   const id = String(accountId || '').trim();
   if (!/^[A-Za-z0-9]{15}([A-Za-z0-9]{3})?$/.test(id)) return { ok: false, reason: 'bad_id_shape' };
-  const result = await callSfLookupFlow({ operation: 'find_account_by_id', value: id });
-  if (!result || result.ok !== true) {
-    return { ok: false, reason: result?.reason || 'lookup_failed' };
+
+  let primary = null;
+  if (hasLookupFlow) {
+    primary = await lookupFlow({ operation: 'find_account_by_id', value: id });
+    if (primary && primary.ok === true) {
+      let acct = normalizeSalesforceAccount(primary.account);
+      if (!acct && Array.isArray(primary.candidates) && primary.candidates.length) {
+        acct = normalizeSalesforceAccount(primary.candidates[0]);
+      }
+      if (!acct) return { ok: true, account: null, reason: 'no_match' };
+      return { ok: true, account: acct };
+    }
   }
-  let acct = null;
-  if (result.account) acct = result.account;
-  else if (Array.isArray(result.candidates) && result.candidates.length) acct = result.candidates[0];
-  if (!acct || !(acct.Id || acct.id)) return { ok: true, account: null, reason: 'no_match' };
+
+  if (hasRecordLookup) {
+    const fallback = await recordLookup({
+      objectType: 'Account',
+      fields: 'Id,Name,Type,Industry',
+      ids: [id],
+      batchSize: 1,
+      requestIdSeed: 'decision-account-id',
+    });
+    if (fallback && fallback.ok) {
+      const rows = Array.isArray(fallback.records) ? fallback.records : [];
+      const acct = normalizeSalesforceAccount(rows[0]);
+      if (!acct) return { ok: true, account: null, reason: 'no_match' };
+      return { ok: true, account: acct, source: 'sf_record_lookup' };
+    }
+    return {
+      ok: false,
+      reason: fallback?.reason || 'record_lookup_failed',
+      detail: fallback?.errors?.[0]?.detail || fallback?.detail || primary?.detail || null,
+      lookup_flow: primary ? { reason: primary.reason || null, status: primary.status || null, detail: primary.detail || null } : null,
+    };
+  }
+
   return {
-    ok: true,
-    account: {
-      Id: acct.Id || acct.id,
-      Name: acct.Name || acct.name || null,
-      Type: acct.Type || acct.type || null,
-      Industry: acct.Industry || acct.industry || null,
-    },
+    ok: false,
+    reason: primary?.reason || 'lookup_failed',
+    status: primary?.status || null,
+    detail: primary?.detail || null,
   };
 }
 
@@ -1007,4 +1050,135 @@ export async function getSalesforceOpportunityAccounts(oppIds) {
     account_name: r.AccountName || r.accountName || (r.Account && (r.Account.Name || r.Account.name)) || r.account_name || null,
   })).filter((a) => a.opp_id && a.account_id);
   return { ok: true, accounts };
+}
+
+// ============================================================================
+// Task MAINTENANCE — the two writes that let LCC own the pursuit list
+// ============================================================================
+// Doctrine (Scott, 2026-08-17): **LCC is the operational source of truth for
+// Team Briggs BD.** Northmarq requires call logging and open activities in
+// Salesforce, so SF carries the MINIMUM compliance artifact and nothing more --
+// no enrichment, no extra links, no LCC-derived data pushed across. SF state is
+// never read back as truth; it is read only to AUDIT compliance.
+//
+// The team's practice, which these mirror exactly:
+//   * ONE open Task per pursued contact, held open indefinitely
+//   * NM Type (API name SJC_Type_sjc__c) = 'Opportunity' marks a SELLER PROSPECT;
+//     blank = marketing / broker activity. Picklist: Opportunity, Prospect,
+//     Execution, Client Management, Other.
+//   * completed Tasks are the logged calls; the OPEN one's due date is pushed
+//     forward as the pursuit continues
+//   * the open Task is closed when the account is no longer pursued
+//
+// LCC could already CREATE tasks (createSalesforceTask) and log calls
+// (logSalesforceActivity) but could neither push the due date nor close --
+// the exact two steps Scott was doing by hand. Until both exist, LCC cannot be
+// the source of truth for the pursuit list; it can only start one.
+//
+// Both send the id plus ONE field. That minimalism is the compliance contract,
+// not an optimisation.
+// ============================================================================
+
+/** Salesforce 15- or 18-character id. */
+const SF_ID_RE = /^[A-Za-z0-9]{15}([A-Za-z0-9]{3})?$/;
+
+/**
+ * Push the due date on an existing open pursuit Task (ActivityDate only).
+ * Called when an LCC cadence advances — LCC owns the schedule, SF mirrors it.
+ *
+ * @param {{sfTaskId?:string, sf_task_id?:string, activityDate?:string, activity_date?:string}} args
+ * @returns {Promise<{ok:boolean, task?:{Id:string}, reason?:string, detail?:any}>}
+ */
+export async function updateSalesforceTaskDue(args = {}) {
+  if (!isSalesforceConfigured()) return { ok: false, reason: 'sf_not_configured' };
+  const sfTaskId = String(args.sfTaskId || args.sf_task_id || '').trim();
+  if (!SF_ID_RE.test(sfTaskId)) return { ok: false, reason: 'bad_task_id' };
+
+  // Same normalisation as createSalesforceTask: ALWAYS a clean YYYY-MM-DD.
+  // Unlike create, we do NOT fall back to today — a caller that failed to
+  // supply a date must not silently re-date the customer's task to now.
+  const raw = (args.activityDate != null) ? args.activityDate
+            : (args.activity_date != null) ? args.activity_date : null;
+  const activityDate = normalizeActivityDate(raw);
+  if (!activityDate) return { ok: false, reason: 'bad_activity_date' };
+
+  const result = await callSfLookupFlow({
+    operation: 'update_task_due',
+    sf_task_id: sfTaskId,
+    activity_date: activityDate,
+  });
+  if (!result || result.ok !== true) {
+    return { ok: false, reason: result?.reason || 'lookup_failed', detail: result?.detail || null };
+  }
+  return { ok: true, task: { Id: sfTaskId } };
+}
+
+/**
+ * Close the open pursuit Task when LCC retires the cadence.
+ * Status only — never touches subject, type, comments or relationships.
+ *
+ * @param {{sfTaskId?:string, sf_task_id?:string, status?:string}} args
+ */
+export async function closeSalesforceTask(args = {}) {
+  if (!isSalesforceConfigured()) return { ok: false, reason: 'sf_not_configured' };
+  const sfTaskId = String(args.sfTaskId || args.sf_task_id || '').trim();
+  if (!SF_ID_RE.test(sfTaskId)) return { ok: false, reason: 'bad_task_id' };
+  const status = String(args.status || 'Completed').trim() || 'Completed';
+
+  const result = await callSfLookupFlow({
+    operation: 'close_task',
+    sf_task_id: sfTaskId,
+    status,
+  });
+  if (!result || result.ok !== true) {
+    return { ok: false, reason: result?.reason || 'lookup_failed', detail: result?.detail || null };
+  }
+  return { ok: true, task: { Id: sfTaskId }, status };
+}
+
+/**
+ * READ, for COMPLIANCE AUDIT ONLY — never as a source of truth.
+ *
+ * Answers the Northmarq rules-of-engagement question: is every contact we are
+ * pursuing carrying exactly one open Task, and does what SF holds match what LCC
+ * believes? Callers MUST NOT write SF state into LCC from this; the direction of
+ * truth is LCC → SF.
+ *
+ * `nmType` defaults to 'Opportunity' (the seller-prospect marker). Pass null to
+ * audit every open Task regardless of type.
+ *
+ * @param {{ownerIds?:string[], nmType?:string|null}} args
+ * @returns {Promise<{ok:boolean, tasks?:Array<{id,who_id,what_id,subject,status,activity_date,nm_type,owner_id}>, reason?:string}>}
+ */
+export async function getOpenTasksForCompliance(args = {}) {
+  if (!isSalesforceConfigured()) return { ok: false, reason: 'sf_not_configured' };
+  const ownerIds = Array.from(new Set(
+    (Array.isArray(args.ownerIds) ? args.ownerIds : [])
+      .map((s) => String(s || '').trim())
+      .filter((s) => SF_ID_RE.test(s))
+  ));
+  const nmType = (args.nmType === null) ? null
+    : String(args.nmType || 'Opportunity').trim();
+
+  const result = await callSfLookupFlow({
+    operation: 'open_tasks_by_owner',
+    owner_ids: ownerIds,
+    nm_type: nmType,
+  });
+  if (!result || result.ok !== true) {
+    return { ok: false, reason: result?.reason || 'lookup_failed', detail: result?.detail || null };
+  }
+  const rows = Array.isArray(result.tasks) ? result.tasks
+    : Array.isArray(result.records) ? result.records : [];
+  const tasks = rows.map((r) => ({
+    id:            r.Id || r.id || null,
+    who_id:        r.WhoId || r.who_id || null,
+    what_id:       r.WhatId || r.what_id || null,
+    subject:       r.Subject || r.subject || null,
+    status:        r.Status || r.status || null,
+    activity_date: r.ActivityDate || r.activity_date || null,
+    nm_type:       r.SJC_Type_sjc__c || r.nm_type || null,
+    owner_id:      r.OwnerId || r.owner_id || null,
+  })).filter((t) => t.id);
+  return { ok: true, tasks };
 }

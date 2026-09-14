@@ -1,3 +1,9 @@
+-- ⚠️ HISTORICAL — DO NOT RE-APPLY. This directory does not own the government database;
+-- `government-lease` does (see supabase/migrations/government/README.md, 2026-09-12).
+-- This file is kept as a record of what this repo applied in the past. The live, correct
+-- copy of any object it defines may have since diverged -- read the deployed database or
+-- government-lease's committed source, never this file, before trusting its content.
+
 -- ============================================================================
 -- 20260729160000_pin_function_search_path_gov.sql   (GOV scknotsqkcheojiaewwh)
 -- Applied live 2026-07-29. Same as the OPS pass, lock-safe (short lock_timeout + per-function

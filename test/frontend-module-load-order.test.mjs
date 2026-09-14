@@ -1,0 +1,782 @@
+// W6.5 Stage 1 (Prompt 87) — front-end decomposition load-order smoke test.
+//
+// The SPA is served statically by Railway/Express with NO bundler: JS files are
+// classic <script> tags concatenated into one global scope, so LOAD ORDER is the
+// dependency mechanism. Stage 1 extracted the Decision Center federated lanes from
+// ops.js into dc-lanes.js. This guard pins the invariants that keep that split
+// behavior-identical, so a later reorder / rename can't silently break the app:
+//   1. dc-lanes.js is loaded, as a classic (non-module) script, BEFORE ops.js.
+//   2. dc-lanes.js and ops.js are both syntactically valid.
+//   3. The federated surface lives in dc-lanes.js; the lane partition + seeded
+//      renderers stay in ops.js (the two halves don't both define the same thing).
+
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync, readdirSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
+const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+const html = readFileSync(join(root, 'index.html'), 'utf8');
+
+function scriptIndex(file) {
+  // Match a classic <script src="file?v=..."></script> tag (module tags excluded).
+  const re = new RegExp('<script\\s+src="' + file.replace('.', '\\.') + '(\\?[^"]*)?"\\s*>', 'i');
+  const m = html.match(re);
+  return m ? m.index : -1;
+}
+
+describe('index.html loads each local script EXACTLY once', () => {
+  // A merge that resolves the <script> block by keeping BOTH sides duplicates
+  // every tag in it. That shipped to main on 2026-08-26: dc-lanes.js, ops.js and
+  // the four ops-* siblings each got a second tag.
+  //
+  // Measured, not assumed — the damage differs by file and neither half is ok:
+  //   · dc-lanes.js (3 top-level let/const) and ops.js (45) throw a
+  //     redeclaration SyntaxError on the second parse. A classic script's parse
+  //     error is scoped to that script, so the first copy still holds and the app
+  //     survives — but the console fills with SyntaxErrors that mask real ones.
+  //   · the four ops-* files declare only `function`/`var`, so they parse fine
+  //     and RE-EXECUTE. Harmless only because none carries a top-level
+  //     side effect today; nothing stops the next one from doing so.
+  // Either way every duplicated file is downloaded twice.
+  //
+  // The cache-buster guard caught this only BY ACCIDENT (the two copies happened
+  // to carry different ?v= values). Two duplicate tags at the SAME version pass
+  // it cleanly, so the duplication itself needs its own assertion.
+  it('no local <script src> appears more than once', () => {
+    const seen = new Map();
+    const re = /<script[^>]*\ssrc="(?!https?:)([^"?]+)(?:\?[^"]*)?"/gi;
+    let m;
+    while ((m = re.exec(html)) !== null) {
+      seen.set(m[1], (seen.get(m[1]) || 0) + 1);
+    }
+    const dupes = [...seen.entries()].filter(([, n]) => n > 1);
+    assert.deepEqual(dupes, [],
+      'duplicate <script src> in index.html: ' + JSON.stringify(dupes));
+    assert.ok(seen.size > 10, 'sanity: the scanner found ' + seen.size + ' local scripts');
+  });
+});
+
+describe('W6.5 front-end module load order (no-bundler classic scripts)', () => {
+  it('dc-lanes.js is present in index.html', () => {
+    assert.ok(scriptIndex('dc-lanes.js') >= 0, 'index.html must load dc-lanes.js');
+  });
+
+  it('ops.js is present in index.html', () => {
+    assert.ok(scriptIndex('ops.js') >= 0, 'index.html must load ops.js');
+  });
+
+  it('dc-lanes.js loads BEFORE ops.js (federated globals defined first)', () => {
+    const dc = scriptIndex('dc-lanes.js');
+    const ops = scriptIndex('ops.js');
+    assert.ok(dc >= 0 && ops >= 0, 'both scripts must be present');
+    assert.ok(dc < ops, 'dc-lanes.js must appear before ops.js in index.html');
+  });
+
+  it('dc-lanes.js is a CLASSIC script (not type="module"), matching ops.js', () => {
+    // A module would get its own scope and break the shared-global contract.
+    assert.doesNotMatch(html, /<script\s+type="module"\s+src="dc-lanes\.js/i,
+      'dc-lanes.js must be a classic script, not a module');
+  });
+
+  it('dc-lanes.js and ops.js both parse (node --check)', () => {
+    for (const f of ['dc-lanes.js', 'ops.js']) {
+      assert.doesNotThrow(() => execFileSync(process.execPath, ['--check', join(root, f)]),
+        `${f} must be syntactically valid`);
+    }
+  });
+
+  // ── Stage 2, Unit 1: detail-rent.js ──────────────────────────────────────
+  it('detail-rent.js is a CLASSIC script loaded BEFORE detail.js', () => {
+    const rent = scriptIndex('detail-rent.js');
+    const detail = scriptIndex('detail.js');
+    assert.ok(rent >= 0, 'index.html must load detail-rent.js');
+    assert.ok(detail >= 0, 'index.html must load detail.js');
+    assert.ok(rent < detail, 'detail-rent.js must appear before detail.js in index.html');
+    assert.doesNotMatch(html, /<script\s+type="module"\s+src="detail-rent\.js/i,
+      'detail-rent.js must be a classic script, not a module');
+  });
+
+  it('detail-rent.js and detail.js both parse (node --check)', () => {
+    for (const f of ['detail-rent.js', 'detail.js']) {
+      assert.doesNotThrow(() => execFileSync(process.execPath, ['--check', join(root, f)]),
+        `${f} must be syntactically valid`);
+    }
+  });
+
+  it('the rent POLICY moved to detail-rent.js; the rent RENDERERS stayed in detail.js', () => {
+    const rentSrc = readFileSync(join(root, 'detail-rent.js'), 'utf8');
+    const detailSrc = readFileSync(join(root, 'detail.js'), 'utf8');
+    // Moved: the four pure helpers now live in detail-rent.js ONLY.
+    for (const fn of ['_udProjectRent', '_udPickCurrentRent', '_udParseRentEscalation', '_udBuildRentSchedule']) {
+      assert.match(rentSrc, new RegExp(`function\\s+${fn}\\b`), `detail-rent.js defines ${fn}`);
+      assert.doesNotMatch(detailSrc, new RegExp(`function\\s+${fn}\\b`), `detail.js must NOT redefine ${fn}`);
+    }
+    // Stayed: the UI renderers + the shared date coercer remain in detail.js ONLY.
+    for (const fn of ['_udRenderRentChart', '_udRenderRentRoll', '_udRentPsfTagHtml', '_udCoerceDate']) {
+      assert.match(detailSrc, new RegExp(`function\\s+${fn}\\b`), `detail.js keeps ${fn}`);
+      assert.doesNotMatch(rentSrc, new RegExp(`function\\s+${fn}\\b`), `detail-rent.js must NOT copy ${fn}`);
+    }
+    // A pointer comment is left where the region was, so the seam is findable.
+    assert.match(detailSrc, /MOVED to detail-rent\.js/, 'detail.js keeps a pointer comment at the extraction site');
+  });
+
+  // ── Stage 2, Unit 2: detail-tab-documents.js ─────────────────────────────
+  it('detail-tab-documents.js is a CLASSIC script loaded BEFORE detail.js', () => {
+    const docs = scriptIndex('detail-tab-documents.js');
+    const detail = scriptIndex('detail.js');
+    assert.ok(docs >= 0, 'index.html must load detail-tab-documents.js');
+    assert.ok(docs < detail, 'detail-tab-documents.js must appear before detail.js');
+    assert.doesNotMatch(html, /<script\s+type="module"\s+src="detail-tab-documents\.js/i,
+      'detail-tab-documents.js must be a classic script, not a module');
+    assert.doesNotThrow(() => execFileSync(process.execPath, ['--check', join(root, 'detail-tab-documents.js')]),
+      'detail-tab-documents.js must be syntactically valid');
+  });
+
+  it('the Documents tab moved whole — renderers AND the section table', () => {
+    const docsSrc = readFileSync(join(root, 'detail-tab-documents.js'), 'utf8');
+    const detailSrc = readFileSync(join(root, 'detail.js'), 'utf8');
+    for (const fn of ['_udRenderDocumentsAsync', '_udRenderDossiers', '_udRenderDocuments',
+                      '_udOpenDossier', '_udOpenDocument',
+                      '_udBuildPropertyDossierHTML', '_udOpenClientDossier']) {
+      assert.match(docsSrc, new RegExp(`function\\s+${fn}\\b`), `detail-tab-documents.js defines ${fn}`);
+      assert.doesNotMatch(detailSrc, new RegExp(`function\\s+${fn}\\b`), `detail.js must NOT redefine ${fn}`);
+    }
+    // The section table is only meaningful with its renderers — it moves too.
+    assert.match(docsSrc, /const\s+_UD_DOC_SECTIONS\s*=/, 'detail-tab-documents.js owns _UD_DOC_SECTIONS');
+    assert.doesNotMatch(detailSrc, /const\s+_UD_DOC_SECTIONS\s*=/, 'detail.js must NOT redefine _UD_DOC_SECTIONS');
+    // window.* exports feed inline onclick handlers — they must survive the move.
+    for (const w of ['_udOpenDossier', '_udOpenDocument', '_udBuildPropertyDossierHTML']) {
+      assert.match(docsSrc, new RegExp(`window\\.${w}\\s*=`), `detail-tab-documents.js keeps the window.${w} export`);
+    }
+    assert.match(detailSrc, /MOVED to detail-tab-documents\.js/, 'detail.js keeps a pointer comment');
+  });
+
+  // ── Stage 2, Unit 3: detail-panel-shell.js ───────────────────────────────
+  it('detail-panel-shell.js is a CLASSIC script loaded BEFORE detail.js', () => {
+    const shell = scriptIndex('detail-panel-shell.js');
+    const detail = scriptIndex('detail.js');
+    assert.ok(shell >= 0, 'index.html must load detail-panel-shell.js');
+    assert.ok(shell < detail, 'detail-panel-shell.js must appear before detail.js — '
+      + 'its top-level lets (_companionState, _panelParked, _activePrimaryKind) are read from detail.js');
+    assert.doesNotMatch(html, /<script\s+type="module"\s+src="detail-panel-shell\.js/i,
+      'detail-panel-shell.js must be a classic script, not a module');
+    assert.doesNotThrow(() => execFileSync(process.execPath, ['--check', join(root, 'detail-panel-shell.js')]),
+      'detail-panel-shell.js must be syntactically valid');
+  });
+
+  it('the panel SHELL moved; the tab shell + entity tabs stayed in detail.js', () => {
+    const shellSrc = readFileSync(join(root, 'detail-panel-shell.js'), 'utf8');
+    const detailSrc = readFileSync(join(root, 'detail.js'), 'utf8');
+    for (const fn of ['_dualCapable', '_panelClampWidth', '_panelSetWidth', '_panelRestoreWidths',
+                      '_panelInitResizers', '_panelSyncResizers', '_panelTrayRender', '_panelParkSig',
+                      '_panelTrayPark', '_panelTrayRestore', '_panelSwap', 'minimizePrimary',
+                      'openCompanionProperty', 'openCompanionEntity', '_renderCompanionEntity',
+                      'closeCompanion', '_setPrimaryKind']) {
+      assert.match(shellSrc, new RegExp(`function\\s+${fn}\\b`), `detail-panel-shell.js defines ${fn}`);
+      assert.doesNotMatch(detailSrc, new RegExp(`function\\s+${fn}\\b`), `detail.js must NOT redefine ${fn}`);
+    }
+    // Mutable panel state moves WITH its owners, or the two files disagree.
+    for (const decl of ['let\\s+_companionState', 'let\\s+_panelParked', 'let\\s+_activePrimaryKind',
+                        'const\\s+_PANEL_W', 'const\\s+DUAL_DOCK_MIN_WIDTH']) {
+      assert.match(shellSrc, new RegExp(decl), `detail-panel-shell.js owns ${decl}`);
+      assert.doesNotMatch(detailSrc, new RegExp(decl), `detail.js must NOT redeclare ${decl}`);
+    }
+    // The TAB shell is a different thing and must NOT have followed.
+    for (const fn of ['openUnifiedDetail', 'switchUnifiedTab', '_udMapLegacyTab']) {
+      assert.match(detailSrc, new RegExp(`function\\s+${fn}\\b`), `${fn} stays in detail.js`);
+    }
+    assert.match(detailSrc, /MOVED to detail-panel-shell\.js/, 'detail.js keeps a pointer comment');
+  });
+
+  it('every window.* export survives the panel-shell move (inline onclick targets)', () => {
+    // These are reached from onclick="" at CLICK time, off `window` — not through
+    // lexical scope. Lose one and the UI renders fine and dies on interaction.
+    const shellSrc = readFileSync(join(root, 'detail-panel-shell.js'), 'utf8');
+    const exports = [
+      '_activePrimaryKind', '_companionEnlargeEntity', '_companionOpenFull', '_entityDrillProperty',
+      '_openEntityByNameSmart', '_openEntitySmart', '_panelHeaderControls', '_panelSetWidth',
+      '_panelSwap', '_panelSyncResizers', '_panelTrayDrop', '_panelTrayPark', '_panelTrayRestore',
+      'closeCompanion', 'minimizeCompanion', 'minimizePrimary', 'openCompanionEntity',
+      'openCompanionProperty', 'restoreCompanion',
+    ];
+    const missing = exports.filter((e) => !new RegExp(`window\\.${e}\\s*=`).test(shellSrc));
+    assert.deepEqual(missing, [], `window export(s) lost in the move — onclick handlers would break: ${missing.join(', ')}`);
+  });
+
+  // ── Stage 2, Unit 4: detail-entity-tabs.js ───────────────────────────────
+  it('detail-entity-tabs.js is a CLASSIC script loaded BEFORE detail.js', () => {
+    const tabs = scriptIndex('detail-entity-tabs.js');
+    const detail = scriptIndex('detail.js');
+    assert.ok(tabs >= 0, 'index.html must load detail-entity-tabs.js');
+    assert.ok(tabs < detail, 'detail-entity-tabs.js must appear before detail.js');
+    assert.doesNotMatch(html, /<script\s+type="module"\s+src="detail-entity-tabs\.js/i,
+      'detail-entity-tabs.js must be a classic script, not a module');
+    assert.doesNotThrow(() => execFileSync(process.execPath, ['--check', join(root, 'detail-entity-tabs.js')]),
+      'detail-entity-tabs.js must be syntactically valid');
+  });
+
+  it('entity tab BODIES moved; the entity DISPATCHER stayed in detail.js', () => {
+    const tabsSrc = readFileSync(join(root, 'detail-entity-tabs.js'), 'utf8');
+    const detailSrc = readFileSync(join(root, 'detail.js'), 'utf8');
+    for (const fn of ['_entityTabRelationships', '_entityTabHistory', '_entityTabActivity',
+                      '_entityTabEngagement', '_entityTabRoe', '_entityTabPropertyRef',
+                      '_entityTabDeal', '_entityCadenceCockpit', '_dealOpenSource', '_dealInspectSource']) {
+      assert.match(tabsSrc, new RegExp(`function\\s+${fn}\\b`), `detail-entity-tabs.js defines ${fn}`);
+      assert.doesNotMatch(detailSrc, new RegExp(`function\\s+${fn}\\b`), `detail.js must NOT redefine ${fn}`);
+    }
+    // The DISPATCHER is the shell for the entity panel — same split the property
+    // panel keeps between switchUnifiedTab and its tab bodies.
+    for (const fn of ['_renderEntityTab', 'switchEntityTab', 'openEntityDetail']) {
+      assert.match(detailSrc, new RegExp(`function\\s+${fn}\\b`), `${fn} is the entity dispatcher and stays in detail.js`);
+      assert.doesNotMatch(tabsSrc, new RegExp(`function\\s+${fn}\\b`), `detail-entity-tabs.js must NOT take ${fn}`);
+    }
+    assert.match(detailSrc, /const\s+ENTITY_DETAIL_TABS\s*=/, 'the tab list stays with the dispatcher');
+    // Unit 5 completed the set — no _entityTab* body may remain in detail.js.
+    const strays = [...detailSrc.matchAll(/^function\s+(_entityTab[A-Za-z]+)\s*\(/gm)]
+      .map((m) => m[1])
+      // Unit 6 moved _entityTabOverview + its helper cluster, so its carve-out is
+      // GONE — the only exclusion left is _entityTabsForRole, which is a tab-LIST
+      // helper belonging to the dispatcher, not a tab body. The guard got stricter
+      // as a result of the move; that is how you know the move was complete.
+      .filter((n) => n !== '_entityTabsForRole');
+    assert.deepEqual(strays, [],
+      `entity tab BODY left behind in detail.js — it belongs with its siblings: ${strays.join(', ')}`);
+    for (const fn of ['_entityTabContactDeals', '_entityTabBrokerDeals', '_entityTabPortfolio',
+                      '_entityTabContacts', '_entityGenerateDossier', '_entityOpenDossierMenu',
+                      '_entityTabOverview', '_entityHeroHTML', '_nextActionForContact',
+                      '_entityRoeBanner', '_entityFmtMoney']) {
+      assert.match(tabsSrc, new RegExp(`function\\s+${fn}\\b`), `detail-entity-tabs.js defines ${fn}`);
+    }
+    // Shared chrome writes the SAME DOM nodes as the property panel — it is shell.
+    assert.match(detailSrc, /function\s+_entityRenderCompletenessRail\b/,
+      'the shared completeness rail stays in detail.js (it is shell, not tab content)');
+    // ⚠️ Unit 6's four exports were MISSING from this list on the first pass and
+    // the mutation test caught it: dropping window._nextActionForContact broke
+    // the hero CTA's onclick and every one of the 113 assertions still passed.
+    // A window export is only guarded if it is NAMED here — adding the function
+    // to the definition list above does nothing for it.
+    for (const w of ['_cortexPullHistory', '_dealOpenSource', '_dealInspectSource',
+                     '_entityGenerateDossier', '_entityOpenDossierMenu',
+                     '_nextActionForContact', '_entityOpenContactProperty',
+                     '_entityDraftAndLog', '_entityCopyDraft']) {
+      assert.match(tabsSrc, new RegExp(`window\\.${w}\\s*=`), `detail-entity-tabs.js keeps the window.${w} export`);
+    }
+    assert.match(detailSrc, /MOVED to detail-entity-tabs\.js/, 'detail.js keeps a pointer comment');
+  });
+
+  // ── Stage 2, Unit 7: detail-openers.js ───────────────────────────────────
+  it('detail-openers.js is a CLASSIC script loaded BEFORE detail.js', () => {
+    const op = scriptIndex('detail-openers.js');
+    assert.ok(op >= 0, 'index.html must load detail-openers.js');
+    assert.ok(op < scriptIndex('detail.js'), 'detail-openers.js must appear before detail.js');
+    assert.doesNotMatch(html, /<script\s+type="module"\s+src="detail-openers\.js/i,
+      'detail-openers.js must be a classic script — the openers rely on top-level '
+      + 'function declarations becoming window properties, which modules do NOT do');
+    assert.doesNotThrow(() => execFileSync(process.execPath, ['--check', join(root, 'detail-openers.js')]),
+      'detail-openers.js must be syntactically valid');
+  });
+
+  it('the subject OPENERS moved; the panel opener + fetch layer stayed', () => {
+    const opSrc = readFileSync(join(root, 'detail-openers.js'), 'utf8');
+    const detailSrc = readFileSync(join(root, 'detail.js'), 'utf8');
+    for (const fn of ['_ensureCallNoteModal', 'openCallNote', 'closeCallNote', 'submitCallNote',
+                      'openContact360', 'openEntityDetailByName', 'openContactDetail',
+                      'openContactDetailByName']) {
+      assert.match(opSrc, new RegExp(`function\\s+${fn}\\b`), `detail-openers.js defines ${fn}`);
+      assert.doesNotMatch(detailSrc, new RegExp(`function\\s+${fn}\\b`), `detail.js must NOT redefine ${fn}`);
+    }
+    assert.match(opSrc, /var\s+_callNoteCtx/, 'the modal state moves with its modal');
+    assert.doesNotMatch(detailSrc, /var\s+_callNoteCtx/, 'detail.js must NOT redeclare _callNoteCtx');
+    // These are what the openers delegate INTO — they stay.
+    for (const fn of ['openEntityDetail', '_entityApiFetch', '_entityApiHeaders']) {
+      assert.match(detailSrc, new RegExp(`function\\s+${fn}\\b`), `${fn} stays in detail.js`);
+      assert.doesNotMatch(opSrc, new RegExp(`function\\s+${fn}\\b`), `detail-openers.js must NOT take ${fn}`);
+    }
+    for (const w of ['openCallNote', 'closeCallNote', 'submitCallNote', 'openContact360']) {
+      assert.match(opSrc, new RegExp(`window\\.${w}\\s*=`), `detail-openers.js keeps the window.${w} export`);
+    }
+    assert.match(detailSrc, /MOVED to detail-openers\.js/, 'detail.js keeps a pointer comment');
+  });
+
+  // ── Stage 3, Unit 1: app-modal.js ────────────────────────────────────────
+  it('app-modal.js is a CLASSIC script loaded BEFORE app.js', () => {
+    const modal = scriptIndex('app-modal.js');
+    assert.ok(modal >= 0, 'index.html must load app-modal.js');
+    assert.ok(modal < scriptIndex('app.js'), 'app-modal.js must appear before app.js');
+    assert.doesNotMatch(html, /<script\s+type="module"\s+src="app-modal\.js/i,
+      'app-modal.js must be a classic script — lccConfirm/lccPrompt become window '
+      + 'properties via top-level function declarations, which five other files rely on');
+    assert.doesNotThrow(() => execFileSync(process.execPath, ['--check', join(root, 'app-modal.js')]),
+      'app-modal.js must be syntactically valid');
+  });
+
+  it('the modal moved whole — state, dialogs, and its own DOM wiring', () => {
+    const modalSrc = readFileSync(join(root, 'app-modal.js'), 'utf8');
+    const appSrc = readFileSync(join(root, 'app.js'), 'utf8');
+    for (const fn of ['_isModalOpen', '_showModal', '_closeModal', '_modalCancel',
+                      'lccConfirm', 'lccPrompt']) {
+      assert.match(modalSrc, new RegExp(`function\\s+${fn}\\b`), `app-modal.js defines ${fn}`);
+      assert.doesNotMatch(appSrc, new RegExp(`function\\s+${fn}\\b`), `app.js must NOT redefine ${fn}`);
+    }
+    // Dialog state is useless apart from its dialogs — it moves with them.
+    for (const d of ['_modalResolve', '_modalPrevFocus', '_modalIsPrompt']) {
+      assert.match(modalSrc, new RegExp(`let\\s+${d}\\b`), `app-modal.js owns ${d}`);
+      assert.doesNotMatch(appSrc, new RegExp(`let\\s+${d}\\b`), `app.js must NOT redeclare ${d}`);
+    }
+    // The listener block is what makes OK/Cancel/Esc work; leaving it behind
+    // would give a modal that renders and never closes.
+    assert.match(modalSrc, /DOMContentLoaded/, 'app-modal.js keeps its own DOM wiring');
+    assert.match(modalSrc, /lcc-modal-ok/, 'app-modal.js keeps the OK-button wiring');
+    // The ROUTER stays put — the map lumped this region into a 988-2300 "router"
+    // range, which is wrong; hash routing is the spine and is extracted last, if ever.
+    for (const fn of ['navTo', 'applyRoute', '_routeParseHash']) {
+      assert.match(appSrc, new RegExp(`function\\s+${fn}\\b`), `${fn} (router) stays in app.js`);
+      assert.doesNotMatch(modalSrc, new RegExp(`function\\s+${fn}\\b`), `app-modal.js must NOT take ${fn}`);
+    }
+    assert.match(appSrc, /MOVED to app-modal\.js/, 'app.js keeps a pointer comment');
+  });
+
+  // ── Stage 3, Unit 2: app-treasury-chart.js ───────────────────────────────
+  it('app-treasury-chart.js is a CLASSIC script loaded BEFORE app.js', () => {
+    const chart = scriptIndex('app-treasury-chart.js');
+    assert.ok(chart >= 0, 'index.html must load app-treasury-chart.js');
+    assert.ok(chart < scriptIndex('app.js'), 'app-treasury-chart.js must appear before app.js');
+    assert.doesNotMatch(html, /<script\s+type="module"\s+src="app-treasury-chart\.js/i,
+      'app-treasury-chart.js must be a classic script, not a module');
+    assert.doesNotThrow(() => execFileSync(process.execPath, ['--check', join(root, 'app-treasury-chart.js')]),
+      'app-treasury-chart.js must be syntactically valid');
+  });
+
+  it('the chart LOGIC moved but its wiring stayed — because that block boots the ROUTER', () => {
+    const chartSrc = readFileSync(join(root, 'app-treasury-chart.js'), 'utf8');
+    const appSrc = readFileSync(join(root, 'app.js'), 'utf8');
+    for (const fn of ['loadMarket', 'yearsForRange', 'fetchYieldHistory', 'filterByRange',
+                      'loadYieldChart', 'renderYieldSVG']) {
+      assert.match(chartSrc, new RegExp(`function\\s+${fn}\\b`), `app-treasury-chart.js defines ${fn}`);
+      assert.doesNotMatch(appSrc, new RegExp(`function\\s+${fn}\\b`), `app.js must NOT redefine ${fn}`);
+    }
+    for (const d of ['yieldHistoryCache', 'currentYieldRange']) {
+      assert.match(chartSrc, new RegExp(`let\\s+${d}\\b`), `app-treasury-chart.js owns ${d}`);
+      assert.doesNotMatch(appSrc, new RegExp(`let\\s+${d}\\b`), `app.js must NOT redeclare ${d}`);
+    }
+    // ⚠️ THE POINT OF THIS UNIT. The yieldChartControls handler shares a
+    // DOMContentLoaded block with applyRoute(). Taking the block would have taken
+    // the hash router with it. Both must remain in app.js, in the SAME block.
+    // Assert on the CONSTRUCT, not the word: this file's own header explains the
+    // shared-bootstrap decision, so a bare /DOMContentLoaded/ match fails on the
+    // documentation. (It did, on the first run — the guard caught my own comment.)
+    assert.doesNotMatch(chartSrc, /addEventListener\(\s*['"]DOMContentLoaded['"]/,
+      'app-treasury-chart.js must NOT take the shared bootstrap — it boots the router');
+    // ⚠️ Assert the CONSTRUCT, never the bare word — twice in this unit a word-match
+    // was satisfied by a COMMENT while the real code was gone. Deleting the wiring
+    // and leaving "yieldChartControls" in the pointer comment passed 123/123 on the
+    // first mutation run. A guard that a comment can satisfy is not a guard.
+    assert.match(appSrc, /getElementById\(\s*['"]yieldChartControls['"]\s*\)\s*\??\.addEventListener/,
+      'app.js keeps the LIVE chart-controls wiring (not just a mention of it)');
+    // (No loose applyRoute() assertion here: there are TWO call sites — the
+    // hashchange handler at ~2519 and the bootstrap — so a bare match is satisfied
+    // by the wrong one. The BLOCK assertion below is the real guard, and it pins
+    // the bootstrap specifically.)
+    const boot = appSrc.slice(appSrc.indexOf("addEventListener('DOMContentLoaded'"));
+    const blockEnd = boot.indexOf('\n});');
+    const block = boot.slice(0, blockEnd > 0 ? blockEnd : 3000);
+    assert.ok(block.includes('applyRoute') && block.includes('yieldChartControls'),
+      'the router bootstrap and the chart wiring must stay in the SAME DOMContentLoaded block — '
+      + 'splitting them changes init ordering');
+    assert.match(appSrc, /MOVED to app-treasury-chart\.js/, 'app.js keeps a pointer comment');
+  });
+
+  // ── Stage 3, Unit 3: app-export-comps.js ─────────────────────────────────
+  it('app-export-comps.js is a CLASSIC script loaded BEFORE app.js', () => {
+    const x = scriptIndex('app-export-comps.js');
+    assert.ok(x >= 0, 'index.html must load app-export-comps.js');
+    assert.ok(x < scriptIndex('app.js'), 'app-export-comps.js must appear before app.js');
+    assert.doesNotMatch(html, /<script\s+type="module"\s+src="app-export-comps\.js/i,
+      'app-export-comps.js must be a classic script, not a module');
+    assert.doesNotThrow(() => execFileSync(process.execPath, ['--check', join(root, 'app-export-comps.js')]),
+      'app-export-comps.js must be syntactically valid');
+  });
+
+  it('the Excel export moved WITH its window export (two files onclick it)', () => {
+    const xSrc = readFileSync(join(root, 'app-export-comps.js'), 'utf8');
+    const appSrc = readFileSync(join(root, 'app.js'), 'utf8');
+    assert.match(xSrc, /function\s+exportCompsToXlsx\b/, 'app-export-comps.js defines exportCompsToXlsx');
+    assert.doesNotMatch(appSrc, /function\s+exportCompsToXlsx\b/, 'app.js must NOT redefine it');
+    // ⚠️ The ONLY callers are inline onclick strings built by dialysis.js and
+    // gov.js. They resolve off `window` at CLICK time — lose this line and both
+    // Export buttons render and do nothing, with no error anywhere.
+    assert.match(xSrc, /window\.exportCompsToXlsx\s*=\s*exportCompsToXlsx/,
+      'app-export-comps.js MUST keep the window export — dialysis.js and gov.js onclick it');
+    // And the callers must still be reaching it by that name.
+    for (const f of ['dialysis.js', 'gov.js']) {
+      assert.match(readFileSync(join(root, f), 'utf8'), /onclick="exportCompsToXlsx\(/,
+        `${f} still invokes exportCompsToXlsx from an inline onclick`);
+    }
+    // Neighbours that deliberately stayed.
+    assert.match(appSrc, /window\.renderLiveIngestWorkbench\s*=/, 'LiveIngest exports stay in app.js');
+    assert.doesNotMatch(xSrc, /iPhone\|iPad/, 'the iOS install banner is not part of this region');
+    assert.match(appSrc, /MOVED to app-export-comps\.js/, 'app.js keeps a pointer comment');
+  });
+
+  // ── Stage 3, Unit 4: app-tasks.js ────────────────────────────────────────
+  it('app-tasks.js is a CLASSIC script loaded BEFORE app.js', () => {
+    const x = scriptIndex('app-tasks.js');
+    assert.ok(x >= 0, 'index.html must load app-tasks.js');
+    assert.ok(x < scriptIndex('app.js'), 'app-tasks.js must appear before app.js');
+    assert.doesNotMatch(html, /<script\s+type="module"\s+src="app-tasks\.js/i,
+      'app-tasks.js must be a classic script, not a module');
+    assert.doesNotThrow(() => execFileSync(process.execPath, ['--check', join(root, 'app-tasks.js')]),
+      'app-tasks.js must be syntactically valid');
+  });
+
+  it('the task store moved whole, and the four subsystems the map would have swept in stayed', () => {
+    const taskSrc = readFileSync(join(root, 'app-tasks.js'), 'utf8');
+    const appSrc = readFileSync(join(root, 'app.js'), 'utf8');
+    for (const fn of ['_updateTaskInAllStores', '_rerenderCurrentView', '_syncTaskToSalesforce',
+                      '_closeOriginalSfTask', '_updateSfTaskDate',
+                      'completeTask', 'rescheduleTask', 'dismissTask']) {
+      assert.match(taskSrc, new RegExp(`function\\s+${fn}\\b`), `app-tasks.js defines ${fn}`);
+      assert.doesNotMatch(appSrc, new RegExp(`function\\s+${fn}\\b`), `app.js must NOT redefine ${fn}`);
+    }
+    // ⚠️ The map said 5361-6260. That range crosses FOUR unrelated subsystems.
+    // Pin each one on the app.js side so a later "finish the range" cannot drag
+    // them into a file called app-tasks.
+    for (const fn of ['mktReclassifyDeal', 'mktMatchLead', 'mktUpdateStatus',
+                      'renderProspects', 'execProspectsSearch',
+                      'showDetail', 'closeDetail', 'switchDetailTab',
+                      'openLogCall', 'submitLogReschedule']) {
+      assert.match(appSrc, new RegExp(`function\\s+${fn}\\b`), `${fn} stays in app.js — not task logic`);
+      assert.doesNotMatch(taskSrc, new RegExp(`function\\s+${fn}\\b`), `app-tasks.js must NOT hold ${fn}`);
+    }
+    // The Prospects search state is three top-level `let`s. Two definitions of a
+    // top-level let across classic scripts is a runtime SyntaxError that kills
+    // the whole app — they must exist in exactly one file.
+    for (const v of ['prospectsSearchTerm', 'prospectsResults', 'prospectsSearching']) {
+      assert.match(appSrc, new RegExp(`^let\\s+${v}\\b`, 'm'), `app.js owns the top-level let ${v}`);
+      assert.doesNotMatch(taskSrc, new RegExp(`^let\\s+${v}\\b`, 'm'), `app-tasks.js must NOT redeclare ${v}`);
+    }
+    // These are top-level function declarations, so they land on `window`
+    // automatically — that is how the inline onclick strings reach them.
+    assert.match(appSrc, /onclick="completeTask\(/, 'app.js still onclicks completeTask');
+    assert.match(appSrc, /onclick="dismissTask\(/, 'app.js still onclicks dismissTask');
+    // And submitLogReschedule still reaches back across the seam.
+    assert.match(appSrc, /_updateTaskInAllStores\(/, 'submitLogReschedule still calls the shared store');
+    assert.match(appSrc, /MOVED to app-tasks\.js/, 'app.js keeps a pointer comment');
+  });
+
+  // ── Stage 4, Unit 1: ops-perf-dashboard.js ───────────────────────────────
+  it('ops-perf-dashboard.js is a CLASSIC script loaded BEFORE ops.js', () => {
+    const x = scriptIndex('ops-perf-dashboard.js');
+    assert.ok(x >= 0, 'index.html must load ops-perf-dashboard.js');
+    assert.ok(x < scriptIndex('ops.js'), 'ops-perf-dashboard.js must appear before ops.js');
+    assert.doesNotMatch(html, /<script\s+type="module"\s+src="ops-perf-dashboard\.js/i,
+      'ops-perf-dashboard.js must be a classic script, not a module');
+    assert.doesNotThrow(() => execFileSync(process.execPath, ['--check', join(root, 'ops-perf-dashboard.js')]),
+      'ops-perf-dashboard.js must be syntactically valid');
+  });
+
+  it('the perf dashboard moved, and Sync Health still calls into it', () => {
+    const perfSrc = readFileSync(join(root, 'ops-perf-dashboard.js'), 'utf8');
+    const opsSrc = readFileSync(join(root, 'ops.js'), 'utf8');
+    for (const fn of ['renderPerfDashboard', 'appendPerfToSyncHealth']) {
+      assert.match(perfSrc, new RegExp(`function\\s+${fn}\\b`), `ops-perf-dashboard.js defines ${fn}`);
+      assert.doesNotMatch(opsSrc, new RegExp(`function\\s+${fn}\\b`), `ops.js must NOT redefine ${fn}`);
+    }
+    // ⚠️ THIS ASSERTION USED TO NAME A FILE, AND STAGE 4 UNIT 2 BROKE IT.
+    // It read `assert.match(opsSrc, /setTimeout\(appendPerfToSyncHealth,/)` —
+    // true when Sync Health lived in ops.js, false the moment Sync Health moved
+    // to ops-sync-health.js, even though the RELATIONSHIP it protects was never
+    // violated. A guard that encodes an ADDRESS goes stale on the next move; a
+    // guard that encodes the RELATIONSHIP survives it. The real invariant is:
+    // whatever file owns the Sync Health page must still graft the dashboard on.
+    const opsCorpus = readdirSync(root)
+      .filter((f) => f === 'ops.js' || /^ops-[a-z0-9-]+\.js$/i.test(f))
+      .map((f) => [f, readFileSync(join(root, f), 'utf8')]);
+    const syncOwner = opsCorpus.find(([, src]) => /function\s+renderSyncHealthPage\b/.test(src));
+    assert.ok(syncOwner, 'some ops file must define renderSyncHealthPage');
+    assert.match(syncOwner[1], /setTimeout\(appendPerfToSyncHealth,/,
+      `${syncOwner[0]} owns the Sync Health page and must still schedule appendPerfToSyncHealth`);
+    assert.match(opsSrc, /MOVED to ops-perf-dashboard\.js/, 'ops.js keeps a pointer comment');
+    // Neighbours that stayed: the helper above and the Home-stats section below.
+    assert.match(opsSrc, /function\s+jsStringArg\b/, 'jsStringArg stays in ops.js');
+    assert.match(opsSrc, /function\s+updateHomeStats\b/, 'updateHomeStats stays in ops.js');
+    assert.doesNotMatch(perfSrc, /HOME PAGE INTEGRATION/, 'the Home-stats section did not come along');
+  });
+
+  it('⚠️ STAGE 4 RULE: an ops sibling declares ONLY functions — no eval-time read of the shared state header', () => {
+    // ops.js keeps ~30 top-level let/const (lines 45-126) that every subsystem
+    // reads. A sibling loaded BEFORE ops.js runs first, so ANY top-level
+    // statement here that touched that state would hit the TDZ and throw at
+    // load — killing the app. Call-time reads (opsPerfLog inside a function
+    // body) are safe and are the whole reason before-ops ordering works.
+    const perfSrc = readFileSync(join(root, 'ops-perf-dashboard.js'), 'utf8');
+    const offenders = perfSrc.split('\n')
+      .filter((l) => /^[^\s/}]/.test(l))                    // top-level, not comment/blank/close
+      .filter((l) => !/^(async\s+)?function\s/.test(l));    // ...and not a function declaration
+    assert.deepEqual(offenders, [],
+      `ops-perf-dashboard.js must contain only top-level function declarations; found: ${offenders.join(' | ')}`);
+    // The shared state itself must NOT have been copied out of ops.js.
+    for (const v of ['opsPerfLog', 'opsSyncData', 'opsPagination']) {
+      assert.doesNotMatch(perfSrc, new RegExp(`^\\s*(let|const|var)\\s+${v}\\b`, 'm'),
+        `${v} must stay declared in ops.js, never redeclared in a sibling`);
+    }
+    assert.match(readFileSync(join(root, 'ops.js'), 'utf8'), /^const opsPerfLog = \[\];/m,
+      'ops.js still owns the opsPerfLog declaration');
+  });
+
+  // ── Stage 4, Unit 2: ops-sync-health.js ──────────────────────────────────
+  it('ops-sync-health.js is a CLASSIC script loaded BEFORE ops.js', () => {
+    const x = scriptIndex('ops-sync-health.js');
+    assert.ok(x >= 0, 'index.html must load ops-sync-health.js');
+    assert.ok(x < scriptIndex('ops.js'), 'ops-sync-health.js must appear before ops.js');
+    assert.doesNotMatch(html, /<script\s+type="module"\s+src="ops-sync-health\.js/i,
+      'ops-sync-health.js must be a CLASSIC script — triggerSync/retrySync reach window '
+      + 'only via the automatic top-level-function binding, which modules do not get');
+    assert.doesNotThrow(() => execFileSync(process.execPath, ['--check', join(root, 'ops-sync-health.js')]),
+      'ops-sync-health.js must be syntactically valid');
+  });
+
+  it('sync health moved with BOTH of its window-binding mechanisms intact', () => {
+    const shSrc = readFileSync(join(root, 'ops-sync-health.js'), 'utf8');
+    const opsSrc = readFileSync(join(root, 'ops.js'), 'utf8');
+    for (const fn of ['renderSyncHealthPage', 'triggerSync', 'retrySync',
+                      'reconnectConnector', 'removeConnector']) {
+      assert.match(shSrc, new RegExp(`function\\s+${fn}\\b`), `ops-sync-health.js defines ${fn}`);
+      assert.doesNotMatch(opsSrc, new RegExp(`function\\s+${fn}\\b`), `ops.js must NOT redefine ${fn}`);
+    }
+    // Mechanism 1 — explicit exports, reached by onclick="reconnectConnector(…)".
+    for (const w of ['reconnectConnector', 'removeConnector']) {
+      assert.match(shSrc, new RegExp(`window\\.${w}\\s*=\\s*${w}`), `explicit window.${w} export survives`);
+      assert.match(shSrc, new RegExp(`onclick="${w}\\(`), `the onclick calling ${w} came along`);
+    }
+    // Mechanism 2 — bare identifier inside an onclick, resolved off window at
+    // CLICK time. No export line exists to assert, so assert the CALL SHAPE:
+    // if this stops being an inline handler, the automatic binding stops mattering
+    // and someone must think about it.
+    for (const fn of ['triggerSync', 'retrySync']) {
+      assert.match(shSrc, new RegExp(`onclick="_opsBtnGuard\\(this, ${fn},`),
+        `${fn} is still passed as a bare identifier inside an inline onclick`);
+      assert.doesNotMatch(shSrc, new RegExp(`window\\.${fn}\\s*=`),
+        `${fn} relies on the automatic binding — a redundant export would hide that`);
+    }
+    // _opsBtnGuard stayed in ops.js and is reached the same way.
+    assert.match(opsSrc, /function\s+_opsBtnGuard\b/, '_opsBtnGuard stays in ops.js');
+    // Cross-sibling seam into Unit 1.
+    assert.match(shSrc, /setTimeout\(appendPerfToSyncHealth,/,
+      'the page still grafts on ops-perf-dashboard.js at call time');
+    // External nav dispatcher.
+    assert.match(readFileSync(join(root, 'app.js'), 'utf8'), /case 'pageSyncHealth':/,
+      'app.js still dispatches pageSyncHealth');
+    assert.match(opsSrc, /MOVED to ops-sync-health\.js/, 'ops.js keeps a pointer comment');
+    assert.doesNotMatch(shSrc, /QUICK ACTIONS/, 'the Quick Actions section stayed behind');
+  });
+
+  it('STAGE 4 RULE holds for ops-sync-health.js (functions + window exports only)', () => {
+    const shSrc = readFileSync(join(root, 'ops-sync-health.js'), 'utf8');
+    const offenders = shSrc.split('\n')
+      .filter((l) => /^[^\s/}]/.test(l))
+      .filter((l) => !/^(async\s+)?function\s/.test(l))
+      .filter((l) => !/^window\.\w+\s*=/.test(l));
+    assert.deepEqual(offenders, [],
+      `ops-sync-health.js must declare only functions/window exports; found: ${offenders.join(' | ')}`);
+  });
+
+  // ── Stage 4, Unit 3: ops-domain-health.js ────────────────────────────────
+  it('ops-domain-health.js is a CLASSIC script loaded BEFORE ops.js', () => {
+    const x = scriptIndex('ops-domain-health.js');
+    assert.ok(x >= 0, 'index.html must load ops-domain-health.js');
+    assert.ok(x < scriptIndex('ops.js'), 'ops-domain-health.js must appear before ops.js');
+    assert.doesNotMatch(html, /<script\s+type="module"\s+src="ops-domain-health\.js/i,
+      'ops-domain-health.js must be a classic script, not a module');
+    assert.doesNotThrow(() => execFileSync(process.execPath, ['--check', join(root, 'ops-domain-health.js')]),
+      'ops-domain-health.js must be syntactically valid');
+  });
+
+  it('⚠️ the SHARED helpers under the B8 banner did NOT travel with it', () => {
+    const dhSrc = readFileSync(join(root, 'ops-domain-health.js'), 'utf8');
+    const opsSrc = readFileSync(join(root, 'ops.js'), 'utf8');
+    const detailSrc = readFileSync(join(root, 'detail.js'), 'utf8');
+
+    // B8-only code moved.
+    for (const fn of ['_opsTrendSeries', 'renderDomainHealthSummary']) {
+      assert.match(dhSrc, new RegExp(`function\\s+${fn}\\b`), `ops-domain-health.js defines ${fn}`);
+      assert.doesNotMatch(opsSrc, new RegExp(`function\\s+${fn}\\b`), `ops.js must NOT redefine ${fn}`);
+    }
+
+    // _opsSparkline is CROSS-FILE SHARED and must stay put. detail.js draws the
+    // dialysis Ops-tab census chart with it. This function already caused one
+    // silent production bug (a rival detail.js definition that ops.js overrode,
+    // so the chart printed "no trend" on every property for months) — it does
+    // not get tucked into a feature module.
+    assert.match(opsSrc, /function\s+_opsSparkline\b/,
+      '_opsSparkline must stay in ops.js — it is shared, not domain-health code');
+    assert.doesNotMatch(dhSrc, /function\s+_opsSparkline\b/,
+      'ops-domain-health.js must NOT take _opsSparkline');
+    assert.ok(/_opsSparkline\(/.test(detailSrc),
+      'detail.js still calls _opsSparkline — that is why it stays shared');
+    // Exactly ONE definition must exist across the whole front end.
+    const defs = readdirSync(root)
+      .filter((f) => /\.js$/.test(f))
+      .filter((f) => /function\s+_opsSparkline\b/.test(readFileSync(join(root, f), 'utf8')));
+    assert.deepEqual(defs, ['ops.js'],
+      `_opsSparkline must be defined in exactly one file; found in: ${defs.join(', ')}`);
+
+    // metricCardHTML: 28 call sites in ops.js, also shared, also stays.
+    assert.match(opsSrc, /function\s+metricCardHTML\b/, 'metricCardHTML stays in ops.js');
+    assert.doesNotMatch(dhSrc, /function\s+metricCardHTML\b/, 'ops-domain-health.js must NOT take metricCardHTML');
+
+    assert.match(opsSrc, /MOVED to ops-domain-health\.js/, 'ops.js keeps a pointer comment');
+  });
+
+  it('STAGE 4 RULE holds for ops-domain-health.js (functions only)', () => {
+    const dhSrc = readFileSync(join(root, 'ops-domain-health.js'), 'utf8');
+    const offenders = dhSrc.split('\n')
+      .filter((l) => /^[^\s/}]/.test(l))
+      .filter((l) => !/^(async\s+)?function\s/.test(l));
+    assert.deepEqual(offenders, [],
+      `ops-domain-health.js must declare only functions; found: ${offenders.join(' | ')}`);
+  });
+
+  // ── Stage 4, Unit 4: ops-metrics.js ──────────────────────────────────────
+  it('ops-metrics.js is a CLASSIC script loaded BEFORE ops.js', () => {
+    const x = scriptIndex('ops-metrics.js');
+    assert.ok(x >= 0, 'index.html must load ops-metrics.js');
+    assert.ok(x < scriptIndex('ops.js'), 'ops-metrics.js must appear before ops.js');
+    assert.doesNotMatch(html, /<script\s+type="module"\s+src="ops-metrics\.js/i,
+      'ops-metrics.js must be a classic script, not a module');
+    assert.doesNotThrow(() => execFileSync(process.execPath, ['--check', join(root, 'ops-metrics.js')]),
+      'ops-metrics.js must be syntactically valid');
+  });
+
+  it('metrics moved but metricCardHTML stayed — majority of callers rule', () => {
+    const mSrc = readFileSync(join(root, 'ops-metrics.js'), 'utf8');
+    const opsSrc = readFileSync(join(root, 'ops.js'), 'utf8');
+    assert.match(mSrc, /async function\s+renderMetricsPage\b/, 'ops-metrics.js defines renderMetricsPage');
+    assert.doesNotMatch(opsSrc, /function\s+renderMetricsPage\b/, 'ops.js must NOT redefine it');
+    // metricCardHTML: 12 calls were in the moved region, 16 remain in ops.js.
+    // A helper whose MAJORITY of callers sit outside the region is shared
+    // infrastructure, not part of the feature.
+    assert.match(opsSrc, /function\s+metricCardHTML\b/,
+      'metricCardHTML must stay in ops.js — most of its call sites are outside metrics');
+    assert.doesNotMatch(mSrc, /function\s+metricCardHTML\b/, 'ops-metrics.js must NOT take metricCardHTML');
+    const remaining = (opsSrc.match(/metricCardHTML\(/g) || []).length;
+    assert.ok(remaining >= 10,
+      `ops.js should still hold the bulk of metricCardHTML call sites; found ${remaining}`);
+    assert.match(readFileSync(join(root, 'app.js'), 'utf8'), /case 'pageMetrics':/,
+      'app.js still dispatches pageMetrics');
+    assert.match(opsSrc, /MOVED to ops-metrics\.js/, 'ops.js keeps a pointer comment');
+  });
+
+  it('STAGE 4 RULE holds for ops-metrics.js (functions only)', () => {
+    const mSrc = readFileSync(join(root, 'ops-metrics.js'), 'utf8');
+    const offenders = mSrc.split('\n')
+      .filter((l) => /^[^\s/}]/.test(l))
+      .filter((l) => !/^(async\s+)?function\s/.test(l));
+    assert.deepEqual(offenders, [], `ops-metrics.js must declare only functions; found: ${offenders.join(' | ')}`);
+  });
+
+  // ── P173: the research lane must be ANSWERABLE ───────────────────────────
+  it('the research card offers a capture path, and reuses the owner picker', () => {
+    const ops = readFileSync(join(root, 'ops.js'), 'utf8');
+    const detail = readFileSync(join(root, 'detail.js'), 'utf8');
+    // The defect: the research page had 6 buttons and 0 inputs, so `Complete`
+    // closed a task without recording an answer — 316 open / 0 completed ever.
+    assert.match(ops, /function\s+researchFindContact\b/, 'ops.js defines the capture action');
+    assert.match(ops, /window\.researchFindContact\s*=/,
+      'it must be on window — the card reaches it from an inline onclick at CLICK time');
+    assert.match(ops, /onclick="researchFindContact\(/, 'the research card renders the button');
+    // ⚠️ It must REUSE the owner panel's picker, never introduce a second way to
+    // record a contact. Two capture paths is how the phantom/duplicate contact
+    // problems started.
+    assert.match(ops, /openEntityDetail\(entityId\)/, 'it opens the owner panel');
+    // ⚠️ Match the CALL, not the bare word. The first version of this assertion
+    // matched /_entityAcquireContact/, which the explanatory COMMENT above the
+    // function also satisfies — so deleting the actual call passed 39/39. A
+    // guard a comment can satisfy is not a guard.
+    assert.match(ops, /setTimeout\(_entityAcquireContact,/,
+      'it must actually INVOKE the existing picker, not merely mention it');
+    assert.match(detail, /window\._entityAcquireContact\s*=/, 'that picker is exported from detail.js');
+    // Scoped: only the lane that actually asks an open question gets the button.
+    assert.match(ops, /item\.research_type === 'owner_contact_manual'/,
+      'the button is scoped to owner_contact_manual — a binary verdict needs no field');
+  });
+
+  // ── P179: the ownership-history lane must be answerable too ───────────────
+  it('the ownership-history research card opens the property Ownership tab', () => {
+    const ops = readFileSync(join(root, 'ops.js'), 'utf8');
+    // P173 gated its button to ONE research_type, leaving establish_ownership_history
+    // (545 open, above the value floor) with no way to record an answer.
+    assert.match(ops, /function\s+researchOpenOwnership\b/, 'ops.js defines the capture action');
+    assert.match(ops, /window\.researchOpenOwnership\s*=/,
+      'it must be on window — the card reaches it from an inline onclick at CLICK time');
+    assert.match(ops, /onclick="researchOpenOwnership\(/, 'the research card renders the button');
+    // ⚠️ Same trap the P173 test documents: the explanatory comment above the
+    // function mentions both `researchOpenOwnership` and `openUnifiedDetail`, so a
+    // bare-word match would pass with the real call deleted. Anchor on the CALL,
+    // with its exact argument shape.
+    assert.match(ops, /openUnifiedDetail\(dom,\s*\{\s*property_id:\s*pid\s*\},\s*\{\},\s*'Ownership'\)/,
+      'it must INVOKE the existing property panel on the Ownership tab, not merely mention it');
+    // Scoped to the one lane, and gated on the identifiers it actually needs.
+    assert.match(ops, /item\.research_type === 'establish_ownership_history'/,
+      'the button is scoped to establish_ownership_history');
+    assert.match(ops, /item\.domain && item\.source_record_id/,
+      'gated on the property identifiers — the card is about a PROPERTY, not the owner');
+    // ⚠️ The subject is a property. Routing to the entity panel would open the
+    // CURRENT owner, and the whole task is that the ownership chain is unresolved,
+    // so that owner is the thing in question.
+    assert.doesNotMatch(ops, /onclick="researchOpenOwnership\([^"]*item\.entity_id/,
+      'must NOT be wired to entity_id — that is the disputed owner, not the subject');
+  });
+
+  // ── P180: the research lane picker, and its honest-count rules ────────────
+  it('the research lane picker exists and reports counts honestly', () => {
+    const ops = readFileSync(join(root, 'ops.js'), 'utf8');
+    const queue = readFileSync(join(root, 'api', 'queue.js'), 'utf8');
+
+    assert.match(ops, /function\s+researchLanePickerHTML\b/, 'ops.js renders the picker');
+    assert.match(ops, /window\.setResearchLane\s*=/,
+      'the chip reaches its handler from an inline onclick at CLICK time');
+    assert.match(ops, /onclick="setResearchLane\(/, 'the chips are clickable');
+    assert.match(ops, /view=research_lanes/, 'it reads the lane summary endpoint');
+    assert.match(queue, /case 'research_lanes'/, 'queue.js serves that view');
+    assert.match(queue, /v_lcc_research_lane_summary/, 'backed by the summary view');
+
+    // ⚠️ RULE 1 — a failed picker must not strand the queue. Promise.all would
+    // reject the whole render on one bad response; the Overview tiles were
+    // broken this exact way.
+    assert.match(ops, /Promise\.allSettled\(\[\s*\n?\s*opsApi\(`\/api\/queue\?view=research/,
+      'the two fetches use allSettled, never Promise.all');
+
+    // ⚠️ RULE 2 — NULL rent means "cannot be sized", not "$0". Six lanes carry
+    // no entity_id, and two of them are the highest-throughput work we have;
+    // rendering "$0" would invite exactly the wrong triage. The null check must
+    // come BEFORE any numeric coercion (Number(null) === 0).
+    assert.match(ops, /if\s*\(v === null \|\| v === undefined\) return '<span title="no owner link/,
+      'null/undefined rent short-circuits to an em-dash before Number() is applied');
+
+    // ⚠️ RULE 3 — a lane with no capture path is marked, not silently offered.
+    assert.match(ops, /l\.answerable \?/, 'the chip distinguishes answerable lanes (Class 3)');
+
+    // Selecting a lane must reset paging, or the operator lands on page N of a
+    // shorter lane and reads an empty list as "no work".
+    assert.match(ops, /function setResearchLane\(type\)\s*\{[^}]*opsResearchPage = 1/,
+      'selecting a lane resets to page 1');
+  });
+
+  it('the federated surface lives in dc-lanes.js, the partition stays in ops.js', () => {
+    const dcSrc = readFileSync(join(root, 'dc-lanes.js'), 'utf8');
+    const opsSrc = readFileSync(join(root, 'ops.js'), 'utf8');
+    // Moved: definitions now in dc-lanes.js only.
+    assert.match(dcSrc, /const\s+_DC_FED_META\s*=/, 'dc-lanes.js defines _DC_FED_META');
+    assert.match(dcSrc, /function\s+_fedCardHTML\b/, 'dc-lanes.js defines _fedCardHTML');
+    assert.match(dcSrc, /function\s+renderFederatedLane\b/, 'dc-lanes.js defines renderFederatedLane');
+    assert.doesNotMatch(opsSrc, /const\s+_DC_FED_META\s*=/, 'ops.js must NOT redefine _DC_FED_META');
+    assert.doesNotMatch(opsSrc, /function\s+_fedCardHTML\b/, 'ops.js must NOT redefine _fedCardHTML');
+    // Stayed: the lane partition primitive remains in ops.js only.
+    assert.match(opsSrc, /_DC_FEDERATED\s*=\s*new Set\(/, 'ops.js keeps _DC_FEDERATED (the lane partition)');
+    assert.doesNotMatch(dcSrc, /_DC_FEDERATED\s*=\s*new Set\(/, 'dc-lanes.js must NOT redefine _DC_FEDERATED');
+  });
+});

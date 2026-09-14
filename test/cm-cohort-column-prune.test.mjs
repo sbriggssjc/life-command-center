@@ -17,10 +17,11 @@ const capKeys = (cols) => cols.map(c => c.key).filter(k => /^cap_/.test(k));
 // Rows shaped like the LIVE views actually expose them (verified 2026-06-10):
 //   dia views   -> cap_12plus / cap_8to12 / cap_6to8 / cap_5orless only
 //   gov DOT view -> cap_10plus / cap_5to10 / cap_less5 / cap_outside_firm
-//   gov Q view   -> cap_10plus / cap_6to10 / cap_less5 / cap_outside_firm
+//   gov Q view (cap_rate_by_lease_term) -> value-of-firm-term 3-bucket recut
+//     (2026-08-13): cap_6plus / cap_1_5to6 / cap_sub1_5
 const diaRows   = [{ period_end: '2026-05-31', cap_12plus: 0.062, cap_8to12: 0.066, cap_6to8: 0.069, cap_5orless: 0.072 }];
 const govDotRows = [{ period_end: '2026-03-31', cap_10plus: 0.0699, cap_5to10: 0.0716, cap_less5: 0.0708, cap_outside_firm: 0.0744 }];
-const govQRows   = [{ period_end: '2026-03-31', cap_10plus: 0.0699, cap_6to10: 0.0716, cap_less5: 0.0708, cap_outside_firm: 0.0744 }];
+const govQRows   = [{ period_end: '2026-03-31', cap_6plus: 0.0746, cap_1_5to6: 0.0763, cap_sub1_5: 0.0800 }];
 
 test('A1: dia sold-cap tab keeps only the dia cohort scheme', () => {
   const out = selectCohortColumns(chartColumns.sold_cap_by_term_dot_plot, 'sold_cap_by_term_dot_plot', 'dialysis', diaRows);
@@ -32,9 +33,9 @@ test('A1: gov sold-cap (dot) tab keeps cap_5to10, drops the dia scheme AND cap_6
   assert.deepEqual(capKeys(out), ['cap_10plus', 'cap_5to10', 'cap_less5', 'cap_outside_firm']);
 });
 
-test('A1: gov quarterly cap-by-term tab keeps cap_6to10, drops the dia scheme AND cap_5to10', () => {
+test('A1: gov quarterly cap-by-term tab keeps the 3-bucket firm-term scheme, drops the dia scheme', () => {
   const out = selectCohortColumns(chartColumns.cap_rate_by_lease_term, 'cap_rate_by_lease_term', 'gov', govQRows);
-  assert.deepEqual(capKeys(out), ['cap_10plus', 'cap_6to10', 'cap_less5', 'cap_outside_firm']);
+  assert.deepEqual(capKeys(out), ['cap_6plus', 'cap_1_5to6', 'cap_sub1_5']);
 });
 
 test('A1: dia quarterly cap-by-term tab keeps only the dia scheme', () => {
@@ -64,5 +65,5 @@ test('A1: with no rows (schema-sniff callers) the vertical scheme is still prune
   // wrong-scheme drop applies even without rows; the data-driven alias prune
   // is skipped so callers that sniff columns still see the canonical set.
   const out = selectCohortColumns(chartColumns.cap_rate_by_lease_term, 'cap_rate_by_lease_term', 'dialysis', []);
-  assert.ok(!capKeys(out).some(k => ['cap_10plus', 'cap_6to10', 'cap_5to10', 'cap_less5', 'cap_outside_firm'].includes(k)));
+  assert.ok(!capKeys(out).some(k => ['cap_6plus', 'cap_1_5to6', 'cap_sub1_5', 'cap_10plus', 'cap_6to10', 'cap_5to10', 'cap_less5', 'cap_outside_firm'].includes(k)));
 });

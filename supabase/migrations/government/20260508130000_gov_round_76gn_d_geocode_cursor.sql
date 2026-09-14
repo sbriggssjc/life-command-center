@@ -1,3 +1,9 @@
+-- ⚠️ HISTORICAL — DO NOT RE-APPLY. This directory does not own the government database;
+-- `government-lease` does (see supabase/migrations/government/README.md, 2026-09-12).
+-- This file is kept as a record of what this repo applied in the past. The live, correct
+-- copy of any object it defines may have since diverged -- read the deployed database or
+-- government-lease's committed source, never this file, before trusting its content.
+
 -- Round 76gn.d (2026-05-08): geocode-tick cursor pagination state.
 -- Mirrors the dia migration. See
 --   supabase/migrations/dialysis/20260508130000_dia_round_76gn_d_geocode_cursor.sql

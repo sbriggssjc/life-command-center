@@ -1,0 +1,25 @@
+-- ============================================================================
+-- Rent Intelligence Phase 5 — enforce the Ancestry Rule in the reconcile loop.
+-- DB: Dialysis_DB zqzrriwuavgrquhisnoa. Applied live via mcp apply_migration
+-- (dia_rent_intelligence_phase5_reconcile_ancestry_guard). Authoritative body
+-- in-DB; reproduce via pg_get_functiondef('public.dia_reconcile_rent_evidence').
+--
+-- The Phase 3 CORROBORATE branch raised confidence on surrounding projected
+-- years WITHOUT checking whether the corroborating evidence descended from those
+-- very rows — self-confirmation. The rebuild adds an ancestry guard: the evidence
+-- node (passed via p_source_ref.evidence_kind / evidence_id) may NOT corroborate
+-- any timeline row in its own provenance chain (dia_check_ancestry). Circular rows
+-- are excluded from the confidence raise and reported under skipped_circular; when
+-- every candidate is circular the verdict is 'skipped_ancestry'. A surviving
+-- corroboration records a 'corroborated_by' provenance edge. Fork / queue paths
+-- are byte-identical to Phase 3.
+--
+-- Acceptance (self-rolling-back synthetic gate, 0 residue):
+--   BLOCKED (listing that the rows descend from) -> verdict skipped_ancestry,
+--     confidence_years_raised=0, skipped_circular=2
+--   CONTROL (unrelated listing)                  -> verdict corroborated,
+--     confidence_years_raised=2
+--
+-- See: docs/reports/rent-intelligence-engine-phase5-report.md
+-- ============================================================================
+-- (Executable body applied live; see report for the full function + gate.)

@@ -53,14 +53,25 @@ const PERSONAL_DOMAINS = new Set([
 ]);
 
 // Field-level authority: which source wins for each field
+// ⚠️ `outlook` and `outlook_gal` are DELIBERATELY DIFFERENT SOURCES (2026-08-26).
+//   • `outlook`     = Scott's OWN contacts folder (LinkedIn-synced, curated by him). Evidence
+//                     of a relationship he actually has.
+//   • `outlook_gal` = the Northmarq-wide "Shared Contacts Folder" / company address book.
+//                     Reference data about people the FIRM knows — NOT evidence that Scott
+//                     knows them.
+// They must stay separable because `source` is persisted per-field in `field_sources`, and a
+// directory entry is the weakest possible association (the P112 / P161 lesson: a bare
+// association is not a BD signal). Conflating them would inflate reachability and pursuit.
+// `outlook_gal` therefore sits BELOW `outlook` on every ladder — it fills blanks and never
+// clobbers Scott's own curation.
 const FIELD_PRIORITY = {
-  email:        ['salesforce', 'outlook', 'calendar', 'iphone', 'manual'],
-  phone:        ['salesforce', 'outlook', 'webex', 'iphone', 'manual'],
-  mobile_phone: ['iphone', 'outlook', 'salesforce', 'manual'],
-  title:        ['salesforce', 'outlook', 'manual'],
-  company_name: ['salesforce', 'gov_contacts', 'dia_activities', 'outlook', 'manual'],
-  city:         ['salesforce', 'gov_contacts', 'manual'],
-  state:        ['salesforce', 'gov_contacts', 'manual'],
+  email:        ['salesforce', 'outlook', 'calendar', 'iphone', 'outlook_gal', 'manual'],
+  phone:        ['salesforce', 'outlook', 'webex', 'iphone', 'outlook_gal', 'manual'],
+  mobile_phone: ['iphone', 'outlook', 'salesforce', 'outlook_gal', 'manual'],
+  title:        ['salesforce', 'outlook', 'outlook_gal', 'manual'],
+  company_name: ['salesforce', 'gov_contacts', 'dia_activities', 'outlook', 'outlook_gal', 'manual'],
+  city:         ['salesforce', 'gov_contacts', 'outlook_gal', 'manual'],
+  state:        ['salesforce', 'gov_contacts', 'outlook_gal', 'manual'],
 };
 
 // WebEx API base URL
@@ -608,7 +619,7 @@ async function getHistory(req, res, id) {
 async function ingestContact(req, res, user) {
   const {
     source, contact_class: requestedClass,
-    first_name, last_name, email, phone, mobile_phone,
+    first_name, last_name, email: emailIn, email_candidates, phone, mobile_phone,
     company_name, title, city, state, website,
     sf_contact_id, sf_account_id, outlook_contact_id,
     webex_person_id, teams_user_id, icloud_contact_id,
@@ -616,7 +627,21 @@ async function ingestContact(req, res, user) {
     engagement  // optional: { call_date, call_duration, email_date, meeting_date }
   } = req.body || {};
 
-  const VALID_SOURCES = ['salesforce', 'outlook', 'calendar', 'webex', 'teams', 'teams_call', 'iphone', 'icloud', 'iphone_call', 'manual'];
+  // ⚠️ THE FIRST EMAIL IS OFTEN THE WRONG ONE — pick, do not take (2026-08-26).
+  // Grounded in Scott's real Outlook contacts:
+  //   Sarah Martin  primary = idigmusic27@gmail.com   (personal), work address is 2nd
+  //   Ken Hedrick   primary = khedrick@stanjohnsonco.com (PRIOR firm), northmarq is 3rd
+  //   Jerry Hopkins primary = jhopkins@northmarq.com  (correct)
+  // Email is the Tier-0 identity key, so taking `emailAddresses[0]` would file people
+  // under a personal address or a firm they have left, and every later match inherits it.
+  // Callers may send `email_candidates` (array of strings, or of {address} / {name,address})
+  // and let the server choose. The extras are KEPT — a multi-domain history is exactly the
+  // "where did this person go" signal (Ken Hedrick: stanjohnson -> northmarq, company says
+  // Newmark = a stale contact, which is a finding rather than a defect).
+  const emailPicked = pickBestEmail(email_candidates, emailIn);
+  const email = emailPicked.email;
+
+  const VALID_SOURCES = ['salesforce', 'outlook', 'outlook_gal', 'calendar', 'webex', 'teams', 'teams_call', 'iphone', 'icloud', 'iphone_call', 'manual'];
   if (!source || !VALID_SOURCES.includes(source)) {
     return res.status(400).json({ error: `source is required, one of: ${VALID_SOURCES.join(', ')}` });
   }
@@ -627,7 +652,9 @@ async function ingestContact(req, res, user) {
   // Auto-classify if not specified
   let contactClass = requestedClass;
   if (!contactClass) {
-    contactClass = autoClassify(source, email);
+    // Pass the business evidence the payload already carries (P-contacts 2026-08-26):
+    // a job title or company outranks a consumer email domain.
+    contactClass = autoClassify(source, email, { title, company_name });
   }
 
   // --- Entity Resolution ---
@@ -732,7 +759,7 @@ async function ingestContact(req, res, user) {
 
   const now = new Date().toISOString();
   const syncField = source === 'salesforce' ? 'last_synced_sf'
-    : source === 'outlook' ? 'last_synced_outlook'
+    : (source === 'outlook' || source === 'outlook_gal') ? 'last_synced_outlook'
     : (source === 'calendar' || source === 'teams' || source === 'teams_call') ? 'last_synced_calendar'
     : null;
 
@@ -872,6 +899,10 @@ async function ingestContact(req, res, user) {
       first_name: first_name || null,
       last_name: last_name || null,
       email: email || null,
+      // Keep every other address the source gave us. A multi-domain history IS the
+      // "where did this person go" signal (Ken Hedrick: stanjohnsonco -> northmarq while
+      // companyName reads Newmark). Never discarded, never used as the identity key.
+      email_aliases: emailPicked.aliases.length ? emailPicked.aliases : null,
       phone: phone || null,
       mobile_phone: mobile_phone || null,
       title: title || null,
@@ -2000,9 +2031,101 @@ function computeEngagementScore(lastCallDate, lastEmailDate, lastMeetingDate, to
 // AUTO-CLASSIFICATION
 // ============================================================================
 
-function autoClassify(source, email) {
+// ⚠️ A CONSUMER EMAIL DOMAIN IS NOT EVIDENCE THAT A CONTACT IS PERSONAL (2026-08-26).
+// This function decided personal-vs-business from the email DOMAIN ALONE for every source
+// that reaches the fall-through (outlook, calendar, manual) and inside the `iphone` branch.
+// In CRE that is wrong at scale — measured live:
+//   • 2,468 of 6,553 Salesforce campaign members with an email (38%) sit on a consumer domain
+//   • 406 resolved OWNERS' active contacts sit on a consumer domain
+// Real principals on the `GSA Buyer` campaign are among them: Lee Elman <lee.eii@me.com>,
+// James Brooke <jamesbrooke.office@icloud.com>, Thomas P. Bohlinger <…@gmail.com>. Small
+// principals, family offices and single-asset LLC owners routinely use consumer email.
+//
+// This is the same trap as P124, where "exclude consumer-domain recipients" looked obviously
+// right and would have deleted the BEST BD exemplars from the voice corpus.
+//
+// FIX: business EVIDENCE (a job title or a company) outranks the domain. The domain is now a
+// tiebreak used only when we know nothing else. Deliberately NOT applied to `icloud`, whose
+// personal default is intentional, nor to the sources that already return 'business'.
+// `evidence` is optional, so the existing calendar caller is unchanged.
+// Choose the identity email from a candidate list, and keep the rest.
+//
+// RULE (deliberately simple and deterministic — see the header comment in ingestContact):
+//   1. the first candidate on a NON-consumer domain wins;
+//   2. if every candidate is consumer-domain, the first candidate wins;
+//   3. an explicitly-supplied `email` is used when no candidates are given, and is itself
+//      treated as a candidate when they are.
+// ⚠️ We deliberately do NOT try to guess which employer is CURRENT. Ken Hedrick carries
+// stanjohnsonco.com and northmarq.com while his companyName reads "Newmark" — no ordering
+// rule can resolve that, and guessing would silently pick a firm he has left. The aliases
+// preserve the full history so a later, evidence-based pass can decide.
+// ⚠️ SUPERSEDED DOMAINS — a firm that no longer exists must lose to one that does.
+//
+// These are FACTUAL business events (acquisitions), not heuristics, which is why an explicit
+// list is the right shape rather than a similarity score. Measured 2026-08-26: **101 contacts
+// carried a dead `@stanjohnsonco.com` primary, 52 of them with a live `@northmarq.com`
+// address already on file** — `pickBestEmail` chose the dead firm purely because it sorts
+// first in the Outlook `emailAddresses` array. Ken Hedrick is the worked example.
+//
+// Scope note: this decides which address is the IDENTITY key. The superseded address is never
+// discarded — it stays in `email_aliases`, because the employer trail is exactly the
+// "where did this person go" signal the BD doctrine wants.
+//
+// Add a line when a firm we deal with is acquired. Do NOT infer this from name similarity.
+const SUPERSEDED_DOMAINS = new Map([
+  ['stanjohnsonco.com', 'northmarq.com'],   // Stan Johnson Company -> Northmarq
+]);
+
+export function pickBestEmail(candidates, explicitEmail) {
+  const norm = (v) => {
+    if (!v) return null;
+    const s = typeof v === 'string' ? v : (v.address || v.Address || v.name || null);
+    if (!s || typeof s !== 'string') return null;
+    const t = s.trim();
+    return t.includes('@') ? t : null;      // `name` is often a display name, not an address
+  };
+  const list = [];
+  for (const c of (Array.isArray(candidates) ? candidates : [])) {
+    const e = norm(c);
+    if (e && !list.some((x) => x.toLowerCase() === e.toLowerCase())) list.push(e);
+  }
+  const explicit = norm(explicitEmail);
+  if (explicit && !list.some((x) => x.toLowerCase() === explicit.toLowerCase())) list.unshift(explicit);
+
+  if (!list.length) return { email: null, aliases: [], basis: 'none' };
+
+  const domainOf = (e) => (e.split('@')[1] || '').toLowerCase();
+  const isConsumer = (e) => PERSONAL_DOMAINS.has(domainOf(e));
+  const isSuperseded = (e) => SUPERSEDED_DOMAINS.has(domainOf(e));
+
+  // Preference order: a LIVE business domain, then a superseded one, then consumer.
+  // A dead firm still beats a personal address — it is at least a work identity.
+  const live = list.find((e) => !isConsumer(e) && !isSuperseded(e));
+  const dead = list.find((e) => !isConsumer(e) && isSuperseded(e));
+  const chosen = live || dead || list[0];
+  const basis = live ? 'live_business_domain'
+    : dead ? 'superseded_business_domain_only'
+    : 'all_consumer_domains';
+  return {
+    email: chosen,
+    // The superseded address is KEPT — it is the employer trail, not noise.
+    aliases: list.filter((e) => e !== chosen),
+    basis,
+  };
+}
+
+export function autoClassify(source, email, evidence) {
+  const hasBusinessEvidence = !!(evidence && (
+    (evidence.title && String(evidence.title).trim()) ||
+    (evidence.company_name && String(evidence.company_name).trim())
+  ));
+
   // Salesforce contacts are always business
   if (source === 'salesforce') return 'business';
+
+  // The company-wide address book is business by definition — it is a corporate
+  // directory, so the consumer-domain tiebreak must never apply to it.
+  if (source === 'outlook_gal') return 'business';
 
   // WebEx contacts are always business (org calls)
   if (source === 'webex') return 'business';
@@ -2018,6 +2141,7 @@ function autoClassify(source, email) {
 
   // iPhone contacts: check email domain, default business (Exchange sync path)
   if (source === 'iphone') {
+    if (hasBusinessEvidence) return 'business';   // title/company outranks the domain
     if (email) {
       const domain = email.split('@')[1]?.toLowerCase();
       if (domain && PERSONAL_DOMAINS.has(domain)) return 'personal';
@@ -2025,7 +2149,10 @@ function autoClassify(source, email) {
     return 'business';
   }
 
-  // Check email domain for personal detection
+  // A job title or a company IS business evidence, whatever the domain says.
+  if (hasBusinessEvidence) return 'business';
+
+  // Check email domain for personal detection — the TIEBREAK when we know nothing else.
   if (email) {
     const domain = email.split('@')[1]?.toLowerCase();
     if (domain && PERSONAL_DOMAINS.has(domain)) {

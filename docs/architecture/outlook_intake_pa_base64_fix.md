@@ -1,5 +1,10 @@
 # PA Outlook Intake — Base64 Upload Fix
 
+> 🗄️ **HISTORICAL (DOCMAP1, 2026-09-08).** Named point fix ('Base64 Upload Fix'); the fix itself is now baked into CLAUDE.md's OM-intake footgun list ("the HTTP PUT body MUST use base64ToBinary").
+>
+> Kept for the record — nothing below was edited; treat any status/data claim in it as a
+> point-in-time snapshot, not current state.
+
 ## Symptom
 
 OMs uploaded via the Outlook intake flow land in the `lcc-om-uploads` Supabase

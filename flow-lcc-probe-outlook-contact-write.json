@@ -1,0 +1,312 @@
+{
+  "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+  "contentVersion": "1.0.0.0",
+  "_comment": "LCC Probe B — is /me/contacts ACTUALLY writable via Graph? Prompt 184. Scott proved on 2026-08-26 that the Outlook CLIENT can save a contact carrying the 'This contact is read-only' marker (migration residue from Stan Johnson Co -> Northmarq). That does NOT prove the API can. Graph can return 200 and DISCARD the change, which is the dangerous case, so the status code is not the answer — the RE-READ is. ⚠️ THE DOC'S ORIGINAL PROBE DESIGN WAS UNABLE TO ANSWER ITS OWN QUESTION: it wrote jobTitle back to its EXISTING value, so a successful write and a silent discard both re-read identical. This flow writes a SENTINEL that is guaranteed to differ from the current value, re-reads to compare, then RESTORES the original and re-reads again to prove cleanup. Same class of error as the P125 Outlook draft seam (identical success response for a threaded reply and a standalone message) and the P125 'short is not truncated' proxy. Transport is the shared_office365 HttpRequest passthrough under the user's own M365 connection — no app registration, exactly as flow-lcc-create-outlook-draft.json does it. Contacts have no transmitting operation, so nothing here can send mail. ⚠️ UNVERIFIED AGAINST A LIVE TENANT: operationIds and the $connections reference resolve only on import; every HttpRequest carrying a Body sets ContentType: application/json because Graph 400s 'Empty Content-Type provided' without it (learned in P125). Run with apply=false first and read the baseline before setting apply=true.",
+  "parameters": {
+    "$connections": {
+      "type": "Object",
+      "defaultValue": {}
+    },
+    "$authentication": {
+      "type": "SecureObject",
+      "defaultValue": {}
+    }
+  },
+  "triggers": {
+    "manual": {
+      "type": "Request",
+      "kind": "Http",
+      "inputs": {
+        "schema": {
+          "type": "object",
+          "properties": {
+            "display_name": {
+              "type": "string",
+              "description": "Exact displayName of the contact to probe, e.g. 'Ken Hedrick'. Pick one carrying the read-only marker — probing a contact you created yourself would answer a different question."
+            },
+            "apply": {
+              "type": "boolean",
+              "description": "false (default) = read the baseline only, write nothing. true = run the sentinel write, verify, and restore."
+            }
+          },
+          "required": [
+            "display_name"
+          ]
+        }
+      }
+    }
+  },
+  "actions": {
+    "Find_contact": {
+      "runAfter": {},
+      "type": "OpenApiConnection",
+      "_comment": "Graph passthrough under the user's own O365 connection. Single quotes in a displayName must be doubled for $filter.",
+      "inputs": {
+        "host": {
+          "connectionName": "shared_office365",
+          "operationId": "HttpRequest",
+          "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365"
+        },
+        "parameters": {
+          "Uri": "@{concat('https://graph.microsoft.com/v1.0/me/contacts?$top=1&$select=id,displayName,jobTitle,personalNotes,parentFolderId&$filter=displayName eq ''', replace(triggerBody()?['display_name'], '''', ''''''), '''')}",
+          "Method": "GET"
+        },
+        "authentication": "@parameters('$authentication')"
+      }
+    },
+    "Contact_found": {
+      "runAfter": {
+        "Find_contact": [
+          "Succeeded"
+        ]
+      },
+      "type": "If",
+      "_comment": "An empty $filter result would build /me/contacts// on every downstream call — the exact defect P125 found in the draft flow.",
+      "expression": {
+        "and": [
+          {
+            "greater": [
+              "@length(coalesce(body('Find_contact')?['value'], json('[]')))",
+              0
+            ]
+          }
+        ]
+      },
+      "actions": {
+        "Init_contact_id": {
+          "runAfter": {},
+          "type": "InitializeVariable",
+          "inputs": {
+            "variables": [
+              {
+                "name": "contact_id",
+                "type": "string",
+                "value": "@{first(body('Find_contact')?['value'])?['id']}"
+              }
+            ]
+          }
+        },
+        "Init_before": {
+          "runAfter": {
+            "Init_contact_id": [
+              "Succeeded"
+            ]
+          },
+          "type": "InitializeVariable",
+          "_comment": "The BASELINE jobTitle. Empty string means the field was blank — restore must then clear it, not write ''.",
+          "inputs": {
+            "variables": [
+              {
+                "name": "before",
+                "type": "string",
+                "value": "@{coalesce(first(body('Find_contact')?['value'])?['jobTitle'], '')}"
+              }
+            ]
+          }
+        },
+        "Init_sentinel": {
+          "runAfter": {
+            "Init_before": [
+              "Succeeded"
+            ]
+          },
+          "type": "InitializeVariable",
+          "_comment": "⚠️ THE WHOLE POINT: the sentinel MUST differ from the baseline. Writing the existing value back cannot distinguish a real write from a silent discard.",
+          "inputs": {
+            "variables": [
+              {
+                "name": "sentinel",
+                "type": "string",
+                "value": "@{concat(variables('before'), ' [LCC-PROBE-DELETE-ME]')}"
+              }
+            ]
+          }
+        },
+        "Should_apply": {
+          "runAfter": {
+            "Init_sentinel": [
+              "Succeeded"
+            ]
+          },
+          "type": "If",
+          "expression": {
+            "and": [
+              {
+                "equals": [
+                  "@coalesce(triggerBody()?['apply'], false)",
+                  true
+                ]
+              }
+            ]
+          },
+          "actions": {
+            "Patch_sentinel": {
+              "runAfter": {},
+              "type": "OpenApiConnection",
+              "inputs": {
+                "host": {
+                  "connectionName": "shared_office365",
+                  "operationId": "HttpRequest",
+                  "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365"
+                },
+                "parameters": {
+                  "Uri": "@{concat('https://graph.microsoft.com/v1.0/me/contacts/', variables('contact_id'))}",
+                  "Method": "PATCH",
+                  "ContentType": "application/json",
+                  "Body": "@setProperty(json('{}'), 'jobTitle', variables('sentinel'))"
+                },
+                "authentication": "@parameters('$authentication')"
+              }
+            },
+            "Reread_after_patch": {
+              "runAfter": {
+                "Patch_sentinel": [
+                  "Succeeded",
+                  "Failed"
+                ]
+              },
+              "type": "OpenApiConnection",
+              "_comment": "Runs on Failed too — a 403 is a legitimate ANSWER (not writable), not a reason to abort without reporting. This re-read, NOT the status code, is the verdict.",
+              "inputs": {
+                "host": {
+                  "connectionName": "shared_office365",
+                  "operationId": "HttpRequest",
+                  "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365"
+                },
+                "parameters": {
+                  "Uri": "@{concat('https://graph.microsoft.com/v1.0/me/contacts/', variables('contact_id'), '?$select=id,jobTitle')}",
+                  "Method": "GET"
+                },
+                "authentication": "@parameters('$authentication')"
+              }
+            },
+            "Restore_original": {
+              "runAfter": {
+                "Reread_after_patch": [
+                  "Succeeded",
+                  "Failed"
+                ]
+              },
+              "type": "OpenApiConnection",
+              "_comment": "Always restore, whatever the verdict. A blank baseline is cleared with null — writing '' would leave the probe's own footprint behind.",
+              "inputs": {
+                "host": {
+                  "connectionName": "shared_office365",
+                  "operationId": "HttpRequest",
+                  "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365"
+                },
+                "parameters": {
+                  "Uri": "@{concat('https://graph.microsoft.com/v1.0/me/contacts/', variables('contact_id'))}",
+                  "Method": "PATCH",
+                  "ContentType": "application/json",
+                  "Body": "@setProperty(json('{}'), 'jobTitle', if(equals(variables('before'), ''), json('null'), variables('before')))"
+                },
+                "authentication": "@parameters('$authentication')"
+              }
+            },
+            "Reread_after_restore": {
+              "runAfter": {
+                "Restore_original": [
+                  "Succeeded",
+                  "Failed"
+                ]
+              },
+              "type": "OpenApiConnection",
+              "_comment": "Proves cleanup. If this does not equal the baseline, the probe LEFT A MARK and that must be visible in the response, not silent.",
+              "inputs": {
+                "host": {
+                  "connectionName": "shared_office365",
+                  "operationId": "HttpRequest",
+                  "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365"
+                },
+                "parameters": {
+                  "Uri": "@{concat('https://graph.microsoft.com/v1.0/me/contacts/', variables('contact_id'), '?$select=id,jobTitle')}",
+                  "Method": "GET"
+                },
+                "authentication": "@parameters('$authentication')"
+              }
+            },
+            "Respond_verdict": {
+              "runAfter": {
+                "Reread_after_restore": [
+                  "Succeeded",
+                  "Failed"
+                ]
+              },
+              "type": "Response",
+              "_comment": "verdict is computed from the RE-READ, never from the PATCH status. 'accepted_then_discarded' is the outcome the whole probe exists to catch — it is the one that would have shipped a projector that runs green and changes nothing.",
+              "inputs": {
+                "statusCode": 200,
+                "headers": {
+                  "Content-Type": "application/json"
+                },
+                "body": {
+                  "probe": "outlook_contact_write",
+                  "contact_id": "@{variables('contact_id')}",
+                  "display_name": "@{first(body('Find_contact')?['value'])?['displayName']}",
+                  "parent_folder_id": "@{first(body('Find_contact')?['value'])?['parentFolderId']}",
+                  "carries_readonly_marker": "@contains(coalesce(first(body('Find_contact')?['value'])?['personalNotes'], ''), 'read-only')",
+                  "applied": true,
+                  "before": "@{variables('before')}",
+                  "sentinel_written": "@{variables('sentinel')}",
+                  "patch_status": "@{actions('Patch_sentinel')?['status']}",
+                  "after_patch": "@{coalesce(body('Reread_after_patch')?['jobTitle'], '')}",
+                  "after_restore": "@{coalesce(body('Reread_after_restore')?['jobTitle'], '')}",
+                  "restored_cleanly": "@equals(coalesce(body('Reread_after_restore')?['jobTitle'], ''), variables('before'))",
+                  "verdict": "@{if(equals(coalesce(body('Reread_after_patch')?['jobTitle'], ''), variables('sentinel')), 'WRITABLE', if(equals(actions('Patch_sentinel')?['status'], 'Failed'), 'REJECTED_patch_failed', 'ACCEPTED_THEN_DISCARDED'))}"
+                }
+              }
+            }
+          },
+          "else": {
+            "actions": {
+              "Respond_baseline": {
+                "runAfter": {},
+                "type": "Response",
+                "_comment": "Dry run. Reports what WOULD be written and nothing else — the dry-run-first doctrine every repair in this codebase follows.",
+                "inputs": {
+                  "statusCode": 200,
+                  "headers": {
+                    "Content-Type": "application/json"
+                  },
+                  "body": {
+                    "probe": "outlook_contact_write",
+                    "applied": false,
+                    "contact_id": "@{variables('contact_id')}",
+                    "display_name": "@{first(body('Find_contact')?['value'])?['displayName']}",
+                    "parent_folder_id": "@{first(body('Find_contact')?['value'])?['parentFolderId']}",
+                    "carries_readonly_marker": "@contains(coalesce(first(body('Find_contact')?['value'])?['personalNotes'], ''), 'read-only')",
+                    "before": "@{variables('before')}",
+                    "would_write": "@{variables('sentinel')}",
+                    "note": "Dry run — nothing was written. Re-run with apply=true to get the verdict."
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "actions": {
+          "Respond_not_found": {
+            "runAfter": {},
+            "type": "Response",
+            "_comment": "'No contact matched' and 'not writable' are DIFFERENT FACTS and must never collapse into one answer.",
+            "inputs": {
+              "statusCode": 404,
+              "headers": {
+                "Content-Type": "application/json"
+              },
+              "body": {
+                "probe": "outlook_contact_write",
+                "verdict": "CONTACT_NOT_FOUND",
+                "display_name": "@{triggerBody()?['display_name']}",
+                "note": "No contact matched that exact displayName. This is not a writability result."
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

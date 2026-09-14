@@ -5,6 +5,33 @@
 // ============================================================================
 
 // ============================================================================
+// UX-T1b — guarded "Flag for research" (2026-09-08)
+// ============================================================================
+// The three "Flag for research" buttons (CMS Data tab, NPI Intel, Lease
+// Watchlist) used to POST straight into `research_queue_outcomes` from the
+// browser via applyInsertWithFallback — no server-side validation, and
+// invisible to the unified Research workbench (a second, isolated queue).
+// This routes through the guarded server endpoint instead: it validates the
+// domain/queue_type/clinic_id, upserts idempotently on the table's own
+// UNIQUE(queue_type, clinic_id), and creates a linked research_task so the
+// flag lands on the workbench "Follow-ups" tab too.
+async function flagForResearchGuarded(clinicId, clinicName, queueType, notes) {
+  const resp = await fetch('/api/queue?_route=flag-for-research', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      domain: 'dialysis', clinic_id: clinicId, clinic_name: clinicName || null,
+      queue_type: queueType, notes: notes || 'Flagged for research',
+    }),
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok || !data.ok) {
+    throw new Error(data.error || `Flag failed (HTTP ${resp.status})`);
+  }
+  return data;
+}
+
+// ============================================================================
 // MODULE STATE
 // ============================================================================
 
@@ -91,7 +118,7 @@ let diaPropertiesSearch = '';
 let diaPropertiesPage = 0;
 let diaPropertiesSort = { col: 'address', dir: 'asc' };
 let diaPropertiesStateFilter = '';
-let diaPropertiesSummary = null;     // { states, withSFCount, avgSF, total }
+let diaPropertiesSummary = null;     // { states, withSFCount, medianSF, p95SF, total }
 let diaPropertiesRequestId = 0;      // race-condition guard
 const DIA_PROPERTIES_PAGE_SIZE = 25;
 
@@ -116,7 +143,15 @@ let diaVerificationSummaryLoading = false;
 // by 'all' | 'evidence' | 'cron' to match the breakout in the summary card.
 let diaRecentVerifications = null;
 let diaRecentVerificationsLoading = false;
-let diaRecentVerificationsFilter = 'all';
+// UX11 (2026-09-02): default to the EVIDENCE lane, not 'all'. Measured on dia:
+// of 1,400 verification rows in the last 7 days, 1,400 are the cron's
+// method='auto_scrape'/check_result='inferred_active' timer advance whose note
+// reads "auto-scrape: no sale evidence in 3y window, timer advanced" — which is
+// why every row in this feed said "no update". The feed was honest; opening it
+// on 'all' meant the operator met 100% machine no-ops and learned to ignore the
+// surface. The evidence lane is the human-relevant one (last evidence row:
+// 2026-08-06), and when it is empty that emptiness is the finding.
+let diaRecentVerificationsFilter = 'evidence';
 let diaIntakeQueue = null;
 let diaIntakeLoading = false;
 let diaIntakeIdx = 0;
@@ -126,6 +161,8 @@ let diaIntakeIdx = 0;
 // one canonical and you fix multiple properties.
 let diaOwnershipBacklog       = null;   // array of cluster rows
 let diaOwnershipBacklogLoading = false;
+let diaOwnershipBacklogError  = null;   // last load failure message; distinguishes
+                                        // "the query failed" from "there are 0 rows"
 let diaOwnershipFilterState   = '';     // optional state filter (e.g. 'TX')
 let diaOwnershipFilterText    = '';     // optional name-substring filter
 
@@ -141,7 +178,17 @@ let diaOwnershipFilterText    = '';     // optional name-substring filter
  */
 async function diaQuery(table, select, params = {}) {
   // Query via serverless proxy — keeps secret key server-side
-  const { filter, filter2, order, limit = 1000, offset = 0, includeCount = false } = params;
+  //
+  // throwOnError (2026-08-29): this helper returns [] on EVERY non-OK response,
+  // which is why the Deals > Ownership tab rendered "no canonical clusters yet —
+  // run dia_unify_canonical_true_owners to seed" while PostgREST was actually
+  // answering HTTP 500 (the view exceeded the 8s statement_timeout). A failed
+  // request and an empty result produced identical pixels, and the empty state
+  // then recommended a write that was not needed. Default stays false so the
+  // ~70 existing callers are byte-identical; callers that render an empty state
+  // asserting something about the DATA should opt in, so their own catch can
+  // tell the operator the query failed.
+  const { filter, filter2, order, limit = 1000, offset = 0, includeCount = false, throwOnError = false } = params;
 
   const url = new URL('/api/dia-query', window.location.origin);
   url.searchParams.set('table', table);
@@ -168,6 +215,7 @@ async function diaQuery(table, select, params = {}) {
     if (!response.ok) {
       const errBody = await response.text();
       console.error(`diaQuery ${table}: HTTP ${response.status}`, errBody);
+      if (throwOnError) throw new Error(`diaQuery ${table}: HTTP ${response.status} ${String(errBody).slice(0, 300)}`);
       return includeCount ? { data: [], count: 0 } : [];
     }
 
@@ -176,8 +224,13 @@ async function diaQuery(table, select, params = {}) {
     return result.data || [];
   } catch (err) {
     clearTimeout(timeout);
-    if (err.name === 'AbortError') { console.warn('diaQuery ' + table + ' timed out (30s)'); return includeCount ? { data: [], count: 0 } : []; }
+    if (err.name === 'AbortError') {
+      console.warn('diaQuery ' + table + ' timed out (30s)');
+      if (throwOnError) throw new Error(`diaQuery ${table}: timed out after 30s`);
+      return includeCount ? { data: [], count: 0 } : [];
+    }
     console.error('diaQuery error:', err);
+    if (throwOnError) throw err;
     return includeCount ? { data: [], count: 0 } : [];
   }
 }
@@ -211,6 +264,76 @@ async function diaQueryAll(table, select, params = {}) {
   }
   return all;
 }
+
+/**
+ * THROTTLED-parallel pagination — the fix R2-W-6 named and deferred above.
+ *
+ * History matters here. QA-27 made dia pagination fully parallel (N concurrent
+ * requests, one per page); QA-33 rolled back the same change on gov because it
+ * "overwhelms Vercel/Supabase/browser" when several dashboards stack pagers in
+ * a Promise.all. R2-W-6 reverted dia to serial and wrote down the correct
+ * answer: *"A throttled-parallel approach (concurrency=4) is the better
+ * long-term fix; deferred for both gov + dia."* This is that, at exactly that
+ * concurrency — NOT a re-run of the unbounded version that was reverted twice.
+ *
+ * Why it is needed: the Marketing loader was pulling 11,831 rows of
+ * v_opportunity_domain_classified in 12 STRICTLY SEQUENTIAL round-trips on
+ * page load (measured 2026-08-15). Serial paging makes latency multiply by
+ * page count; a cap of 4 keeps the concurrent-request count bounded and
+ * constant no matter how large the table grows.
+ *
+ * Correctness notes:
+ *  - Page 0 is fetched with includeCount so the total is known up front and
+ *    the remaining offsets can be planned. Without a count we fall back to the
+ *    original serial loop rather than guessing.
+ *  - Results are written into a positional array and flattened, so the output
+ *    order is identical to the serial version regardless of completion order.
+ *  - The 2-minute fuse from diaQueryAll is preserved.
+ *
+ * ⚠️ OFFSET pagination without an ORDER BY is only stable if the underlying
+ * relation returns rows consistently. That caveat is inherited from the serial
+ * version, not introduced here — callers that need a guaranteed-stable page
+ * boundary should pass `order`.
+ */
+async function diaQueryAllThrottled(table, select, params = {}, concurrency = 4) {
+  const pageSize = 1000;   // PostgREST max-rows cap
+  const maxTime = 120000;  // same 2-minute fuse as diaQueryAll
+  const start = Date.now();
+
+  const first = await diaQuery(table, select, { ...params, limit: pageSize, offset: 0, includeCount: true });
+  const rows0 = (first && Array.isArray(first.data)) ? first.data : [];
+  const total = (first && typeof first.count === 'number') ? first.count : null;
+
+  if (rows0.length < pageSize) return rows0;           // single page, done
+  if (total == null || total <= pageSize) {
+    // No usable count — fall back to the proven serial loop rather than guess.
+    return diaQueryAll(table, select, params);
+  }
+
+  const pages = Math.ceil(total / pageSize);
+  const out = new Array(pages);
+  out[0] = rows0;
+
+  let next = 1;
+  const worker = async () => {
+    while (true) {
+      const page = next++;
+      if (page >= pages) return;
+      if (Date.now() - start > maxTime) {
+        console.warn('diaQueryAllThrottled(' + table + ') fuse hit at page ' + page + '/' + pages);
+        return;
+      }
+      const rows = await diaQuery(table, select, { ...params, limit: pageSize, offset: page * pageSize });
+      out[page] = rows || [];
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, pages - 1) }, worker));
+
+  const flat = [];
+  for (const chunk of out) if (chunk) flat.push(...chunk);
+  return flat;
+}
+window.diaQueryAllThrottled = diaQueryAllThrottled;
 
 // Single-page fetch with count — for server-side pagination
 async function diaQueryPage(table, select, params = {}) {
@@ -1529,11 +1652,26 @@ function renderDiaActionItemsInner() {
       detail: 'Renewal / sale-leaseback windows opening — prioritize outreach on these owners',
       action: 'Review leases', tab: 'leases' });
   }
-  const onMarket = (typeof diaAvailListings !== 'undefined' && Array.isArray(diaAvailListings)) ? diaAvailListings.length : 0;
+  // UX10 (2026-09-02): READ THE CANONICAL SET. This tile used to count
+  // diaAvailListings (v_available_listings, the broader lifecycle-flag set —
+  // 462 rows live) while Deals > Sales > Availables filters membership by
+  // v_dia_on_market (the T9d canonical CURRENT on-market set — 207 live). Two
+  // surfaces, two views, one question: measured 461 vs 207, a 2.2x
+  // disagreement on the same Overview the operator reads first. The canonical
+  // rows are already loaded in the main Promise.all (diaData.onMarketRows);
+  // diaAvailListings stays the fallback ONLY until that load lands, and the
+  // tile names which set it is showing so the number can never be read as the
+  // other one.
+  const _omCanonical = (typeof diaData !== 'undefined' && Array.isArray(diaData.onMarketRows))
+    ? diaData.onMarketRows : null;
+  const onMarket = _omCanonical
+    ? _omCanonical.length
+    : ((typeof diaAvailListings !== 'undefined' && Array.isArray(diaAvailListings)) ? diaAvailListings.length : 0);
   if (onMarket > 0) {
     bd.push({ icon: '🏷️', color: '#34d399', urgency: 'info',
       title: fmtN(onMarket) + ' dialysis propert' + (onMarket > 1 ? 'ies' : 'y') + ' on market',
-      detail: 'Active listings — acquisition targets / competitive positioning for your pipeline',
+      detail: (_omCanonical ? 'Currently on market (canonical set) — ' : 'Active listings (pending canonical load) — ')
+        + 'acquisition targets / competitive positioning for your pipeline',
       action: 'View listings', tab: 'sales' });
   }
 
@@ -1599,6 +1737,128 @@ function renderDiaActionItemsInner() {
 /**
  * Render overview — infographic-style command center homepage
  */
+// Dialysis Market Economics — a Northmarq-branded market-education exhibit built on
+// the reconciled facility-economics model (dialysis_econ_reconciled_v1). Teaches the
+// scale economics of dialysis + demonstrates our analytical depth (validated to 10-K).
+// Pure inline SVG; opens as a print-ready HTML report (same idiom as the clinic export).
+async function _diaMarketEconomicsExhibit() {
+  const NB = { blue:'#003DA5', navy:'#001159', sky:'#62B5E5', blue85:'#265AB2', tint:'#E0E8F4',
+    slate:'#6A748C', iron:'#D8DFDF', body:'#191919',
+    font:"'futura-pt','Futura PT','Century Gothic','Open Sans',Arial,sans-serif" };
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+  const pct = v => v == null ? '—' : (Number(v) * 100).toFixed(1) + '%';
+  const usdBn = v => v == null ? '—' : '$' + (Number(v) / 1e9).toFixed(1) + 'B';
+  let scale = [], oper = [], mkt = [];
+  try {
+    const [a, b, c] = await Promise.all([
+      diaQuery('v_dia_econ_scale_curve', '*', { order: 'volume_band.asc', limit: 20 }).catch(() => []),
+      diaQuery('v_dia_econ_operator_benchmark', '*', { order: 'clinics.desc', limit: 20 }).catch(() => []),
+      diaQuery('v_dia_econ_market_summary', '*', { order: 'total_revenue.desc', limit: 60 }).catch(() => [])
+    ]);
+    scale = Array.isArray(a) ? a : (a && a.data) || [];
+    oper = Array.isArray(b) ? b : (b && b.data) || [];
+    mkt = Array.isArray(c) ? c : (c && c.data) || [];
+  } catch (e) { /* fall through to empty-state */ }
+  if (!scale.length && !oper.length) {
+    alert('Market economics data is not available yet. If this persists, the data-query edge function may need a redeploy to expose the new views.');
+    return;
+  }
+  const natl = mkt.find(m => m.state === 'US') || null;
+  const states = mkt.filter(m => m.state && m.state !== 'US').slice(0, 10);
+
+  // ── Chart 1: scale curve (operating & EBITDA margin by volume band) ──
+  const sc = scale.filter(s => s.clinics > 0);
+  let svg1 = '';
+  if (sc.length) {
+    const W = 780, H = 300, ml = 52, mr = 52, mt = 24, mb = 56, pw = W - ml - mr, ph = H - mt - mb;
+    const n = sc.length, slot = pw / n;
+    const yPct = v => mt + ph - ((v + 0.15) / (0.45)) * ph; // margin range -15%..+30%
+    const costs = sc.map(s => Number(s.median_cost_per_tx) || 0);
+    const cMax = Math.max.apply(null, costs) * 1.1 || 1;
+    const yCost = v => mt + ph - (v / cMax) * ph;
+    svg1 = '<svg width="100%" viewBox="0 0 ' + W + ' ' + H + '" font-family="' + NB.font + '">';
+    // zero line + % gridlines
+    [-0.10, 0, 0.10, 0.20, 0.30].forEach(g => { const y = yPct(g);
+      svg1 += '<line x1="' + ml + '" y1="' + y.toFixed(1) + '" x2="' + (W - mr) + '" y2="' + y.toFixed(1) + '" stroke="' + (g === 0 ? NB.slate : NB.tint) + '" stroke-width="1"/>';
+      svg1 += '<text x="' + (ml - 6) + '" y="' + (y + 3).toFixed(1) + '" text-anchor="end" font-size="9" fill="' + NB.slate + '">' + (g * 100).toFixed(0) + '%</text>'; });
+    // cost/tx bars (secondary)
+    sc.forEach((s, i) => { const cx = ml + slot * i + slot / 2, bw = Math.min(30, slot * 0.4);
+      const by = yCost(Number(s.median_cost_per_tx) || 0), bh = mt + ph - by;
+      svg1 += '<rect x="' + (cx - bw / 2).toFixed(1) + '" y="' + by.toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + Math.max(0, bh).toFixed(1) + '" fill="' + NB.iron + '" opacity="0.55"/>';
+      svg1 += '<text x="' + cx.toFixed(1) + '" y="' + (by - 3).toFixed(1) + '" text-anchor="middle" font-size="8" fill="' + NB.slate + '">$' + Math.round(Number(s.median_cost_per_tx)) + '</text>';
+      svg1 += '<text x="' + cx.toFixed(1) + '" y="' + (H - mb + 16) + '" text-anchor="middle" font-size="9" fill="' + NB.body + '">' + esc(String(s.volume_band).replace(/^\d+\.\s*/, '')) + '</text>'; });
+    // margin lines
+    const lineFor = (key, color) => { const pts = sc.map((s, i) => (ml + slot * i + slot / 2).toFixed(1) + ',' + yPct(Number(s[key]) || 0).toFixed(1));
+      let g = '<polyline points="' + pts.join(' ') + '" fill="none" stroke="' + color + '" stroke-width="2.5"/>';
+      sc.forEach((s, i) => { const cx = ml + slot * i + slot / 2, cy = yPct(Number(s[key]) || 0);
+        g += '<circle cx="' + cx.toFixed(1) + '" cy="' + cy.toFixed(1) + '" r="3" fill="' + color + '"/>'; });
+      return g; };
+    svg1 += lineFor('median_operating_margin', NB.blue85);
+    svg1 += lineFor('median_ebitda_margin', NB.blue);
+    // x label + legend
+    svg1 += '<text x="' + (ml + pw / 2) + '" y="' + (H - 6) + '" text-anchor="middle" font-size="10" fill="' + NB.slate + '">Annual treatment volume (facility scale) →</text>';
+    svg1 += '<rect x="' + ml + '" y="6" width="10" height="10" fill="' + NB.iron + '"/><text x="' + (ml + 14) + '" y="15" font-size="9">Cost / treatment</text>';
+    svg1 += '<line x1="' + (ml + 96) + '" y1="11" x2="' + (ml + 110) + '" y2="11" stroke="' + NB.blue85 + '" stroke-width="2.5"/><text x="' + (ml + 114) + '" y="15" font-size="9">Operating margin</text>';
+    svg1 += '<line x1="' + (ml + 210) + '" y1="11" x2="' + (ml + 224) + '" y2="11" stroke="' + NB.blue + '" stroke-width="2.5"/><text x="' + (ml + 228) + '" y="15" font-size="9">EBITDA margin</text>';
+    svg1 += '</svg>';
+  }
+
+  // ── Chart 2: operator benchmark (EBITDA margin bars) ──
+  const ob = oper.filter(o => o.clinics >= 50).sort((a, b) => Number(b.ebitda_margin) - Number(a.ebitda_margin));
+  let svg2 = '';
+  if (ob.length) {
+    const rowH = 30, W = 780, mt = 10, ml = 150, barMax = 480;
+    const H = mt + ob.length * rowH + 10;
+    const mMax = Math.max.apply(null, ob.map(o => Number(o.ebitda_margin) || 0)) * 1.15 || 0.35;
+    svg2 = '<svg width="100%" viewBox="0 0 ' + W + ' ' + H + '" font-family="' + NB.font + '">';
+    ob.forEach((o, i) => { const y = mt + i * rowH, m = Number(o.ebitda_margin) || 0;
+      const bw = Math.max(1, (m / mMax) * barMax);
+      svg2 += '<text x="' + (ml - 8) + '" y="' + (y + rowH / 2 + 3) + '" text-anchor="end" font-size="11" font-weight="600" fill="' + NB.body + '">' + esc(o.operator) + '</text>';
+      svg2 += '<rect x="' + ml + '" y="' + (y + 5) + '" width="' + bw.toFixed(1) + '" height="' + (rowH - 12) + '" fill="' + (o.operator === 'DaVita' ? NB.blue : NB.blue85) + '" rx="2"/>';
+      svg2 += '<text x="' + (ml + bw + 6).toFixed(1) + '" y="' + (y + rowH / 2 + 3) + '" font-size="10" fill="' + NB.body + '">' + pct(o.ebitda_margin) + ' EBITDA · $' + Math.round(Number(o.revenue_per_treatment)) + '/tx · ' + o.clinics + ' clinics</text>'; });
+    svg2 += '</svg>';
+  }
+
+  let stateRows = states.map(s => '<tr><td style="padding:3px 8px;border-bottom:1px solid ' + NB.tint + '">' + esc(s.state) + '</td>'
+    + '<td style="padding:3px 8px;border-bottom:1px solid ' + NB.tint + ';text-align:right">' + s.clinics + '</td>'
+    + '<td style="padding:3px 8px;border-bottom:1px solid ' + NB.tint + ';text-align:right">' + usdBn(s.total_revenue) + '</td>'
+    + '<td style="padding:3px 8px;border-bottom:1px solid ' + NB.tint + ';text-align:right">' + pct(s.ebitda_margin) + '</td></tr>').join('');
+  const today = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+
+  const doc = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Dialysis Market Economics | Northmarq</title>'
+    + '<link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@300;400;600;700&display=swap" rel="stylesheet">'
+    + '<style>body{font-family:' + NB.font + ';color:' + NB.body + ';margin:0;padding:0;background:#fff}'
+    + '.wrap{max-width:900px;margin:0 auto;padding:28px 36px}'
+    + '.hdr{background:' + NB.blue + ';color:#fff;padding:20px 36px;display:flex;justify-content:space-between;align-items:baseline}'
+    + '.hdr h1{font-size:20px;margin:0;font-weight:700;letter-spacing:.3px}.hdr .sub{font-size:12px;opacity:.85}'
+    + 'h2{font-size:14px;text-transform:uppercase;letter-spacing:1.2px;color:' + NB.blue + ';border-bottom:2px solid ' + NB.sky + ';padding-bottom:6px;margin:26px 0 12px}'
+    + '.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:14px 0}'
+    + '.kpi{background:' + NB.tint + ';border-radius:8px;padding:12px 14px}.kpi .v{font-size:20px;font-weight:700;color:' + NB.navy + '}.kpi .l{font-size:11px;color:' + NB.slate + '}'
+    + '.note{font-size:12px;color:' + NB.slate + ';line-height:1.6}.callout{background:' + NB.tint + ';border-left:4px solid ' + NB.blue + ';border-radius:0 6px 6px 0;padding:12px 16px;font-size:12px;line-height:1.6;margin:12px 0}'
+    + 'table{width:100%;border-collapse:collapse;font-size:12px}th{text-align:left;color:' + NB.navy + ';padding:4px 8px;border-bottom:2px solid ' + NB.sky + '}'
+    + '.btn{position:fixed;top:14px;right:16px;background:' + NB.blue + ';color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;cursor:pointer}@media print{.btn{display:none}}'
+    + 'footer{margin:30px 0 10px;padding-top:12px;border-top:1px solid ' + NB.iron + ';font-size:10px;color:' + NB.slate + '}</style></head><body>'
+    + '<button class="btn" onclick="window.print()">🖨 Print / Save PDF</button>'
+    + '<div class="hdr"><h1>Dialysis Facility Economics</h1><div class="sub">Market Education &amp; Analytical Capability · ' + today + '</div></div>'
+    + '<div class="wrap">'
+    + '<p class="note">Northmarq reconstructs a single reconciled revenue, operating-profit, and EBITDA figure for <strong>every one of ~8,300 U.S. dialysis facilities</strong>, per year back to 2011. We treat the CMS HCRIS cost report as what it is — a <em>cost</em> report — and anchor treatment volume and cost to it, then reconstruct revenue as treatments × a payer-mix-weighted reimbursement rate. The model is validated bottom-up against operator SEC filings.</p>'
+    + (natl ? '<div class="kpis"><div class="kpi"><div class="v">' + natl.clinics + '</div><div class="l">Facilities modeled</div></div>'
+        + '<div class="kpi"><div class="v">' + usdBn(natl.total_revenue) + '</div><div class="l">Aggregate revenue</div></div>'
+        + '<div class="kpi"><div class="v">' + pct(natl.operating_margin) + '</div><div class="l">Median operating margin</div></div>'
+        + '<div class="kpi"><div class="v">' + pct(natl.ebitda_margin) + '</div><div class="l">Facility EBITDA margin</div></div></div>' : '')
+    + (svg1 ? '<h2>Scale drives dialysis profitability</h2><p class="note">Per-treatment cost falls sharply with facility scale (audited HCRIS), so margin expands from loss-making at the smallest facilities to ~25% operating / ~30% EBITDA at the largest. This is the single most important economic fact in the sector — and it is why volume trajectory is the leading indicator of a facility\'s value.</p>' + svg1 : '')
+    + (svg2 ? '<h2>Operator benchmarking</h2>' + svg2
+        + '<div class="callout"><strong>Validated to the 10-K.</strong> Aggregated across DaVita\'s ~2,700 facilities, our model implies <strong>$380 revenue/treatment</strong> (DaVita FY2024 10-K: ~$369–380, within ~3%) and a <strong>25.0% facility EBITDA margin</strong> (reported dialysis EBITDA ~24.5%). Our aggregate revenue is <em>conservative</em> vs operator-reported totals because we anchor to audited CMS treatment counts — the model does not overstate.</div>' : '')
+    + (states.length ? '<h2>Largest state markets</h2><table><tr><th>State</th><th style="text-align:right">Facilities</th><th style="text-align:right">Revenue</th><th style="text-align:right">EBITDA margin</th></tr>' + stateRows + '</table>' : '')
+    + '<footer><strong>Methodology.</strong> Model dialysis_econ_reconciled_v1: revenue = HCRIS treatments × payer-mix-weighted rate (CY2024: Medicare $279, Medicaid $225, Commercial $1,100, Other $250/tx, MA-corrected); operating profit = revenue − HCRIS cost; EBITDA = operating profit + 10-K-anchored D&A (~$27/tx, size/age-distributed). Figures are Northmarq estimates for illustration, reconciled to public filings; not audited financials. Sources: CMS HCRIS, CMS Dialysis Facility Compare, USRDS, MedPAC, operator 10-K filings.<br>Northmarq · Confidential · ' + today + '</footer>'
+    + '</div></body></html>';
+  const blob = new Blob([doc], { type: 'text/html' });
+  const url = URL.createObjectURL(blob);
+  window.open(url, '_blank');
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+if (typeof window !== 'undefined') window._diaMarketEconomicsExhibit = _diaMarketEconomicsExhibit;
+
 function renderDiaOverview() {
   // UI Phase 2: load the single-row overview-stats MV (Portfolio at a Glance,
   // Lease Expiration Risk, Operator/Geographic Breakdown). Fast (~100ms); fills
@@ -2017,6 +2277,13 @@ function renderDiaOverview() {
   // Breakdown → Data Health & Coverage (ops at the bottom).
   // ═══════════════════════════════════════════════
   const _diaGroup = (label) => '<div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:1.5px;color:var(--text3);margin:30px 0 0;padding:0 2px 6px;border-bottom:2px solid var(--border)">' + label + '</div>';
+
+  // Market-education exhibit launcher (reconciled facility economics — scale curve,
+  // operator benchmark vs 10-K, value crosswalk). Opens a Northmarq-branded report.
+  html += '<div style="display:flex;justify-content:flex-end;margin:2px 0 -8px">'
+    + '<button class="gov-btn" onclick="_diaMarketEconomicsExhibit()" title="Dialysis facility economics — market-education exhibit" '
+    + 'style="font-size:11px;padding:6px 12px;border-radius:8px;background:#003DA5;color:#fff;border:1px solid #003DA5;font-weight:600;cursor:pointer">'
+    + '📊 Market Economics Exhibit</button></div>';
 
   // ── SECTION 1: PORTFOLIO AT A GLANCE (value-first headline) ──
   html += sectionHeader('Portfolio at a Glance', '🏥', 'search');
@@ -3211,17 +3478,7 @@ function renderDiaChanges() {
         btn.disabled = true;
         btn.textContent = '...';
         try {
-          await applyInsertWithFallback({
-            proxyBase: '/api/dia-query',
-            table: 'research_queue_outcomes',
-            data: {
-              medicare_id: clinicId,
-              outcome: 'flagged_for_review',
-              notes: 'Flagged from CMS Data tab for research',
-              created_at: new Date().toISOString()
-            },
-            source_surface: 'dia_cms_flag'
-          });
+          await flagForResearchGuarded(clinicId, clinicName, 'cms_data', 'Flagged from CMS Data tab for research');
           btn.textContent = '✓';
           btn.style.color = 'var(--success)';
           btn.style.borderColor = 'var(--success)';
@@ -3928,12 +4185,7 @@ function _wireNpiFlagDismissButtons() {
       if (!npiId) return;
       btn.disabled = true; btn.textContent = '…';
       try {
-        await applyInsertWithFallback({
-          proxyBase: '/api/dia-query',
-          table: 'research_queue_outcomes',
-          data: { medicare_id: npiId, outcome: 'flagged_for_review', notes: 'Flagged from NPI Intel BD events', created_at: new Date().toISOString() },
-          source_surface: 'dia_npi_flag'
-        });
+        await flagForResearchGuarded(npiId, npiName, 'npi_intel', 'Flagged from NPI Intel BD events');
         showToast('Flagged ' + (npiName || npiId), 'success');
         // Remove from local list so card disappears
         diaData.npiSignals = (diaData.npiSignals || []).filter(s =>
@@ -4890,8 +5142,12 @@ async function loadDiaOwnershipBacklog() {
     // client-side.
     const rows = await diaQuery('v_recorded_owner_canonical_clusters', '*', {
       order: 'canonical_total_properties.desc',
-      limit: 500
+      limit: 500,
+      // Opt in so a 500/timeout reaches the catch below instead of being
+      // laundered into an empty result that reads as "there is no data".
+      throwOnError: true
     });
+    diaOwnershipBacklogError = null;
     const seen = new Set();
     const collapsed = [];
     for (const r of (rows || [])) {
@@ -4912,6 +5168,7 @@ async function loadDiaOwnershipBacklog() {
   } catch (e) {
     console.error('loadDiaOwnershipBacklog error:', e);
     showToast('Ownership backlog load failed', 'error');
+    diaOwnershipBacklogError = e && e.message ? e.message : String(e);
     diaOwnershipBacklog = [];
   }
   diaOwnershipBacklogLoading = false;
@@ -7433,9 +7690,21 @@ function renderDiaOwnershipResearch() {
   // Context header
   html += '<div style="padding:12px 14px;background:var(--s2);border:1px solid var(--border);border-radius:8px;margin-bottom:14px">';
   html += '<div style="font-size:13px;color:var(--text);line-height:1.5">';
+  // ⚠️ Copy corrected 2026-08-29 after measuring the lane end to end
+  // (docs/audits/DIA_OWNERSHIP_LANE_COVERAGE_2026-08-29.md). The previous text
+  // claimed resolving a canonical "auto-fills any linked properties whose
+  // true_owner is still NULL" — there are ZERO such properties; the propagation
+  // already ran. It also read as a survey of the duplicate-owner problem when it
+  // is a readout of the 38 hand-written owner_canonical_patterns regexes: only
+  // 72 of 7,255 recorded_owners match one, and there are no byte-identical
+  // duplicate names, so 99% of owners can never appear here. Saying so is the
+  // difference between "this lane is nearly clean" and "this lane sees 1% of the
+  // population" — the operator cannot tell those apart from the counts alone.
   html += '<strong>Ownership research backlog.</strong> Each row is one canonical entity (e.g. "SMBC Leasing & Finance Inc") that has multiple recorded_owner name variants in our deed data. ';
-  html += 'Resolving the canonical&rsquo;s true_owner_id once via the property detail panel auto-fills any linked properties whose true_owner is still NULL ';
-  html += '(via the migration-V propagation trigger). Sorted by total properties &mdash; biggest leverage first.';
+  html += 'Sorted by total properties &mdash; biggest leverage first. ';
+  html += '<span style="color:var(--text3)">Scope: this lane is driven by the curated <code>owner_canonical_patterns</code> table, so it shows only owners a pattern has been written for ';
+  html += '(72 of 7,255 recorded_owners) &mdash; it is not a survey of every duplicate owner name. ';
+  html += 'Note the true_owner slot is rarely empty: on ~79% of these properties it already holds the <em>operator</em> (DaVita, Fresenius), not the landlord, so linking a buyer here is a supersession decision rather than a blank to fill.</span>';
   html += '</div></div>';
 
   // Metrics row
@@ -7462,7 +7731,16 @@ function renderDiaOwnershipResearch() {
   if (!filtered.length) {
     html += '<div style="text-align:center;padding:48px;color:var(--text3);background:var(--s2);border:1px dashed var(--border);border-radius:8px">';
     html += rows.length === 0
-      ? 'No canonical clusters yet &mdash; v_recorded_owner_canonical_clusters returned 0 rows. Run dia_unify_canonical_true_owners on the DB to seed.'
+      ? (diaOwnershipBacklogError
+          // The query FAILED — never recommend a DB write on the strength of an
+          // error. dia_unify_canonical_true_owners is a real owner-merge; a
+          // failed read is no evidence that anything needs seeding.
+          ? 'Could not load the ownership backlog &mdash; the query to ' +
+            'v_recorded_owner_canonical_clusters failed. This is not the same as ' +
+            '&ldquo;no clusters exist&rdquo;. Details: ' + esc(diaOwnershipBacklogError)
+          : 'No canonical clusters &mdash; v_recorded_owner_canonical_clusters returned 0 rows. ' +
+            'If recorded_owners genuinely holds no duplicate canonical names this is correct; ' +
+            'if you expect clusters, run dia_unify_canonical_true_owners on the DB to seed.')
       : 'No clusters match your filter.';
     html += '</div></div>';
     return html;
@@ -9525,15 +9803,34 @@ async function _loadDiaPropertiesSummary() {
     }
     states.sort();
 
-    // Compute avg SF from pre-filtered rows (only rows with building_size > 0)
+    // UX31 (2026-09-02): report the MEDIAN, not the mean.
+    //
+    // "Building size looks too large" was correct and it was not a unit error
+    // (the I12 acres/sq-ft class) — building_size is genuinely square feet.
+    // It is a SHAPE error. Measured live over the 8,607 dia properties with a
+    // size: median 8,646 sf (right for a dialysis clinic), mean 24,044 sf,
+    // max 2,507,852. 357 rows carry the RBA of the whole medical-office
+    // building the clinic occupies a suite in, and the mean is dragged 2.78x
+    // by them — so the tile asserted that a typical clinic is 24,044 sf when
+    // it is 8,646. The median is the honest central value for this
+    // distribution, and the p95 rides in the sub-label so the long tail is
+    // visible rather than averaged away.
     var withSFCount = sfRows.length;
-    var sfSum = 0;
+    var sfVals = [];
     for (var j = 0; j < sfRows.length; j++) {
-      sfSum += parseFloat(sfRows[j].building_size);
+      var _v = parseFloat(sfRows[j].building_size);
+      if (isFinite(_v) && _v > 0) sfVals.push(_v);
     }
-    var avgSF = withSFCount > 0 ? Math.round(sfSum / withSFCount) : 0;
+    sfVals.sort(function (a, b) { return a - b; });
+    var medianSF = 0, p95SF = 0;
+    if (sfVals.length) {
+      var mid = Math.floor(sfVals.length / 2);
+      medianSF = Math.round(sfVals.length % 2 ? sfVals[mid] : (sfVals[mid - 1] + sfVals[mid]) / 2);
+      p95SF = Math.round(sfVals[Math.min(sfVals.length - 1, Math.floor(sfVals.length * 0.95))]);
+    }
 
-    diaPropertiesSummary = { states: states, withSFCount: withSFCount, avgSF: avgSF, total: stateRows.length };
+    diaPropertiesSummary = { states: states, withSFCount: withSFCount,
+                             medianSF: medianSF, p95SF: p95SF, total: stateRows.length };
 
     // Update DOM in-place without full re-render
     var statesValEl = document.getElementById('diaPropStatesValue');
@@ -9542,8 +9839,9 @@ async function _loadDiaPropertiesSummary() {
     if (statesSubEl) statesSubEl.textContent = states.slice(0, 5).join(', ') + (states.length > 5 ? '...' : '');
     var sfValEl = document.getElementById('diaPropSFValue');
     var sfSubEl = document.getElementById('diaPropSFSub');
-    if (sfValEl) sfValEl.textContent = avgSF > 0 ? fmtN(avgSF) : '\u2014';
-    if (sfSubEl) sfSubEl.textContent = withSFCount + ' with SF data';
+    if (sfValEl) sfValEl.textContent = medianSF > 0 ? fmtN(medianSF) : '\u2014';
+    if (sfSubEl) sfSubEl.textContent = withSFCount + ' with SF data'
+      + (p95SF > 0 ? ' \u00b7 p95 ' + fmtN(p95SF) : '');
     // Populate state dropdown if not yet populated
     var sel = document.getElementById('diaPropsStateSelect');
     if (sel && sel.options.length <= 1) {
@@ -9623,9 +9921,10 @@ async function renderDiaProperties() {
     color: 'green', id: 'diaPropStatesValue', subId: 'diaPropStatesSub'
   });
   html += infoCard({
-    title: 'Avg Building SF',
-    value: summary ? (summary.avgSF > 0 ? fmtN(summary.avgSF) : '\u2014') : '...',
-    sub: summary ? summary.withSFCount + ' with SF data' : 'loading',
+    title: 'Median Building SF',
+    value: summary ? (summary.medianSF > 0 ? fmtN(summary.medianSF) : '\u2014') : '...',
+    sub: summary ? (summary.withSFCount + ' with SF data'
+                    + (summary.p95SF > 0 ? ' \u00b7 p95 ' + fmtN(summary.p95SF) : '')) : 'loading',
     color: 'purple', id: 'diaPropSFValue', subId: 'diaPropSFSub'
   });
   html += '</div>';
@@ -10436,17 +10735,7 @@ function buildDiaLeasesHTML() {
         btn.disabled = true;
         btn.textContent = '...';
         try {
-          await applyInsertWithFallback({
-            proxyBase: '/api/dia-query',
-            table: 'research_queue_outcomes',
-            data: {
-              medicare_id: lid,
-              outcome: 'flagged_for_review',
-              notes: 'Flagged from Lease Watchlist — expiring/at-risk lease',
-              created_at: new Date().toISOString()
-            },
-            source_surface: 'dia_lease_flag'
-          });
+          await flagForResearchGuarded(lid, lname, 'lease_watchlist', 'Flagged from Lease Watchlist — expiring/at-risk lease');
           btn.textContent = '✓';
           btn.style.color = 'var(--success)';
           btn.style.borderColor = 'var(--success)';
@@ -10645,6 +10934,120 @@ function buildDiaLoansHTML() {
 
 let diaPlayersView = 'operators';
 let diaBuyers = null;        // lazy-loaded from sales_transactions
+// The exact column lists the Players tab asks sales_transactions for. Named
+// constants so the guard test can assert them against the real dia schema:
+// buyer_name / buyer_type / seller_name exist; seller_type DOES NOT.
+const DIA_BUYER_SELECT  = 'buyer_name,buyer_type,sold_price,sale_date,cap_rate,property_id';
+const DIA_SELLER_SELECT = 'seller_name,sold_price,sale_date,cap_rate,property_id';
+
+// Non-null => the last Players load FAILED. A failed load must never render as
+// a zero (that is exactly how UX29 hid 2,142 sellers for months).
+let diaPlayersError = null;
+function _diaPlayersErrorBanner() {
+  if (!diaPlayersError) return '';
+  return '<div class="dia-info-card dia-info-red" style="padding:12px 14px;margin-bottom:12px;font-size:12px;color:var(--text2)">'
+    + 'This list could not be loaded, so the figures below are not a measurement of the data. '
+    + escapeHtmlSafe(String(diaPlayersError).slice(0, 240)) + '</div>';
+}
+
+// ---------------------------------------------------------------------------
+// UX28/UX29 (2026-09-02) — the Players tab grouping key and its failure mode.
+//
+// UX29: the sellers arm selected a column that DOES NOT EXIST. dia
+// sales_transactions carries buyer_name, buyer_type and seller_name but NO
+// seller_type — so PostgREST answered 42703, diaQuery laundered the non-OK
+// response into [], diaQueryAll broke out of its page loop on a short page,
+// the catch never fired, and the tile rendered "Total Sellers 0 / in dataset"
+// over 2,142 real sellers and $13.48B of volume. The buyers arm differs by
+// exactly that one column, which is why buyers worked and sellers did not.
+// Every select here is now asserted against a named column list.
+//
+// UX28: the grouping key was name.trim().toUpperCase(), so any punctuation or
+// spacing difference minted a second party. Measured on the live top-50 by
+// volume, "Sumitomo Bank Leasing And Finance Inc" (78 deals / $267.7M) sat at
+// rank 1 and "Sumitomo Bank Leasing and Finance, Inc" (60 deals / $199.2M) at
+// rank 4 — one buyer, split, with $199M filed under a phantom.
+//
+// The key is lower() THEN strip non-alphanumerics, with NO token removal —
+// the identity-safe comparator (lcc_ownership_chain_name_key / A2), never the
+// fuzzy-pairing one that reduces "Realty Income Corporation" to the empty
+// string. It merges only names that are provably the same string modulo
+// punctuation. Semantic duplicates ("Realty Income Corp" vs "Realty Income
+// Corporation", "Smbc Leasing And Finance" vs "Smfg") are deliberately NOT
+// merged here: those are entity-resolution judgements that belong to the
+// human-confirm merge lane, not to a tile.
+function _diaPartyKey(name) {
+  const raw = String(name == null ? '' : name).trim();
+  const tight = raw.toLowerCase().replace(/[^a-z0-9]/g, '');
+  // A name with no alphanumeric content cannot be keyed this way; fall back to
+  // the old key so such a row stays its own party rather than collapsing every
+  // punctuation-only name into one.
+  return tight || raw.toUpperCase();
+}
+
+// Fold rows into one entry per party. Keeps the most complete spelling seen
+// (most frequent, then longest) as the display name and reports how many raw
+// spellings were folded, so a collapsed row is visible rather than silent.
+function _diaGroupParties(rows, nameField, typeField) {
+  const map = {};
+  (rows || []).forEach(r => {
+    const nm = r && r[nameField];
+    if (!nm || !String(nm).trim()) return;
+    const key = _diaPartyKey(nm);
+    if (!map[key]) map[key] = { name: String(nm).trim(), _spellings: {}, type: typeField ? r[typeField] : null,
+                                deals: 0, volume: 0, prices: [], capRates: [], records: [] };
+    const g = map[key];
+    const disp = String(nm).trim();
+    g._spellings[disp] = (g._spellings[disp] || 0) + 1;
+    g.deals++;
+    g.volume += (Number(r.sold_price) || 0);
+    if (r.cap_rate) { const _cr = parseFloat(r.cap_rate); if (isFinite(_cr)) g.capRates.push(_cr < 1 ? _cr * 100 : _cr); }
+    if (typeField && !g.type && r[typeField]) g.type = r[typeField];
+    g.records.push(r);
+  });
+  return Object.values(map).map(g => {
+    const sp = Object.keys(g._spellings);
+    g.name = sp.sort((a, b) => (g._spellings[b] - g._spellings[a]) || (b.length - a.length))[0];
+    g.variants = sp.length;
+    delete g._spellings;
+    return g;
+  }).sort((a, b) => b.volume - a.volume);
+}
+
+// A folded party says so. UX28 merges only punctuation/spacing variants of one
+// spelling; the operator should be able to see that two rows became one.
+function _diaVariantNote(g) {
+  const n = Number(g && g.variants) || 1;
+  if (n < 2) return '';
+  return '<span style="margin-left:6px;font-size:10px;color:var(--text3)" title="'
+    + n + ' spellings of this name folded into one party">(' + n + ' spellings)</span>';
+}
+
+// Honest scope tiles. "Total Sellers" counts the whole dataset while the deal
+// and volume figures are the top-50 SHOWN — UX27: two tiles side by side, two
+// populations, titles that did not say so. Every title now carries its own
+// scope and the dataset-wide totals are reported alongside.
+function _diaPartyTiles(label, all, top, color) {
+  const topDeals  = top.reduce((s, x) => s + x.deals, 0);
+  const topVolume = top.reduce((s, x) => s + x.volume, 0);
+  const allDeals  = all.reduce((s, x) => s + x.deals, 0);
+  const allVolume = all.reduce((s, x) => s + x.volume, 0);
+  const folded    = all.reduce((s, x) => s + ((x.variants || 1) - 1), 0);
+  let h = '<div class="dia-grid dia-grid-4" style="gap: 12px; margin-bottom: 20px;">';
+  h += infoCard({ title: label + ' (all)', value: fmtN(all.length),
+                  sub: fmtN(allDeals) + ' deals \u00b7 ' + fmt(allVolume, 'currency') + ' total'
+                       + (folded > 0 ? ' \u00b7 ' + fmtN(folded) + ' spelling variants folded' : ''),
+                  color: color });
+  h += infoCard({ title: 'Top ' + label.replace(/s$/, ''), value: top[0] ? (String(top[0].name).substring(0, 30) || '\u2014') : '\u2014',
+                  sub: top[0] ? fmt(top[0].volume, 'currency') + ' volume' : '', color: 'green' });
+  h += infoCard({ title: 'Avg Deal Size (top 50)', value: fmt(Math.round(topVolume / Math.max(1, topDeals)), 'currency'),
+                  sub: 'across the ' + fmtN(top.length) + ' shown below', color: 'cyan' });
+  h += infoCard({ title: 'Deals (top 50)', value: fmtN(topDeals),
+                  sub: 'of ' + fmtN(allDeals) + ' in dataset', color: 'purple' });
+  h += '</div>';
+  return h;
+}
+
 let diaSellers = null;       // lazy-loaded from sales_transactions
 let diaBrokers = null;       // lazy-loaded from sale_brokers/brokers/sales_transactions (joined client-side)
 let diaPlayersLoading = false;
@@ -10809,38 +11212,26 @@ function renderDiaPlayers() {
       diaPlayersLoading = true;
       (async () => {
         try {
-          const buyersRaw = await diaQueryAll('sales_transactions', 'buyer_name,buyer_type,sold_price,sale_date,cap_rate,property_id');
-          // Group by buyer_name
-          const buyerMap = {};
-          buyersRaw.forEach(r => {
-            if (r.buyer_name) {
-              const key = r.buyer_name.trim().toUpperCase();
-              if (!buyerMap[key]) buyerMap[key] = { name: r.buyer_name, type: r.buyer_type, deals: 0, volume: 0, prices: [], capRates: [], records: [] };
-              buyerMap[key].deals++;
-              buyerMap[key].volume += (r.sold_price || 0);
-              if (r.cap_rate) { var _cr = parseFloat(r.cap_rate); buyerMap[key].capRates.push(_cr < 1 ? _cr * 100 : _cr); }
-              buyerMap[key].records.push(r);
-            }
-          });
-          diaBuyers = Object.values(buyerMap).sort((a, b) => b.volume - a.volume);
+          // throwOnError: a non-OK response must reach the catch below. Without
+          // it diaQuery returns [] and an empty tile is indistinguishable from
+          // a real zero — the UX29 failure, one arm over.
+          const buyersRaw = await diaQueryAll('sales_transactions', DIA_BUYER_SELECT, { throwOnError: true });
+          diaBuyers = _diaGroupParties(buyersRaw, 'buyer_name', 'buyer_type');
+          diaPlayersError = null;
           diaPlayersLoading = false;
           renderDiaTab();
         } catch (err) {
           console.error('Error loading buyer data:', err);
+          diaBuyers = [];
+          diaPlayersError = err && err.message ? String(err.message) : 'request failed';
           diaPlayersLoading = false;
+          renderDiaTab();
         }
       })();
     } else if (diaBuyers) {
       const top50 = diaBuyers.slice(0, 50);
-      const totalVolume = top50.reduce((s, b) => s + b.volume, 0);
-      const totalDeals = top50.reduce((s, b) => s + b.deals, 0);
-
-      html += '<div class="dia-grid dia-grid-4" style="gap: 12px; margin-bottom: 20px;">';
-      html += infoCard({ title: 'Total Buyers', value: fmtN(diaBuyers.length), sub: 'in dataset', color: 'blue' });
-      html += infoCard({ title: 'Top Buyer', value: top50[0] ? (top50[0].name.substring(0, 30) || '—') : '—', sub: top50[0] ? fmt(top50[0].volume) + ' volume' : '', color: 'green' });
-      html += infoCard({ title: 'Avg Deal Size', value: fmt(Math.round(totalVolume / Math.max(1, totalDeals))), sub: 'across top 50', color: 'cyan' });
-      html += infoCard({ title: 'Total Deals', value: fmtN(totalDeals), sub: 'transactions (top 50)', color: 'purple' });
-      html += '</div>';
+      html += _diaPlayersErrorBanner();
+      html += _diaPartyTiles('Buyers', diaBuyers, top50, 'blue');
 
       html += '<div class="table-wrapper"><div class="data-table">';
       html += '<div class="table-row" style="font-weight: 600; border-bottom: 2px solid var(--border);">';
@@ -10855,7 +11246,7 @@ function renderDiaPlayers() {
       top50.forEach((b, idx) => {
         const avgCapRate = b.capRates.length > 0 ? b.capRates.reduce((s, cr) => s + cr, 0) / b.capRates.length : 0;
         html += '<div class="table-row clickable-row" onclick=\'showDetail(' + safeJSON(b.records[0]) + ', "sales-transaction")\'>';
-        html += '<div style="flex: 2;"><span style="color: var(--text2); margin-right: 8px;">#' + (idx + 1) + '</span>' + entityLink(b.name, 'contact', null, 'dialysis') + '</div>';
+        html += '<div style="flex: 2;"><span style="color: var(--text2); margin-right: 8px;">#' + (idx + 1) + '</span>' + entityLink(b.name, 'contact', null, 'dialysis') + _diaVariantNote(b) + '</div>';
         html += '<div style="flex: 1;">' + esc(b.type || '—') + '</div>';
         html += '<div style="flex: 1; text-align: right; color: var(--accent);">' + b.deals + '</div>';
         html += '<div style="flex: 1; text-align: right;">' + fmt(b.volume, 'currency') + '</div>';
@@ -10873,43 +11264,31 @@ function renderDiaPlayers() {
       diaPlayersLoading = true;
       (async () => {
         try {
-          const sellersRaw = await diaQueryAll('sales_transactions', 'seller_name,seller_type,sold_price,sale_date,cap_rate,property_id');
-          // Group by seller_name
-          const sellerMap = {};
-          sellersRaw.forEach(r => {
-            if (r.seller_name) {
-              const key = r.seller_name.trim().toUpperCase();
-              if (!sellerMap[key]) sellerMap[key] = { name: r.seller_name, type: r.seller_type, deals: 0, volume: 0, prices: [], capRates: [], records: [] };
-              sellerMap[key].deals++;
-              sellerMap[key].volume += (r.sold_price || 0);
-              if (r.cap_rate) { var _cr = parseFloat(r.cap_rate); sellerMap[key].capRates.push(_cr < 1 ? _cr * 100 : _cr); }
-              sellerMap[key].records.push(r);
-            }
-          });
-          diaSellers = Object.values(sellerMap).sort((a, b) => b.volume - a.volume);
+          // UX29: seller_type is NOT a column on dia sales_transactions. Asking
+          // for it 42703'd every request and the tile read 0 / $0 over 2,142
+          // sellers. There is no stored seller type, so the table below does
+          // not claim one.
+          const sellersRaw = await diaQueryAll('sales_transactions', DIA_SELLER_SELECT, { throwOnError: true });
+          diaSellers = _diaGroupParties(sellersRaw, 'seller_name', null);
+          diaPlayersError = null;
           diaPlayersLoading = false;
           renderDiaTab();
         } catch (err) {
           console.error('Error loading seller data:', err);
+          diaSellers = [];
+          diaPlayersError = err && err.message ? String(err.message) : 'request failed';
           diaPlayersLoading = false;
+          renderDiaTab();
         }
       })();
     } else if (diaSellers) {
       const top50 = diaSellers.slice(0, 50);
-      const totalVolume = top50.reduce((s, s2) => s + s2.volume, 0);
-      const totalDeals = top50.reduce((s, s2) => s + s2.deals, 0);
-
-      html += '<div class="dia-grid dia-grid-4" style="gap: 12px; margin-bottom: 20px;">';
-      html += infoCard({ title: 'Total Sellers', value: fmtN(diaSellers.length), sub: 'in dataset', color: 'red' });
-      html += infoCard({ title: 'Top Seller', value: top50[0] ? (top50[0].name.substring(0, 30) || '—') : '—', sub: top50[0] ? fmt(top50[0].volume) + ' volume' : '', color: 'green' });
-      html += infoCard({ title: 'Avg Deal Size', value: fmt(Math.round(totalVolume / Math.max(1, totalDeals))), sub: 'across top 50', color: 'cyan' });
-      html += infoCard({ title: 'Total Deals', value: fmtN(totalDeals), sub: 'transactions (top 50)', color: 'purple' });
-      html += '</div>';
+      html += _diaPlayersErrorBanner();
+      html += _diaPartyTiles('Sellers', diaSellers, top50, 'red');
 
       html += '<div class="table-wrapper"><div class="data-table">';
       html += '<div class="table-row" style="font-weight: 600; border-bottom: 2px solid var(--border);">';
-      html += '<div style="flex: 2;">Seller Name</div>';
-      html += '<div style="flex: 1;">Type</div>';
+      html += '<div style="flex: 3;">Seller Name</div>';
       html += '<div style="flex: 1; text-align: right;">Deals</div>';
       html += '<div style="flex: 1; text-align: right;">Total Volume</div>';
       html += '<div style="flex: 1; text-align: right;">Avg Cap Rate</div>';
@@ -10919,8 +11298,7 @@ function renderDiaPlayers() {
       top50.forEach((s2, idx) => {
         const avgCapRate = s2.capRates.length > 0 ? s2.capRates.reduce((s, cr) => s + cr, 0) / s2.capRates.length : 0;
         html += '<div class="table-row clickable-row" onclick=\'showDetail(' + safeJSON(s2.records[0]) + ', "sales-transaction")\'>';
-        html += '<div style="flex: 2;"><span style="color: var(--text2); margin-right: 8px;">#' + (idx + 1) + '</span>' + entityLink(s2.name, 'contact', null, 'dialysis') + '</div>';
-        html += '<div style="flex: 1;">' + esc(s2.type || '—') + '</div>';
+        html += '<div style="flex: 3;"><span style="color: var(--text2); margin-right: 8px;">#' + (idx + 1) + '</span>' + entityLink(s2.name, 'contact', null, 'dialysis') + _diaVariantNote(s2) + '</div>';
         html += '<div style="flex: 1; text-align: right; color: var(--accent);">' + s2.deals + '</div>';
         html += '<div style="flex: 1; text-align: right;">' + fmt(s2.volume, 'currency') + '</div>';
         html += '<div style="flex: 1; text-align: right; color: var(--text2);">' + pct(avgCapRate / 100) + '</div>';

@@ -16,6 +16,7 @@ const {
   shapePropertyContext,
   boundHttpToolResult,
 } = await import('../mcp/http-response-bound.js');
+const { negotiateProtocolVersion } = await import('../mcp/server.js');
 
 // A row big enough that a modest array of them blows past the ceiling.
 function bigRow(i) {
@@ -241,6 +242,17 @@ describe('boundHttpToolResult — shaper + guard, per tool', () => {
     };
     const out = boundHttpToolResult('get_daily_briefing', result, {});
     assert.equal(jsonLen(out) <= MAX_HTTP_RESPONSE_CHARS, true);
+  });
+});
+
+describe('MCP protocol negotiation', () => {
+  it('returns 2025-03-26 when the client requests an older protocol', () => {
+    assert.equal(negotiateProtocolVersion('2024-11-05'), '2025-03-26');
+  });
+
+  it('echoes streamable-HTTP compatible client protocol versions', () => {
+    assert.equal(negotiateProtocolVersion('2025-03-26'), '2025-03-26');
+    assert.equal(negotiateProtocolVersion('2025-06-18'), '2025-06-18');
   });
 });
 

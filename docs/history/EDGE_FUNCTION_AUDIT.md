@@ -90,7 +90,22 @@ canonical.
 | Function | v | Last update | Verdict | Intent / current state |
 |---|---|---|---|---|
 | `bulk-import-awards` | 3 | 2026-04-19 | KEEP | Bulk upsert into `federal_lease_awards`. Narrow, idempotent, healthy. |
-| `sam-entity-lookup` | 3 | 2026-04-19 | KEEP | SAM.gov UEI / name lookup, batch enrichment of `true_owners`. `verify_jwt: true`. Real, healthy. |
+| `sam-entity-lookup` | 3 | 2026-04-19 | KEEP | SAM.gov UEI / name lookup, batch enrichment of `true_owners`. `verify_jwt: true`. ~~Real, healthy.~~ Real, but **rate-limited to ~10 lookups/day** — see the note below. |
+
+> **⚠️ `sam-entity-lookup` — SUPERSEDED 2026-08-20. The key is VALID; the constraint is a RATE LIMIT.**
+> (This audit never carried the `401 API_KEY_INVALID` claim that circulated elsewhere; the correction is
+> recorded here because the "Real, healthy" verdict reads as full throughput.) Live evidence: 281
+> `sam_entities` (53 in the last 30 days), 497 contacts with `data_source='sam'`, owners stamped
+> `sam_checked` as recently as 2026-08-19. Per GSA's published tier table a non-federal personal key with
+> **no role** gets **10 requests/day** (with a role: 1,000). A live probe returns
+> `{"rate_limited":true,"api_calls":0,"next_access":"…00:00Z"}` and stops on the first owner. The fail-soft
+> design (an API error skips the `sam_checked` mark so the owner retries) makes a ~98% rate-limited pipeline
+> indistinguishable from a healthy slow one — **measure `sam_checked` stamps per day, never "is the cron
+> active"**, and never grade this function healthy on liveness alone. Bulk alternative built 2026-08-20: the
+> PUBLIC MONTHLY entity extract is ONE request covering all registrants
+> (`GovernmentProject/src/ingest_sam_public_extract.py` + `gov_match_sam_public_extract`), carrying POC
+> name+title but NOT email/phone (FOUO, federal-account-only). See
+> `GovernmentProject/docs/RUNBOOK_sam_public_extract_cron.md`.
 
 ## Gap register — work to triage one-by-one
 
