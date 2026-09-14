@@ -51,11 +51,14 @@ groups seen, 232 merged, 2 routed to review (TD Bank / U.S. Bank). **Parity conf
 the merged-loser counts. No property silently moved to a different real owner. dia confirmed untouched
 (already zero exact AND fuzzy dups, no build needed).
 
-Migration: `supabase/migrations/government/20261013120000_gov_id3b_owner_variant_merge.sql`. Offline
-structural guard: `test/id3b-owner-variant-merge.test.mjs` (9/9 pass, asserts guard checks present,
-no second merge mechanism invented, flagged groups never merged, idempotent review inserts, no
-destructive DELETE). `PLANNED-BACKLOG.md` ID3b and RO2a rows marked executed with the live numbers.
-`ownership-truth-pipeline-state.md` Stage 3 refreshed to note the entity-dedup residue this closes.
+Migration: committed in `government-lease` (`sql/20261013_gov_id3b_owner_variant_merge.sql`) --
+the owning repo per ID3a-d, not life-command-center. **Correction, 2026-09-14:** this file was
+first committed to life-command-center's now-retired `supabase/migrations/government/` directory
+by mistake; PR #2420's CI caught it (`test/gov-migrations-directory-retired.test.mjs` -- the exact
+regression guard ID3a-d built for this exact mistake). Moved to `government-lease` where it
+belongs; the live database change itself was correct and unaffected throughout. `PLANNED-BACKLOG.md`
+ID3b and RO2a rows marked executed with the live numbers. `ownership-truth-pipeline-state.md`
+Stage 3 refreshed to note the entity-dedup residue this closes.
 
 No Railway redeploy needed (DB-only, no application consumer changed). Left for a human: the 26
 review-lane rows (`gov_owner_merge_review_log`); Stage 3's remaining `OWN-T0b/c/d/f/g` (417
