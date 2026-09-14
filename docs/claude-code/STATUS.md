@@ -94,6 +94,89 @@ immediately" rule) plus a test file and two docs. The actual Python producer fix
 `ABC`/`XYZ` template-shaped names) is filed as **`OWNERGAP1-producer`**, cross-repo, not shippable from this
 session's read-only `Dialysis` access.
 
+## 2026-09-14 — OC-v2 de-risked by measuring triage before sending it (Cowork)
+
+Rather than send OC-v2 blind, forced a triage dry run against the deployed handler
+(`tranquil-delight` `cf04ae04ae52`, which reports `skipped: flag_off` / `registry_state: null` honestly
+and offers `?force=1`). Filed **two realistic notes** first, because the only queued note was meta
+("confirming the funnel accepts notes") and a meta note is a bad test of a classifier.
+**Result — `scanned 3, triaged 1, routed 1, unclassified 2, errors 0`:** an unambiguous **dialysis bug
+report** naming a route, a lane and a mechanism came back `unclassified`
+(`no_deterministic_rule_matched_and_model_declined`); the one success was a comps idea routed
+`deterministic`ally but with **`lane: null`**, despite "government deals" and "GSA lease".
+**So: only keyword rules fire, they lack market-brief/dialysis vocabulary, lane is never populated, and
+the model arm declines** (`triage_source: null` on both misses). ⚠️ **Flipping the flag as-is would route
+about one note in three and lose the rest silently** — the funnel would look alive while still dropping
+most of what Scott puts in it. MB-a measured Ollama reachable from Railway in the RSS path, so OC-v2 must
+check whether the TRIAGE path reaches the model at all: unreachable is a wiring bug, conservative is a
+prompt question, and they have different fixes. Both test notes left in the queue as fixtures.
+
+## 2026-09-14 — OWN-T0d shipped: 11 tombstone-duplicate-current properties cleaned up (Cowork)
+
+Continuing the ownership-truth-pipeline work after OWN-T0c's revert, picked up OWN-T0d next (my own
+recommendation, approved). Re-measured `v_lcc_property_multi_current` on LCC Opps: `tombstone_duplicate_current`
+unchanged at 11 properties from the 2026-09-02 audit (unlike OWN-T0c's population, which had nearly tripled).
+
+Reviewed existing machinery *before* building anything (the lesson from OWN-T0c) and found the fix already
+built and deployed: `lcc_repair_tombstone_portfolio_facts(p_dry_run, p_batch)` (P175) on `lcc_entity_portfolio_facts`
+-- finds current-fact rows still sitting under a tombstoned (`entities.merged_into_entity_id is not null`)
+entity_id where the survivor already holds an equal-or-better current row for the same property, and
+dedup-deletes the ghost row (or repoints it if the survivor lacks the property). It explicitly leaves alone
+any case where the ghost claims current and the survivor claims ended -- a genuine conflicting claim, not a
+duplicate -- for `v_lcc_portfolio_ownership_conflict` to surface separately, so it never over-corrects.
+
+Dry run found **12** ghost fact rows (not 11 properties -- one extra, gov/1708, was bucketed under the
+*other* defect class `multi_current_distinct_parties` by the view because it also carries a genuine second
+rival owner; the repair function operates at the fact-row level so it caught it anyway). Ran live, batch tag
+`own_t0d_2026-09-14`, fully logged to `lcc_p175_portfolio_repair_log` (old-row snapshot per fact) and
+reversible via `lcc_unrepair_tombstone_portfolio_facts('own_t0d_2026-09-14')`.
+
+Re-measured after: `tombstone_duplicate_current` **0** (was 11/12). `multi_current_distinct_parties` unchanged
+at 747/\$876,981,134, confirming no genuine rival-party conflict was touched. gov/1708 now correctly shows
+exactly its 2 real current owners (The Greystone Group vs. the Silverstone Company survivor) with only the
+duplicate Silverstone ghost row gone. No migration needed -- the repair function pre-existed; this was a
+live-data operation only, documented in `PLANNED-BACKLOG.md`'s OWN-T0b/c/d/f/g row and
+`docs/architecture/ownership-truth-pipeline-state.md`.
+
+Housekeeping: checked `docs/claude-code/responses/` -- empty, nothing to reconcile.
+
+Next recommendation: Stage 4's contact-linkage gap (13% owner-to-person linkage), or the smaller
+mechanical OWN-T0f (`ownership_source` per-row UUID noise) / OWN-T0g (`lcc_finalize_entity_portfolios`
+supersession-window gap) follow-ons. OWN-T0b/c (1,183 `duplicate_entity` merges) stay blocked on the
+trailing-"The" human decision from the prior entry.
+## 2026-09-14 — MB2e verified live; then found the operator funnel has no consumer (Cowork)
+
+**MB2e confirmed independently.** All **13 feeds now contribute ≥1** — Federal Register (GSA) 6→**4**
+after cutoff, Tax Foundation 15→**5** — **zero feeds at zero**, zero open alerts of either kind, and the
+11:15 UTC cron genuinely calls **both** monitors (checked the cron command, not the claim). The feed
+thread is complete and self-monitoring. No doc entry was needed for the confirmation itself.
+**Closed a stale blocker:** `MB2a` still read `⛔ blocked on edge-function deploy` two days after that
+deploy landed (v21 → v25 since). Now ✅ — and it is exactly the stale-dated-blocker class **XB2** exists
+to catch automatically.
+🚨 **The operator funnel accepts notes and nothing processes them.** OC-v's blocker #1 IS resolved —
+the standalone MCP redeploy happened, `log_operator_note`/`get_operator_inbox` are live, intake works
+end to end. But: `operator_notes` holds **1** note, filed 2026-09-12, still `open` / `note_type=null` /
+`routed_to=null`; the **`OPERATOR_NOTE_TRIAGE` registry row does not exist at all** (OC2 shipped the
+handler and never registered the flag, so it cannot be turned on); and there is **no triage cron**.
+This is worse than not having the funnel — Scott was told it is live, so a note filed there looks
+captured, is captured, and is then silently ignored. Same class as a dead feed reporting healthy.
+→ **OC-v2** (`prompts/OC-v2-notes-go-in-and-nothing-happens.md`).
+
+## 2026-09-14 — MB2e: two more feeds green + contributing nothing (Federal Register GSA, Tax Foundation)
+
+MB2b's `items_after_cutoff` column found its next two customers on day one. Same class as FEED2
+(a fixed window vs. a slower producer cadence, worst on Monday): `maxAgeHours` set 24*7 on both
+`government/Federal Register (GSA)` and `tax_policy/Tax Foundation` (measured: newest item 82h/92h
+old, 5 items each land inside 7d, 0 inside 72h). Deployed to LCC Opps (v24 → v25), body re-read to
+confirm. Forced live: both feeds went from `items_after_cutoff: 0` to **4** and **5** respectively
+on the same day's real feed. Monitor half also shipped (migration `20260914130000`):
+`v_market_brief_feed_health_no_contribution` + `lcc_check_market_brief_feed_no_contribution` — a
+DISTINCT alert_kind from `market_brief_feed_stale`, counting consecutive checks (never calendar
+days, FEED2's fix applied from the start) that parsed items but contributed 0; rides the same
+11:15 UTC cron. Guard `test/mb2e-feed-cutoff-window.test.mjs`. Full suite green (6,212 tests).
+Backlog **MB2e** ✅; canonical lesson filed in `docs/architecture/data-coherence-invariants.md` I11
+section (fixed-window-vs-cadence is a class, not a one-off).
+
 ## 2026-09-14 🚨 — The tax feed has written 228 fabricated owner names into production, and the owner gap is NOT recoverable (Cowork)
 
 Set out to size the recoverable half of **PDR2-noowner** (the 4,021 dia properties — **34% of the book** — that
@@ -2245,131 +2328,7 @@ New row **ID2b-caps** with prompt `prompts/ID2bcaps-comps-engine-operator-id-pas
 cannot change — proven on 5 subjects), group bands on the id, supersede the text-keyed fragments. Gate: Fresenius 63+11 →
 one band n=74, DaVita 67+9 → n=76, whole-market n≈167 unmoved.
 
-## 2026-09-12 — HP1 P0 reconciled: the Today 500 is fixed, DEPLOYED and verified — and the "See all (N)" badge was never honest
 
-Filed `responses/HP1 desktop response.docx` → `done/`; prompt → `prompts/done/`. **PR #2358 merged
-(`42158f17`) and LIVE — `/version` reads `42158f174956`** (probed from LCC Opps via `net.http_get`,
-the sandbox-reachable route), so this one is *running*, not merely merged.
-
-**What shipped, verified live in the merged source rather than from the response:** `Promise.all` →
-**`Promise.allSettled`** with a `settledQueryResult()` mapper (1b); explicit **`timeoutMs: 20000`** on
-the seller-prospect read and 12 s on the other three ops calls (1a); **`countMode` `'exact'` →
-`'estimated'`** on all four (1c); and a real per-lane failure state (1e) — `today-sections.js` now
-returns **`source_error`** per section, `app.js` renders *"This section is unavailable right now"*
-instead of the blanket "Today unavailable — HTTP 500", and `assembleTodaySections` folds a
-per-request degradation note into the existing **`named_gaps`** contract reading *"Section shown
-empty, not exhausted."* That last distinction is the whole point: before this, a lane whose source
-died rendered **"Nothing here right now. ✓"** — a green checkmark over a failure. CC also found and
-wrapped a **seventh** previously-unguarded `opsQuery` in the same handler (the entity-name lookup),
-which the brief had not named. Guard `test/today-sections-degraded-source.test.mjs` asserts a thrown
-source empties exactly its own lane, leaves the other two intact, and the endpoint returns **200**;
-full suite 6,013 pass / 0 fail / 6 skipped.
-
-🔴 **NEW FINDING, mine, found while reconciling — `total_open` is the CAPPED PAGE LENGTH, not the
-population, and two of the three "See all (N) →" badges under-report.** Every section returns
-`total_open: all.length` (`today-sections.js:79/103/182`) where `all` is the rows the query
-returned — and every source query carries **`limit=200`**. Measured live 2026-09-12:
-
-| lane | badge reads | true population | honest? |
-|---|---:|---:|---|
-| Significant (`v_lcc_seller_prospect_queue`) | **200** | **517** | ❌ under-reports 61% |
-| Urgent (`v_lcc_bd_worklist` contact_writeback half) | **≤200** | **1,587** | ❌ under-reports 87% |
-| Important (`bd_opportunities` open) | 50 | 50 | ✅ (below the cap) |
-
-**The module's own header promises the opposite** — *"`total_open` (the full population, for the
-'See all →' link)"* — and cites **P159a**, the rule that a rendered count and a population must be
-two distinct numbers and never blended. It is the honest-counts rule (Consumption Layer §5) failing
-inside the module written to enforce it. **Be precise about the blast radius: the RANKING is not
-affected.** Each query is `order=rank_value.desc` before the `limit=200`, so the eight rows rendered
-really are the top eight; only the badge lies.
-
-⚠️ **And this corrects my own filing, in place.** HP1's 1c said *"the only consumer of `total_open`
-is the 'See all (N) →' button text"*, which implies the PostgREST header count fed it. **It never
-did** — CC checked and reported correctly that `.count` is read nowhere in the handler, which is
-exactly why the downgrade to `'estimated'` was safe. What that check actually exposed is that the
-exact `COUNT(*)` we were paying ~750–800 ms for on every page load was **pure waste**, and the badge
-has been wrong since UX-T1a-today shipped. **Re-enabling `count=exact` is NOT the fix** — an
-estimated planner count over one of these views is the documented ~58× trap, and an exact one
-re-imposes the cost 1c just removed. Filed as **HP1-badge**: either a cheap dedicated count-only
-read, or render the badge as *"top 200"* and stop claiming a total. 👤 A count nobody can afford to
-compute may simply not belong on the card.
-
-**1d re-measured and correctly NOT built.** Post-1c the 200-row page is **~1.2 s warm** and the
-separate exact COUNT that 1c removed was **~0.8 s** (my own pre-fix measurement was 815 ms + 750 ms;
-wall-clock on this box moves 2–4× between sessions, so read the structural facts, not the
-milliseconds). The structural cost is untouched — seq scans on `entities` / `lcc_property_attributes`
-/ `lcc_entity_portfolio_facts` plus the `activity_events` subplan at `loops=1518` — so the
-materialized-view question stays open as **HP1-1d** rather than being taken on a number that moved.
-
-**Still open, unchanged:** **P1** (deal-backbone freshness + the deal-status confirmation lane) is
-held 👤 pending Scott's determination of whether the frozen transaction stages are a Salesforce
-hygiene gap or a Power Automate scope gap — *do not assume*. **P2** (Inbox routing/ranking, My Work
-re-rank onto the shared function) untouched. The 12 s front-end race in `renderTodaySections` was
-correctly left alone.
-
-⚠️ **Deploy note:** the doctrine is *redeploy BOTH Railway services*. `tranquil-delight` is confirmed
-on `42158f17` and serves this endpoint and `app.js`; the standalone MCP service does not serve
-`today_sections`, so the surface is fixed either way — but confirm the MCP redeploy before assuming
-any other engine change in the same merge is live.
-
-**Next:** HP1-badge (smallest, and it is an honest-counts defect on an operator surface), then P2's
-inbox routing. P1 stays 👤-blocked.
-## 2026-09-12 — PR-scanner-3 shipped: `county_records_needed`, the sixth ownership-history-lane action
-
-Re-measured live before building (unchanged from the 2026-09-12 sizing already in `PLANNED-BACKLOG.md`):
-of gov's 68 `human_actionable` `mismatch`/`all_guarded` tasks in `v_lcc_ownership_history_lane_split`,
-27 (40%) carry no trustworthy `parcel_records`/`tax_records`/`deed_records` on file; fleet-wide (254
-tasks) it is 126 (49.6%). The spec's `ai_gpt4o_presumed` model-leg label does not exist as a literal in
-gov's tables — the live tag is `ai_recall_gpt` (11 deed / 23 parcel / 14 tax rows), used instead.
-Shipped as a RECLASSIFICATION inside the existing split (mirroring A3's `sponsor_spe` precedent) rather
-than a new lane/table. Cross-database constraint (the view is on LCC Opps, the source tables on the gov
-project) solved with a small mirror table (`lcc_gov_property_record_coverage`) synced by
-`api/_shared/gov-property-record-coverage.js`; the SQL CASE in the view stays the single owner of the
-classification, and an unsynced property (`IS FALSE`, never `= false`) is left at its base action —
-never guessed into the reclassification on an absence of information. Reuses B1's existing
-`lcc_chain_human_value_floor()` unchanged.
-
-Predicted-vs-actual delta was **exact**: `mismatch` 192→101, `all_guarded` 62→27,
-`county_records_needed` 0→126, `human_actionable` held at 68 (split 37/4/27), `agrees`/`sponsor_spe`
-untouched. Wired the first live consumer of PR-scanner-5's previously-unwired `/api/recorder-portal`
-route: a "County portal →" button on these cards (`researchOpenCountyPortal`, `ops.js`).
-
-Migration `supabase/migrations/20260912150000_lcc_pr_scanner3_county_records_needed_action.sql`
-(applied live to LCC Opps + coverage table seeded for today's 254-property population). Guards:
-`test/ownership-lane-split.test.mjs` (6 new/updated assertions) + `test/gov-property-record-coverage.test.mjs`
-(7 behavioural tests, injected deps). Full suite: 6,022 pass / 0 fail (6 pre-existing skips, unrelated).
-
-**Not done — an operator/scheduling step:** `syncGovPropertyRecordCoverageForOwnershipLane()` is not
-yet wired to a cron; today's mirror was seeded once against the live population this measurement
-covers. As PR-scanner-1/2's capture writers get adopted (still 0 rows on either domain per the
-2026-09-12 research-workbench.md §7c note), the mirror needs a periodic re-sync to stay current.
-Docs updated in the same change: `PLANNED-BACKLOG.md` (row `PR-scanner-3`), `research-workbench.md`
-§7d, `ownership-history-lane.md` §5.
-## 2026-09-12 — ID2b partially shipped: market brief's operator-count source switched to `operator_id`; comps/CM/dossier measured and deferred
-
-Executed `prompts/ID2b-consumer-switch-to-operator-id.md`. **Re-measured the population first: the real grep hit is
-96 views, not 45** — most are review/audit queues where raw operator text IS the deliverable (switching would hide
-the ambiguity they surface), correctly left alone. **Shipped:** `v_market_brief_cms_operator_counts` (the market
-brief's only CMS-operator-count source) now groups on `properties.operator_id` (survivor-resolved via
-`dia_operator_survivor`), fill-blanks fallback to raw text for the 14.7% of clinics with no resolved operator.
-Measured live: row-count parity 6,695→6,695, `Satellite Healthcare`(54)+`Satellite Dialysis`(14)→one bucket of 69.
-`market-brief-facts.js` needed no code change — it was already agnostic to the grouping key, so it is unblocked.
-Migration `supabase/migrations/dialysis/20260912120000_dia_id2b_market_brief_operator_id.sql`; guard
-`test/id2b-consumer-operator-id.test.mjs` (6 tests, incl. a repo-wide class guard against a NEW module grouping on
-raw operator text). Full suite 6,017/0/6-skipped.
-
-**Deferred, named, not silently declared done** (per the prompt's own "ship the highest-value subset, name the
-rest" instruction): `mcp/comps-tools.js` fuzzy comp SELECTION (`operatorTier`/`tenantMatches`) was read — its
-substring filter already tolerates most alias variance, but the required 5-subject live comp-set before/after diff
-was NOT run (needs a live MCP tick invocation this session's budget didn't reach) — filed **ID2b-c**, Scott's call.
-`cm_dialysis_operator_unit_economics`/`v_dia_econ_operator_benchmark` already ILIKE-bucket via `dia_operator_bucket()`
-(so the exact Fresenius/DaVita string split mostly doesn't occur there today, but it's a heuristic, not the
-registry); `cm_dialysis_available_by_tenant[_q]` and `cm_dialysis_industry_participants` still group on raw/
-precomputed text — filed **ID2b-cm**. `dossier-generator.js`/`rent-projection.js`/`team-context.js`/
-`sidebar-pipeline.js` and the ~85 remaining views not read this round — filed **ID2b-remaining**/**ID2b-mods**.
-Full report: `docs/audits/ID2b_OPERATOR_ID_CONSUMER_SWITCH_2026-09-12.md`. Branch `claude/dreamy-pascal-i97j44`.
-
-
-> **📦 ARCHIVE (2026-09-14, twelfth span):** a further run of 2026-09-12 entries (ID2b scoped) was moved **verbatim** to
-> [`docs/history/STATUS_claude-code_2026-09-12_id2b-scoped_tail4.md`](../history/STATUS_claude-code_2026-09-12_id2b-scoped_tail4.md).
+> **📦 ARCHIVE (2026-09-14, thirteenth span):** a further run of 2026-09-12 entries was moved **verbatim** to
+> [`docs/history/STATUS_claude-code_2026-09-12_tail5.md`](../history/STATUS_claude-code_2026-09-12_tail5.md).
 > Nothing was dropped; every still-open item it named is tracked in `PLANNED-BACKLOG.md`.

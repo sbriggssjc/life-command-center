@@ -438,6 +438,21 @@ Two general lessons worth carrying into any I11 detector:
 A false alarm is not a harmless failure mode: a monitor that cries wolf every Monday is one nobody reads
 by the third week, which returns the system to exactly the silence I11 was written to end.
 
+**FEED2's twin lives in the CUTOFF, not the STALENESS CHECK — MB2e, 2026-09-14.** A fixed calendar
+window (`maxAgeHours`) applied to a source whose publication cadence is slower than that window is
+empty by construction on some days, for the identical reason FEED2's streak was: the checker's clock and
+the producer's clock disagree. Where FEED2's disagreement was *weekday cron vs daily check*, MB2e's is
+*a 72h news cutoff vs a feed that publishes a few times a week* — Federal Register (GSA) and Tax
+Foundation both parsed real items and contributed **zero** on a Monday check (newest item 82h / 92h
+old), because Monday-minus-72h excludes everything published before Friday morning. Fixed the same way
+twice already worked: size the window from the source's own measured cadence (168h/7d, not a global
+widening of the 72h news default — MB2b's ESRD fix is the precedent), and give the MONITOR a way to see
+the class itself (`v_market_brief_feed_health_no_contribution`, a DISTINCT alert from `market_brief_
+feed_stale`, counting consecutive CHECKS never calendar days, with `items_after_cutoff IS NULL` rows
+never counting toward the streak in either direction). **The general rule: whenever a fixed window is
+compared against a producer's cadence — a staleness check OR a content cutoff — ask what the window
+looks like on the worst day of that producer's cycle, not the best.**
+
 ### I10 — A one-shot backfill is not a producer
 
 If the mechanism that filled a store was a migration or a script, the store **decays from the moment

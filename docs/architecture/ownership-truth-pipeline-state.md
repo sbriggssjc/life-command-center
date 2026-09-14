@@ -96,10 +96,14 @@ pipeline — as of the last version of this page. **It is now mostly closed:**
   but wrong `type:'person'` stamp that was trusted verbatim. Fix: `contactEntityType()` now treats an
   explicit `type:'person'` as a floor, not an absolute — `hasFirmSuffix()` can still override it to
   `'organization'`, one-directional only. `owner-role-classification.md` §9i.
-- **`[OWN-T0b/c/d/f/g]`** 🔴 residue named in the 2026-09-02 audit: no LCC mirror of
-  `v_ownership_transitions_portfolio`; **417** `duplicate_entity` merges still needed (the same
-  `Duke Realty` class blocking Stage 2's A2 residue); 11 tombstones still holding a live current fact
-  beside their survivor; per-row UUID noise in `ownership_source`; `lcc_finalize_entity_portfolios`
+- **`[OWN-T0b/c/d/f/g]`** 🔴 residue named in the 2026-09-02 audit, re-measured 2026-09-14 (b/c/f/g
+  still open, d shipped): no LCC mirror of `v_ownership_transitions_portfolio`; `duplicate_entity`
+  merges re-measured at **1,183** live (the same `Duke Realty` class blocking Stage 2's A2 residue) --
+  the trailing-"The" framing this residue was originally sized under is now a contested, undecided
+  question (see `PLANNED-BACKLOG.md`'s OWN-T0b/c/d/f/g row); ✅ **d shipped 2026-09-14** — the 11
+  tombstones (12 ghost fact rows) still holding a live current fact beside their survivor were cleaned
+  up via the existing, already-deployed `lcc_repair_tombstone_portfolio_facts` (P175), reversible via
+  batch tag `own_t0d_2026-09-14`; per-row UUID noise in `ownership_source`; `lcc_finalize_entity_portfolios`
   supersedes only within its own payload on gov and not at all on dia.
 - **`[OWN-T0h]`** 🟢 two different conflict-property denominators (756 vs 2,097) are both live and
   disagree by nearly 3×; undecided which the panel and backlog should quote.

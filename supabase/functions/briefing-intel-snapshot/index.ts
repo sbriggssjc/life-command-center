@@ -229,6 +229,15 @@ const RSS_FEEDS: Record<string, { url: string; source: string; redirect?: boolea
     {
       source: "Federal Register (GSA)",
       url: "https://www.federalregister.gov/api/v1/documents.rss?conditions%5Bagencies%5D%5B%5D=general-services-administration&per_page=20",
+      // MB2e (2026-09-14): measured live -- newest item was 82h old on a
+      // Monday check (5 items land inside 7d, 0 inside 72h). This feed
+      // publishes a few rulemaking/notice documents a week, not daily, so
+      // the 72h news cutoff was structurally empty on the day-after-a-
+      // weekend check that matters most. 168h (7d) is the measured-correct
+      // window: it captures the real weekly cadence without approaching the
+      // 30d ESRD override (a materially slower query). Do not widen further
+      // without re-measuring -- see the maxAgeHours comment above RSS_FEEDS.
+      maxAgeHours: 24 * 7,
     },
     { source: "Government Executive", url: "https://www.govexec.com/rss/all/" },
   ],
@@ -239,7 +248,14 @@ const RSS_FEEDS: Record<string, { url: string; source: string; redirect?: boolea
     { source: "REBusinessOnline", url: "https://rebusinessonline.com/feed/" },
   ],
   tax_policy: [
-    { source: "Tax Foundation",   url: "https://taxfoundation.org/feed/" },
+    {
+      source: "Tax Foundation",   url: "https://taxfoundation.org/feed/",
+      // MB2e (2026-09-14): same cadence-vs-window mismatch as Federal
+      // Register (GSA) above -- newest item 92h old on a Monday check, 5
+      // items land inside 7d, 0 inside 72h. Tax Foundation posts a few times
+      // a week, not daily. 168h measured-correct; see the note above.
+      maxAgeHours: 24 * 7,
+    },
   ],
 };
 
