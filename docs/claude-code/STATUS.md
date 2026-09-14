@@ -93,6 +93,22 @@ behaviour exactly (encoded as the corresponding test cases).
 
 Not touched, per the task's exclusions: PDR12 (Rock Hill planner), PDR14/14b machinery, the 167
 `needs_human` entities, any domain-DB write, any `GENERATED`-headed or canon/surface file.
+## 2026-09-14 — MB2b/MB2c/FEED2 landed; the new column immediately found two more silent feeds (Cowork)
+
+**Verified live after CC's PR #2426 (v23 → v24).** `items_after_cutoff` column present, PRSS correctly
+**off**, zero open feed alerts, ESRD now contributes (1 of 1) under its `maxAgeHours = 30d`. CC's PRSS
+judgment stands and is the right call — the Google News **query** is the blocker, not the plumbing.
+🚨 **On its first day the new column exposed two feeds that are green and contribute nothing:**
+**Federal Register (GSA)** 6 items → **0 after cutoff**, and **Tax Foundation** 15 → **0**. MB2b set
+`maxAgeHours` on ESRD only. Measured both directly: FR GSA newest item **82h** old, Tax Foundation
+**92h** — so 0 within 72h, but **5 each within 7 days**. Live consequence: `government` contributes from
+ONE feed (FEED1 only half-fixed it) and **`tax_policy` is empty in the daily email** while reading green.
+⭐ **This is FEED2's twin.** FEED2 was a monitor counting calendar days against a weekday producer; this
+is a cutoff counting calendar hours against feeds that publish a few times a week. A fixed calendar
+window aimed at a slower-cadence source is empty by construction on some days, and **Monday is worst —
+72h on a Monday excludes everything before Friday morning.** Today is Monday. The 72h default is a NEWS
+window and we keep pointing it at non-news sources. → **MB2e** (`maxAgeHours = 7d` on both, then a
+distinct `no_contribution` alert arm so the monitor catches this class itself).
 
 ## 2026-09-14 — MB2b/MB2c/FEED2: fixed the instrumentation, then judged PRSS off (Claude Code)
 
