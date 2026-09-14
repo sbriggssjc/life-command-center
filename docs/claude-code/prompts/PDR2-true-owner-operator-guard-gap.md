@@ -1,4 +1,18 @@
-# PDR2 — close the operator-as-owner guard gap in `assemblePropertyPacket` (systemic, ~4,026 properties)
+# PDR2 — close the operator-as-owner guard gap in `assemblePropertyPacket` (systemic, **7,937** dia properties)
+
+> ⚠️ **HEADLINE CORRECTED 2026-09-14 (Cowork re-measure).** This prompt was written on 2026-09-11 quoting
+> *"~4,026 properties"*. That is the **no-fallback subset**, not the total. Re-measured live in Dialysis_DB:
+> **7,937** properties have a `true_owner_id` pointing at an `is_operator_not_owner=true` row, of which
+> **4,022** also have `recorded_owner_id IS NULL` — i.e. the correctly-guarded paths have **nothing to fall back
+> to** and render no owner at all. Top offenders: **Fresenius Medical Care 3,077 · DaVita Inc. 2,625 · DaVita
+> Kidney Care 1,182 · U.S. Renal Care 343 · Dialysis Clinic Inc 256 · American Renal Associates 221** — so this is
+> not one bad DaVita placeholder row, it is **every major operator**. §1 still stands: re-measure before building,
+> and do not quote these figures either without re-running them.
+>
+> **Why this outranks the rest of the queue:** for a net-lease broker the whole job is identifying and calling the
+> **owner**. `get_property_context` currently answers *"the owner is DaVita"* when DaVita is the **tenant**. Two
+> other readers in this same repo already guard it correctly (`assemblePropertyDossier` §1.6,
+> `sf-link-reconcile.js::isOperator()`), so this is a **one-file inconsistency, not a data problem**.
 
 **Repo: `life-command-center`.** Code-only read-path fix; no domain-DB writes expected.
 
