@@ -17,6 +17,39 @@
      archive pointer — never reword or drop an entry to make room.
      ============================================================================ -->
 
+## 2026-09-14 — OWN-T0d shipped: 11 tombstone-duplicate-current properties cleaned up (Cowork)
+
+Continuing the ownership-truth-pipeline work after OWN-T0c's revert, picked up OWN-T0d next (my own
+recommendation, approved). Re-measured `v_lcc_property_multi_current` on LCC Opps: `tombstone_duplicate_current`
+unchanged at 11 properties from the 2026-09-02 audit (unlike OWN-T0c's population, which had nearly tripled).
+
+Reviewed existing machinery *before* building anything (the lesson from OWN-T0c) and found the fix already
+built and deployed: `lcc_repair_tombstone_portfolio_facts(p_dry_run, p_batch)` (P175) on `lcc_entity_portfolio_facts`
+-- finds current-fact rows still sitting under a tombstoned (`entities.merged_into_entity_id is not null`)
+entity_id where the survivor already holds an equal-or-better current row for the same property, and
+dedup-deletes the ghost row (or repoints it if the survivor lacks the property). It explicitly leaves alone
+any case where the ghost claims current and the survivor claims ended -- a genuine conflicting claim, not a
+duplicate -- for `v_lcc_portfolio_ownership_conflict` to surface separately, so it never over-corrects.
+
+Dry run found **12** ghost fact rows (not 11 properties -- one extra, gov/1708, was bucketed under the
+*other* defect class `multi_current_distinct_parties` by the view because it also carries a genuine second
+rival owner; the repair function operates at the fact-row level so it caught it anyway). Ran live, batch tag
+`own_t0d_2026-09-14`, fully logged to `lcc_p175_portfolio_repair_log` (old-row snapshot per fact) and
+reversible via `lcc_unrepair_tombstone_portfolio_facts('own_t0d_2026-09-14')`.
+
+Re-measured after: `tombstone_duplicate_current` **0** (was 11/12). `multi_current_distinct_parties` unchanged
+at 747/\$876,981,134, confirming no genuine rival-party conflict was touched. gov/1708 now correctly shows
+exactly its 2 real current owners (The Greystone Group vs. the Silverstone Company survivor) with only the
+duplicate Silverstone ghost row gone. No migration needed -- the repair function pre-existed; this was a
+live-data operation only, documented in `PLANNED-BACKLOG.md`'s OWN-T0b/c/d/f/g row and
+`docs/architecture/ownership-truth-pipeline-state.md`.
+
+Housekeeping: checked `docs/claude-code/responses/` -- empty, nothing to reconcile.
+
+Next recommendation: Stage 4's contact-linkage gap (13% owner-to-person linkage), or the smaller
+mechanical OWN-T0f (`ownership_source` per-row UUID noise) / OWN-T0g (`lcc_finalize_entity_portfolios`
+supersession-window gap) follow-ons. OWN-T0b/c (1,183 `duplicate_entity` merges) stay blocked on the
+trailing-"The" human decision from the prior entry.
 ## 2026-09-14 — MB2e verified live; then found the operator funnel has no consumer (Cowork)
 
 **MB2e confirmed independently.** All **13 feeds now contribute ≥1** — Federal Register (GSA) 6→**4**
