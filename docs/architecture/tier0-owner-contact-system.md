@@ -10,6 +10,17 @@
 > re-measured live and §5/§6 corrected **2026-09-12 (Cowork)** — a real bug was found keeping
 > `TIER0_AUTO_ATTACH` silently off for 16 days despite the registry saying `on`.
 >
+> ✅ **2026-09-14 (Cowork): the 09-12 fix VERIFIED live, closing the one thing §6 explicitly said
+> was never actually done.** `lcc_tier0_auto_attach_run_log` shows `attached=0` on 09-12 06:55
+> (fix landed mid-day, after that run), then **`attached=9` on 09-13 06:55** — the first tier0_auto
+> writes ever (`lcc_tier0_confirm_log.actor` was NULL/system, verdict `attach`, 9 rows, none before
+> 09-13). 09-14 06:55 correctly shows `auto_candidates=0` — the easy pool cleared. Owner-to-person
+> linkage re-measured the same day: **13.5% (1,377 of 10,187)**, essentially unchanged in ratio from
+> the 08-27 audit's 13% (847/6,480) even after the fix started writing — both the linked count and
+> the universe grew (universe growth partly explained by OWN-T0b/c's still-open 1,183
+> `duplicate_entity` residue inflating the owner count with un-merged duplicates). The fix works;
+> the gap it closes per day (9) is tiny next to the gap's size.
+>
 > 📇 **Topic index for the whole ownership→contact chain (~20 files, and two that are named
 > misleadingly): [`connectivity-and-open-threads.md`](connectivity-and-open-threads.md) §0.**
 > That page is the LIVING DOC for the chain end to end; this one owns its slice.
@@ -35,12 +46,12 @@ separate, standing decision** (`account-based-contact-intelligence.md`).
 
 | | |
 |---|---|
-| candidate pairs | **758** (was 684 on 08-27) — re-measured live 2026-09-12 |
-| lane cards shown to the operator | **83** (215 candidates), was 91 (ask 82 + auto 9) on 08-27 |
+| candidate pairs | **742** (was 758 on 09-12, 684 on 08-27) — re-measured live 2026-09-14, down 16 after the 09-13 auto-attach batch |
+| lane cards shown to the operator | **72** (was 83 on 09-12, 91 on 08-27) — re-measured live 2026-09-14 |
 | parked, not shown | 141 as of 08-27 — not re-measured this pass |
-| human attaches recorded | **27 — UNCHANGED since 08-27**, the tell that auto-attach never wrote anything |
+| human attaches recorded | **27**, unchanged since 08-27 (all human attaches predate the fix; see `tier0_auto` writes below for the newer channel) |
 | owner merges logged (all reversible) | **176** (was 66 on 08-27) — real growth, unrelated to auto-attach |
-| `tier0_auto` writes | **0 — CONFIRMED A REAL BUG, not a pending verification** (see §5 trap 14 / §6) |
+| `tier0_auto` writes | ✅ **9 — the fix VERIFIED live 2026-09-14 (Cowork)**, all dated 09-13 06:55 (the first ever; see §5 trap 14 / §6). 09-14's run correctly found 0 new auto candidates — the easy pool cleared, not a regression. |
 | curated sponsor entries | 8 as of 08-27 — not re-measured this pass |
 | `TIER0_AUTO_ATTACH` | ✅ **`on` since 2026-08-28.** ⚠️ **THE GATE IS THE `feature_flags_registry` TABLE, NOT A RAILWAY ENV VAR** — `tier0-auto-attach-tick.js:208` calls `flagEnabled(await fetchFeatureFlag(FLAG))`. Setting the env var on 08-27 had **no effect**: cron 241 logged `flag_enabled=false, planned=9, attached=0` on both 08-27 and 08-28 |
 | merge-detector blind groups remaining | **64** (176 entities) |
@@ -146,8 +157,12 @@ cron **241 at 06:55 UTC**. The GET is an ungated dry run and writes nothing.
   test" verification was never actually done.** It stayed broken for a SECOND, different reason:
   see §5 trap 14 — a call-site arity bug meant the tick could never see the registry as `on` no
   matter what the row said. **Both bugs are now fixed** (registry flip 08-28 + call-site fix
-  09-12); the next 06:55 UTC run is the real test this time (expect `attached` > 0, not just
-  `planned`).
+  09-12). ✅ **VERIFIED 2026-09-14 (Cowork)** — read `lcc_tier0_auto_attach_run_log` directly rather
+  than trusting the cron's green status: 09-13 06:55 shows `flag_enabled=true, auto_candidates=9,
+  planned=9, attached=9` — the first non-zero `attached` in the log's history. `lcc_tier0_confirm_log`
+  confirms it independently: 9 rows with `actor` NULL (system) and `verdict='attach'`, all dated
+  09-13, none before. 09-14 06:55 shows `auto_candidates=0` (pool cleared), which is the expected
+  steady state, not a regression.
   **2026-08-28 entry, kept verbatim for the record:** *"RESOLVED 2026-08-28 — and that policy was
   a DEADLOCK I wrote. The handler gates on the `feature_flags_registry` table (`fetchFeatureFlag`),
   not the Railway env var Scott set, so 'flip the registry only after a tick writes' could never be

@@ -17,6 +17,39 @@
      archive pointer — never reword or drop an entry to make room.
      ============================================================================ -->
 
+## 2026-09-14 — Tier 0 auto-attach fix VERIFIED live; owner-to-person linkage re-measured at 13.5% (Cowork)
+
+Scoped Stage 4's contact-linkage gap per my own recommendation, starting with review before building.
+`tier0-owner-contact-system.md` explicitly flagged an unverified claim: a 2026-09-12 fix to
+`TIER0_AUTO_ATTACH` (a call-site arity bug had silently kept it off for 16 straight days) was never
+actually confirmed to write anything in production.
+
+Verified it directly against `lcc_tier0_auto_attach_run_log` and `lcc_tier0_confirm_log`: 09-12 06:55
+still shows `attached=0` (fix landed mid-day, after that run); **09-13 06:55 shows `attached=9`** -- the
+first non-zero `attached` in the log's history, independently confirmed by 9 new `lcc_tier0_confirm_log`
+rows with `actor` NULL (system) and `verdict='attach'`, all dated 09-13, none before. 09-14 06:55 shows
+`auto_candidates=0`, which is the expected steady state (pool cleared) rather than a regression. The fix
+genuinely works.
+
+Re-measured the "13% owner-to-person linkage" headline figure the same way the 08-27 audit did: **13.5%
+(1,377 of 10,187)** today vs. 13% (847/6,480) then. Both the linked count and the universe grew (universe
+growth is partly the still-open OWN-T0b/c duplicate-entity residue inflating the owner count with
+un-merged duplicates) -- the ratio barely moved. Honest read: the mechanism now works, but 9 links/day
+against a gap this size won't move the headline number on its own.
+
+Documented both findings in `tier0-owner-contact-system.md` (§2 headline table + §6) and
+`ownership-truth-pipeline-state.md` (`[UX-T1a-reach]`).
+
+Did not build anything further this pass -- Stage 4 is a large, 13-audit-round subsystem with several
+genuinely open decisions already sitting there for Scott (fcp/tmg sponsor domain confirmation, N3c
+bank/trustee scope, N15 Salesforce-campaign orphans, N15c's canonical_name unique-key call), any of
+which is a smaller, well-scoped next step than trying to move the 13% number directly. Flagged back to
+Scott rather than picking one unilaterally.
+
+Housekeeping: `docs/claude-code/responses/` had OC-v2 and OWNERGAP1 desktop responses queued; left
+untouched -- another concurrent session had the shared checkout mid-edit on exactly those topics
+(uncommitted changes across api/, docs/audits/, docs/os/, supabase/migrations/, test/) when checked, so
+reconciling them was that session's in-flight work, not mine to touch.
 ## 2026-09-14 — OWNERGAP1 reconciled: containment verified both ways, CC corrected my premise, one residual gap found (Cowork)
 
 PR #2437 merged. Responses and prompt filed to `done/`. **CC's pass was better than the prompt that asked for it,
