@@ -17,6 +17,26 @@
      archive pointer — never reword or drop an entry to make room.
      ============================================================================ -->
 
+## 2026-09-14 — OC-v2 taken live: the operator funnel now triages, routes, and watches itself (Cowork)
+
+**Applied the migration CC could not** (`20261102140000`): flag row registered, `v_operator_notes_stale_open`,
+`lcc_check_operator_notes_stale`, crons `lcc-operator-triage` 07:25 UTC and `lcc-operator-notes-stale-check`
+07:30 UTC — **both slots verified free against live `cron.job` first**, which the migration's own comment
+explicitly asked an operator to do. Confirmed the deployed build carries the fix (`87042eb63878`,
+`merge-base` proves it contains PR #2438) before grading anything — merged is not running.
+**Re-graded with the model actually invoked: `scanned 3, triaged 3, routed 2, unclassified 0`** (was
+1 / 1 / 2). The dialysis bug note that previously failed now grades `bug` / `lane: dialysis` / `medium`
+→ `app/briefing` via `onprem_ollama`; the comps idea now carries `lane: government`.
+**`OPERATOR_NOTE_TRIAGE` flipped ON** against that evidence — the gate the migration documented. A POST
+run wrote the classifications; all three fixtures were then closed through the normal disposition path,
+so that path is exercised too. Stale monitor reads 0 open notes, 0 alerts.
+⚠️ **Correction to my own earlier diagnosis, which was wrong.** I reported the model as "declining" on the
+bug note. CC found the truth: a plain GET **never called Ollama at all** — `model_declined` meant *never
+asked*. That is why the fix was a code path, not a prompt. Worth keeping: a verdict string named the
+wrong cause, and I repeated it as measurement.
+👤 Residual: the meta note graded `bug` (over-classification) with `routed_to: null`. Triaged-but-unrouted
+correctly stays `open` and would age into an alert — the monitor working as designed.
+
 ## 2026-09-14 — OWNERGAP1 reconciled: containment verified both ways, CC corrected my premise, one residual gap found (Cowork)
 
 PR #2437 merged. Responses and prompt filed to `done/`. **CC's pass was better than the prompt that asked for it,
