@@ -19,3 +19,9 @@ cd "${CLAUDE_PROJECT_DIR:-.}"
 # and in sync with package-lock.json. Prefer install over ci so a cached
 # container state is reused rather than wiped.
 npm install --no-audit --no-fund
+
+# OC3 — refresh the one operator to-do list at the start of every session
+# (spec EXEC-BRIEFS-SPEC.md §6). Never blocks the session: exits 0 with a
+# message when OPS_SUPABASE_* creds aren't available (the normal case in a
+# sandbox with no .env.local), and `|| true` covers any other failure.
+node scripts/render-operator-inbox.mjs --write || true

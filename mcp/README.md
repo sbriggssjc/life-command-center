@@ -134,6 +134,16 @@ bov / bov-government skills should read this for rent at a given year instead of
 ### 13. `log_memory` / `recall_memory`
 Persist and recall durable notes across sessions.
 
+### 14. `log_operator_note` / `get_operator_inbox`
+The OC-a operator-note funnel (spec: `docs/architecture/EXEC-BRIEFS-SPEC.md` §6, contract:
+`docs/architecture/operator_note_contract.md`). `log_operator_note` files a bug/data-gap/idea/UX/
+question note — every channel (in-app Note button, Outlook, Teams, MCP, Cowork) writes the same
+`operator_notes` table; a separate triage tick classifies, dedupes and routes it. `get_operator_inbox`
+reads the one to-do list (open/routed/in_progress notes grouped by owner thread) — call it alongside
+`recall_memory` at the start of a session. Sibling of `log_memory`/`recall_memory`, same auth pattern.
+`log_operator_note` is a WRITE tool and has no HTTP route (Claude/MCP-only, matching `log_memory`);
+`get_operator_inbox` is read-only and is exposed at `/api/operator-inbox` for ChatGPT/Copilot.
+
 ## Endpoints
 
 | Path | Method | Description |
@@ -159,6 +169,7 @@ these into a GPT Action or Copilot custom connector.
 | `/api/queue-summary` | POST | get_queue_summary |
 | `/api/pipeline-health` | POST | get_pipeline_health |
 | `/api/recall-memory` | POST | recall_memory |
+| `/api/operator-inbox` | POST | get_operator_inbox |
 | `/api/query-comps` | POST | query_comps |
 | `/api/synthesize-comps` | POST | synthesize_comps |
 

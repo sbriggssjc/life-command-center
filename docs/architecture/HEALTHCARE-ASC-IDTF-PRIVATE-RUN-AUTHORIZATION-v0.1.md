@@ -168,3 +168,45 @@ receipt may leave the boundary.
 
 This validator has no download, sampling, database, CRM, or production-write capability. Passing it authorizes
 only the explicitly governed next lane action; it does not itself perform that action.
+
+## 13. ASC governed property-review workbench
+
+The ASC source-collection run now has a private authenticated workbench at `/asc-review.html`. Its API is an
+operator-only sub-route of the existing intake handler, and its database writes are limited to two invoker
+functions over `healthcare_research_reviews` and the matching candidate review state.
+
+The persisted scorecard vocabulary matches `healthcare_property_review:1.0`: `stnl`, `dominant_user`,
+`minority_mob`, `campus`, `operator_owned`, or `unknown`. The earlier `unresolved` value remains accepted only
+as a source-exception sentinel so the existing completion functions remain operable; a primary scorecard
+cannot submit it. The migration converts the six existing exception sentinels to `unknown` without changing
+their final dispositions.
+
+Primary and second-review identities and timestamps are stored separately. A required second reviewer must be
+a different authenticated user. Agreement can close the row-level review; disagreement remains visible and
+keeps the candidate in `second_review`. Neither function grants or performs a canonical-property, Salesforce,
+outreach, production-opportunity, or IDTF write.
+
+## 14. Production handoff and review order
+
+The reviewer-guidance layer is a presentation-only aid to human execution: readable evidence cards and
+safe source links sit above a collapsed raw audit payload; field definitions explain `Unknown`/`Unresolved`; the
+sticky header keeps the authenticated reviewer visible; and client validation explains blockers before POST. It
+does not change the persisted contract, review RPCs, source evidence, or any candidate judgment.
+
+PR #2355 merged on 2026-09-12 as `9829cc3391dc`; the workbench migration was applied before merge and
+Railway reported the same pinned revision. The page and authentication boundary were verified live. Deployment
+created no scorecard or reviewer judgment: the measured handoff remains 50 frozen candidates, 0 primary
+reviews, and 0 independent second reviews.
+
+PR #2384 merged on 2026-09-12 as `3f60666055892616648b2348f952d1d53fbefd42`. Railway `/version`
+reported the pinned revision `3f6066605589` and `/asc-review.html` returned HTTP 200. This closed the
+presentation prerequisite without changing the review contract or creating a candidate judgment. The 0/50
+primary and 0/22 initially required second-review counts above remain the last database-verified baseline; they
+must be re-measured before being quoted as current after reviewers begin work.
+
+The human execution order is primary review first, candidate by candidate, followed by a different
+authenticated reviewer for every row the workbench places in `second_review`. The initial collection evidence
+requires 22 second reviews, but `unknown` property form or low primary confidence can increase that count.
+Reviewers must preserve private citations, the frozen CMS identity, source-exception dispositions, and any
+explicit disagreement. They must not use the workbench as authority for a canonical-property, Salesforce,
+outreach, production-opportunity, IDTF, or lane-advance write.

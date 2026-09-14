@@ -24,8 +24,13 @@ import { mountLccMcp } from './mcp/server.js';
 import { makeOpportunitySyncRoute } from './mcp/opportunity-sync.js';
 import { makeDealRosterRoute } from './mcp/deal-roster.js';
 import { handleDealEmailMatchCron } from './api/_handlers/deal-email-match-cron.js';
+import { handleOperatorNoteIntake } from './api/_handlers/operator-notes-intake.js';
+import { handleOperatorTriageTick } from './api/_handlers/operator-triage-tick.js';
 import { handleDealCommsPropagateTick } from './api/_handlers/deal-comms-propagate-tick.js';
 import { handleCommsOwnerAttributionTick } from './api/_handlers/comms-owner-attribution-tick.js';
+import { handleMarketBriefPsqlTick } from './api/_handlers/market-brief-psql-tick.js';
+import { handleMarketBriefRssTick } from './api/_handlers/market-brief-rss-tick.js';
+import { handleMarketBriefTab } from './api/_handlers/market-brief-tab.js';
 
 // ── Import the core 9 API handlers (Phase 4b consolidated) ─────────────────
 // daily-briefing, data-proxy, diagnostics absorbed into admin.js
@@ -217,9 +222,11 @@ app.all('/api/link-coverage-tick', (req, res) => { req.query._route = 'link-cove
 app.all('/api/match-disambig-assist-tick', (req, res) => { req.query._route = 'match-disambig-assist-tick'; adminHandler(req, res); });
 app.all('/api/property-twin-assist-tick',  (req, res) => { req.query._route = 'property-twin-assist-tick';  adminHandler(req, res); });
 app.all('/api/ownership-chain-draft-tick', (req, res) => { req.query._route = 'ownership-chain-draft-tick'; adminHandler(req, res); });
+app.all('/api/ownt0j-sponsor-classify-tick', (req, res) => { req.query._route = 'ownt0j-sponsor-classify-tick'; adminHandler(req, res); });
 app.all('/api/briefing-analyst-take-tick', (req, res) => { req.query._route = 'briefing-analyst-take-tick'; adminHandler(req, res); });
 app.all('/api/dia-property-link-tick', (req, res) => { req.query._route = 'dia-property-link-tick'; adminHandler(req, res); });
 app.all('/api/tier0-auto-attach-tick',    (req, res) => { req.query._route = 'tier0-auto-attach-tick';    adminHandler(req, res); });
+app.all('/api/broker1-assign-tick',       (req, res) => { req.query._route = 'broker1-assign-tick';       adminHandler(req, res); });
 app.all('/api/ambiguous-entity-automerge-tick', (req, res) => { req.query._route = 'ambiguous-entity-automerge-tick'; adminHandler(req, res); });
 app.all('/api/bench-rank-tick',           (req, res) => { req.query._route = 'bench-rank-tick';           adminHandler(req, res); });
 app.all('/api/sf-link-assist-tick',        (req, res) => { req.query._route = 'sf-link-assist-tick';        adminHandler(req, res); });
@@ -422,6 +429,21 @@ app.all('/api/intake-log-call', (req, res) => { req.query._route = 'log-call'; i
 // W7.3 path C: Outlook category-tagging receiver (Power Automate). The
 // correspondence design names this receiver /api/intake-tagged-comm.
 app.all('/api/intake-tagged-comm', (req, res) => { req.query._route = 'tagged-comm'; intakeHandler(req, res); });
+// OC-a — operator-note funnel (spec EXEC-BRIEFS-SPEC.md §6): one intake
+// endpoint for every channel (in-app Note, MCP log_operator_note, Cowork,
+// Teams/PA) + the OC2 triage tick. Mounted directly (not via intakeHandler's
+// _route dispatch) — each handler is its own auth boundary.
+app.all('/api/operator-notes', handleOperatorNoteIntake);
+app.all('/api/operator-triage-tick', handleOperatorTriageTick);
+// MB-a — market brief producers, dialysis lane first (spec EXEC-BRIEFS-SPEC.md
+// §2, MB1/MB2). Flag-gated (MARKET_BRIEF_PSQL / MARKET_BRIEF_PRSS), both off
+// until live-verified. GET is always a dry run.
+app.all('/api/market-brief-psql-tick', handleMarketBriefPsqlTick);
+app.all('/api/market-brief-rss-tick', handleMarketBriefRssTick);
+// MB-b — read-only data for the homepage Market Briefs tab (#/briefs/<lane>).
+// Flag-gated (MARKET_BRIEF_RENDER); GET returns {enabled:false} while off,
+// never a 404/500.
+app.all('/api/market-brief-tab', handleMarketBriefTab);
 // W7.6 Mailbox Mirror: deterministic worklist of closed-loop flagged emails +
 // the PA mover's ack endpoint. Flag-gated (MAILBOX_MIRROR).
 app.all('/api/mailbox-reconcile-worklist', (req, res) => { req.query._route = 'mailbox-reconcile-worklist'; intakeHandler(req, res); });
@@ -441,6 +463,7 @@ app.all('/api/asc-research-import', (req, res) => { req.query._route = 'asc-rese
 app.all('/api/asc-research-target', (req, res) => { req.query._route = 'asc-research-target'; intakeHandler(req, res); });
 app.all('/api/asc-research-capture', (req, res) => { req.query._route = 'asc-research-capture'; intakeHandler(req, res); });
 app.all('/api/asc-research-complete', (req, res) => { req.query._route = 'asc-research-complete'; intakeHandler(req, res); });
+app.all('/api/asc-research-review', (req, res) => { req.query._route = 'asc-research-review'; intakeHandler(req, res); });
 
 // Phase 2 Slice 2b: write an LCC-generated deliverable INTO a property folder.
 app.all('/api/property-doc-writeback', (req, res) => { req.query._route = 'property-doc-writeback'; intakeHandler(req, res); });

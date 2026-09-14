@@ -96,11 +96,21 @@ pipeline — as of the last version of this page. **It is now mostly closed:**
   but wrong `type:'person'` stamp that was trusted verbatim. Fix: `contactEntityType()` now treats an
   explicit `type:'person'` as a floor, not an absolute — `hasFirmSuffix()` can still override it to
   `'organization'`, one-directional only. `owner-role-classification.md` §9i.
-- **`[OWN-T0b/c/d/f/g]`** 🔴 residue named in the 2026-09-02 audit: no LCC mirror of
-  `v_ownership_transitions_portfolio`; **417** `duplicate_entity` merges still needed (the same
-  `Duke Realty` class blocking Stage 2's A2 residue); 11 tombstones still holding a live current fact
-  beside their survivor; per-row UUID noise in `ownership_source`; `lcc_finalize_entity_portfolios`
-  supersedes only within its own payload on gov and not at all on dia.
+- **`[OWN-T0b/c/d/f/g]`** 🔴 residue named in the 2026-09-02 audit, re-measured 2026-09-14 (b/c/g
+  still open, d shipped, f reviewed/closed): no LCC mirror of `v_ownership_transitions_portfolio`;
+  `duplicate_entity` merges re-measured at **1,183** live (the same `Duke Realty` class blocking Stage 2's
+  A2 residue) -- the trailing-"The" framing this residue was originally sized under is now a contested,
+  undecided question (see `PLANNED-BACKLOG.md`'s OWN-T0b/c/d/f/g row); ✅ **d shipped 2026-09-14** — the
+  11 tombstones (12 ghost fact rows) still holding a live current fact beside their survivor were cleaned
+  up via the existing, already-deployed `lcc_repair_tombstone_portfolio_facts` (P175), reversible via
+  batch tag `own_t0d_2026-09-14`; ✅ **f reviewed 2026-09-14, no action needed** — the per-row UUID in
+  `ownership_source` is deliberate source-chain-link citation, not noise, and the one live consumer that
+  groups on it already normalizes correctly (verified 0 rows fall to `other` across 27,421 rows); 🔴 **g
+  sized, not shipped** — `lcc_finalize_entity_portfolios` (live, cron-driven, runs both domains' syncs)
+  confirmed to supersede only within its own inflight request payload on gov (a pagination-split property
+  never gets end-dated across calls) and not at all on dia; needs a supersession-rule design decision
+  before building, since "new current owner supersedes old" is not universally safe here (gov/1708 has
+  two genuinely-current co-owners).
 - **`[OWN-T0h]`** 🟢 two different conflict-property denominators (756 vs 2,097) are both live and
   disagree by nearly 3×; undecided which the panel and backlog should quote.
 - **`[OWN-T0i]`** 🟢 hedge-phrase "owner" entities (`X or affiliated investors`) are live candidates in
@@ -140,7 +150,12 @@ pipeline — as of the last version of this page. **It is now mostly closed:**
   owner-entity-linked touches gives a false floor of 19 owners; following any link at all gives a false
   ceiling of 1,024 (it imports machine-written asset events). The real constraint the audit found:
   **only 847 of 6,480 owners (13%) have a linked person at all — 5,633 (87%) have none** — missing
-  *links*, not missing *touches*.
+  *links*, not missing *touches*. Re-measured live 2026-09-14 (Cowork) alongside verifying the Tier 0
+  auto-attach fix (see `tier0-owner-contact-system.md`): **13.5% (1,377 of 10,187)** by the same
+  method against today's live counts -- essentially the same ratio despite the fix now genuinely
+  writing (9 new links 09-13, confirmed live, the first ever). The universe grew faster than the
+  fix can close it (part of that growth is un-merged OWN-T0b/c duplicate-entity residue inflating
+  the owner count); 9/day against a gap this size is not going to move the headline number on its own.
   `[UX-T1a-touchcount]` 🔴 blocks grading any fix here — `current_touch` reads p50 0 / max 8,198 against
   a 7-step sequence, so cadence position is presently unreadable.
 - **SFENRICH / SF-DIRECT / RAILWAY-PA-SECRET** — separate, currently-active infra threads (owned by
@@ -178,13 +193,101 @@ Two patterns repeat across every stage, worth carrying into whatever gets priori
    both) was what kept re-creating the
    population Stage 3's retype lane exists to clean up. **Fixing entity-dedup and entity-typing at the
    root (once, upstream) is worth more than any one stage's local patch** — this is the single highest-
-   leverage thread across the whole pipeline as stated.
+   leverage thread across the whole pipeline as stated. **`[ID3b]` ✅ shipped 2026-09-12 — one slice of
+   this root-level fix, now done:** the gov `recorded_owners`/`true_owners` fuzzy-name-VARIANT residue
+   (name-format/punctuation/abbreviation duplicates like `Baker Properties Limited Partnership` /
+   `Baker-Properties, Ltd.`) that RO2a sized (1,380 groups / 2,870 rows combined) is now merged —
+   1,466 `recorded_owners` rows + 232 `true_owners` rows collapsed into their survivors via two new
+   guarded tick functions, 26 correctly routed to human review (bank/lienholder/brokerage names,
+   never auto-merged), parity confirmed bit-for-bit. **This is NOT the same population as the
+   OWN-T0b/c/d/f/g `duplicate_entity` residue below** — that 417-row population is Stage 3's
+   `entity_match_candidates`-classified rival/duplicate entities (a different classification lane,
+   `sponsor_family_confirmed`/`duplicate_entity`/`unclassified_rival`), still open. ID3b closed the
+   *upstream, mechanical, name-variant* half of "the same entity-dedup gap"; the *downstream,
+   classification-driven* half (OWN-T0b/c/d/f/g, and Stage 2's A2 residue) is unaffected by this build
+   and remains the next entity-dedup slice to take.
 2. **The human-verdict lanes (Decision Center) are unevenly used, independent of whether they're built
    well.** `[UX-T1c]`'s live census found **12 of 28 federated lanes have never received a single
    verdict**, several holding thousands of live, fully-wired candidate rows (`agency_risk_action` 692,
    `npi_dedup_review` 285). Before building a new lane anywhere in this pipeline, check whether an
    existing one with real population is simply not being worked — that is cheaper to fix than it is to
    build.
+
+## Open decisions — needs Scott, compiled across the whole chain (2026-09-14, Cowork)
+
+Every item below is a genuine judgment call, not sizing work Cowork can push further alone. Compiled
+in one place per Scott's request so nothing sits scattered across per-stage docs waiting to be
+noticed. Re-measure the live numbers before acting on any of these -- this pipeline's populations
+move by hundreds between sessions (see OWN-T0c's 417 → 1,183 in two weeks as the cautionary case).
+
+1. **Trailing "The" in the canonical entity key** (`[OWN-T0b/c]`, `PLANNED-BACKLOG.md`). Does
+   `"XYZ Company, The"` name the same real-world party as `"XYZ Company"`? The audit's premise says
+   yes; a deliberate, dated, SQL-verified test corpus (`test/entity-canonical-key.test.mjs`) says the
+   opposite on purpose. Blast radius if merged: ~43 entities carry a trailing "the" token, ~6
+   actually collide (Port Authority of New York & New Jersey, Brady Bunch, Graham Companies, Bridge
+   Behavioral Health, Buncher Company, Carrington Company). **Blocks:** the 1,183-conflict
+   `duplicate_entity` residue cannot be safely worked at scale until this is settled (some of those
+   1,183 pairs are trailing-"The" variants, some are not, and today nothing tells them apart).
+2. **`entities.canonical_name` as an enforced UNIQUE key** (`[N15c] (2)`, `tier0-owner-contact-system.md`
+   §6). The token rule is built and live; whether the column becomes a hard uniqueness constraint is
+   still open. **Blocked by #1** -- collapsing keys is exactly what creates new collisions, so this
+   can't be decided independently of the trailing-"The" call.
+3. **`lcc_finalize_entity_portfolios`'s supersession rule** (`[OWN-T0g]`, sized 2026-09-14, not
+   shipped). Gov's current-owner supersession only looks within a single sync-request payload (a
+   property split across sync calls never gets end-dated); dia has no supersession logic at all. The
+   open question: should supersession compare against ALL historical facts for a property, not just
+   the current payload -- and is "a new current owner appeared" even a safe signal that the old one
+   ended, given gov/1708 has two owners that are both genuinely, simultaneously current (The Greystone
+   Group and the Silverstone survivor)? Needs a rule before it needs code.
+4. **1,475 Salesforce-campaign orphans** (`[N15]`, `tier0-owner-contact-system.md` §6). Do they get hub
+   rows (become addressable entities in the graph) or stay excluded?
+5. **T2b -- widen ownership resolution to the remaining 2,241 properties / 2,054 owners**
+   (`connectivity-and-open-threads.md` §4k.1). Sized safe and cheap to run against the post-T2a graph
+   (duplicate-group growth is actually LOWER than T2a's measured actual, not higher). The real
+   question is value, not risk: only 3.7% of this population (76 owners) is contactable today, down
+   from T2a's already-low 17.2%. "Resolve all ownership, rank later" is the standing doctrine; this is
+   the population where that doctrine is most expensive relative to its payoff. **Not run. No default
+   taken.**
+6. **What evidence promotes an owner out of `unknown` role** (`connectivity-and-open-threads.md`
+   §4o, marked explicitly "the open question is Scott's, and it is doctrine"). Decides who gets
+   prospected and in which bucket. Candidate signals already modelled and unused: portfolio shape
+   (asset count/domain/rent), acquisition history (`purchases` edges distinguishing a repeat investor
+   from a one-off), `is_operator_not_owner`, and deed/sales-party roles. Whatever rule is adopted needs
+   a value gate and an auto-retire predicate, or it reproduces a prior 931-row data-work flood.
+
+**✅ Resolved this session:** banks and CMBS trustees excluded from prospecting (`[N3c]`, Scott
+2026-09-14, see `tier0-owner-contact-system.md` §4/§6) -- shipped, not just decided; revisitable if
+lender prospecting via Northmarq debt-side coordination is taken up later. fcp/tmg sponsor-domain
+confirmations are stale (no live population left, re-checked 2026-09-14) -- no decision needed unless
+they resurface.
+
+## Where we are toward 100% -- a snapshot, not a target date (2026-09-14, Cowork)
+
+Scott's stated goal is complete connection across every targeted property and its ownership history,
+pushed all the way through the BD/prospecting pipeline. These are the load-bearing numbers as measured
+this session and the sessions immediately before it -- each is a live re-measurement, not a historical
+quote, and each will have moved by the time this is read again:
+
+| stage | metric | now | context |
+|---|---|---:|---|
+| Stage 1 | gov's two stores disagree (`[OWN-T0a]`) | 43.4% | 1,509 of 3,474 gov properties |
+| Stage 3 | duplicate-entity conflicts open (`[OWN-T0b/c]`) | 1,183 | blocked on decision #1 above |
+| Stage 3 | tombstone-duplicate-current defect | **0** | ✅ shipped 09-14 (OWN-T0d), was 11 |
+| Stage 3 | `ownership_source` producer noise (`[OWN-T0f]`) | **0 action needed** | ✅ reviewed 09-14, already handled |
+| Stage 3 | portfolio-facts supersession gap (`[OWN-T0g]`) | open | sized 09-14, needs decision #3 above |
+| Stage 4 | owner-to-person linkage | 13.5% | 1,377 of 10,187 -- essentially flat vs. 13% on 08-27 despite Tier 0's auto-attach fix now genuinely writing |
+| Stage 4 | Tier 0 auto-attach mechanism | ✅ verified working | 9 writes 09-13, confirmed live 09-14 |
+| Stage 4 | banks/CMBS trustees in prospecting pool | excluded | ✅ shipped 09-14 |
+| Stage 4/5 | "reached" (person-link definition, C4/C5) | 618 of 6,480 (9.5%) | 08-28 measurement, not re-measured this session |
+| Stage 5 | Salesforce deal-book linkage (`[UX12a]`) | 0 of 4,785 | producer does not exist |
+| Stage 5 | teammate mailbox sync (`[UX13a]`) | Scott-only | deliberately deferred |
+
+**Honest read:** the mechanisms keep getting fixed (auto-attach now writes, tombstone duplicates are
+gone, the bank/trustee category is closed), but the entity-dedup residue upstream (#1/#2 above) and
+the sheer size of the unlinked-owner population mean the headline linkage number hasn't moved much yet
+-- 13% → 13.5% in over two weeks of real fixes landing. The fastest path to moving it is almost
+certainly #1 (trailing-"The"), because it's the single blocker sitting in front of the largest counted
+population (1,183) and touches Stage 3, Stage 4, and this session's re-measurements all at once.
 
 ## The UX review (the Word-document walkthrough)
 

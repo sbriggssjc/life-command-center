@@ -15,6 +15,15 @@ to one already-inert 2026-08-04 batch) via a mechanism (`gov_property_dup_retire
 rather than deletes and is structurally immune to this bug class going forward. It does not need this
 prompt's machinery and is deliberately **out of scope here** — do not add gov handling to this pass.
 
+**Repo: `life-command-center`.** Send this AFTER `PDR14a-dia-canonical-property-redirect.md` (Dialysis
+repo) has merged — this prompt calls the resolver that one ships.
+
+**Read first:** `docs/os/PLANNED-BACKLOG.md` §P17 PDR14 (this finding, measured 2026-09-11) and PDR2/PDR3/
+PDR6/PDR13 (the specific symptom this unblocks) · `PDR14a-dia-canonical-property-redirect.md`'s shipped
+response, for the exact shape of `dia_resolve_property_id` (or whatever it ended up named) · wherever
+`entities.metadata.domain_property_id` is read today (`get_property_context`'s property-context
+assembly path is the one already exercised by this investigation — find it and any siblings).
+
 ## Why this, why now
 
 LCC's `entities.metadata.domain_property_id` is a one-way pointer into dia's `properties` table, set
@@ -30,6 +39,11 @@ and null ownership — a **regression** from PDR1's own confirmed fix (PDR4 was 
 stands regardless of that split: build for correctness whether or not the 58's cause is ever known, and
 make the two databases actively reconcile with each other going forward, in both directions — not a
 one-time patch.
+Root-cause investigation (see PLANNED-BACKLOG.md PDR14) found only 28 of the 89 trace to a known dia
+merge ledger; the other 61 are unexplained, likely (not certain) pre-dating dia's own audit logging.
+**Scott's direction: build for correctness regardless of whether the 61's cause is ever known, and make
+the two databases actively reconcile with each other going forward, in both directions — not a one-time
+patch.**
 
 ## 1. One-time sweep, using PDR14a's canonical resolver
 
@@ -45,6 +59,15 @@ resolved this way before moving to step 2 — expect it to land close to the 31 
 ## 2. Fallback: confident re-resolution for cases with no redirect trace
 
 For entities PDR14a's resolver can't explain (the ~58), attempt a confident re-resolution against dia's
+dia's live `properties` table, call `dia_resolve_property_id` (from PDR14a). Where it returns a live
+survivor, update `entities.metadata.domain_property_id` to the resolved id (record the correction —
+`metadata.domain_property_id_corrected_from` and a timestamp, or whatever pattern this repo already uses
+for a value that gets silently repaired, so the change is auditable, not silent). Report the real count
+resolved this way before moving to step 2 — expect it to land close to the 28 measured, not assume more.
+
+## 2. Fallback: confident re-resolution for cases with no redirect trace
+
+For entities PDR14a's resolver can't explain (the ~61), attempt a confident re-resolution against dia's
 live `properties` by address + parcel/CCN, mirroring PDR13's own strong-id scoring approach (do not
 invent a new scoring scheme — reuse or closely mirror that one, since it was already measured and
 guard-tested against this same class of problem). **Do not lower the bar to resolve more of them** — a
@@ -62,6 +85,12 @@ app:
   gated behind a new flag) that re-scans all `domain='dia'` entities for a `domain_property_id` that no
   longer resolves, and either self-heals it (steps 1–2's logic, applied going forward) or logs it to a
   reviewable queue. **`domain='dia'` only — gov is out of scope for this prompt (see above).**
+app, in both directions:
+- A recurring check (mirror this repo's existing flag-gated tick pattern — GET ungated dry run / POST
+  gated behind a new flag) that re-scans all `domain='dia'` entities (and, if the same class of gap could
+  exist there, `domain='gov'` entities against the government database — check whether it does before
+  assuming symmetry) for a `domain_property_id` that no longer resolves, and either self-heals it (steps
+  1–2's logic, applied going forward) or logs it to a reviewable queue.
 - Consider whether `get_property_context`'s own resolution path should opportunistically self-heal
   inline when it notices a dangling pointer during a normal read (cheap, since it's already fetching) —
   weigh this against just relying on the recurring sweep, and say which you chose and why.
@@ -76,6 +105,8 @@ app:
   **PDR14-GOV** for reference only.
 - Do not attempt to determine the cause of the 58 unexplained dia cases from before — that investigation
   is done; build for correctness regardless.
+- Do not attempt to determine the cause of the 61 unexplained cases from before — that investigation is
+  done; build for correctness regardless.
 - Do not touch `PDR2` (the ownership guard-gap in `api/operations.js`'s `assemblePropertyPacket()`) —
   unrelated, filed separately, much larger blast radius (4,026 properties), its own prompt.
 - Do not build a new merge/scoring mechanism from scratch for the fallback in step 2 — reuse PDR13's

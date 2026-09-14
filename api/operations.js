@@ -57,6 +57,7 @@
 // ============================================================================
 
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
+import { isTrueOwnerOperator, trueOwnerOperatorSelectFields } from './_shared/true-owner-operator-guard.js';
 import { opsQuery, pgFilterVal, requireOps, withErrorHandler, insertEntityRelationship } from './_shared/ops-db.js';
 import { closeResearchLoop } from './_shared/research-loop.js';
 import { ensureEntityLink, normalizeCanonicalName, refreshPlaceholderEntityNameById, looksLikePersonName, recordContactFieldWrites } from './_shared/entity-link.js';
@@ -2031,32 +2032,137 @@ async function getBdWorklist(req, res, user, workspaceId) {
 //     for "a touch that generates a BOV or a working buyer"; no BOV-generation
 //     or marketing-live-listing producer exists — named gap).
 //   Urgent      — action_items open/in_progress rows tied to a deal (deal
-//     correspondence) UNIONED with v_lcc_bd_worklist's contact_writeback +
-//     domain owner_source_conflict(auto_fixable) rows (pipeline hygiene).
-//     loan_maturity and ownership_chain are deliberately excluded (see
-//     today-sections.js header for why).
+//     correspondence) UNIONED with domain owner_source_conflict(auto_fixable)
+//     rows (a data-integrity block on the deal moving). v_lcc_bd_worklist's
+//     contact_writeback is CRM plumbing, not deal work (HP1-P2f-urgent,
+//     2026-09-12) — it is EXCLUDED from the union and surfaced instead as
+//     `urgent.pointer` (true, uncapped count + a link to the BD worklist's
+//     own contact_writeback chip). loan_maturity and ownership_chain are
+//     deliberately excluded too (see today-sections.js header for why).
 // ============================================================================
-async function getTodaySections(req, res, user, workspaceId) {
+// HP1 Finding 1 (P0, 2026-09-12) — settle a Promise that may REJECT (opsQuery's
+// fetchWithTimeout throws on abort; it does not resolve {ok:false}) into the
+// same {ok,status,data} shape domainSelect already fails soft into. Without
+// this, one slow source (the seller-prospect view crossing its timeout on a
+// cold shared-buffer cache) rejects the whole `Promise.all` and 500s all THREE
+// Today lanes at once — the exact symptom Scott reported (one endpoint, drawn
+// three times). `Promise.allSettled` + this mapper means a thrown source
+// degrades ONLY its own lane; every other source is untouched.
+function settledQueryResult(settled, label) {
+  if (settled.status === 'fulfilled') return settled.value;
+  const reason = settled.reason;
+  const msg = (reason && reason.message) ? String(reason.message).slice(0, 200) : String(reason || 'unknown error');
+  console.error(`[today_sections] source "${label}" threw:`, reason && reason.stack || reason);
+  return { ok: false, status: 0, data: null, error: msg };
+}
+
+export async function getTodaySections(req, res, user, workspaceId) {
   const limit = (() => {
     const n = Number(req.query.limit);
     return (Number.isFinite(n) && n > 0 && n <= 25) ? Math.floor(n) : TODAY_SECTION_LIMIT;
   })();
 
+  // 1c (superseded by HP1-badge, 2026-09-12): `.count` from the row-fetch
+  // calls is still never read — `total_open` must NOT come from a header
+  // count riding the SAME request as the row fetch, because that is exactly
+  // the ~750ms-per-request cost measured and removed here (docs/HP1 Finding
+  // 1). The row-fetch reads stay `countMode: 'estimated'` for that reason.
+  // HP1-badge instead runs the true count as a SEPARATE, PARALLEL, narrow
+  // (single-column, `limit=1`) probe per lane, `Prefer: count=exact` (the
+  // same idiom `getBdWorklist`'s summary path already uses for
+  // `v_lcc_bd_worklist`). Paying the DB's real COUNT(*) cost once, in
+  // parallel with the row fetches rather than serially inside one of them,
+  // is what keeps this off the row-fetch's own critical path — see the
+  // measured latency in the HP1-badge writeup before touching this shape.
+  // 1a: the seller-prospect view is the one measured to cross the OLD 8s
+  // default on a cold cache (EXPLAIN ANALYZE ~1.6s warm; several-fold longer
+  // cold) — it gets the most headroom. The other three are lighter aggregates
+  // but get real headroom too rather than a bare guess. The count probes get
+  // the SAME headroom as their row-fetch siblings, since a view's COUNT(*)
+  // can cost as much as materialising it.
   const [
-    sellerQR, bdOppR, actionItemsR, lccUrgentR, ocGovR, ocDiaR,
-  ] = await Promise.all([
-    opsQuery('GET', 'v_lcc_seller_prospect_queue?select=*&order=rank_value.desc.nullslast,years_into_term.asc.nullslast&limit=200', null, { countMode: 'exact' }),
-    opsQuery('GET', 'bd_opportunities?select=id,entity_id,type,stage,amount,expected_close_date,opened_at&is_open=eq.true&order=amount.desc.nullslast&limit=200', null, { countMode: 'exact' }),
-    opsQuery('GET', "action_items?select=id,entity_id,action_type,title,priority,due_date,status&status=in.(open,in_progress)&order=due_date.asc.nullslast&limit=200", null, { countMode: 'exact' }),
-    opsQuery('GET', 'v_lcc_bd_worklist?select=signal_type,source_domain,property_id,entity_id,what,who,rank_value,city,state&signal_type=eq.contact_writeback&order=rank_value.desc.nullslast&limit=200', null, { countMode: 'exact' }),
+    sellerQS, bdOppQS, actionItemsQS, lccUrgentQS, ocGovR, ocDiaR,
+    sellerCountQS, bdOppCountQS, actionItemsCountQS, lccUrgentCountQS, ocGovCountR, ocDiaCountR,
+  ] = await Promise.allSettled([
+    opsQuery('GET', 'v_lcc_seller_prospect_queue?select=*&order=rank_value.desc.nullslast,years_into_term.asc.nullslast&limit=200', null, { countMode: 'estimated', timeoutMs: 20000 }),
+    opsQuery('GET', 'bd_opportunities?select=id,entity_id,type,stage,amount,expected_close_date,opened_at&is_open=eq.true&order=amount.desc.nullslast&limit=200', null, { countMode: 'estimated', timeoutMs: 12000 }),
+    opsQuery('GET', "action_items?select=id,entity_id,action_type,title,priority,due_date,status&status=in.(open,in_progress)&order=due_date.asc.nullslast&limit=200", null, { countMode: 'estimated', timeoutMs: 12000 }),
+    opsQuery('GET', 'v_lcc_bd_worklist?select=signal_type,source_domain,property_id,entity_id,what,who,rank_value,city,state&signal_type=eq.contact_writeback&order=rank_value.desc.nullslast&limit=200', null, { countMode: 'estimated', timeoutMs: 12000 }),
     domainSelect('gov', 'v_owner_source_conflict?auto_fixable=eq.true&select=property_id,recorded_owner_name,latest_deed_grantee,conflict_kind,annual_rent,city,state&order=annual_rent.desc.nullslast&limit=100'),
     domainSelect('dia', 'v_owner_source_conflict?auto_fixable=eq.true&select=property_id,recorded_owner_name,latest_deed_grantee,conflict_kind,annual_rent,city,state&order=annual_rent.desc.nullslast&limit=100'),
+    opsQuery('GET', 'v_lcc_seller_prospect_queue?select=entity_id&limit=1', null, { countMode: 'exact', timeoutMs: 20000 }),
+    opsQuery('GET', 'bd_opportunities?select=id&is_open=eq.true&limit=1', null, { countMode: 'exact', timeoutMs: 12000 }),
+    opsQuery('GET', "action_items?select=id&status=in.(open,in_progress)&limit=1", null, { countMode: 'exact', timeoutMs: 12000 }),
+    opsQuery('GET', 'v_lcc_bd_worklist?select=signal_type&signal_type=eq.contact_writeback&limit=1', null, { countMode: 'exact', timeoutMs: 12000 }),
+    domainSelectCount('gov', 'v_owner_source_conflict?auto_fixable=eq.true&select=property_id'),
+    domainSelectCount('dia', 'v_owner_source_conflict?auto_fixable=eq.true&select=property_id'),
   ]);
+
+  const sellerQR = settledQueryResult(sellerQS, 'v_lcc_seller_prospect_queue (significant)');
+  const bdOppR = settledQueryResult(bdOppQS, 'bd_opportunities (important)');
+  const actionItemsR = settledQueryResult(actionItemsQS, 'action_items (urgent: deal correspondence)');
+  const lccUrgentR = settledQueryResult(lccUrgentQS, 'v_lcc_bd_worklist (urgent: pipeline hygiene)');
+  // domainSelect already fails soft internally (try/catch around its own
+  // fetch) — Promise.allSettled never sees a rejection from these two, but
+  // routing them through the same settler keeps one shape for every source.
+  const ocGov = settledQueryResult(ocGovR, 'gov v_owner_source_conflict');
+  const ocDia = settledQueryResult(ocDiaR, 'dia v_owner_source_conflict');
+
+  // HP1-badge: each true-count probe resolves to a NUMBER only when it
+  // actually succeeded with a real Content-Range total; anything else
+  // (thrown, non-2xx, missing/garbled header) is `null` — "unknown", never
+  // "0" and never a silent fallback to the capped page length (P180).
+  const exactCountOrNull = (settled, label) => {
+    const r = settledQueryResult(settled, label);
+    return (r && r.ok && Number.isFinite(r.count)) ? r.count : null;
+  };
+  const significantTrueCount = exactCountOrNull(sellerCountQS, 'v_lcc_seller_prospect_queue count (significant)');
+  const importantTrueCount = exactCountOrNull(bdOppCountQS, 'bd_opportunities count (important)');
+  const actionItemsTrueCount = exactCountOrNull(actionItemsCountQS, 'action_items count (urgent)');
+  const contactWritebackTrueCount = exactCountOrNull(lccUrgentCountQS, 'v_lcc_bd_worklist count (urgent)');
+  // domainSelectCount fails soft to {ok:false,count:0} internally and never
+  // throws, so settledQueryResult only ever sees 'fulfilled' here — routed
+  // through it anyway for one shape, and its own ok:false still reads as
+  // unknown (never the 0 it happens to carry).
+  const ocGovTrueCount = exactCountOrNull(ocGovCountR, 'gov v_owner_source_conflict count (urgent)');
+  const ocDiaTrueCount = exactCountOrNull(ocDiaCountR, 'dia v_owner_source_conflict count (urgent)');
+  // HP1-P2f-urgent: contact_writeback no longer feeds Urgent's union (it is
+  // CRM plumbing, surfaced instead as a `pointer` — see today-sections.js),
+  // so it is dropped from this sum. Urgent's total_open now has THREE
+  // independent producers; summing them is only honest when every one
+  // actually resolved — a partial sum both under-reports (a failed leg
+  // silently contributes 0) and would be indistinguishable from a genuinely
+  // small population, so ANY unresolved leg makes the whole Urgent total
+  // "unknown" rather than a guess.
+  const urgentTrueCount = (
+    actionItemsTrueCount !== null && ocGovTrueCount !== null && ocDiaTrueCount !== null
+  ) ? (actionItemsTrueCount + ocGovTrueCount + ocDiaTrueCount) : null;
 
   const significantRows = sellerQR.ok ? (sellerQR.data || []) : [];
   const bdOppRows = bdOppR.ok ? (bdOppR.data || []) : [];
   const actionItems = actionItemsR.ok ? (actionItemsR.data || []) : [];
   const lccUrgentRows = lccUrgentR.ok ? (lccUrgentR.data || []) : [];
+
+  // 1b: a source that failed THIS request is named, never silently rendered
+  // as an empty-but-healthy lane (which would read as a false all-clear on a
+  // seller-prospect/pipeline-hygiene queue). Each string is short + honest —
+  // the HTTP status or the caught error, never the raw stack.
+  const describeFailure = (r, fallback) => {
+    if (r.ok) return null;
+    if (r.error) return r.error;
+    if (r.status) return `HTTP ${r.status}`;
+    return fallback;
+  };
+  const sourceErrors = {
+    significant: describeFailure(sellerQR, 'seller-prospect queue unavailable'),
+    important: describeFailure(bdOppR, 'bd_opportunities unavailable'),
+    actionItems: describeFailure(actionItemsR, 'action_items unavailable'),
+    // The bd_worklist half of Urgent is fed by THREE sources (lcc + gov + dia
+    // owner-conflict); name it degraded if the LCC leg failed — a failed
+    // domain leg alone just thins the rows (P131: never fabricate, never
+    // escalate a partial thinning to a full-lane failure).
+    bdWorklist: describeFailure(lccUrgentR, 'v_lcc_bd_worklist unavailable'),
+  };
 
   // The Urgent bd_worklist half reuses the SAME normalize+dedup+rank pure
   // function the full worklist uses (assembleBdWorklist) — never a second,
@@ -2064,28 +2170,39 @@ async function getTodaySections(req, res, user, workspaceId) {
   const bdWorklistRows = assembleBdWorklist({
     lcc: lccUrgentRows,
     owner_conflict: {
-      gov: ocGovR.ok ? ocGovR.data : [],
-      dia: ocDiaR.ok ? ocDiaR.data : [],
+      gov: ocGov.ok ? ocGov.data : [],
+      dia: ocDia.ok ? ocDia.data : [],
     },
   });
 
   // entity name lookup — bd_opportunities/action_items carry no FK for
   // PostgREST to embed (P132: never trust an unhinted embed), so resolve
-  // names with one bounded fetch instead of N+1s.
+  // names with one bounded fetch instead of N+1s. Guarded the same way as the
+  // six sources above: a thrown lookup degrades to "no names resolved" (the
+  // caller already falls back to the raw entity_id), never a 500 for the
+  // whole endpoint.
   const entityIds = [...new Set([
     ...bdOppRows.map((r) => r.entity_id),
     ...actionItems.map((r) => r.entity_id),
   ].filter(Boolean))];
   const entityById = new Map();
   if (entityIds.length) {
-    const idsFilter = entityIds.map((id) => encodeURIComponent(id)).join(',');
-    const enR = await opsQuery('GET', `entities?select=id,name&id=in.(${idsFilter})`, null, { countMode: 'none' });
-    if (enR.ok) for (const e of (enR.data || [])) entityById.set(e.id, e.name);
+    try {
+      const idsFilter = entityIds.map((id) => encodeURIComponent(id)).join(',');
+      const enR = await opsQuery('GET', `entities?select=id,name&id=in.(${idsFilter})`, null, { countMode: 'none' });
+      if (enR.ok) for (const e of (enR.data || [])) entityById.set(e.id, e.name);
+    } catch (e) {
+      console.error('[today_sections] entity name lookup threw:', e && e.stack || e);
+    }
   }
 
   const sections = assembleTodaySections({
     significantRows, bdOppRows, actionItems, bdWorklistRows, entityById,
-  }, { limit });
+    contactWritebackCount: contactWritebackTrueCount,
+  }, {
+    limit, sourceErrors,
+    trueTotalOpen: { significant: significantTrueCount, important: importantTrueCount, urgent: urgentTrueCount },
+  });
 
   return res.status(200).json({ ok: true, ...sections });
 }
@@ -8809,7 +8926,20 @@ export async function assemblePropertyPacket(entityId, workspaceId, deps = {}) {
     if (listRes.ok) listings = listRes.data || [];
 
     // ownership — recorded/true owner names (domain) + related people/orgs (LCC graph).
-    ownership = { recorded_owner_name: null, true_owner_name: null, related_entities: [] };
+    // PDR2 (2026-09-14): the true_owner may be the TENANT/OPERATOR, not the landlord (P113 —
+    // 7,937 dia properties resolve true_owner_id to an operator-flagged row). Never return an
+    // operator-flagged true_owner as ownership.true_owner_name; surface it explicitly instead
+    // via true_owner_is_operator + operator_name (the same field names
+    // entities-handler.js::assemblePropertyDossier §1.6 already reads/produces), and leave
+    // recorded_owner_name as the owner of record. gov's true_owners has no
+    // is_operator_not_owner/owner_type column — trueOwnerOperatorSelectFields degrades the
+    // select per domain so this never 400s there, and isTrueOwnerOperator never throws on a
+    // row missing those keys.
+    ownership = {
+      recorded_owner_name: null, true_owner_name: null,
+      true_owner_is_operator: false, operator_name: null,
+      related_entities: []
+    };
     if (leaseData && (leaseData.recorded_owner_id != null || leaseData.true_owner_id != null)) {
       const ownerCalls = [];
       if (leaseData.recorded_owner_id != null) {
@@ -8818,14 +8948,20 @@ export async function assemblePropertyPacket(entityId, workspaceId, deps = {}) {
           .then(r => ({ kind: 'recorded', r })));
       }
       if (leaseData.true_owner_id != null) {
+        const toSelect = `true_owner_id,name,${trueOwnerOperatorSelectFields(domain)}`;
         ownerCalls.push(_domainGet(domain,
-          `true_owners?true_owner_id=eq.${encodeURIComponent(leaseData.true_owner_id)}&select=true_owner_id,name&limit=1`)
+          `true_owners?true_owner_id=eq.${encodeURIComponent(leaseData.true_owner_id)}&select=${toSelect}&limit=1`)
           .then(r => ({ kind: 'true', r })));
       }
       for (const { kind, r } of await Promise.all(ownerCalls)) {
-        if (r.ok && r.data?.[0]?.name) {
-          if (kind === 'recorded') ownership.recorded_owner_name = r.data[0].name;
-          else ownership.true_owner_name = r.data[0].name;
+        if (!(r.ok && r.data?.[0]?.name)) continue;
+        if (kind === 'recorded') {
+          ownership.recorded_owner_name = r.data[0].name;
+        } else if (isTrueOwnerOperator(r.data[0])) {
+          ownership.true_owner_is_operator = true;
+          ownership.operator_name = r.data[0].name;
+        } else {
+          ownership.true_owner_name = r.data[0].name;
         }
       }
     }
@@ -8858,7 +8994,11 @@ export async function assemblePropertyPacket(entityId, workspaceId, deps = {}) {
   } else {
     // No domain linkage — these sections are unavailable, not errors.
     fieldsMissing.push('lease_data', 'documents', 'transactions', 'ownership', 'investment');
-    ownership = { recorded_owner_name: null, true_owner_name: null, related_entities: [] };
+    ownership = {
+      recorded_owner_name: null, true_owner_name: null,
+      true_owner_is_operator: false, operator_name: null,
+      related_entities: []
+    };
   }
 
   // Related people/orgs from the LCC graph — resolve the "other" entity's name.

@@ -200,6 +200,10 @@ export default withErrorHandler(async function handler(req, res) {
       const { handleAscResearchComplete } = await import('./_handlers/asc-research-handler.js');
       return handleAscResearchComplete(req, res);
     }
+    case 'asc-research-review': {
+      const { handleAscResearchReview } = await import('./_handlers/asc-research-handler.js');
+      return handleAscResearchReview(req, res);
+    }
     case 'doc-bytes-backfill': {
       // Bounded server-side re-fetch backfill for url-only docs (public/CDN links
       // that are NOT session-bound). Session-bound CoStar links honestly stay

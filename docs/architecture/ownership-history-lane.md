@@ -333,6 +333,7 @@ variant A4b now catches). **There is no further recoverable population here.**
 | **A3-residue** | ~31 chains with no sponsor family — the genuine integrity lane. **Sized, surface deliberately not built.** | ~31 |
 | **P1c / J1–J4** | **JV / fund ownership is multi-party and the chain is single-valued.** `Boyd Watterson JV UBP` resolves to Boyd alone; its partner is invisible. Leasehold vs fee is a real split, not a weaker claim. | design |
 | — | **`r9_chain_connect` (cron 104) mints prior-owner entities and attaches them to nothing** — 291 of the 331 grantors A2 resolved were its unattached output. A2 is its missing consumer. | ~4,900 |
+| ~~**PR-scanner-3**~~ | ✅ **DONE 2026-09-12** — SIXTH action `county_records_needed`: a reclassification of `mismatch`/`all_guarded` when the gov property carries no trustworthy `parcel_records`/`tax_records`/`deed_records` on file (`costar_sidebar` parcel/tax, or any deed not tagged `ai_recall_gpt`, per `api/_shared/gov-property-record-coverage.js`). Reuses B1's human floor unchanged. Re-measured live: **27 of 68 human_actionable tasks (40%)** reclassify; fleet-wide (mismatch+all_guarded) **126 of 254 (49.6%)**. Predicted-vs-actual delta after shipping the migration was **exact** (mismatch 192→101, all_guarded 62→27, county_records_needed 0→126, `human_actionable` count unchanged at 68 split 37/4/27). A sidepanel button ("County portal →", `researchOpenCountyPortal`) wires PR-scanner-5's `/api/recorder-portal` to these cards — the first live consumer of that route. The coverage mirror needs a sync tick scheduled (`syncGovPropertyRecordCoverageForOwnershipLane`, not yet on a cron — an operator step). | 126 (27 human_actionable) |
 
 ## 6. Evidence trail (dated audits — the *why*)
 
@@ -428,8 +429,30 @@ growth that does not happen.
 `OWN-T0b` no LCC mirror of `v_ownership_transitions_portfolio` · `OWN-T0c` 417 duplicate-entity
 merges (and `lcc_entity_canonical_key` keeps a trailing `(The)`) · `OWN-T0d` 11 tombstone duplicates ·
 **`OWN-T0e` ~1,550 unconfirmed sponsor/SPE pairs — one confirm clears a family; the highest-leverage
-follow-up** (✅ **BUILT 2026-09-09** — Decision Center lane `sponsor_family_confirm`, one write = `INSERT lcc_ownership_sponsor_family`, reversible by DELETE; JS ships on the next Railway redeploy. The lane reads the 4-hourly cache `lcc_ownt0e_sponsor_family_proposals_cache` — the proposals view `v_lcc_ownt0e_sponsor_family_proposals` costs ~20 s because it scans this whole reconciled store, which is built for point-queries — and re-derives `already_confirmed` live. 182 groups / **317 pairs, not props** (a property with three candidates carries two; NGP Capital's 30 pairs flipped 28 properties in a rolled-back control); 13 breadth groups (19 incl. tied) carry a "SPE" that holds ≥2 properties — usually a sponsor DUPLICATE → `same_party`, which since OWN-T0e-b can merge the named pair here (`merge_now`, `lcc_merge_entity`, reversible; refused when the recorded `entity_type` differs — that refusal found `Gardner-Tanenbaum` typed `person`). ⚠️ Read the pair: Truist Bank ↔ Truist Financial is parent/subsidiary, not a duplicate. **LIVE 2026-09-09 (`/version` 87b631e8): 5 cards worked — registry 6→8 (`ngp`, `uirc`), 3 reversible merges, `sponsor_family_confirmed` 64→102, exactly the predicted 28+10; re-measure `unclassified_rival` before quoting it (two reads 13 min apart said 1,575 and 1,516 with no write between — OWN-T0h). Design + build + live record `docs/audits/OWN_T0e_SPONSOR_FAMILY_LANE_DESIGN_2026-09-08.md` §4/§6/§8; ⚠️ the reconciled store reads **2,097** conflict properties, not 756 — OWN-T0h) · `OWN-T0f` per-row UUIDs in `ownership_source` · `OWN-T0g`
+follow-up** (✅ **BUILT 2026-09-09** — Decision Center lane `sponsor_family_confirm`, one write = `INSERT lcc_ownership_sponsor_family`, reversible by DELETE; JS ships on the next Railway redeploy. The lane reads the 4-hourly cache `lcc_ownt0e_sponsor_family_proposals_cache` — the proposals view `v_lcc_ownt0e_sponsor_family_proposals` costs ~20 s because it scans this whole reconciled store, which is built for point-queries — and re-derives `already_confirmed` live. 182 groups / **317 pairs, not props** (a property with three candidates carries two; NGP Capital's 30 pairs flipped 28 properties in a rolled-back control); 13 breadth groups (19 incl. tied) carry a "SPE" that holds ≥2 properties — usually a sponsor DUPLICATE → `same_party`, which since OWN-T0e-b can merge the named pair here (`merge_now`, `lcc_merge_entity`, reversible; refused when the recorded `entity_type` differs — that refusal found `Gardner-Tanenbaum` typed `person`). ⚠️ Read the pair: Truist Bank ↔ Truist Financial is parent/subsidiary, not a duplicate. **LIVE 2026-09-09 (`/version` 87b631e8): 5 cards worked — registry 6→8 (`ngp`, `uirc`), 3 reversible merges, `sponsor_family_confirmed` 64→102, exactly the predicted 28+10; re-measure `unclassified_rival` before quoting it (two reads 13 min apart said 1,575 and 1,516 with no write between — OWN-T0h). Design + build + live record `docs/audits/OWN_T0e_SPONSOR_FAMILY_LANE_DESIGN_2026-09-08.md` §4/§6/§8. ✅ **`OWN-T0h` DECIDED 2026-09-11: the reconciled store's conflict count is canonical, not `v_lcc_property_multi_current`'s 756** — `multi_current` only checks the fact ledger against itself; the reconciled store also admits the resolver's proposal and the domain true_owner mirror, which is what the panel actually reads ("one door"). ⚠️ A same-day re-measurement first (wrongly) reported this had doubled to 4,478 — that was a counting bug (`count(*)` counts owner-candidate ROWS, not properties, on a view where every conflict property carries ≥2 rows by construction). **Corrected: `count(distinct property)` gives 2,065 today (gov 1,752 / dia 313) — essentially flat vs. 2,097 on 2026-09-02**, the small drop fully explained by OWN-T0e's confirm lane (`unclassified_rival` 1,617→1,508, `sponsor_family_confirmed` 64→142) plus a few merges (`duplicate_entity` 417→415). No mystery growth. Always count distinct property on this view.) · `OWN-T0f` per-row UUIDs in `ownership_source` · `OWN-T0g`
 `lcc_finalize_entity_portfolios` supersedes only within its own payload (gov) and not at all (dia).
+
+**`OWN-T0j` — the gov-side classifier `OWN-T0a` calls for is SHIPPED (2026-09-11, branch
+`claude/own-t0j-sponsor-classifier`, pushed, not yet merged).** `OWN-T0a` measures gov's OWN latest
+ownership-transition-grantee vs `properties.true_owner_id` disagreement directly against gov's tables
+(43–49%), which is a different, upstream comparison from this file's `v_lcc_property_ownership_reconciled`
+store and from `OWN-T0e`'s confirm lane — confirming a sponsor family in `lcc_ownership_sponsor_family`
+(LCC Opps) never writes back to gov, so it cannot move `OWN-T0a`'s number by itself. `OWN-T0j` is the
+missing cross-database read: a Node tick (`api/_handlers/ownt0j-sponsor-classify-tick.js` +
+`api/_shared/ownt0j-sponsor-classifier.js`) fetches gov's disagreement population and LCC Opps' confirmed
+sponsor tokens (two separate Supabase projects — no SQL join possible), name-keys them with a byte-for-byte
+port of gov's own `v_ownership_transitions_portfolio` key expression, and splits the population into
+`sponsor_family_confirmed` (a confirmed sponsor family already explains it — expected, not a defect) vs
+`unclassified_rival` (the honest residual). Cache table `lcc_ownt0j_sponsor_disagreement_cache` + reporting
+view `v_lcc_ownt0j_sponsor_disagreement_report` on LCC Opps (migration `20260911190000`, applied live);
+refresh cron `lcc-ownt0j-sponsor-classify-refresh` (`39 */4 * * *`). **Measured 2026-09-11 against both live
+projects: 5,133 comparable / 2,462 disagree; `sponsor_family_confirmed` = 482 (19.6%), `unclassified_rival`
+= 1,980 (80.4%)** — Boyd Watterson's 192 gov properties classify entirely `sponsor_family_confirmed` as the
+positive control. It does NOT make gov's two sides agree (refused per `OWN-T0`/`RO2` above) and does NOT
+build a second confirm mechanism — a genuinely `unclassified_rival` pair routes to `OWN-T0e`'s existing
+`sponsor_family_confirm` lane. ⚠️ The confirmed token `gov` is a 3-char generic substring worth watching
+before curating more short tokens. See `docs/os/PLANNED-BACKLOG.md` row `OWN-T0j` and
+`docs/claude-code/STATUS.md` 2026-09-11 for the full measurement.
 
 ### The `resolve_ownership` Decision Center lane vs this store (UX-T1c §10, 2026-09-08)
 
@@ -442,3 +465,87 @@ verdicts ever. ✅ **RO1 (same day) filters the 836 at the source** (`proposal_i
 operator opens from its card reads this view and will disagree. Backlog **RO1–RO5**; the
 family-shaped deed rows (≥124) belong to **OWN-T0e**. Full measurement:
 `docs/audits/UX_T1c_DECISION_CENTER_BUCKET_AUDIT_2026-09-08.md` §10.
+
+**RO5 (2026-09-11) — sized the overlap between the two stores, on the 761-row post-RO1 population.**
+Joined `v_ownership_resolution`'s 761 genuine-dispute gov properties against
+`v_lcc_property_ownership_reconciled` (gov domain, current, primary) — pulled live from both Supabase
+projects and joined locally in Python, since a direct SQL join isn't possible across two separate
+Postgres instances. **742 of 761 (97.5%) are present in the reconciled store; 19 absent** (mostly
+person-name-format mismatches the reconciled store never linked, e.g. `LIDDELL ANDY` / `Andy Liddell`).
+Of the 742 present, comparing the reconciled store's primary `owner_name` against the lane's three
+names: **169 (23%) agree with `proposed_owner_name`** (the deed/lessor signal the lane already shows),
+**198 (26%) agree only with `current_recorded_owner_name`** (the reconciled store rejected the lane's
+proposal and kept the recorded owner), **253 (33%) agree only with `true_owner_name`** (the reconciled
+store already matches gov's own true-owner field, which the lane's card doesn't compare against), and
+**122 (16%) are hard disagreements** — the reconciled store's primary owner matches none of the three.
+Of those 122: 88 still carry the reconciled store's own `conflict_class` (mostly `unclassified_rival`,
+largely the Boyd Watterson/Easterly/Gardner Tanenbaum sponsor-family SPE shapes `OWN-T0e` already
+handles), 57 are `is_domain_true_owner=true` (high confidence) vs 65 not.
+
+**RO3 decision (Scott, 2026-09-11): repoint `resolve_ownership` at the reconciled store — merge into
+this store's conflict lane, don't keep it a separate door.** RO5's numbers set the migration's real
+scope: the reconciled store's gov `conflict` population is **1,752 properties today, not 761** — a
+larger, *different* population (it surfaces lessor/relationship-graph-shaped disagreements the
+deed-only lane never saw, and drops the 253 cases that already agree with `true_owner_name`). The
+card's `context` needs a field mapping from the reconciled store's ranked-owner-candidate shape
+(`owner_entity_id, owner_name, is_primary, primary_reason, conflict_class, evidence_level,
+resolver_rung, is_domain_true_owner`) onto the existing recorded/proposed/true-owner card fields — not
+a 1:1 rename, since the reconciled store has no single proposed-vs-recorded pair. The four
+write-verdict paths (`keep` / `update_owner` / `confirm_sale` / `research`) call real gov RPCs behind
+existing guards (`DECISION_GOV_WRITEBACK` env gate, $50k sale-price floor, never-fabricated dates) and
+are not reconciled-store-specific — recommended to preserve them as-is and repoint only the source
+population/context query. **Not built yet** — this is a live financial-write lane; a written
+field-mapping design is the recommended next step before any code change. `docs/os/PLANNED-BACKLOG.md`
+rows `RO3`/`RO5`; `docs/claude-code/STATUS.md` 2026-09-11.
+
+**RO3 migration design (2026-09-11) — field mapping, not yet built.**
+
+*Population query.* Replace `v_ownership_resolution?proposal_is_recorded=eq.false` (761 rows) with
+`v_lcc_property_ownership_reconciled?source_domain=eq.gov&is_current=eq.true&property_state=eq.conflict`
+(1,752 properties today, `is_primary=eq.true` for the one row per property the card anchors on — the
+other current candidate rows for that property are read alongside it, the same way the property panel
+already shows multiple claimants). `annual_rent` for the existing rank/sort column already exists on
+the reconciled store row — no change needed there.
+
+*Fields that move as-is* (still read from gov's own tables, unchanged by this migration, because the
+reconciled store doesn't carry them): `recorded_owner_name` / `true_owner_name` (gov `recorded_owners`
+/ `true_owners`, joined by property_id as today), `address` / `city` / `state` / `agency`.
+
+*Fields that map from the reconciled store's shape, not renamed 1:1:*
+- `proposed_owner_name` ← the primary row's `owner_name` (the resolver's top-ranked current candidate)
+- `primary_signal` ← `resolver_rung` (`domain_true_owner` / `relationship_graph` / `supersession` /
+  etc.) — a different vocabulary than today's `deed_grantee` / `gsa_lessor_change` /
+  `state_lessor_change` / `discrepancy`, so the card's signal badge needs new copy, not a value swap
+- `evidence` ← assembled from `link_source` + `evidence_level` + `resolver_rung` (today's `evidence`
+  jsonb array has no reconciled-store equivalent; this is new code, not a rename)
+- `recommended_action` ← derived, not carried: `conflict_class = 'sponsor_family_confirmed'` → treat
+  as already-resolved (arguably shouldn't even surface as a card, since `OWN-T0e` already confirmed
+  it — **open question for Scott**: does RO3's lane exclude `sponsor_family_confirmed` properties
+  entirely, or show them as a lower-priority "confirmed, FYI" tier?); `is_domain_true_owner = true` →
+  `confirm`-shaped; `conflict_class = 'unclassified_rival'` and no domain true owner → `research`;
+  everything else → needs a rule, not yet written
+- `is_newer_than_recorded` / `latest_deed_date` / `deed_conflict_kind` / `deed_auto_fixable` /
+  `suspected_grantor` / `suspected_grantee` / `suspected_sale_date` / `discrepancy_source` /
+  `discrepancy_proposed` / `has_deed_signal` / `has_lessor_signal` / `has_discrepancy_signal` — these
+  are all `v_ownership_resolution`-specific (deed/lessor/discrepancy CTE provenance) and have **no
+  reconciled-store equivalent at all**. They either get dropped from the card (the reconciled store
+  doesn't distinguish signal type the same way) or the migration keeps reading `v_ownership_resolution`
+  *alongside* the reconciled store just to backfill these fields when they exist — **open question for
+  Scott**, since carrying both sources forever defeats the "one door" point of doing this migration.
+- `owner_guards_pass` ← re-run `granteePassesOwnerGuards` (or the reconciled store's own
+  `is_brokerage`/`is_placeholder`/`is_operator` flags, which already encode most of the same guard
+  logic on the candidate row) against the primary row's `owner_name` — the reconciled store's flags are
+  likely the better source here, since they're already computed and available on every row.
+
+*Write side — recommended unchanged.* The four verdict handlers (`keep` / `update_owner` /
+`confirm_sale` / `research`) call real gov RPCs (`propagateDeedGranteeToOwner`,
+`reconcileSaleAndOwnershipForNewOwner`, `gov_apply_manual_true_owner`, `gov_confirm_suspected_sale`,
+`createResearchTask`) behind existing guards and never touch `v_lcc_property_ownership_reconciled`
+directly — they write to gov's own tables, which the reconciled store then re-reads on its own refresh
+cycle. No reason to change these; only the GET-side population/context query needs to move.
+
+**Not started.** The two open questions above (whether `sponsor_family_confirmed` properties surface
+at all, and whether deed/lessor/discrepancy-specific fields get dropped or double-sourced) are real
+design calls, not implementation details — recommend resolving them with Scott before writing any
+code, since this lane's `update_owner`/`confirm_sale` verdicts make real, live writes to gov's
+ownership tables.

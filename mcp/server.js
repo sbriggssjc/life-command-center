@@ -587,6 +587,29 @@ const TOOL_DEFINITIONS = {
       required: ['summary']
     }
   },
+  log_operator_note: {
+    name: 'log_operator_note',
+    description: 'File a note into the LCC operator funnel (spec: EXEC-BRIEFS-SPEC.md §6) — a bug, data gap, idea, UX friction, or question about the LCC app/data. Every channel (in-app Note button, Outlook, Teams, MCP, Cowork/Claude Code) writes the SAME queue; a separate triage tick classifies, dedupes, and routes it to an owner thread. Use this for something a human should eventually see and act on — not for durable cross-session facts (use log_memory for those).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        raw_text: { type: 'string', description: 'The note itself, in plain language (required)' },
+        context: { type: 'object', description: 'Whatever the calling surface already has for free — session id, repo/PR reference, the prompt that produced the note, an error message, a route/entity id. Optional.' },
+        channel: { type: 'string', enum: ['mcp', 'cowork'], description: "Defaults to 'mcp'; pass 'cowork' when the calling harness is Cowork/Claude Code rather than a chat surface." }
+      },
+      required: ['raw_text']
+    }
+  },
+  get_operator_inbox: {
+    name: 'get_operator_inbox',
+    description: 'Read the one operator to-do list (spec: EXEC-BRIEFS-SPEC.md §6) — every open/routed/in-progress operator note across every channel, grouped by owner thread and severity. Call this at the start of a session alongside recalling memory, so work already flagged is not silently missed. Optionally filter to one thread.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        thread: { type: 'string', description: "Optional owner thread to filter to, e.g. 'automation', 'data-coherence', 'comps'. Omit for the full inbox." }
+      }
+    }
+  },
   generate_bov: {
     name: 'generate_bov',
     description: "Generate a Briggs CRE BOV Excel workbook (10 tabs, all formulas recalculated) and return a short-lived download link to the finished .xlsx. TWO ways to call: (1) PREFERRED for a known LCC property — pass ONLY `property_lookup` (an address like '207 Fob James Dr, Valley, AL') or `cre_property_id`; the server loads that property's reviewed lease/financial record and builds the identical workbook every team member would get. (2) For a brand-new deal not yet in LCC — hand-author asset_type + property + tenants + underwriting + client. You may also pass property_lookup/cre_property_id AND override specific fields (e.g. client) — posted fields win over the loaded record.",
@@ -851,6 +874,67 @@ export const TOOL_HANDLERS = {
       };
       const r = await opsQuery("POST", "cortex_memory", row);
       return textResult({ ok: r.ok !== false, logged: summary });
+    });
+  },
+  log_operator_note: async ({ raw_text, context, channel }) => {
+    return withTiming("log_operator_note", async () => {
+      if (!OPS_SUPABASE_URL || !OPS_SUPABASE_KEY) {
+        return textResult({ error: "OPS database not configured" });
+      }
+      const text = String(raw_text || "").trim();
+      if (!text) return textResult({ error: "raw_text is required" });
+      const validChannel = channel === "cowork" ? "cowork" : "mcp";
+      const row = {
+        channel: validChannel,
+        raw_text: text.slice(0, 20000),
+        attachments: [],
+        context: context && typeof context === "object" ? context : {},
+        received_from: null,
+        disposition: "open",
+      };
+      const r = await opsQuery("POST", "operator_notes", row, "return=representation");
+      const inserted = Array.isArray(r.data) ? r.data[0] : r.data;
+      if (r.ok === false || !inserted) {
+        return textResult({ ok: false, error: r?.data?.message || r?.data?.error || "insert failed" });
+      }
+      return textResult({ id: inserted.id, disposition: inserted.disposition || "open" });
+    });
+  },
+  get_operator_inbox: async ({ thread }) => {
+    return withTiming("get_operator_inbox", async () => {
+      if (!OPS_SUPABASE_URL || !OPS_SUPABASE_KEY) {
+        return textResult({ error: "OPS database not configured" });
+      }
+      let path = "operator_notes?disposition=in.(open,routed,in_progress)"
+        + "&select=id,channel,raw_text,note_type,lane,severity,routed_to,disposition,dedupe_of,metadata,received_at,received_from"
+        + "&order=received_at.desc&limit=500";
+      if (thread) path += `&routed_to=eq.${enc(thread)}`;
+      const r = await opsQuery("GET", path);
+      const notes = Array.isArray(r.data) ? r.data : [];
+      // Group by thread + severity, mirroring api/_shared/operator-inbox.js
+      // (kept as a small inline mirror here rather than importing across the
+      // MCP/API module boundary — the SQL/data shape is the shared contract,
+      // not the grouping code, and the fields read are identical).
+      const rank = { high: 0, medium: 1, low: 2 };
+      const groups = new Map();
+      for (const n of notes) {
+        const t = n.routed_to || "(unrouted)";
+        if (!groups.has(t)) groups.set(t, []);
+        groups.get(t).push(n);
+      }
+      for (const list of groups.values()) {
+        list.sort((a, b) => (rank[a.severity] ?? 3) - (rank[b.severity] ?? 3)
+          || new Date(b.received_at || 0) - new Date(a.received_at || 0));
+      }
+      const threads = [...groups.keys()].sort((a, b) => {
+        if (a === "(unrouted)") return 1;
+        if (b === "(unrouted)") return -1;
+        return a.localeCompare(b);
+      });
+      return textResult({
+        count: notes.length,
+        threads: threads.map((t) => ({ thread: t, notes: groups.get(t) })),
+      });
     });
   },
   get_daily_briefing: async ({ workspace_id }) => {
@@ -1748,6 +1832,7 @@ const READ_ONLY_HTTP_TOOLS = new Set([
   "get_queue_summary",
   "get_pipeline_health",
   "recall_memory",
+  "get_operator_inbox",
 ]);
 
 // MCP tools return { content: [{ type: 'text', text: <JSON string> }] } (and
@@ -2338,6 +2423,7 @@ const READ_HTTP_ROUTES = {
   "/api/queue-summary": "get_queue_summary",
   "/api/pipeline-health": "get_pipeline_health",
   "/api/recall-memory": "recall_memory",
+  "/api/operator-inbox": "get_operator_inbox",
 };
 for (const [routePath, toolName] of Object.entries(READ_HTTP_ROUTES)) {
   app.post(prefixed(routePath), authenticate, makeReadHttpRoute(toolName));

@@ -31,6 +31,7 @@ import { invokeExtractionAI } from '../_shared/ai.js';
 import { advanceOutboundTodos, findCrossPathDuplicate } from '../_shared/outbound-advance.js';
 import { maybeAttachActionSummary, touchedActionLabels } from '../_shared/action-summary.js';
 import { parseAddress, parseAddressList } from '../_shared/outlook-recipients.js';
+import { insertOperatorNote, validateOperatorNotePayload } from '../_shared/operator-notes.js';
 
 const PA_WEBHOOK_SECRET = process.env.PA_WEBHOOK_SECRET;
 function authenticateWebhook(req) {
@@ -42,6 +43,21 @@ function authenticateWebhook(req) {
     mismatch |= provided.charCodeAt(i) ^ PA_WEBHOOK_SECRET.charCodeAt(i);
   }
   return mismatch === 0;
+}
+
+const OPERATOR_NOTE_CATEGORY_RE = /^\s*lcc[\s_-]*note\s*$/i;
+const OPERATOR_NOTE_BRIEFING_SUBJECT_RE = /\b(daily briefing|market brief|analyst'?s? take|build brief)\b/i;
+
+/** Pure. See the "OC1 — the operator-note funnel's Outlook channel" comment
+ * at the call site for the dormancy diagnosis this fixes. Exported for
+ * direct unit testing (no live DB / handler invocation needed). */
+export function classifyOperatorNoteChannel(rawCategories, subject) {
+  const categoryList = Array.isArray(rawCategories) ? rawCategories : String(rawCategories || '').split(/[;,]/);
+  const isLccNoteCategory = categoryList.some((c) => OPERATOR_NOTE_CATEGORY_RE.test(String(c || '')));
+  const isBriefingReply = !isLccNoteCategory
+    && /^re:/i.test(String(subject || ''))
+    && OPERATOR_NOTE_BRIEFING_SUBJECT_RE.test(String(subject || ''));
+  return { isLccNoteCategory, isBriefingReply };
 }
 
 const firstNonEmpty = (...xs) => xs.find((x) => x != null && String(x).trim() !== '') ?? null;
@@ -180,6 +196,51 @@ export async function handleTaggedComm(req, res) {
   const fromName = parseAddress(firstNonEmpty(p.from, p.sender, null)).name || null;
   const toNames = parseAddressList(firstNonEmpty(p.to, p.to_recipients, p.recipients, null))
     .filter((x) => x.name).map((x) => ({ name: x.name, email: x.email }));
+
+  // OC1 — the operator-note funnel's Outlook channel. Two arms, BEFORE the
+  // deal-resolution LCC gate below, because a note is never a deal:
+  //   1. Category `LCC-Note` (any case/spacing) — an explicit operator note.
+  //      DORMANCY DIAGNOSIS (spec §6): the pre-existing `LCC`/`LCC:<hint>`
+  //      gate (parseLccCategoryHint) matches `^lcc$` or `^lcc[:=](.+)$` only
+  //      — a category literally named `LCC-Note` matches NEITHER pattern (the
+  //      hyphen fails both regexes), so every note tagged that way has always
+  //      fallen through to `no_lcc_category` and been silently dropped. This
+  //      is why the channel reads flag-on-but-dormant (contract note: "First
+  //      diagnose the dormancy... is the PA category flow off, erroring, or
+  //      just unused?") — for the NOTE category specifically it was neither:
+  //      the regex could never have matched it, so it never had a live path.
+  //      The 6-lifetime-rows dormancy documented in PLANNED-BACKLOG §P18 is
+  //      about the broader `LCC`/`LCC:<hint>` deal-tagging flow, which is a
+  //      SEPARATE, narrower dormancy question (whether the PA category-
+  //      assigned trigger itself still fires) — this fix only closes the
+  //      LCC-Note-specific gap, and does not by itself prove the PA flow is
+  //      alive; that needs a live post through the flow to confirm (§6).
+  //   2. A plain reply to a briefing email that never carried an LCC tag at
+  //      all (contract: "outlook_reply... replies to briefing emails, if the
+  //      flow can match them") — detected narrowly by subject: a reply
+  //      (`Re:`) whose ORIGINAL subject line is a recognizable briefing
+  //      subject. Never guessed beyond that; anything else still falls
+  //      through to the LCC deal gate below, unchanged.
+  const { isLccNoteCategory, isBriefingReply } = classifyOperatorNoteChannel(p.categories ?? p.category, subject);
+
+  if (isLccNoteCategory || isBriefingReply) {
+    const rawText = (bodyPreview || subject || '').toString();
+    const validated = validateOperatorNotePayload({
+      channel: isLccNoteCategory ? 'outlook_tagged' : 'outlook_reply',
+      raw_text: rawText,
+      context: { subject, thread_id: conversationId || null, original_message_id: internetMsgId },
+      received_from: fromAddr,
+      idempotency_key: String(internetMsgId),
+    });
+    if (!validated.ok) {
+      return res.status(200).json({ ok: true, logged: false, reason: 'operator_note_invalid_payload', detail: validated.error });
+    }
+    const result = await insertOperatorNote(validated.row, { idempotencyKey: validated.idempotencyKey });
+    return res.status(200).json({
+      ok: true, logged: !!result.ok, operator_note_id: result.id || null,
+      disposition: result.disposition || null, via: isLccNoteCategory ? 'lcc_note_category' : 'briefing_reply_subject',
+    });
+  }
 
   // Category gate — a message with no LCC category is a mis-fire; ignore quietly.
   const { tagged, hint } = parseLccCategoryHint(p.categories ?? p.category);

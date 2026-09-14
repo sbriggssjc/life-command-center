@@ -360,6 +360,68 @@ plus Stage 1's `dc-lanes.js` out of `ops.js`). Map + the full extraction recipe:
 
 ## Core doctrines (apply to every change)
 
+### 🗄️ ONE REPO OWNS EACH DATABASE'S OBJECTS (Scott, 2026-09-12)
+
+`government-lease` owns the **government** DB's migrations, functions, views and triggers. This repo's
+`supabase/migrations/government/*` (213 files) is **historical** — the record of what was applied, not a place to add
+to. Do not write new gov DB objects here, and do not re-apply an old one: found 2026-09-12, LCC's committed
+`canonicalize_agency()` is older than live (no state-qualifier guard, old ICE/CBP branch order), so re-running it would
+silently restore `TEXAS DEPARTMENT OF AGRICULTURE → USDA` and `Immigration & Customs Enforcement → CBP`. Before editing
+any DB object, read its **deployed** definition and know which repo owns it (invariant I16). **Ownership table (Scott, 2026-09-12):**
+
+| database | owning repo | note |
+|---|---|---|
+| government | **`government-lease`** | LCC's `supabase/migrations/government/*` (213 files) is historical — **188 of the 194 objects they define are live right now**, so re-applying one overwrites a running object |
+| Dialysis_DB | **`life-command-center`** | where the work happens: operator registry, aliases, write guards, comps engine, market-brief producers. The Dialysis repo owns its CMS/NPI **ingestion** (rows, not schema) — if it needs a schema change, it lands here |
+| LCC Opps | **`life-command-center`** | this repo is the app |
+any DB object, read its **deployed** definition and know which repo owns it (invariant I16).
+
+✅ **ID3a-d SHIPPED 2026-09-12 — every database now has a named owner, measured, not guessed.**
+
+| database | ref | owning repo | evidence | migration count in owning repo | migration count in non-owning repos | newest file |
+|---|---|---|---|---:|---|---|
+| **government** | `scknotsqkcheojiaewwh` | **`government-lease`** (settled by Scott) | `government-lease` is the canonical repo per its own CLAUDE.md §1; carries `sql/*.sql`; ID3a-c's live fix (PR #398) shipped there | 294 (`sql/*.sql`) | `life-command-center` **213** (`supabase/migrations/government/*.sql`) — **retired, historical, this round** | both repos: 2026-09-12 (the same-day ID3a-c work) |
+| **Dialysis_DB** | `zqzrriwuavgrquhisnoa` | **`Dialysis`** — 👤 not formally confirmed by Scott, but the evidence is one-sided: this is the repo's own database (its CLAUDE.md documents dozens of migrations against it directly), it carries by far the largest and most actively-maintained migration set, and its own CLAUDE.md never defers to another repo | `Dialysis` carries `supabase/migrations/*.sql` (+ `sql/migrations/`, `migrations/`) | 555 files across all migration dirs in `Dialysis` | `life-command-center` **277** (`supabase/migrations/dialysis/*.sql`) — **not yet retired; same treatment as government is the obvious next step, filed below** | `Dialysis`: 2026-09-11 (`dia_pdr14a_property_redirects`); `life-command-center`'s dia copy: same window |
+| **LCC Opps** | `xengecqvemvfknjvbvrq` | **`life-command-center`** (this repo — the entities/BD-spine/priority-queue/decisions/cadence/provenance-registry app IS this repo) | This repo's own CLAUDE.md names LCC Opps as "the brain: entities, BD spine, priority queue, decisions, cadence, provenance registry, health alerts, auth (GoTrue), most crons" and every `lcc_*` function/table in this file is defined by this repo's root-level `supabase/migrations/*.sql` | 865 (root `supabase/migrations/*.sql`, excluding the `dialysis/` and `government/` subdirectories) | none found — no other repo in this session's scope carries LCC-Opps-targeted migrations | this repo, 2026-09-12 |
+
+**Not retired here (out of scope for ID3a-d, filed as a follow-up):** `life-command-center`'s
+`supabase/migrations/dialysis/*` (277 files) is the same shape of duplicate as the government
+directory was — a second repo's migrations sitting in a non-owning repo — but Scott has not been
+asked to confirm `Dialysis` as the formal owner (👤 above), and the dia directory has not (yet)
+been shown to carry a stale, dangerous copy of a live fix the way the gov directory did. Retiring
+it the same way (README + header stamp) is the natural next unit once Scott confirms ownership;
+see `docs/os/PLANNED-BACKLOG.md` §P0d **ID3a-d-dia**.
+
+**I16 drift detector:** designed, documented, ready to run, **not yet executed** (no Supabase
+network access from this sandbox) — `scripts/db-drift/gov-deployed-vs-committed-drift.sql` +
+`scripts/db-drift/README.md`. Run it once under real credentials, record the result in
+`docs/claude-code/STATUS.md`, and only then consider scheduling it on the I11 alert path.
+
+### 🧭 TRUTH IS FIXED AT ITS SOURCE OF RECORD — NEVER PATCHED WHERE IT SHOWS (Scott, 2026-09-11)
+
+Scott: *"for any of these factual errors, we want to track the source to ensure that the truth persists in all
+places, not just a patch for the purposes of these updates."* When a wrong, split, stale, or duplicated fact
+surfaces anywhere (a brief, a comps band, a CM chart, a dossier, an export), the fix is **not** in the surface that
+exposed it. Do these instead:
+
+1. **Trace it to the source of record.** That's the table and column that owns the fact, and **every writer**
+   that sets it: ingesters, sync jobs, sidebar capture, intake promoters, manual SQL, the Dialysis repo.
+2. **Fix it there, with provenance.** Repair or merge the record (reconcilable, never automatic truth). Ambiguous
+   cases go to a review lane, not a guess.
+3. **Guard every writer** so the defect cannot be re-minted. One resolver (JS plus a lock-step SQL mirror) that
+   every write path calls, and a CI or DB constraint that fails on a bypass.
+4. **Move every consumer to the canonical key** (an id, never a display string), then **measure every surface
+   that reads the fact** and confirm they agree.
+5. **Look one level deeper.** A naming split usually means a missing identity model, a stale number usually means
+   a dead feed, and a round-number cap usually means a truncated import. Name the underlying defect class and sweep
+   for its siblings before closing.
+
+A consumer-side normalizer (a map in the renderer, a `CASE` in a view) is allowed only as a **labelled, temporary
+bridge** with a backlog row pointing at the source fix. It is never the fix. *Worked example: the 2026-09-11
+operator split (backlog **ID1**): "Fresenius" vs "Fresenius Medical Care" in the market brief traced back to
+free-text `dia.properties.operator`, a duplicated `operators` registry, and two conflicting "canonical" spellings.*
+
+
 ### ⚠️ "MERGED" IS NOT "RUNNING" — CHECK THE FIX AGAINST THE DEPLOYED SHA BEFORE CALLING IT BROKEN (2026-08-26)
 
 Three assist fixes landed on 2026-08-26 and **the deploy cutoff cut straight through them.** The
@@ -611,6 +673,35 @@ merged today.
   deed, the listing and the document repointed correctly. **"205 merges lost data" overstates that
   row and understates a `cap_rate_history` loss.** Substantive / re-derivable / queue are three
   policies, and the fold must state which applies per table rather than infer it from the name.
+
+### 🚨 TWO BRANCHES THAT BOTH *ADD* TO A SHARED DOC MERGE CLEANLY AND SILENTLY DUPLICATE IT — ONLY A GUARD CATCHES IT (BACKLOG-ids, 2026-09-12)
+
+`PLANNED-BACKLOG.md` and `STATUS.md` are append-mostly files that every session and every parallel agent writes
+to. Git's 3-way merge sees two pure **insertions** at different offsets, finds **no textual conflict**, and keeps
+**both**. Nobody is warned, and nothing is wrong with either side in isolation.
+
+Measured, the same day, twice over:
+- A dedupe PR fixed 27 duplicate backlog IDs correctly. A concurrent PR then merged `MB2a`/`MB3`/`MB4` restatement
+  rows into `main`. The merge was clean; the duplication the PR existed to remove was **reintroduced on its own
+  branch**, plus malformed extra table columns from the earlier bad merges.
+- `STATUS.md` passed its line budget locally at 2,465, then a merge from `main` added 74 lines and it failed CI at
+  **2,503**. Twice, on two different PRs.
+
+**Therefore:**
+1. **A shared append-mostly doc needs a CI guard, not a convention.** Prose conventions have failed here five
+   times in one day on a single rule. Live guards: `test/backlog-id-uniqueness.test.mjs` (one row per ID),
+   `test/backlog-table-shape.test.mjs`, `test/status-header-integrity.test.mjs` (H1 on line 1),
+   `test/status-line-budget.test.mjs` (≤ 2,500 lines).
+2. **A green local run proves nothing about the merge.** Re-run the doc guards **after** merging `main` into your
+   branch, before pushing — and for the line budget, archive an old span to `docs/history/` **before** you push,
+   leaving 200+ lines of headroom rather than trimming to fit.
+3. **Never resolve a doc duplicate by deleting a row.** Classify first: two unrelated issues sharing an ID is a
+   **collision** — rename the newer one, keep the ID where more citations already point (count them), and leave a
+   pointer so old references resolve. The same issue written twice is a **restatement** — collapse it keeping
+   every distinct fact, and where two copies disagree on a number, **report the conflict and keep both readings
+   with their dates**; never silently pick one.
+4. **Edit the row, don't restate it.** Every one of the 14 restatement groups began as a session appending a fresh
+   row instead of amending the existing one.
 
 ### ⚠️ A CANONICAL TOPIC PAGE GOES STALE ON ITS OWN TOPIC FIRST — UPDATE IT IN THE SAME CHANGE (2026-09-08)
 
