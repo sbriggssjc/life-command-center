@@ -150,7 +150,12 @@ pipeline — as of the last version of this page. **It is now mostly closed:**
   owner-entity-linked touches gives a false floor of 19 owners; following any link at all gives a false
   ceiling of 1,024 (it imports machine-written asset events). The real constraint the audit found:
   **only 847 of 6,480 owners (13%) have a linked person at all — 5,633 (87%) have none** — missing
-  *links*, not missing *touches*.
+  *links*, not missing *touches*. Re-measured live 2026-09-14 (Cowork) alongside verifying the Tier 0
+  auto-attach fix (see `tier0-owner-contact-system.md`): **13.5% (1,377 of 10,187)** by the same
+  method against today's live counts -- essentially the same ratio despite the fix now genuinely
+  writing (9 new links 09-13, confirmed live, the first ever). The universe grew faster than the
+  fix can close it (part of that growth is un-merged OWN-T0b/c duplicate-entity residue inflating
+  the owner count); 9/day against a gap this size is not going to move the headline number on its own.
   `[UX-T1a-touchcount]` 🔴 blocks grading any fix here — `current_touch` reads p50 0 / max 8,198 against
   a 7-step sequence, so cadence position is presently unreadable.
 - **SFENRICH / SF-DIRECT / RAILWAY-PA-SECRET** — separate, currently-active infra threads (owned by
