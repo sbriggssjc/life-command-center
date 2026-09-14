@@ -12,6 +12,7 @@ canonical. **Nothing here is deleted, nothing here is live.** For what IS canoni
 | `dialysis.js.backup` | `dialysis.js` (live) |
 | `gov.js.backup` | `gov.js` (live) |
 | `scratch-2026-09-12/` (12 files) | nothing — one-off scratch, superseded by the work itself. `err.txt` (0 bytes), `draft1/draft2/draftsave.json`, `harvest.json`, `twin.json`, `seed-apply/seed-dryrun.json`, `acq-dryrun.json`, `fix-allother-pagination.patch`, `_commit.bat`, `_deploy_hardening.bat`. Verified unreferenced anywhere outside `STATUS.md`/`docs/history` before moving (REPO1-root-clutter, 2026-09-12). |
+| `prompt-queue-audit-2026-09-14/` (2 files) | `docs/claude-code/prompts/done/` — **exact duplicates**. `PRI4-preflight-abort-hang-and-uncovered-call-site.md` and `PRI5-orphaned-tracker-row-on-start-run-failure-and-census-demographics.md` were sitting in **both** `prompts/` and `prompts/done/`, byte-identical (md5 verified). Both are shipped and deployed. The active-queue copies were moved here rather than deleted; `prompts/done/` holds the canonical copy. |
 
 ## Superseded but intentionally LEFT IN PLACE (do not move — documented instead)
 - **`flow-*.json` (15 files, repo root)** — Power Automate flow definitions. Referenced by name from `CLAUDE.md`, `.env.example`, code comments and ~10 docs; moving them would turn a dozen accurate references stale. **Indexed by topic instead at [`../docs/flows/README.md`](../docs/flows/README.md)** — read that to find a flow, then open the JSON at the root.

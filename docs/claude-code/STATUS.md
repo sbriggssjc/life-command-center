@@ -64,6 +64,40 @@ No Railway redeploy needed (DB-only, no application consumer changed). Left for 
 review-lane rows (`gov_owner_merge_review_log`); Stage 3's remaining `OWN-T0b/c/d/f/g` (417
 `duplicate_entity` merges) and Stage 4's contact-linkage gaps are the next candidates in this pipeline,
 not yet started.
+## 2026-09-14 — Prompt-queue audit: two prompts existed in BOTH `prompts/` and `prompts/done/`; PDR2's blast radius is ~2× what it says (Cowork)
+
+Before adding a fourth prompt to Scott's queue, checked whether the queue is accurate — an earlier XB2 pass found
+shipped prompts still sitting in `prompts/`, and the failure mode is worse than untidiness: a future chat re-runs
+finished work.
+
+**Found and fixed:**
+- ⛔ **`PRI4` and `PRI5` were in `prompts/` AND `prompts/done/` — byte-identical (md5 verified).** Both are shipped
+  and deployed (PRI5 confirmed by Scott 2026-09-11; PRI4 merged via PR #2293/#2297). A file in two places is worse
+  than a stale one: a reader cannot tell which is canonical. Active-queue copies moved to
+  `_superseded/prompt-queue-audit-2026-09-14/` with a manifest row — not deleted, and `prompts/done/` keeps the
+  canonical copy.
+- **`MB2a` was ✅ BUILT with a response already filed, but its prompt was still in the active queue** → `done/`.
+  (Its follow-on `MB2a-deploy` stays 🚨 open — a separate row, correctly.)
+- Two new prompts arrived from parallel Claude Code work (`HCRIS-TIMEOUT`, `MB2bc`). **Queue is now 7, all
+  genuinely open**: `BR1`, `HCRIS-TIMEOUT`, `HP1-P2misparse-fp`, `ID3b`, `ID3d`, `MB2bc`, `PDR2`.
+
+🔴 **And the audit turned up the thing that should be built next — PDR2, whose own headline understates it by
+about half.** The prompt says *"~4,026 properties"*; that is the **no-fallback subset**. Re-measured live in
+Dialysis_DB: **7,937** properties point `true_owner_id` at an `is_operator_not_owner=true` row, and **4,022** of
+those also have `recorded_owner_id IS NULL` — so even the readers that guard correctly have **nothing to fall back
+to**. Top offenders: **Fresenius 3,077 · DaVita Inc. 2,625 · DaVita Kidney Care 1,182 · U.S. Renal Care 343 ·
+Dialysis Clinic Inc 256 · American Renal 221** — **every major operator, not one bad DaVita placeholder.**
+
+**Why it outranks the rest of the queue:** for a net-lease broker the entire job is identifying and calling the
+**owner**. `get_property_context` — the MCP tool and the property packet Scott actually reads — currently answers
+*"the owner is DaVita"* when DaVita is the **tenant**. And two other readers in this same repo already guard it
+correctly (`assemblePropertyDossier` §1.6, `sf-link-reconcile.js::isOperator()`), so it is a **one-file
+inconsistency, not a data problem** — cheap to fix, expensive to leave.
+
+Corrected the figure in the prompt header and on the backlog row rather than leaving a dated number to be quoted
+again (*"re-measure a dated blocker before quoting it"*). §1 of the prompt still requires CC to re-measure rather
+than inherit even these.
+
 ## 2026-09-14 — HP1-P2misparse-fp prompt: the guard blocks real people, and a shape fix cannot repair it (Cowork)
 
 Sized the last 🔴 under HP1 before writing anything, and the sizing changed the shape of the fix.
