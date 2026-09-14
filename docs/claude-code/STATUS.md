@@ -17,6 +17,21 @@
      archive pointer — never reword or drop an entry to make room.
      ============================================================================ -->
 
+## 2026-09-14 — MB2e: two more feeds green + contributing nothing (Federal Register GSA, Tax Foundation)
+
+MB2b's `items_after_cutoff` column found its next two customers on day one. Same class as FEED2
+(a fixed window vs. a slower producer cadence, worst on Monday): `maxAgeHours` set 24*7 on both
+`government/Federal Register (GSA)` and `tax_policy/Tax Foundation` (measured: newest item 82h/92h
+old, 5 items each land inside 7d, 0 inside 72h). Deployed to LCC Opps (v24 → v25), body re-read to
+confirm. Forced live: both feeds went from `items_after_cutoff: 0` to **4** and **5** respectively
+on the same day's real feed. Monitor half also shipped (migration `20260914130000`):
+`v_market_brief_feed_health_no_contribution` + `lcc_check_market_brief_feed_no_contribution` — a
+DISTINCT alert_kind from `market_brief_feed_stale`, counting consecutive checks (never calendar
+days, FEED2's fix applied from the start) that parsed items but contributed 0; rides the same
+11:15 UTC cron. Guard `test/mb2e-feed-cutoff-window.test.mjs`. Full suite green (6,212 tests).
+Backlog **MB2e** ✅; canonical lesson filed in `docs/architecture/data-coherence-invariants.md` I11
+section (fixed-window-vs-cadence is a class, not a one-off).
+
 ## 2026-09-14 — PDR2: closed the operator-as-owner read-path gap in `assemblePropertyPacket` (systemic, 7,937 dia properties)
 
 Re-measured the blast radius live (do not requote the 2026-09-11 figures) — **7,937 dia
