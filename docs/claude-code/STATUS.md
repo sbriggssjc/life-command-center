@@ -17,6 +17,24 @@
      archive pointer — never reword or drop an entry to make room.
      ============================================================================ -->
 
+## 2026-09-14 — MB2e verified live; then found the operator funnel has no consumer (Cowork)
+
+**MB2e confirmed independently.** All **13 feeds now contribute ≥1** — Federal Register (GSA) 6→**4**
+after cutoff, Tax Foundation 15→**5** — **zero feeds at zero**, zero open alerts of either kind, and the
+11:15 UTC cron genuinely calls **both** monitors (checked the cron command, not the claim). The feed
+thread is complete and self-monitoring. No doc entry was needed for the confirmation itself.
+**Closed a stale blocker:** `MB2a` still read `⛔ blocked on edge-function deploy` two days after that
+deploy landed (v21 → v25 since). Now ✅ — and it is exactly the stale-dated-blocker class **XB2** exists
+to catch automatically.
+🚨 **The operator funnel accepts notes and nothing processes them.** OC-v's blocker #1 IS resolved —
+the standalone MCP redeploy happened, `log_operator_note`/`get_operator_inbox` are live, intake works
+end to end. But: `operator_notes` holds **1** note, filed 2026-09-12, still `open` / `note_type=null` /
+`routed_to=null`; the **`OPERATOR_NOTE_TRIAGE` registry row does not exist at all** (OC2 shipped the
+handler and never registered the flag, so it cannot be turned on); and there is **no triage cron**.
+This is worse than not having the funnel — Scott was told it is live, so a note filed there looks
+captured, is captured, and is then silently ignored. Same class as a dead feed reporting healthy.
+→ **OC-v2** (`prompts/OC-v2-notes-go-in-and-nothing-happens.md`).
+
 ## 2026-09-14 — MB2e: two more feeds green + contributing nothing (Federal Register GSA, Tax Foundation)
 
 MB2b's `items_after_cutoff` column found its next two customers on day one. Same class as FEED2
