@@ -17,6 +17,38 @@
      archive pointer — never reword or drop an entry to make room.
      ============================================================================ -->
 
+## 2026-09-14 — Match rate measured: Philadelphia returns ~68%, and it found a two-property owner on the first pass (Cowork)
+
+§7 said download one free file and measure the **match rate**, because coverage is not a hit rate. Done, live,
+against Philadelphia's free public open-data endpoint (`phl.carto.com/api/v2/sql`, `opa_properties_public`) — no
+scraping, no login, no vendor.
+
+**Pass 1, exact address: 9 of 22 distinct addresses. Pass 2, house-number prefix + street: 6 more. ≈ 68%.**
+
+🔑 **Every pass-1 miss had one cause, and it is trivial:** Philadelphia stores address **ranges**; LCC stores the
+lead number. `4126 Walnut St` ↔ `4126-38 WALNUT ST`. `1300 W. Lehigh Ave` ↔ `1300-24 W LEHIGH AVE`.
+`1172 S Broad` ↔ `1172-74 S BROAD ST`. That is an **address-normalisation** problem — exactly the lane
+`OWNERGAP1-ollama` reserves for a local model — **not** a data-availability one.
+
+**Fifteen real, callable owners came back**, including `UNIV CITY ASSOCIATES` (DaVita 42nd St), `SIX G'S L P`
+(DaVita Memphis St), `HASBROOK ASSOCIATES L P` (Fkc Fox Chase), `UMBRIA VENTURES LLC` (Fkc Roxborough) and
+`EPISCOPAL HOSPITAL` (Fkc Episcopal).
+
+🚨 **And the first prospecting signal fell out on the first pass, unprompted:** **`FILIPPONE EDWARD J TR`** owns
+109 Dickinson St and **`FILIPPONE-NEWMAN LLC`** owns 1172-74 S Broad St — **the same family behind two of Team
+Briggs' dialysis properties.** A portfolio seller prospect LCC could not see yesterday, because both properties
+read "owner unknown". That is the point of the whole exercise, arriving earlier than expected.
+
+⚠️ **Two honest limits, both recorded rather than smoothed over.** **One jurisdiction is not a rate** —
+Philadelphia is a well-run open-data city, so re-measure on a Texas CAD and a Florida county before projecting 68%
+onto the 4,021. And **the real hard case is multi-parcel sites**: `3300 Henry Ave` returns **six** owning entities
+(the Falls Center LPs) for a single street address; that needs a unit or parcel discriminator, and no amount of
+address matching resolves it.
+
+**Next: repeat the identical test on Harris TX (50) and Miami-Dade FL (29)** — two more measurements, still no
+build, and the coverage question is then answered with three real rates instead of one projection. Full detail in
+the audit doc §8.
+
 ## 2026-09-14 — Second county sweep: the question was wrong again, and the free path covers ~20% before we start (Cowork)
 
 Scott ruled out a paid provider and asked whether a local Ollama model could do this. Sampled six more
