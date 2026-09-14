@@ -17,6 +17,39 @@
      archive pointer — never reword or drop an entry to make room.
      ============================================================================ -->
 
+## 2026-09-14 — N3c decided and shipped: banks/CMBS trustees excluded; full open-decisions list compiled (Cowork)
+
+Scott's call on N3c: banks and CMBS trustees are their own excluded category, same as public bodies
+and universities, "for now" -- explicitly revisitable if lender prospecting via Northmarq debt-side
+coordination comes up later.
+
+Reviewed existing machinery first: `lcc_owner_name_is_not_prospected` is already the single choke
+point excluding public bodies/universities from prospecting, feeding 7 views (Tier 0 lane, seller
+prospect universe, loan maturity worklist, etc.). Added `lcc_owner_name_is_bank_or_trustee` and wired
+it into that same function rather than building a new mechanism. Sized the regex against live data
+before shipping: 11 owner names match today (10 national banks + 1 JPMorgan CMBS trust), 0 false
+positives against individual/family trustees (e.g. "Tony Martin, Trustee" correctly stays
+prospectable), 0 credit unions swept in (deliberately -- member-owned, can be legitimate
+owner-occupant prospects, a different category from a bank/CMBS trustee holding title incidentally).
+Verified live: Wells Fargo Bank NA and the JPMorgan CMBS trust are now gone from
+`v_lcc_tier0_owner_contact_lane_open`. Migration:
+`supabase/migrations/20261102150000_lcc_own_t0_bank_cmbs_trustee_exclusion.sql`.
+
+Also found fcp/tmg's sponsor-domain proposals (the other N3-adjacent open item) have gone stale --
+zero live rows in `v_lcc_tier0_sponsor_map_proposals` today, re-checked live. Not re-raising a
+decision with no population behind it.
+
+Per Scott's request, compiled every remaining genuine open decision across the whole ownership→contact
+chain into one place: `ownership-truth-pipeline-state.md`'s new "Open decisions — needs Scott" section.
+Six items: trailing-"The" canonical key (`OWN-T0b/c`), `entities.canonical_name` unique-key enforcement
+(`N15c`, blocked by the first), `lcc_finalize_entity_portfolios`'s supersession rule (`OWN-T0g`), 1,475
+Salesforce-campaign orphans (`N15`), whether to widen ownership resolution to the remaining 2,241
+properties (`T2b`, safe/cheap but low-value -- only 3.7% contactable), and what evidence promotes an
+owner out of `unknown` role (doctrine question from `connectivity-and-open-threads.md` §4o). Also added
+a "Where we are toward 100%" snapshot table with every load-bearing metric measured this session and
+the sessions before it, and an honest read: the mechanisms keep getting fixed (auto-attach now writes,
+tombstones cleared, bank/trustee category closed) but the headline 13% owner-to-person linkage number
+has barely moved (13.5% now) because the entity-dedup residue upstream is the real blocker.
 ## 2026-09-14 — Match rate measured: Philadelphia returns ~68%, and it found a two-property owner on the first pass (Cowork)
 
 §7 said download one free file and measure the **match rate**, because coverage is not a hit rate. Done, live,
