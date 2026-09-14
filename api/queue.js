@@ -56,6 +56,30 @@ async function resolveLccIdentity(user) {
   return out;
 }
 
+// HP1-P2a: v_inbox_triage excludes source_type='new_contact_qualify' (captured
+// CoStar contacts awaiting activation — 94% of the pre-fix Inbox, none of it
+// broker judgment). This reads the TRUE, exact population of that excluded
+// lane straight off inbox_items (never the capped view/page a caller asked
+// for), so the pointer the Inbox surfaces render can never under-report it
+// the way a rendered-count badge has before (P159a). Returns null on any
+// query failure rather than a wrong number.
+async function inboxHygienePointer(workspaceId) {
+  try {
+    const path = `inbox_items?workspace_id=eq.${workspaceId}` +
+      `&status=in.(new,triaged)&source_type=eq.new_contact_qualify&select=id&limit=1`;
+    const r = await opsQuery('GET', path, undefined, { countMode: 'exact' });
+    if (!r.ok) return null;
+    return {
+      source_type: 'new_contact_qualify',
+      count: r.count || 0,
+      label: 'Data hygiene — contacts to qualify',
+      surface: 'contact_qualify_worklist',
+    };
+  } catch (_e) {
+    return null;
+  }
+}
+
 // Point-person-scoped My Work path: work I'm the point person on, plus personal (non-deal)
 // items owned/assigned to me. Legacy v_my_work fallback when the user isn't mapped to an lcc_user.
 function myWorkScopedPath(workspaceId, lccUserId, authId) {
@@ -523,7 +547,12 @@ async function v2GetInbox(req, user, workspaceId) {
   path += `&limit=${perPage}&offset=${offset}&order=${order}`;
 
   const result = await opsQuery('GET', path, undefined, { countMode: 'estimated' });
-  return { view: 'inbox', items: result.data || [], pagination: v2PaginationMeta(page, perPage, result.count || 0) };
+  const hygiene_pointer = await inboxHygienePointer(workspaceId);
+  return {
+    view: 'inbox', items: result.data || [],
+    pagination: v2PaginationMeta(page, perPage, result.count || 0),
+    hygiene_pointer,
+  };
 }
 
 // ---- V2 RESEARCH ----
@@ -1310,7 +1339,8 @@ async function handleInbox(req, res, user, workspaceId) {
     }
     await attachInboxIntakeOutcome(items);
     await attachListingBdNames(items);
-    return res.status(200).json({ items, count: result.count });
+    const hygiene_pointer = await inboxHygienePointer(workspaceId);
+    return res.status(200).json({ items, count: result.count, hygiene_pointer });
   }
 
   // POST

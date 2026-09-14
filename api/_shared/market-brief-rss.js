@@ -115,6 +115,12 @@ export async function extractRssFactsWithOllama(lane, article, generate) {
  */
 export function buildRssFactRows({ lane, section, article, facts, staleAfterIso, fetchedAtIso }) {
   const sourceDate = normalizeSourceDate(article?.published_at) || fetchedAtIso.slice(0, 10);
+  // MB2a: a Google-News-sourced article's `url` is a news.google.com
+  // redirect, never the publisher's own page — never present that as a
+  // normal citation link. `source_publisher` (parsed by the edge fn from
+  // the item title's " - Publisher" suffix) names the real outlet;
+  // `source_url_is_redirect` marks the link itself so any renderer can
+  // label it (e.g. "via Google News") instead of implying a direct link.
   return (facts || []).map((f) => ({
     lane,
     section,
@@ -123,6 +129,8 @@ export function buildRssFactRows({ lane, section, article, facts, staleAfterIso,
     unit: f.unit,
     source_url: article?.url || null,
     source_title: article?.title || null,
+    source_publisher: article?.publisher || null,
+    source_url_is_redirect: !!article?.url_is_redirect,
     source_date: sourceDate,
     fetched_at: fetchedAtIso,
     origin: 'rss',

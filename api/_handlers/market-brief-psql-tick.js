@@ -63,6 +63,7 @@ import {
   sectionTtlDays,
   staleAfterIso,
   normKey,
+  TRADES_WINDOW_DAYS,
 } from '../_shared/market-brief-facts.js';
 
 const FLAG = 'MARKET_BRIEF_PSQL';
@@ -343,16 +344,24 @@ async function fetchOnMarket() {
   return { rows: r.data, gap };
 }
 
-async function fetchTradesSince(sinceIso) {
-  if (!sinceIso) return { rows: [], gap: null };
-  // Same shared RPC as the cap-rate band, filtered to trades since the
-  // producer's own last completed run — so a "trade since last run" is
-  // exactly the same comp population every other surface would show for
-  // that window, address/city/state included via the RPC's own
-  // properties join (MB-a's raw sales_transactions select 400'd: that
-  // table carries neither address, city nor state — those live on
-  // `properties`, which only the RPC — or an explicit join — resolves).
-  return fetchCompsRpc({ dateFrom: sinceIso.slice(0, 10), limit: TRADES_LIMIT });
+/**
+ * MB-b (spec §0.2): the trades fact reads a fixed TRAILING window (spec
+ * default: 7 days), never "since the producer's last run" — that cursor
+ * varies with run cadence, so it cannot carry a stable fact identity (a run
+ * that fires twice in one day, or skips a day, silently changes the window's
+ * meaning without changing its label). A fixed trailing window is what lets
+ * the fact_key stay stable (TRADES_FACT_KEY, market-brief-facts.js) while
+ * the claim text still states the window explicitly.
+ */
+async function fetchTradesSince(windowStartIso) {
+  // Same shared RPC as the cap-rate band, filtered to the trailing window —
+  // so "trades in the trailing N days" is exactly the same comp population
+  // every other surface would show for that window, address/city/state
+  // included via the RPC's own properties join (MB-a's raw
+  // sales_transactions select 400'd: that table carries neither address,
+  // city nor state — those live on `properties`, which only the RPC — or an
+  // explicit join — resolves).
+  return fetchCompsRpc({ dateFrom: windowStartIso.slice(0, 10), limit: TRADES_LIMIT });
 }
 
 async function fetchCmsOperatorCounts() {
@@ -384,6 +393,26 @@ async function fetchCmsOperatorCounts() {
     .filter((row) => row.operator && Number.isFinite(row.count))
     .slice(0, TOP_OPERATOR_LIMIT);
   return { rows: sorted, sourceAsOf, gap };
+}
+
+/**
+ * MB-b (spec §0.2): the OLD trades fact_key format
+ * (`trades_since_last_run:<run-day>`) minted a new live fact every day
+ * instead of superseding one. Any such row still live from before this fix
+ * must be explicitly retired — `decideFactWrite` only ever compares within
+ * ONE fact_key, so the new stable `TRADES_FACT_KEY` would otherwise sit
+ * live beside every old date-suffixed fragment forever (the exact
+ * ID2b-caps stale-text-key shape, one column over). Returns the list of
+ * live fact_keys matching the old format, for the caller to fold into its
+ * `retire` list.
+ */
+async function fetchStaleTradesKeys(lane) {
+  const r = await opsQuery('GET',
+    `market_brief_facts?lane=eq.${encodeURIComponent(lane)}&section=eq.trades`
+    + '&status=eq.live&fact_key=like.trades_since_last_run:*'
+    + '&select=fact_key', undefined, { countMode: 'none' });
+  if (!r.ok || !Array.isArray(r.data)) return [];
+  return r.data.map((row) => row.fact_key).filter(Boolean);
 }
 
 /** Prior counts, resolved from the currently-live cms_clinic_count:* facts for the lane. */
@@ -496,7 +525,12 @@ async function retireStaleFact({ lane, section, fact_key, reason }, apply) {
 // ---------------------------------------------------------------------------
 
 const LANE_BUILDERS = {
-  dialysis: async ({ asOfIso, sinceIso, lane }) => {
+  dialysis: async ({ asOfIso, sinceIso: _sinceIso, lane }) => {
+    // _sinceIso (the producer's last-completed-run cursor) is unused inside
+    // this builder as of MB-b §0.2 — the trades fact uses a FIXED trailing
+    // window instead (see tradesWindowStartIso below), never the run cursor.
+    // Kept in the destructure for signature parity with a future lane
+    // builder that may still want it.
     const facts = [];
     const gaps = [];
     // ID2b-caps: fact_keys this run's operator-id cap-rate bands make stale
@@ -504,8 +538,14 @@ const LANE_BUILDERS = {
     // by the handler AFTER the normal write loop, never written to here.
     const retire = [];
 
+    // MB-b (spec §0.2): the trades window is a FIXED trailing period
+    // (TRADES_WINDOW_DAYS), independent of `sinceIso` (which still gates
+    // nothing here — it is the cursor other future per-run-window facts
+    // could use, but trades deliberately does not, so its identity stays
+    // stable regardless of run cadence).
+    const tradesWindowStartIso = new Date(new Date(asOfIso).getTime() - TRADES_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
     const [capRateSrc, onMarketSrc, tradesSrc, cmsSrc] = await Promise.all([
-      fetchDialysisCapRates(), fetchOnMarket(), fetchTradesSince(sinceIso), fetchCmsOperatorCounts(),
+      fetchDialysisCapRates(), fetchOnMarket(), fetchTradesSince(tradesWindowStartIso), fetchCmsOperatorCounts(),
     ]);
     for (const [label, src] of [
       ['rpc_query_comps_ttm', capRateSrc], ['v_dia_on_market', onMarketSrc],
@@ -547,8 +587,9 @@ const LANE_BUILDERS = {
     });
     facts.push(...onMarketFacts);
 
-    // 3. Trades since last run. buildTradesSinceLastRunFact (pure, unit-
-    //    tested against fixtures) expects {sold_price, cap_rate} keys; map
+    // 3. Trades in the trailing window (spec §0.2 — fixed TRADES_WINDOW_DAYS,
+    //    a stable fact identity, never keyed on the run day). buildTradesSinceLastRunFact
+    //    (pure, unit-tested against fixtures) expects {sold_price, cap_rate} keys; map
     //    the RPC's {sale_price, cap_rate} rows onto that shape rather than
     //    changing the tested builder's contract.
     const tradeRows = tradesSrc.rows.map((r) => ({
@@ -556,9 +597,16 @@ const LANE_BUILDERS = {
       sold_price: r.sale_price, cap_rate: reliableCompCap(r),
     }));
     const tradesFact = tradeRows.length
-      ? buildTradesSinceLastRunFact({ lane, trades: tradeRows, sinceIso, sourceLabel: 'rpc_query_comps (dialysis sales)', asOfIso })
-      : buildTradesZeroFact({ lane, sinceIso, sourceLabel: 'rpc_query_comps (dialysis sales)', asOfIso });
+      ? buildTradesSinceLastRunFact({ lane, trades: tradeRows, sinceIso: tradesWindowStartIso, sourceLabel: 'rpc_query_comps (dialysis sales)', asOfIso, windowDays: TRADES_WINDOW_DAYS })
+      : buildTradesZeroFact({ lane, sinceIso: tradesWindowStartIso, sourceLabel: 'rpc_query_comps (dialysis sales)', asOfIso, windowDays: TRADES_WINDOW_DAYS });
     if (tradesFact) facts.push(tradesFact);
+
+    // MB-b (spec §0.2): one-time cleanup of any OLD-format trades fact
+    // still live from before the stable-key fix — see fetchStaleTradesKeys.
+    // Harmless/idempotent once none remain (empty list every run after).
+    for (const staleKey of await fetchStaleTradesKeys(lane)) {
+      retire.push({ section: 'trades', fact_key: staleKey, reason: 'superseded_by_stable_trades_window_key' });
+    }
 
     // 4. CMS clinic counts by top operator + net change vs. the prior run.
     const priorMap = await fetchPriorCmsCounts(lane);

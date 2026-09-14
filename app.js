@@ -1111,6 +1111,7 @@ function handlePageLoad(pageId) {
     case 'pageHome':
       renderDailyBriefingPanel();
       if (!dailyBriefingLoaded) loadDailyBriefingData();
+      if (typeof renderMarketBriefsWidget === 'function') renderMarketBriefsWidget();
       renderNextBestActionPanel();
       if (!nbaLoaded) loadNextBestActionData();
       if (typeof renderTodaySections === 'function') renderTodaySections();
@@ -1134,6 +1135,7 @@ function handlePageLoad(pageId) {
     case 'pageReviewConsole': if (typeof renderReviewConsolePage === 'function') renderReviewConsolePage(); break;
     case 'pagePriorityQueue': if (typeof renderPriorityQueuePage === 'function') renderPriorityQueuePage(); break;
     case 'pageResearch': if (typeof renderResearchPage === 'function') renderResearchPage(); break;
+    case 'pageMarketBriefs': if (typeof renderMarketBriefsPage === 'function') renderMarketBriefsPage(); break;
     case 'pageMetrics': if (typeof renderMetricsPage === 'function') renderMetricsPage(); break;
     case 'pageOpsHealth': if (typeof renderOpsHealthPage === 'function') renderOpsHealthPage(); break;
     case 'pageSyncHealth': if (typeof renderSyncHealthPage === 'function') renderSyncHealthPage(); break;
@@ -2126,6 +2128,7 @@ const ROUTE_SLUG_TO_PAGE = {
   capmarkets: 'pageBiz',
   metrics: 'pageMetrics',
   'seller-prospects': 'pageSellerProspectQueue',
+  briefs: 'pageMarketBriefs', // MB-b — #/briefs/<lane> (sub-path, parsed like #/inbox/<id>)
   calendar: 'pageCal',
   'sync-health': 'pageSyncHealth',
   'ops-health': 'pageOpsHealth',
@@ -2218,6 +2221,12 @@ function _routeParseHash(rawHash) {
       let itemId = subPath;
       try { itemId = decodeURIComponent(subPath); } catch (_) {}
       focus = { kind: 'inbox', id: itemId };
+    } else if (page === 'pageMarketBriefs') {
+      // MB-b — #/briefs/<lane>; no sub-path = default lane ('dialysis', the
+      // only lane with a live producer today, spec §3 "no new gov/NL lanes").
+      let lane = subPath ? subPath.toLowerCase() : 'dialysis';
+      try { lane = decodeURIComponent(lane).toLowerCase(); } catch (_) {}
+      focus = { kind: 'market_brief', lane };
     }
     return { page, detail: _routeParseDetail(detailToken), focus, baseSlug };
   } catch (_) {
@@ -2305,6 +2314,13 @@ function applyRoute() {
     // router releases (_routerApplying) — it never writes the hash, so no loop.
     if (focus && focus.kind === 'inbox' && focus.id && typeof focusInboxItem === 'function') {
       Promise.resolve().then(() => { try { focusInboxItem(focus.id); } catch (_) {} });
+    }
+    // MB-b — #/briefs/<lane>. navTo(targetPage) above already showed
+    // pageMarketBriefs; this loads the requested lane's data (fire-and-
+    // forget, same pattern as the inbox focus above — no hash write, no
+    // router-loop risk).
+    if (focus && focus.kind === 'market_brief' && typeof renderMarketBriefsPage === 'function') {
+      Promise.resolve().then(() => { try { renderMarketBriefsPage(focus.lane); } catch (_) {} });
     }
   } finally {
     _routerApplying = false;
@@ -7319,6 +7335,166 @@ async function loadDailyBriefingData(force = false) {
 window.loadDailyBriefingData = loadDailyBriefingData;
 
 // ============================================================
+// MB-b — Market Briefs: the homepage widget teaser + the full
+// #/briefs/<lane> tab (EXEC-BRIEFS-SPEC.md §2/MB4). Read-only; renders
+// EXACTLY what GET /api/market-brief-tab returns — every number here comes
+// verbatim from a fact object, never computed client-side (the same rule
+// the email block's renderer follows).
+// ============================================================
+
+const MARKET_BRIEF_SECTION_LABELS = {
+  operators: 'Operators', policy: 'Policy', capital_markets: 'Capital Markets',
+  trades: 'Trades', implications: 'Implications',
+};
+const MARKET_BRIEF_SECTION_ORDER = ['operators', 'policy', 'capital_markets', 'trades', 'implications'];
+
+async function _fetchMarketBriefTab(lane) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (LCC_USER.workspace_id) headers['x-lcc-workspace'] = LCC_USER.workspace_id;
+  const res = await fetch(`/api/market-brief-tab?lane=${encodeURIComponent(lane)}`, { headers });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  return res.json();
+}
+
+function _marketBriefFactRow(f) {
+  const asOf = f.source_date ? esc(String(f.source_date)) : '';
+  const staleBadge = f.is_stale
+    ? `<span style="color:#B42318;font-size:11px;">(stale — as of ${asOf})</span>`
+    : (asOf ? `<span style="color:#6A748C;font-size:11px;">(as of ${asOf})</span>` : '');
+  const cite = f.source_url
+    ? ` <a href="${esc(f.source_url)}" target="_blank" rel="noopener" style="font-size:11px;">source</a>`
+    : (f.source_title ? ` <span style="color:#6A748C;font-size:11px;">(${esc(f.source_title)})</span>` : '');
+  const isGap = f.unit === 'gap_marker';
+  return `<div style="padding:6px 0;border-bottom:1px solid #E7E6E6;font-size:13px;${isGap ? 'color:#6A748C;font-style:italic;' : ''}">`
+    + `${esc(f.claim_text)} ${staleBadge}${cite}</div>`;
+}
+
+// Swimlanes MB tracks — must match api/_shared/market-brief-render.js's
+// KNOWN_LANES/LANE_LABELS exactly (frontend/backend duplicate the list on
+// purpose per CLAUDE.md's shared-const-across-runtimes limits; keep both in
+// sync by hand when a lane is added/removed).
+const MARKET_BRIEF_LANES = ['dialysis', 'government', 'net_lease'];
+const MARKET_BRIEF_LANE_LABELS = { dialysis: 'Dialysis', government: 'Government-Leased', net_lease: 'Net Lease' };
+
+function _marketBriefSnapshotLine(lane, data) {
+  const label = esc(MARKET_BRIEF_LANE_LABELS[lane] || lane);
+  const allFacts = MARKET_BRIEF_SECTION_ORDER.flatMap((s) => (data.sections?.[s] || []));
+  const real = allFacts.filter((f) => f.unit !== 'gap_marker');
+  const top = real[0];
+  const count = real.length;
+  const asOf = top?.source_date ? ` (as of ${esc(String(top.source_date))})` : '';
+  const snippet = top ? esc(top.claim_text).slice(0, 140) + (top.claim_text.length > 140 ? '…' : '') : '';
+  return `<div style="padding:8px 0;border-bottom:1px solid #E7E6E6;">`
+    + `<div style="font-size:12px;font-weight:700;color:#003DA5;">${label} <span style="font-weight:400;color:#6A748C;">— ${count} live fact${count === 1 ? '' : 's'}</span></div>`
+    + (snippet ? `<div style="font-size:13px;padding:3px 0;">${snippet}${asOf}</div>` : '')
+    + `<a href="#/briefs/${lane}" style="font-size:12px;">Open full ${label} brief &rarr;</a>`
+    + `</div>`;
+}
+
+function _marketBriefPendingLine(lane) {
+  const label = esc(MARKET_BRIEF_LANE_LABELS[lane] || lane);
+  return `<div style="padding:4px 0;color:#6A748C;font-size:12px;font-style:italic;">${label} — no live facts yet (producer not built).</div>`;
+}
+
+/**
+ * Homepage widget: a short snapshot per lane (one live-fact-count line +
+ * the single freshest claim), not the full fact list — that lives on the
+ * #/briefs/<lane> page. A lane with no live facts yet (no producer built)
+ * shows one muted "not yet" line instead of being silently omitted, so the
+ * gap is visible and self-explanatory rather than confusing. Best-effort;
+ * a load failure degrades to a plain message.
+ */
+async function renderMarketBriefsWidget() {
+  const el = document.getElementById('marketBriefsWidgetContent');
+  if (!el) return;
+  try {
+    const results = await Promise.all(MARKET_BRIEF_LANES.map((lane) =>
+      _fetchMarketBriefTab(lane).then((data) => ({ lane, data })).catch(() => ({ lane, data: null }))
+    ));
+
+    const anyEnabled = results.some((r) => r.data && r.data.enabled);
+    if (!anyEnabled) {
+      el.innerHTML = `<div style="padding:10px 0;color:#6A748C;font-size:12px;">Not live yet.</div>`;
+      return;
+    }
+
+    const withFacts = results.filter((r) => r.data && r.data.enabled && r.data.has_facts);
+    const withoutFacts = results.filter((r) => r.data && r.data.enabled && !r.data.has_facts);
+
+    const html = withFacts.map((r) => _marketBriefSnapshotLine(r.lane, r.data)).join('')
+      + withoutFacts.map((r) => _marketBriefPendingLine(r.lane)).join('');
+    el.innerHTML = html || `<div style="padding:10px 0;color:#6A748C;font-size:12px;">No live facts yet.</div>`;
+  } catch (e) {
+    console.warn('[MarketBriefs] widget load failed:', e.message);
+    el.innerHTML = `<div style="padding:10px 0;color:#6A748C;font-size:12px;">Unavailable right now.</div>`;
+  }
+}
+window.renderMarketBriefsWidget = renderMarketBriefsWidget;
+
+let _marketBriefsCurrentLane = 'dialysis';
+
+/** Full #/briefs/<lane> page. */
+async function renderMarketBriefsPage(lane) {
+  const el = document.getElementById('marketBriefsContent');
+  if (!el) return;
+  const requestedLane = (lane || _marketBriefsCurrentLane || 'dialysis').toLowerCase();
+  _marketBriefsCurrentLane = requestedLane;
+  el.innerHTML = `<div class="loading"><span class="spinner"></span></div>`;
+
+  const laneTabs = MARKET_BRIEF_LANES;
+  const laneLabels = MARKET_BRIEF_LANE_LABELS;
+  const tabsHtml = `<div style="display:flex;gap:6px;margin-bottom:12px;">` + laneTabs.map((l) =>
+    `<button type="button" class="pipeline-tab${l === requestedLane ? ' active' : ''}" onclick="location.hash='#/briefs/${l}'">${esc(laneLabels[l])}</button>`
+  ).join('') + `</div>`;
+
+  try {
+    const data = await _fetchMarketBriefTab(requestedLane);
+
+    if (!data.enabled) {
+      el.innerHTML = tabsHtml + `<div class="empty-state">Market Briefs are not live yet for this lane. `
+        + `${esc(data.hint || '')}</div>`;
+      return;
+    }
+    if (!data.has_facts) {
+      el.innerHTML = tabsHtml + `<div class="empty-state">No live facts yet for ${esc(laneLabels[requestedLane] || requestedLane)}.</div>`;
+      return;
+    }
+
+    const changed = Array.isArray(data.changed_since_last_issue) ? data.changed_since_last_issue : [];
+    const changedHtml = changed.length
+      ? `<div style="margin-bottom:14px;padding:8px 10px;background:#E0E8F4;border-radius:6px;font-size:12.5px;">`
+        + `<strong>Changed since last issue:</strong><br>`
+        + changed.slice(0, 10).map((c) => `${c.action === 'added' ? 'New' : 'Updated'} — ${esc(c.claim_text)}`).join('<br>')
+        + `</div>`
+      : '';
+
+    const sectionsHtml = MARKET_BRIEF_SECTION_ORDER.map((s) => {
+      const facts = (data.sections && data.sections[s]) || [];
+      if (!facts.length) return '';
+      return `<div style="margin-top:14px;">`
+        + `<div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#003DA5;padding-bottom:4px;">${esc(MARKET_BRIEF_SECTION_LABELS[s] || s)}</div>`
+        + facts.map(_marketBriefFactRow).join('') + `</div>`;
+    }).join('');
+
+    const archive = Array.isArray(data.archive) ? data.archive : [];
+    const archiveHtml = archive.length
+      ? `<div style="margin-top:20px;">`
+        + `<div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#003DA5;padding-bottom:4px;">Issue Archive</div>`
+        + archive.slice(0, 20).map((i) =>
+            `<div style="padding:4px 0;font-size:12px;color:#6A748C;">${esc(i.issue_date)} — ${esc(i.issue_type)}${i.summary ? ' — ' + esc(i.summary) : ''}</div>`
+          ).join('')
+        + `</div>`
+      : '';
+
+    el.innerHTML = tabsHtml + changedHtml + (sectionsHtml || `<div class="empty-state">No live facts yet.</div>`) + archiveHtml;
+  } catch (e) {
+    console.warn('[MarketBriefs] page load failed:', e.message);
+    el.innerHTML = tabsHtml + `<div class="empty-state">Failed to load: ${esc(e.message)}</div>`;
+  }
+}
+window.renderMarketBriefsPage = renderMarketBriefsPage;
+
+// ============================================================
 // TOP DATA GAPS TO CLOSE — Home rail (Item #4 Phase C, 2026-05-17;
 //   relabeled R25 Unit 5, 2026-06-15). This is the DATA-GAP cockpit:
 //   highest-value records missing ownership/agency data, ranked by
@@ -7464,14 +7640,41 @@ function _renderTodaySection(contentId, section, viewAllLabel, viewAllOnclick) {
       + (meta.length ? '<div class="nba-item-sub">' + meta.join(' · ') + '</div>' : '')
       + '</div>';
   });
-  const total = section.total_open || items.length;
-  if (viewAllLabel && total > items.length) {
+  // HP1-badge (2026-09-12): `section.total_open || items.length` silently
+  // turned BOTH "count unknown" (null) and "count is genuinely 0" (falsy)
+  // into the capped page length — the exact badge-that-lies failure this
+  // fix exists to close. A number renders only when the server actually
+  // measured it; unknown or not-yet-measured renders the plain arrow with
+  // no count, never a fabricated one.
+  const total = Number.isFinite(section.total_open) ? section.total_open : null;
+  if (viewAllLabel && total !== null && total > items.length) {
     html += '<button type="button" class="nba-viewall" onclick="' + viewAllOnclick + '">'
       + esc(viewAllLabel) + ' (' + total + ') →</button>';
   } else if (viewAllLabel) {
     html += '<button type="button" class="nba-viewall" onclick="' + viewAllOnclick + '">' + esc(viewAllLabel) + ' →</button>';
   }
   el.innerHTML = html;
+}
+
+// HP1-P2f-urgent (2026-09-12): Urgent excludes v_lcc_bd_worklist's
+// contact_writeback rows (CRM plumbing, not deal work) from its ranked union
+// and instead reports the TRUE, uncapped count of what was moved — never a
+// silent absence (P159a's "excluding is not hiding"). Renders a persistent
+// row appended below the section (mirrors the Inbox hygiene_pointer pattern,
+// ops.js renderInbox), linking to the BD worklist's own contact_writeback
+// chip, where every one of these rows already carries a "Push to CRM" action.
+function _renderUrgentHygienePointer(pointer) {
+  const el = document.getElementById('todayUrgentContent');
+  if (!el || !pointer || !(pointer.count > 0)) return;
+  el.innerHTML += '<div class="ops-hygiene-pointer" style="padding:10px 12px;margin:8px 0 0;'
+    + 'background:var(--s2);border-radius:8px;font-size:12px;color:var(--text2);'
+    + 'display:flex;justify-content:space-between;align-items:center;gap:10px">'
+    + '<span>🧹 ' + esc(pointer.label) + ' — <b>' + pointer.count.toLocaleString() + ' contact'
+    + (pointer.count === 1 ? '' : 's') + '</b> (not deal work; not shown here)</span>'
+    + '<button class="q-action" style="font-size:11px;padding:4px 10px" '
+    + 'onclick="navTo(\'pagePriorityQueue\');setTimeout(function(){if(typeof renderBdWorklist===\'function\')'
+    + 'renderBdWorklist(\'contact_writeback\');},300)">Review →</button>'
+    + '</div>';
 }
 
 async function renderTodaySections(force) {
@@ -7503,6 +7706,7 @@ async function renderTodaySections(force) {
       "navTo('pagePipeline')");
     _renderTodaySection('todayUrgentContent', data.urgent, 'See all BD actions',
       "navTo('pagePriorityQueue');setTimeout(function(){if(typeof renderBdWorklist==='function')renderBdWorklist();},300)");
+    _renderUrgentHygienePointer(data.urgent && data.urgent.pointer);
   } catch (e) {
     _todaySectionsFallback('Today unavailable — ' + ((e && e.message) ? String(e.message).slice(0, 160) : 'request threw'));
     console.error('renderTodaySections threw:', e);

@@ -36,6 +36,7 @@ import {
   truncationGap,
   reliableCompCap,
 } from '../api/_handlers/market-brief-psql-tick.js';
+import { TRADES_FACT_KEY } from '../api/_shared/market-brief-facts.js';
 
 const SRC = readFileSync(
   fileURLToPath(new URL('../api/_handlers/market-brief-psql-tick.js', import.meta.url)), 'utf8');
@@ -182,4 +183,20 @@ test('every rpc_query_comps call body includes p_tenant (required to resolve the
 
 test('rpc_query_comps is called via POST rpc/rpc_query_comps (the shared engine RPC), not a raw table select', () => {
   assert.match(CODE, /domainQuery\('dialysis',\s*'POST',\s*'rpc\/rpc_query_comps'/);
+});
+
+// ---------------------------------------------------------------------------
+// 5. MB-b — the old date-suffixed trades fact_key is explicitly retired
+//    (the ID2b-caps stale-text-key shape, one column over: decideFactWrite
+//    only ever compares within ONE fact_key, so a format change needs a
+//    named retirement or the old rows sit live beside the new one forever).
+// ---------------------------------------------------------------------------
+
+test('the dialysis builder queries for and retires any old-format live trades fact_key', () => {
+  assert.match(CODE, /fact_key=like\.trades_since_last_run:\*/);
+  assert.match(CODE, /fetchStaleTradesKeys\(lane\)/);
+});
+
+test('TRADES_FACT_KEY is the stable key the retirement leaves standing', () => {
+  assert.equal(TRADES_FACT_KEY, 'trades_trailing_7d');
 });

@@ -11,7 +11,7 @@ principle; build proceeds prompt-by-prompt. EB1 (foundation) merged PR #2291 202
 | Cadence | Brokers must be able to **recall the brief regularly in conversations**. Include it **daily** in the LCC morning email, **updated and improved as news or data is ingested**. Update schedule per section is Claude's call, based on how often each input actually changes. |
 | Integration | **Built into our systems — not a pinned Cowork task that is never revisited and goes stale/disconnected.** Get design, architecture and connections right. Use the **local Ollama model** where appropriate. |
 | Delivery | **Weekly long-format email** + a **short-form version inside the existing daily morning briefing**, linking to the long form. |
-| Swimlanes | **Dialysis, government, general net lease, broad net lease only.** New medical lanes (ASC, imaging, MOB) join only once they exist as LCC lanes. |
+| Swimlanes | **Dialysis, government, net lease only.** (Net lease and broad net lease were originally scoped as two lanes; collapsed into one 2026-09-12 per Scott — no live facts existed under either at collapse time.) New medical lanes (ASC, imaging, MOB) join only once they exist as LCC lanes. |
 | Generation | Claude's recommendation, weighted by the anti-decay concern. (Recommendation §2.) |
 | Build brief | **Lives on the dashboard always, refreshed when updated.** Email timing per the market-brief pattern. Scott-only. |
 | Operator notes | **All of the above — one large funnel sorting into one to-do list, filtered and delegated by topic to the right agent/thread.** Minimise human friction; maximise improvement loops. |
@@ -70,7 +70,7 @@ flags it. The daily brief keeps rendering from P-SQL + P-RSS.
 1. **Daily morning email (existing `briefing-email-handler.js`)** — new **"Lane Briefs"** block (upgrades
    §8 Sector Watch): per lane, one line of *what changed* (fact diff) + the 2 most material live facts +
    "Read the full brief →" link. No new email engine.
-2. **Weekly long-form email** — Monday, one email with all four lanes (exemplar structure per lane:
+2. **Weekly long-form email** — Monday, one email with all three lanes (exemplar structure per lane:
    exec 5 → operators/tenants → policy → capital markets → implications [opinion] → unverified → sources).
    Rendered from a frozen `market_brief_issues` row; same brand tokens.
 3. **App: "Market Briefs" tab on the homepage** (`#/briefs/<lane>`) — live view + issue archive + "changed
@@ -295,3 +295,138 @@ one label. Live re-verified: exactly three resolved bands (DaVita, Fresenius Med
 Renal Care), no duplicate label. **Design rule 4 is fully satisfied for the market brief's
 operator identity as of ID2b-caps-2, not ID2b-caps.** Full measurement: the addendum appended to
 `docs/audits/ID2b_caps_RPC_QUERY_COMPS_OPERATOR_ID_2026-09-12.md`.
+
+**Addendum 2026-09-12 "MB-b" (this branch; unmerged) — first user-facing P18 surfaces built, flag NOT
+flipped.** Per `docs/claude-code/prompts/MBb-lane-briefs-daily-block-and-tab.md`. §0.1 (operator
+canonicalization) was already satisfied by ID2b-caps-2 above before this build started —
+`planOperatorCapRateBands()` groups every per-operator cap-rate band on `operator_id`, never a
+locally-added name map, and refuses a second live band under one label; a new guard test
+(`test/market-brief-operator-canonicalization.test.mjs`) pins "no two live band facts share an
+operator_id" directly, as the prompt required. §0.2 (the trades fact's date-suffixed key re-minting a
+fresh zero-fact every day) is fixed: `TRADES_FACT_KEY = 'trades_trailing_7d'`
+(`api/_shared/market-brief-facts.js`) is now a single stable key regardless of run day, the tick reads a
+fixed trailing 7-day window instead of "since last run" (a cursor whose meaning drifts with run cadence),
+and the claim states its window explicitly ("… in the trailing 7 days as of <date>"). §0.3: a `dialysis`
+RSS stream (Renal & Urology News, Nephrology News & Issues, CMS Newsroom) was added to
+`briefing-intel-snapshot`'s `RSS_FEEDS`, separate from `healthcare` (which MB-a3-reconcile measured
+carries 0 dialysis content most days) — **not egress-verified from this sandbox**, same limitation that
+addendum already recorded for this exact task; the cron for `lcc-market-brief-rss` is repointed at
+`stream=dialysis` in a new migration.
+
+Built: the daily email's "Lane Briefs" block (`renderMarketBriefLanes`, `api/_handlers/briefing-email-
+handler.js`, sits above Sector Watch — kept, unchanged, below it — per lane with live facts: what
+changed since yesterday via `diffFactSets`, the 2–3 most material live facts via section-weighted
+`selectTopFacts`, named gaps rendered plainly via `selectGapFacts`, "Read the full brief →"); the
+homepage `#/briefs/<lane>` tab (`GET /api/market-brief-tab`, new handler + new `pageMarketBriefs` page +
+`app.js` route wiring for the `#/briefs/<lane>` sub-path, a small teaser beside `#dailyBriefingWidget`);
+shared fetch/diff/select logic in `api/_shared/market-brief-render.js` so both surfaces read the
+identical live-fact selection and diff — they can never disagree about "live" or "changed". Both ship
+behind a new flag, `MARKET_BRIEF_RENDER` (migration `20260912121500`, registered `off`); the homepage
+tab's endpoint returns `{enabled:false}` while off, never a 404/500. Every number in the rendered email
+block traces to a fact object — a dedicated tripwire test extracts every numeric token from the rendered
+HTML (stripping tags/CSS/entity-escaping artifacts) and asserts each is present verbatim in the facts
+handed to the renderer. A daily render freezes one `market_brief_issues` row per lane
+(`issue_type='daily'`), idempotent via the EB1 unique index `(lane, issue_type, issue_date)` — a same-day
+re-render upserts the same row rather than accumulating; a lane with no live facts is never frozen and
+never rendered (omitted, not an empty section).
+
+Guards: `test/market-brief-render.test.mjs` (14 tests — selection/diff/freeze-shape), `test/market-
+brief-lane-briefs-email.test.mjs` (11 — the diff/gap/omitted-lane snapshot cases + the number tripwire),
+`test/market-brief-operator-canonicalization.test.mjs` (3), plus additions to `test/market-brief-
+facts.test.mjs` and `test/market-brief-tick-handlers.test.mjs`. Full repo suite: **6,114 pass / 0 fail /
+6 skipped** across 962 suites — the failures first observed in this session were a missing
+`node_modules` in the sandbox (`npm ci` fixed it), never a real regression; no pre-existing failure was
+masked, per the repo's CI-masking doctrine.
+
+⚠️ **Nothing here is deployed or live-verified — this session had no Railway/Supabase write access.**
+Two new migrations are committed and unapplied: `20260912120000_lcc_mbb_rss_dialysis_stream_cron.sql`
+(repoints the RSS cron at the new stream) and `20260912121500_lcc_mbb_market_brief_render_flag.sql`
+(registers `MARKET_BRIEF_RENDER`, off). `MARKET_BRIEF_RENDER` stays off. Per §5, an operator must: apply
+both migrations, redeploy Railway, run the P-SQL tick once via POST with the flag forced on and confirm
+the trades supersede chain clears the old date-suffixed fragments (any live
+`trades_since_last_run:<date>` fact should read `status='superseded'` after the first post-fix run),
+render the email with a preview and load `#/briefs/dialysis`, verify each new RSS feed URL actually
+parses, THEN flip `MARKET_BRIEF_RENDER`.
+
+**Addendum 2026-09-12 "MB-b live" (Cowork):** §4's first two surfaces are LIVE. `MARKET_BRIEF_PSQL` and
+`MARKET_BRIEF_RENDER` are on; the daily email carries the Lane Briefs block and `#/briefs/dialysis` serves live facts,
+both reading `market_brief_facts`/`market_brief_issues` only. Design rules 1–5 are all now observable in production: the
+brief shows three canonical operator bands (rule 4, via ID2a/ID2b-caps-2), renders the CMS census as a dated gap rather
+than a stale number (rules 3 and 5), and recomputes nothing. **`MARKET_BRIEF_PRSS` remains off** — the dialysis RSS URLs
+added with MB-b all fail (403/404, backlog **MB2a**), a reminder that a feed URL is not a source until it has been
+fetched once and parsed.
+
+**Addendum 2026-09-12 "MB2a" — dead dialysis RSS feeds replaced; feed-health monitor added; PRSS still
+OFF.** `RSS_FEEDS.dialysis` in `briefing-intel-snapshot/index.ts` now points at the two feeds Cowork
+fetched and parsed live (Federal Register, filtered to "end-stage renal disease" — the authoritative
+ESRD PPS policy source spec §3 names; Google News, operator query `dialysis OR DaVita OR "Fresenius
+Medical Care"`), replacing the three dead URLs (403/404/404). No third publisher-specific feed was
+added — this session's sandbox has zero egress to verify one (policy-denied CONNECT to every
+candidate host), and a feed that cannot be verified is skipped rather than shipped with a spoofed
+User-Agent, per this task's own instruction. **Google News's two caveats are handled, §2's own
+wording:** `parseRss()` splits a redirect feed's item title on the LAST `" - "`/`" – "` separator into
+`{headline, publisher}` (a headline containing its own dash still keeps the true publisher suffix; a
+title with none returns `publisher: null` rather than guessing), and `market_brief_facts` gained two
+additive columns — `source_publisher` (the real outlet) and `source_url_is_redirect` — so a citation
+never presents a `news.google.com/rss/articles/...` link as if it were the publisher's own page.
+**A dead feed cannot ship silently again, per §2 and I11:** `scripts/verify-rss-feeds.mjs` (opt-in,
+never wired into `npm test`, which stays hermetic) parses `RSS_FEEDS` straight out of the edge-function
+source and fails non-zero on any non-200 or zero-item feed; and a new `market_brief_feed_health` table
+(migration `20260912150000`) records one row per (stream, source, day) from every `fetchSectorNews()`
+run, with `lcc_check_market_brief_feed_health(3)` opening a deduped `lcc_health_alerts` row after 3
+consecutive zero-item days and auto-resolving on the next real item — the monitor alerts on its own
+blindness rather than reading a dead feed as a quiet news day. **`MARKET_BRIEF_PRSS` was NOT flipped**
+— this session has no live egress and no Railway/Supabase write access, so there is no fresh evidence
+from this change of facts actually flowing; the only live-fetch evidence on record predates this code
+(Cowork, 2026-09-12). Full repo suite unaffected: 6,130 pass / 0 fail / 6 skipped. Backlog: `docs/os/
+PLANNED-BACKLOG.md` §P18 MB2a.
+
+**Addendum 2026-09-12 "MB2a live-reconcile" (Cowork) — a sixth design rule, learned the hard way.**
+Both replacement feeds were re-fetched independently via pg_net and answer: Federal Register ESRD
+**200, 3 items**; Google News operator query **200, 100 items**. The MB2a migration is **applied live**
+to LCC Opps (`market_brief_feed_health`, `v_market_brief_feed_health_stale`,
+`lcc_check_market_brief_feed_health` — executes clean 0/0 — the two `market_brief_facts` citation
+columns, and cron `lcc-market-brief-feed-health` at 11:15 UTC).
+
+🚨 **But the producer still cannot run**: the deployed `briefing-intel-snapshot` is **v21 and has no
+`dialysis` stream at all**, so neither MB-b's feeds nor MB2a's replacements have ever executed. No
+workflow in this repo deploys `supabase/functions/**`, so the merge changed nothing and reported
+nothing. Tracked as backlog **MB2a-deploy**, and as a third **I16** instance.
+
+**Design rule 6 — a producer's source list is only real once the thing that reads it is deployed.**
+§7 gates every step behind a flag, which correctly stops us from *showing* unverified facts; it does
+not catch a producer whose new inputs were never shipped, because a flag that is OFF and a producer
+that is not deployed look identical from the outside — both produce nothing, quietly. So a P18 step
+is "done" only when the deployed body is re-read and confirmed to contain the change, never when the
+PR merges. `MARKET_BRIEF_PRSS` stays OFF until that read succeeds and relevance survival is measured
+on real items.
+
+**Addendum 2026-09-14 "MB2b/MB2c/FEED2" — fixed the instrumentation, then judged the relevance
+question it was meant to answer.** MB2c: `splitGoogleNewsTitle()`'s publisher half was `[^-–—]+`
+(no dash allowed), so a hyphenated outlet ("Honolulu Star-Advertiser", "ad-hoc-news.de") failed the
+whole match and silently returned the citation to the pre-MB2a state (`publisher: null`, suffix stuck
+on the headline). Widened to `.+`; measured against 101 real titles, 98→101 parse, 0 previously-correct
+parses changed. MB2b: `market_brief_feed_health.item_count` recorded PARSING, never CONTRIBUTION —
+Federal Register (ESRD) sat `ok=true, item_count=3` while contributing 0 to the brief on every run
+(all 3 older than the shared 72h cutoff), invisible to the I11-style monitor MB2a shipped. Fixed with
+a per-feed `maxAgeHours` override (ESRD gets 30d, not the global 72h — the 72h default is untouched
+for every other feed, on purpose) and an additive `items_after_cutoff` column. Both deployed
+(`briefing-intel-snapshot` v23→v24, body re-read and confirmed byte-identical to source) and
+live-verified via `net.http_get`/`lcc_cron_post`: today's real feed shows `Federal Register (ESRD)`
+at `item_count:1, items_after_cutoff:1` (was silently 0-of-3) and `sector_news.dialysis` carries a
+live item with `"publisher": "Honolulu Star-Advertiser"`. FEED2's open test gap is closed:
+`test/feed2-streak-checks-not-days.test.mjs` covers the four named scenarios plus structural guards
+on the shipped migration SQL.
+
+**Then the relevance question, forced live, not simulated.** With the pipeline fixed, a forced dry-run
+of `market-brief-rss-tick` against `stream=dialysis` (5 real articles, on-box Ollama) marked 4/5
+"relevant" and would write 4 facts — **none of them a fact a broker could cite**: a capital-markets
+headline restated with the substance stripped, a market-research report title, local EMS coverage.
+The one genuinely on-topic item, a Federal Register ESRD document, was marked NOT relevant. This
+reproduces Cowork's 2026-09-12 measurement (0 of 6 items worth anything) even with MB2b/MB2c shipped —
+**the defect is the broad Google News query, not the instrumentation this addendum fixed.**
+`MARKET_BRIEF_PRSS` stays OFF. An empty news section is the correct outcome here, not a failure to
+deliver, per this spec's own §7 rule that a flag stays off until relevance survival is measured on
+real items — it now has been, and it did not survive. Next step (not done here, a hypothesis to test
+rather than ship blind): tighten the query (`cap rate`, `clinic`, `acquisition`, `when:7d`) and
+re-measure.

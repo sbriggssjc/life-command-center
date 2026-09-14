@@ -30,6 +30,7 @@ import { handleDealCommsPropagateTick } from './api/_handlers/deal-comms-propaga
 import { handleCommsOwnerAttributionTick } from './api/_handlers/comms-owner-attribution-tick.js';
 import { handleMarketBriefPsqlTick } from './api/_handlers/market-brief-psql-tick.js';
 import { handleMarketBriefRssTick } from './api/_handlers/market-brief-rss-tick.js';
+import { handleMarketBriefTab } from './api/_handlers/market-brief-tab.js';
 
 // ── Import the core 9 API handlers (Phase 4b consolidated) ─────────────────
 // daily-briefing, data-proxy, diagnostics absorbed into admin.js
@@ -439,6 +440,10 @@ app.all('/api/operator-triage-tick', handleOperatorTriageTick);
 // until live-verified. GET is always a dry run.
 app.all('/api/market-brief-psql-tick', handleMarketBriefPsqlTick);
 app.all('/api/market-brief-rss-tick', handleMarketBriefRssTick);
+// MB-b — read-only data for the homepage Market Briefs tab (#/briefs/<lane>).
+// Flag-gated (MARKET_BRIEF_RENDER); GET returns {enabled:false} while off,
+// never a 404/500.
+app.all('/api/market-brief-tab', handleMarketBriefTab);
 // W7.6 Mailbox Mirror: deterministic worklist of closed-loop flagged emails +
 // the PA mover's ack endpoint. Flag-gated (MAILBOX_MIRROR).
 app.all('/api/mailbox-reconcile-worklist', (req, res) => { req.query._route = 'mailbox-reconcile-worklist'; intakeHandler(req, res); });

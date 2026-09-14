@@ -205,7 +205,7 @@ export async function handleTier0AutoAttachTick(req, res) {
   const limit = Math.max(1, Math.min(500, Number(req.query.limit) || DEFAULT_BATCH));
 
   let flagOn = false;
-  try { flagOn = flagEnabled(await fetchFeatureFlag(FLAG)); } catch (_e) { flagOn = false; }
+  try { flagOn = flagEnabled(FLAG, await fetchFeatureFlag(FLAG)); } catch (_e) { flagOn = false; }
 
   const batchTag = 't0auto_' + new Date().toISOString().slice(0, 10).replace(/-/g, '')
     + '_' + randomUUID().slice(0, 8);

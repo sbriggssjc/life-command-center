@@ -35,6 +35,12 @@ and the Dialysis test suite had never executed a test in the repo's history — 
 ### ✅ Closed this arc
 
 - **CMS ingestion** repaired (67-day outage; throttle keyed on last *attempt* not last *success*).
+  ⚠️ **RE-VERIFIED LIVE 2026-09-12 (Cowork): the fix does not hold — see `B6d-cms-restart` in
+  `PLANNED-BACKLOG.md`.** `cms_ingestion` reads `status='failing'` (34 of 36 runs failed in 30d),
+  `medicare_clinics.source_last_seen` has been frozen at 2026-08-31 (249 of 8,547, 2.9%) for 12
+  days, and no run fired at all on 2026-09-12. This line's "repaired" describes the throttle fix
+  shipping 2026-08-29 — it does not describe today. **Read the backlog row, not this line, for
+  current state.**
 - **FRED** proven alive — `max(observation_date)` 2026-08-28, first rows ever written from CI.
 - **The Dialysis suite RUNS**: `0 executed → 3,132`, `55 fail → 5`, `executed` up at every step.
   `timeout-minutes` on all four jobs, sized from a measured 6 m 12 s.

@@ -237,12 +237,27 @@ export function buildOnMarketFacts({ lane, count, medianAskCap, sourceLabel, asO
   return facts;
 }
 
+// MB-b (Step 0.2): the fact_key used to be `trades_since_last_run:<run-day>`,
+// so the RUN day was baked into the identity and every day's run minted a
+// NEW fact_key — a zero-trade day never superseded yesterday's zero, it
+// accumulated beside it forever (the CLAUDE.md "a re-discovery tally that
+// reads exactly like throughput" trap, one layer over: here it was a
+// re-mint tally). The window itself (spec default: trailing 7 days) is what
+// gives the fact a STABLE identity — the window doesn't change day to day,
+// only its content does, so the key must name the WINDOW, never the run
+// date. `TRADES_WINDOW_DAYS` is the single source of the default window so
+// the fact_key and the claim text's stated window can never drift apart.
+export const TRADES_WINDOW_DAYS = 7;
+export const TRADES_FACT_KEY = `trades_trailing_${TRADES_WINDOW_DAYS}d`;
+
 /**
- * Trades since the producer's last run — one summary fact per run day (dated
- * identity, so re-running the same day supersedes rather than duplicating,
- * and a new day's window is naturally a new fact).
+ * Trades in the trailing window (default 7 days, spec §0.2) — ONE stable
+ * fact_key regardless of run day, so a re-run supersedes the prior day's
+ * fact instead of re-minting a fresh one next to it. The window is stated
+ * explicitly in the claim text (e.g. "in the trailing 7 days as of
+ * 2026-09-12") so the fact is self-describing even without reading the key.
  */
-export function buildTradesSinceLastRunFact({ lane, trades, sinceIso, sourceLabel, asOfIso }) {
+export function buildTradesSinceLastRunFact({ lane, trades, sinceIso: _sinceIso, sourceLabel, asOfIso, windowDays = TRADES_WINDOW_DAYS }) {
   const list = Array.isArray(trades) ? trades : [];
   // A genuine zero is a real fact too, but it is a DIFFERENT claim shape
   // (buildTradesZeroFact) — kept separate so a caller cannot accidentally
@@ -252,15 +267,13 @@ export function buildTradesSinceLastRunFact({ lane, trades, sinceIso, sourceLabe
   const caps = list.map((t) => Number(t.cap_rate)).filter(Number.isFinite);
   const medPrice = median(prices);
   const medCap = median(caps);
-  // dateStr = the RUN day, kept for fact_key identity (buildTradesSinceLastRunFact's
-  // own dedupe/re-supersede contract — a re-run the SAME day supersedes rather than
-  // duplicates). MB-a3: source_date is a DIFFERENT thing — the latest sale_date among
-  // the trades themselves, since this fact is a derivation over dated comps, not a
-  // point-in-time count. Falls back to the run day only if no trade carries a date.
+  // MB-a3: source_date is the latest sale_date among the trades themselves,
+  // since this fact is a derivation over dated comps, not a point-in-time
+  // count. Falls back to the run day only if no trade carries a date.
   const dateStr = asOfIso.slice(0, 10);
   const saleDates = list.map((t) => t.sale_date).filter(Boolean).map((d) => String(d).slice(0, 10));
   const sourceDateStr = saleDates.length ? saleDates.sort().at(-1) : dateStr;
-  const windowStr = sinceIso ? ` since ${sinceIso.slice(0, 10)}` : '';
+  const windowStr = ` in the trailing ${windowDays} days as of ${dateStr}`;
   let claim = `${list.length} dialysis sale${list.length === 1 ? '' : 's'} recorded${windowStr}.`;
   if (medPrice != null) claim += ` Median price $${Math.round(medPrice).toLocaleString('en-US')}.`;
   if (medCap != null) claim += ` Median cap ${(medCap * 100).toFixed(2)}%.`;
@@ -275,7 +288,7 @@ export function buildTradesSinceLastRunFact({ lane, trades, sinceIso, sourceLabe
     source_date: sourceDateStr,
     origin: 'onbox_sql',
     fact_kind: 'reported',
-    fact_key: `trades_since_last_run:${dateStr}`,
+    fact_key: TRADES_FACT_KEY,
     confidence: 0.9,
     _subtype: 'trades',
   };
@@ -285,10 +298,12 @@ export function buildTradesSinceLastRunFact({ lane, trades, sinceIso, sourceLabe
  * Handles the genuine zero case honestly, separate from the "no trades array at all" guard above.
  * MB-a3 documented exception: source_date = asOfIso. There is no comp to date when the claim IS
  * that no comp exists in the window — the only honest "as of" is the moment the window was checked.
+ * Same stable fact_key as buildTradesSinceLastRunFact (spec §0.2) — a genuine-zero day supersedes
+ * a genuine-zero day just as readily as a non-zero one, never re-minting.
  */
-export function buildTradesZeroFact({ lane, sinceIso, sourceLabel, asOfIso }) {
+export function buildTradesZeroFact({ lane, sinceIso: _sinceIso, sourceLabel, asOfIso, windowDays = TRADES_WINDOW_DAYS }) {
   const dateStr = asOfIso.slice(0, 10);
-  const windowStr = sinceIso ? ` since ${sinceIso.slice(0, 10)}` : '';
+  const windowStr = ` in the trailing ${windowDays} days as of ${dateStr}`;
   return {
     lane,
     section: 'trades',
@@ -300,7 +315,7 @@ export function buildTradesZeroFact({ lane, sinceIso, sourceLabel, asOfIso }) {
     source_date: dateStr,
     origin: 'onbox_sql',
     fact_kind: 'reported',
-    fact_key: `trades_since_last_run:${dateStr}`,
+    fact_key: TRADES_FACT_KEY,
     confidence: 0.9,
     _subtype: 'trades',
   };

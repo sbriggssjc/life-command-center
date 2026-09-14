@@ -747,6 +747,10 @@ async function renderInboxTriage() {
   }
 
   opsInboxData = res.data?.items || res.data || [];
+  // HP1-P2a: the true (exact, uncapped) count of the captured-contact hygiene
+  // rows the Inbox no longer shows (v_inbox_triage excludes them). Rendered
+  // as a persistent pointer row below, never silently dropped.
+  window._inboxHygienePointer = res.data?.hygiene_pointer || null;
 
   // Fallback: if canonical inbox is empty, load flagged emails from inbox_items DB
   if (opsInboxData.length === 0 && opsInboxFilter !== 'triaged') {
@@ -816,6 +820,18 @@ async function renderInboxTriage() {
   html += filterPill('triaged', 'Triaged', opsInboxFilter, 'opsInboxFilter', 'opsInboxSetFilter');
   html += filterPill('all', 'All', opsInboxFilter, 'opsInboxFilter', 'opsInboxSetFilter');
   html += '</div>';
+
+  // HP1-P2a: a persistent pointer to the data-hygiene lane this page no
+  // longer shows — never a silent absence. `count` is the TRUE population
+  // (an exact query against inbox_items, not a capped page), so it cannot
+  // read stale/lower than what is actually waiting.
+  const hp = window._inboxHygienePointer;
+  if (hp && hp.count > 0) {
+    html += `<div class="ops-hygiene-pointer" style="padding:10px 12px;margin:8px 0;background:var(--s2);border-radius:8px;font-size:12px;color:var(--text2);display:flex;justify-content:space-between;align-items:center;gap:10px">
+      <span>🧹 ${esc(hp.label)} — <b>${hp.count.toLocaleString()} item${hp.count === 1 ? '' : 's'}</b> (not broker judgment; not shown here)</span>
+      <button class="q-action" style="font-size:11px;padding:4px 10px" onclick="renderContactQualifyWorklist()">Review →</button>
+    </div>`;
+  }
 
   // W3.5 — Listing-BD source filter. When active, the Inbox switches to a
   // grouped-by-listing consumer view (one card per listing with its N matched

@@ -35,6 +35,1759 @@ warning (`console.warn`, doesn't fail the suite) and a documented 60%-of-budget 
 a new guard asserting the table stays in the first 40 lines. `docs/os/PLANNED-BACKLOG.md`'s
 `CONSOLIDATE3` row updated: items 1 and 3 done, item 2 (≤12-line entries) is this entry's own proof,
 item 4 (DOC-CONTRA) is 1 of 3 fixed with 2 more in progress this same pass.
+# Claude Code queue — STATUS
+
+<!-- =====================================================================     CONVENTION — READ BEFORE PREPENDING AN ENTRY.
+     This file is newest-first. New entries go DIRECTLY BELOW this block, never
+     above it. The `# Claude Code queue — STATUS` H1 above must remain line 1.
+     This is enforced by test/status-header-integrity.test.mjs — CI fails if the
+     H1 moves off line 1 or a second copy appears. Five sessions on 2026-09-12
+     buried it (lines 25, 29, 57, 83, 212) before the guard existed.
+     Line budget: 2,500 (test/status-line-budget.test.mjs). When you approach it,
+     archive BEFORE you push, not when CI fails. ⚠️ This file grows on YOUR
+     branch AND on main at the same time, so a branch that passes locally can go
+     over the budget the moment main is merged in — it has happened twice
+     (PR #2383, and the REPO1 sweep at 2,503). Leave 200+ lines of headroom, and
+     keep entries tight: the findings belong in PLANNED-BACKLOG.md, which is the
+     canonical open-work list; STATUS.md is the narrative, not a second copy.
+     move the OLDEST contiguous span verbatim to docs/history/ and extend the
+     archive pointer — never reword or drop an entry to make room.
+     ============================================================================ -->
+
+## 2026-09-14 — N3c decided and shipped: banks/CMBS trustees excluded; full open-decisions list compiled (Cowork)
+
+Scott's call on N3c: banks and CMBS trustees are their own excluded category, same as public bodies
+and universities, "for now" -- explicitly revisitable if lender prospecting via Northmarq debt-side
+coordination comes up later.
+
+Reviewed existing machinery first: `lcc_owner_name_is_not_prospected` is already the single choke
+point excluding public bodies/universities from prospecting, feeding 7 views (Tier 0 lane, seller
+prospect universe, loan maturity worklist, etc.). Added `lcc_owner_name_is_bank_or_trustee` and wired
+it into that same function rather than building a new mechanism. Sized the regex against live data
+before shipping: 11 owner names match today (10 national banks + 1 JPMorgan CMBS trust), 0 false
+positives against individual/family trustees (e.g. "Tony Martin, Trustee" correctly stays
+prospectable), 0 credit unions swept in (deliberately -- member-owned, can be legitimate
+owner-occupant prospects, a different category from a bank/CMBS trustee holding title incidentally).
+Verified live: Wells Fargo Bank NA and the JPMorgan CMBS trust are now gone from
+`v_lcc_tier0_owner_contact_lane_open`. Migration:
+`supabase/migrations/20261102150000_lcc_own_t0_bank_cmbs_trustee_exclusion.sql`.
+
+Also found fcp/tmg's sponsor-domain proposals (the other N3-adjacent open item) have gone stale --
+zero live rows in `v_lcc_tier0_sponsor_map_proposals` today, re-checked live. Not re-raising a
+decision with no population behind it.
+
+Per Scott's request, compiled every remaining genuine open decision across the whole ownership→contact
+chain into one place: `ownership-truth-pipeline-state.md`'s new "Open decisions — needs Scott" section.
+Six items: trailing-"The" canonical key (`OWN-T0b/c`), `entities.canonical_name` unique-key enforcement
+(`N15c`, blocked by the first), `lcc_finalize_entity_portfolios`'s supersession rule (`OWN-T0g`), 1,475
+Salesforce-campaign orphans (`N15`), whether to widen ownership resolution to the remaining 2,241
+properties (`T2b`, safe/cheap but low-value -- only 3.7% contactable), and what evidence promotes an
+owner out of `unknown` role (doctrine question from `connectivity-and-open-threads.md` §4o). Also added
+a "Where we are toward 100%" snapshot table with every load-bearing metric measured this session and
+the sessions before it, and an honest read: the mechanisms keep getting fixed (auto-attach now writes,
+tombstones cleared, bank/trustee category closed) but the headline 13% owner-to-person linkage number
+has barely moved (13.5% now) because the entity-dedup residue upstream is the real blocker.
+## 2026-09-14 — Match rate measured: Philadelphia returns ~68%, and it found a two-property owner on the first pass (Cowork)
+
+§7 said download one free file and measure the **match rate**, because coverage is not a hit rate. Done, live,
+against Philadelphia's free public open-data endpoint (`phl.carto.com/api/v2/sql`, `opa_properties_public`) — no
+scraping, no login, no vendor.
+
+**Pass 1, exact address: 9 of 22 distinct addresses. Pass 2, house-number prefix + street: 6 more. ≈ 68%.**
+
+🔑 **Every pass-1 miss had one cause, and it is trivial:** Philadelphia stores address **ranges**; LCC stores the
+lead number. `4126 Walnut St` ↔ `4126-38 WALNUT ST`. `1300 W. Lehigh Ave` ↔ `1300-24 W LEHIGH AVE`.
+`1172 S Broad` ↔ `1172-74 S BROAD ST`. That is an **address-normalisation** problem — exactly the lane
+`OWNERGAP1-ollama` reserves for a local model — **not** a data-availability one.
+
+**Fifteen real, callable owners came back**, including `UNIV CITY ASSOCIATES` (DaVita 42nd St), `SIX G'S L P`
+(DaVita Memphis St), `HASBROOK ASSOCIATES L P` (Fkc Fox Chase), `UMBRIA VENTURES LLC` (Fkc Roxborough) and
+`EPISCOPAL HOSPITAL` (Fkc Episcopal).
+
+🚨 **And the first prospecting signal fell out on the first pass, unprompted:** **`FILIPPONE EDWARD J TR`** owns
+109 Dickinson St and **`FILIPPONE-NEWMAN LLC`** owns 1172-74 S Broad St — **the same family behind two of Team
+Briggs' dialysis properties.** A portfolio seller prospect LCC could not see yesterday, because both properties
+read "owner unknown". That is the point of the whole exercise, arriving earlier than expected.
+
+⚠️ **Two honest limits, both recorded rather than smoothed over.** **One jurisdiction is not a rate** —
+Philadelphia is a well-run open-data city, so re-measure on a Texas CAD and a Florida county before projecting 68%
+onto the 4,021. And **the real hard case is multi-parcel sites**: `3300 Henry Ave` returns **six** owning entities
+(the Falls Center LPs) for a single street address; that needs a unit or parcel discriminator, and no amount of
+address matching resolves it.
+
+**Next: repeat the identical test on Harris TX (50) and Miami-Dade FL (29)** — two more measurements, still no
+build, and the coverage question is then answered with three real rates instead of one projection. Full detail in
+the audit doc §8.
+
+## 2026-09-14 — Second county sweep: the question was wrong again, and the free path covers ~20% before we start (Cowork)
+
+Scott ruled out a paid provider and asked whether a local Ollama model could do this. Sampled six more
+jurisdictions. **The framing changed a second time, in his favour.**
+
+**The useful question is not *"can we search this county's portal"* but *"does this jurisdiction publish a FREE
+BULK FILE that already contains the owner"*** — and several of the largest do:
+
+| jurisdiction | props | owner published? | how |
+|---|---:|---|---|
+| **Harris, TX** | 50 | **yes** | portal + CSV/XLS/PDF export |
+| **Dallas, TX** | 25 | **yes** | owner-name search + COMMERCIAL filter, no CAPTCHA |
+| **Miami-Dade, FL** | 29 | **yes** | dedicated **OWNER NAME** search tab |
+| **Philadelphia, PA** | 25 | **yes** | address→owner, full grantee/grantor sales history, **+ free bulk dataset download** |
+| **NYC (Queens + 4)** | 56 | **yes** | **PLUTO**, free, tax-lot level, **monthly** (26v2, Aug 2026) |
+| **Cook, IL** | 73 | gated | CAPTCHA every search — human-only |
+| **Los Angeles, CA** | 54 | **no** | not published at all |
+
+Philadelphia's own property page ends *"You can download the property assessment dataset in bulk"*, and its detail
+view carries the **grantee/grantor chain** — free. **None of this is scraping.** It is open data, downloaded once
+and matched offline.
+
+**Measured coverage of the obvious free-bulk targets: TX 432 + FL 302 + Philadelphia 25 + NYC 56 = 815 of 4,020
+(20.3%)** with no portal automation, no CAPTCHAs and no vendor — before checking the other open-data states.
+
+⚠️ **That is COVERAGE, not a hit rate**, and the distinction is the whole risk. A bulk file covering a
+jurisdiction does not mean our property matches a row in it — matching is **by address**, and these rows carry
+almost no APNs (Cook 0/73, Harris 0/50, LA 1/54). **Measure the match rate on one downloaded file before building
+anything.** Philadelphia is the cheapest test: 25 properties, documented bulk download.
+
+🚨 **On Ollama, recorded as `OWNERGAP1-ollama` because Scott asked and the line is sharp.** A local model may
+**never** be used to recall an owner. Asked *"who owns 5040 Crenshaw Rd"*, any LLM returns a plausible LLC name —
+**exactly the defect we quarantined this week**, since the `ABC`/`XYZ Dialysis Centers` rows came from a `gpt-4o`
+call asked to recall a public record. Running that locally makes it free and unlimited, **which is worse, not
+better.** ✅ Where it genuinely helps: **matching and normalising text we already fetched** — our address strings
+against a downloaded file's (`5040 Crenshaw Rd` ↔ `5040 CRENSHAW RD`, suite noise, abbreviations) and entity names
+(`CRENSHAW MOB LLC` ↔ `Crenshaw MOB, L.L.C.`). Transformation of retrieved data, never recall, every output
+checkable against its source row. That is the step that turns a free download into matched owners.
+
+**Revised recommendation:** download **one** file (Philadelphia), measure the match rate, and let that number —
+not a vendor quote — decide everything downstream. Cook-shaped counties stay manual; LA-shaped are unreachable
+from the county at any price, and the vendor conversation can stay deferred indefinitely against a residual that
+will be far smaller than 4,021. Appended to the decision doc as §7.
+
+## 2026-09-14 — XB scoped by running the audit by hand first; it found real debt (Cowork)
+
+Two of Scott's three original P18 asks are now live and self-monitoring (market briefs, operator funnel).
+**XB — the CDO/CTO build brief — is the third and was never started.** Rather than describe it, ran the
+XB2 rules by hand so the prompt carries a measured acceptance target:
+**618 local branches** (14 unmerged); **68 flags — 37 on / 29 off, 15 off >3 weeks, 11 off >60 days**,
+oldest dark since **2026-05-30**; `sidebar_contact_guard` **31 runs / 31 skipped / 0 completions ever**;
+4 of 8 prompts without a matching response; STATUS 2,257 / 2,500 and BACKLOG 1,178 (both guarded).
+⭐ **The run produced a rule refinement.** `p_rss` also reads "skipped, never completed" — but its
+`skip_reason` is `flag MARKET_BRIEF_PRSS is off`, which is the system working and must stay silent.
+`sidebar_contact_guard`'s reason is operational, 31 runs running — a stall wearing a skip's clothes. So
+the rule is **not** "no completions" but "skips that are NOT flag-gated, N runs running". Same
+dead-vs-silent distinction FEED2 and MB2e each paid for separately; it now has a third instance.
+⚠️ The orphan-prompt rule threw a **false positive** (`MB2bc-…` vs `MB2b desktop response.docx`) — the
+prompt↔response naming convention is unenforced, so that rule needs a real key before shipping.
+Scoped **XB1+XB2 only — no dashboard**: a surface with nothing behind it is exactly how three "looks
+live, does nothing" defects happened this week. → `prompts/XB1-XB2-build-brief-collector-and-audit-rules.md`
+
+## 2026-09-14 — County pilot run live: Harris works, Cook is human-only, LA publishes no owner at all (Cowork)
+
+Ran OWNERGAP1's recommended pilot in the browser rather than handing Scott an hour of clicking. It took minutes,
+and **it refutes the single-number framing of the question it was meant to answer.**
+
+⚠️ **A constraint the decision doc did not weight:** these properties carry essentially **no APNs** — Cook
+**0/73**, Harris **0/50**, LA **1/54** — so every lookup has to work from a **street address alone**. That is what
+the pilot actually tested.
+
+**The three counties resolved three different ways:**
+
+| county | props | verdict |
+|---|---:|---|
+| **Harris, TX** | 50 | ✅ free, address search, **returns the owner**, CSV/XLS/PDF export — looks automatable |
+| **Cook, IL** | 73 | ⚠️ free address search exists but **every search is CAPTCHA-gated** — human-only |
+| **Los Angeles, CA** | 54 | ⛔ free, no CAPTCHA, **but owner names are not published at all** |
+
+**Harris is a direct hit, and the county draws exactly PDR2's distinction.** `5040 Crenshaw` → three accounts:
+`FRESENIUS MEDICAL CARE GREATER SOUTHEAST HOUSTON LLC` and `FUSA MARKETING` as **Personal** property, and
+**`CRENSHAW MOB LLC`** (16,915 SF, $1,903,507) as **Commercial** — the real owner, a single-asset LLC, on a
+property LCC reports as "owner unknown" today.
+
+**LA is a hard no, established by reading rather than assuming.** Parcel detail for AIN 2350012065 carries situs
+address, use code, building characteristics, a 25-row assessment history, and an ownership *events* table with
+recording dates, doc numbers and sale prices — **and no owner name anywhere.** Not a scraping difficulty; the
+datum is not published.
+
+👤 **What it changes for Scott:** **there is no single "Option A yield."** Behind the 4,021 sit **1,266 distinct
+(state, county) combinations**, and the three largest split one-automatable / one-manual / one-impossible. A
+national county build would be sized against the worst case while delivering only the Harris-shaped subset.
+Revised to three options on **OWNERGAP1-decision**: build for Harris-shaped counties only (**sample 5–10 more
+first** — three proves the shapes differ, not how they split); a paid bulk provider, which is the only path that
+reaches LA-shaped counties because it does not depend on what a county chooses to publish; or accept "owner
+unknown" and rank those properties last — now a measured choice rather than a default.
+
+**The cheapest informative next step is more sampling, not a build** — the same logic that made this pilot worth
+running. Appended to `docs/audits/OWNERGAP1_FABRICATED_OWNER_AND_UNRECOVERABLE_GAP_2026-09-14.md` §6 rather than
+filed separately, so the decision and its evidence live in one place.
+
+## 2026-09-14 — Tier 0 auto-attach fix VERIFIED live; owner-to-person linkage re-measured at 13.5% (Cowork)
+
+Scoped Stage 4's contact-linkage gap per my own recommendation, starting with review before building.
+`tier0-owner-contact-system.md` explicitly flagged an unverified claim: a 2026-09-12 fix to
+`TIER0_AUTO_ATTACH` (a call-site arity bug had silently kept it off for 16 straight days) was never
+actually confirmed to write anything in production.
+
+Verified it directly against `lcc_tier0_auto_attach_run_log` and `lcc_tier0_confirm_log`: 09-12 06:55
+still shows `attached=0` (fix landed mid-day, after that run); **09-13 06:55 shows `attached=9`** -- the
+first non-zero `attached` in the log's history, independently confirmed by 9 new `lcc_tier0_confirm_log`
+rows with `actor` NULL (system) and `verdict='attach'`, all dated 09-13, none before. 09-14 06:55 shows
+`auto_candidates=0`, which is the expected steady state (pool cleared) rather than a regression. The fix
+genuinely works.
+
+Re-measured the "13% owner-to-person linkage" headline figure the same way the 08-27 audit did: **13.5%
+(1,377 of 10,187)** today vs. 13% (847/6,480) then. Both the linked count and the universe grew (universe
+growth is partly the still-open OWN-T0b/c duplicate-entity residue inflating the owner count with
+un-merged duplicates) -- the ratio barely moved. Honest read: the mechanism now works, but 9 links/day
+against a gap this size won't move the headline number on its own.
+
+Documented both findings in `tier0-owner-contact-system.md` (§2 headline table + §6) and
+`ownership-truth-pipeline-state.md` (`[UX-T1a-reach]`).
+
+Did not build anything further this pass -- Stage 4 is a large, 13-audit-round subsystem with several
+genuinely open decisions already sitting there for Scott (fcp/tmg sponsor domain confirmation, N3c
+bank/trustee scope, N15 Salesforce-campaign orphans, N15c's canonical_name unique-key call), any of
+which is a smaller, well-scoped next step than trying to move the 13% number directly. Flagged back to
+Scott rather than picking one unilaterally.
+
+Housekeeping: `docs/claude-code/responses/` had OC-v2 and OWNERGAP1 desktop responses queued; left
+untouched -- another concurrent session had the shared checkout mid-edit on exactly those topics
+(uncommitted changes across api/, docs/audits/, docs/os/, supabase/migrations/, test/) when checked, so
+reconciling them was that session's in-flight work, not mine to touch.
+## 2026-09-14 — OC-v2 taken live: the operator funnel now triages, routes, and watches itself (Cowork)
+
+**Applied the migration CC could not** (`20261102140000`): flag row registered, `v_operator_notes_stale_open`,
+`lcc_check_operator_notes_stale`, crons `lcc-operator-triage` 07:25 UTC and `lcc-operator-notes-stale-check`
+07:30 UTC — **both slots verified free against live `cron.job` first**, which the migration's own comment
+explicitly asked an operator to do. Confirmed the deployed build carries the fix (`87042eb63878`,
+`merge-base` proves it contains PR #2438) before grading anything — merged is not running.
+**Re-graded with the model actually invoked: `scanned 3, triaged 3, routed 2, unclassified 0`** (was
+1 / 1 / 2). The dialysis bug note that previously failed now grades `bug` / `lane: dialysis` / `medium`
+→ `app/briefing` via `onprem_ollama`; the comps idea now carries `lane: government`.
+**`OPERATOR_NOTE_TRIAGE` flipped ON** against that evidence — the gate the migration documented. A POST
+run wrote the classifications; all three fixtures were then closed through the normal disposition path,
+so that path is exercised too. Stale monitor reads 0 open notes, 0 alerts.
+⚠️ **Correction to my own earlier diagnosis, which was wrong.** I reported the model as "declining" on the
+bug note. CC found the truth: a plain GET **never called Ollama at all** — `model_declined` meant *never
+asked*. That is why the fix was a code path, not a prompt. Worth keeping: a verdict string named the
+wrong cause, and I repeated it as measurement.
+👤 Residual: the meta note graded `bug` (over-classification) with `routed_to: null`. Triaged-but-unrouted
+correctly stays `open` and would age into an alert — the monitor working as designed.
+
+## 2026-09-14 — OWNERGAP1 reconciled: containment verified both ways, CC corrected my premise, one residual gap found (Cowork)
+
+PR #2437 merged. Responses and prompt filed to `done/`. **CC's pass was better than the prompt that asked for it,
+in four separate ways, and each is worth naming.**
+
+**1. It corrected my premise.** I named `sidebar-pipeline.js` as the producer. It is not — the fabricated names
+come from **`Dialysis/src/public_record_ingest.py`'s `gpt-4o` recall call**, in a *different repo*, asking a model
+to "extract" `mailing_owner` from a prompt **seeded with the property's own owner and no county fetch**. That is
+fabrication **by construction**, the same class as PR1/PR1a/PR1b. Filed honestly as `OWNERGAP1-producer` 🔴 with
+read-only access disclosed rather than claimed as fixed.
+
+**2. The fabrication was bigger than I measured.** I found 228 rows in `tax_records`. CC ran the same detector
+across every table that can carry a model-sourced owner string and found **221 more in
+`entity_registry_records.entity_name`, 12 in `recorded_owners.name`, and 10 in `true_owners.name`** — the last two
+being the **curated** tables `properties.recorded_owner_id`/`true_owner_id` point at. A fabricated row there is a
+live landmine for any future name-match reconciler, not a staging-table curiosity.
+
+**3. It caught its own near-miss during verification and corrected it in place.** The single `recorded_owners` row
+literally named `"Unknown"` **is referenced by 23 real properties today** — a genuine in-use sentinel from some
+other producer, not gpt-4o fabrication. Nulling that FK would have been an undisclosed side effect of a migration
+about stopping fabrication. It narrowed the properties-link guard to fire only on `fabricated_placeholder`, proved
+it with a rolled-back positive **and** negative control, and documented the correction in the migration header.
+
+**4. Its recommendation is the right one, and it is a decision rather than a build.** The concentration analysis
+kills the "narrow path" hope I was hoping for: **top-15 counties = 13.7% of the gap, 1,266 distinct
+(state, county) combinations, 640 properties with no county at all.** So instead of committing to a county-portal
+build or a vendor contract, it proposes a **bounded one-hour manual pilot** on Cook IL / Los Angeles CA /
+Harris TX (177 properties) to learn whether Option A's yield is nearer 40% or 5% **before** anyone spends money.
+
+✅ **What I verified independently rather than reading:** `trg_dia_ownergap1_*_guard` is live and **enabled on all
+four tables**; **370 rows quarantined** (228 + 142), rows intact, reasons distinct. I re-ran the control myself in
+a rolled-back transaction: `XYZ Dialysis Centers LLC` → nulled + `fabricated_placeholder`; `Unknown` → nulled +
+`unstated_placeholder`; **and a real owner, `Decarion Family Trust`, passed through untouched.** Both sides hold.
+
+⚠️ **One residual, filed as `OWNERGAP1-payload`:** the guard protects the **column**, not `raw_payload`. A row
+whose fabricated name sits only in `raw_payload->>'mailing_owner'` is **not** flagged (probe `PROBE-RB-4`), and the
+228 already-quarantined rows **still carry the invented string in their payload** — which is exactly how I found
+them. So *"catches every one going forward"* is true of the column and not of the payload. **Not urgent** (no live
+consumer reads that key, and leaving a raw source record unedited is arguably correct) — the likely right answer is
+to make the quarantine flag readable beside the payload rather than scrub it. Written down so the next reader of
+that payload is not misled.
+
+## 2026-09-14 — OWN-T0f reviewed (no action needed), OWN-T0g sized and deferred pending a decision (Cowork)
+
+Continued the OWN-T0 residue after OWN-T0d shipped. Reviewed existing machinery before building, per the
+OWN-T0c lesson.
+
+**OWN-T0f (closed, no build)**: the per-row UUID on `county_deed:<uuid>`/`gov_ownership_chain:<uuid>` in
+`ownership_source` looked like producer noise in the audit, but reading `lcc_a2_apply_ownership_chains`
+showed it is deliberate citation back to the specific source chain-link record. The one live consumer that
+groups on it, `v_lcc_property_ownership_reconciled` via `lcc_ownership_evidence_level()`, already
+prefix-matches both patterns correctly -- verified live, `evidence_level` grouping has 0 rows in `other`
+across all 27,421 rows. Nothing to build; would have been solving an already-solved problem.
+
+**OWN-T0g (sized, not shipped)**: `lcc_finalize_entity_portfolios` is live, `SECURITY DEFINER`, cron-driven,
+and runs both domains' portfolio syncs -- a different risk class from OWN-T0d's one-time data cleanup.
+Confirmed by reading its body: gov's supersession window is computed only across the current inflight
+request's rows, so a property whose owner history is split across sync calls never gets end-dated across
+that split; dia has no supersession logic at all. Real, confirmed gap. Did not build a fix -- the correct
+repair needs a decision first (should supersession compare against all historical facts, not just the
+current payload; is "new current owner supersedes old" even a safe assumption here, given gov/1708 has two
+genuinely-current co-owners from OWN-T0d's investigation). Recommend sizing the live blast radius against
+the 747 `multi_current_distinct_parties` population before writing anything.
+
+Both findings documented in `PLANNED-BACKLOG.md`'s OWN-T0b/c/d/f/g row and
+`docs/architecture/ownership-truth-pipeline-state.md`.
+
+Housekeeping: MB2e desktop response reconciled (already-merged PR #2433, moved to responses/done/).
+## 2026-09-14 — OC-v2 shipped: lane detection + GET-never-calls-the-model bug fixed, flag registered, cron scheduled
+
+Root-caused the two triage findings from the measurement pass below. `lane: null` was structural —
+`classifyDeterministic` never set `lane`, only `note_type`/`severity`; added `detectLane` (domain
+keyword map: dialysis/government/comps/market-brief/buyer-engagement/automation/data-coherence/canon)
+and attached it to every deterministic verdict. `triage_source: null` / "model declined" was a
+misread — a plain `GET` dry run never called Ollama at all (only `POST` or `?generate=1` did), so the
+bug note was never actually offered to the model. Removed that gate (`?skip_model=1` opts out).
+Migration `20261102140000` registers `OPERATOR_NOTE_TRIAGE` (still **off** — the row never existed,
+so nothing could flip it), schedules `lcc-operator-triage` (07:25 UTC, not flag-gated), and adds a
+distinct stale-note monitor (`v_operator_notes_stale_open` / `lcc_check_operator_notes_stale`,
+`operator_note_stale_open` alert ≥3d, cron 07:30). **Not applied live** (no DB access this session) —
+flag stays off until a live re-grade. `test/operator-notes.test.mjs` + `test/operator-triage-tick.test.mjs`
++ `test/sql-definer-privilege-stanza.test.mjs` all green.
+## 2026-09-14 — OWNERGAP1 Unit 1 shipped: reversible SQL-side quarantine on Dialysis_DB; producer is `Dialysis/src/public_record_ingest.py`, not this repo (Cowork)
+
+Followed up on the entry below (the 228 fabricated `ABC`/`XYZ` owner names + 142 `"Unknown"` placeholders in
+`tax_records.raw_payload->>'mailing_owner'`). Attached the `Dialysis` repo read-only and traced the real
+producer: **not** `sidebar-pipeline.js` as the originating prompt named — that file never writes
+`mailing_owner` (grep: zero hits). It is `Dialysis/src/public_record_ingest.py::write_tax_record`, calling
+`gpt-4o` with the property's own recorded/true owner in the prompt and no county fetch anywhere in the module
+— the same mechanism PR1/PR1a/PR1b already documented on `assessed_value`/`tax_amount`/`tax_delinquent`,
+recurring on a field (`mailing_owner`) those rounds never touched. Corrected in place above.
+
+**Contamination is wider than the prompt described** — measured across all four tables the producer touches,
+not just `tax_records`: `entity_registry_records.entity_name` carries the same `ABC`/`XYZ` pattern, and
+`recorded_owners.name` / `true_owners.name` carry it too (the curated identity tables `properties` FKs
+point at). Migration `20260914150000_dia_ownergap1_fabricated_owner_quarantine.sql` (applied live to
+Dialysis_DB `zqzrriwuavgrquhisnoa` via three sequential statements — the base migration plus two live
+corrections, both folded into the committed file):
+
+- **One detector, `dia_is_fabricated_placeholder_owner(text)`** — case-insensitive `^(XYZ|ABC)\s` plus
+  exact (trimmed, case-insensitive) `= 'unknown'`. Never a `contains` rule (P158a) — a real firm like
+  `"AZ Business Trust LLC"` or `"Unknown Holdings of Dallas LLC"` must not flag.
+- **`dia_ownergap1_fabrication_quarantine`** — append-only log, idempotent (`ON CONFLICT ... WHERE
+  restored_at IS NULL DO NOTHING`), records the pre-quarantine value for every flag.
+- **`tax_records.mailing_owner`** — the field the investigation named — is NULLED (the field is not an
+  identity column; blank is the honest state) + flagged; guard trigger stops future writes the same way.
+- **`entity_registry_records`/`recorded_owners`/`true_owners`** — **flag-only, name preserved.** These are
+  identity columns other rows FK to; nulling `name` would either FK-violate or silently rename a real party.
+  Each has its own `BEFORE INSERT OR UPDATE` guard trigger.
+- **The loophole this closes: `properties.recorded_owner_id`/`true_owner_id`.** A property could still point
+  at a fabricated-and-flagged owner row even after the row itself is flagged. `trg_dia_ownergap1_property_owner_link_guard`
+  nulls the FK on write — **scoped to `fabrication_quarantine_reason = 'fabricated_placeholder'` only, never
+  `'unstated_placeholder'`.** ⚠️ That scoping was corrected live, mid-build: the first version tested
+  `fabrication_quarantined_at IS NOT NULL` generically, and a live `recorded_owners` row literally named
+  `"Unknown"` is referenced by **23 real properties** — the generic guard would have silently severed those
+  on the next write to that row. Caught by testing both directions against production before shipping
+  (rolled back, no residue), not by reading the code.
+- **`dia_ownergap1_restore_quarantine(batch_tag)`** — full reversal, restores `mailing_owner` from the log
+  and clears every flag column for a batch.
+
+**Before/after (live, `zqzrriwuavgrquhisnoa`):** `tax_records.mailing_owner` fabricated 228 → **0** (nulled +
+logged), `"Unknown"` literal 142 → **0** (nulled + logged, `unstated_placeholder`); `entity_registry_records` /
+`recorded_owners` / `true_owners` fabricated names flagged, names preserved. **Confirmed: 0 properties'
+`recorded_owner_id`/`true_owner_id` reference a `fabricated_placeholder`-flagged row** (the link guard's
+positive control), and **no property owner FIELD was written by any of this** — only flags, nulls on the
+non-identity `mailing_owner` field, and reversible FK-nulls on the loophole.
+
+**Unit 2 (re-measurement) — all four of the prompt's own figures reproduced, live, this session**, beside
+the originating measurement: 25,331 `mailing_owner` keys / 24,365 null-or-empty (matches exactly); of the
+4,021 owner-unknown properties, 3,048 join tax records and exactly 1 has a non-blank `mailing_owner`
+(`"Unknown"`, matches exactly); `deed_records` **204** total / 0 overlap (the prompt said 203 — a genuine
++1 landed in the hours between the two measurements, not a methodology disagreement, called out rather than
+silently reconciled); 56 of 4,021 carry a `parcel_number`, 0 of those join a `parcel_records.owner_name`
+(matches exactly). **No source the prompt missed was found.** The finding stands as written: the 4,021-
+property owner gap is not recoverable from any table LCC or Dialysis_DB holds.
+
+**Unit 3 (costed decision doc):** `docs/audits/OWNERGAP1_FABRICATED_OWNER_AND_UNRECOVERABLE_GAP_2026-09-14.md`
+— county-recorder path (`handleRecorderPortal` is gov-only; `county_authorities` does not exist on
+Dialysis_DB at all — verified via `information_schema`, so the prompt's premise there needed correcting too;
+the dia-capable path is the manual `handlePublicRecordsCapture` writeback only) vs a paid bulk vendor
+(`Dialysis/src/regrid_client.py` — a complete, unused Regrid Parcels client gated on unset `REGRID_API_KEY`)
+vs doing nothing; state/county concentration (top 15 = 549/4,021, 13.7%; 640/4,021 carry no county at all;
+1,266 distinct state/county combinations — the population is NOT geographically narrow, so a county-by-county
+manual pilot does not obviously beat a national paid feed); recommendation to Scott: a small 3-county pilot
+before committing to either paid path, given the population's dispersion.
+
+**Guard:** `test/ownergap1-fabricated-owner-quarantine.test.mjs`, 40 tests — positive control on all 12
+known fabricated names + `"Unknown"` variants (case/whitespace), negative control on 10 real names
+(`"AZ Business Trust LLC"`, `"X Y Z Dialysis Consulting LLC"` as the deliberately adversarial edge cases),
+plus structural assertions against the migration's own source (detector, quarantine table, all four+one
+guard triggers, the `fabricated_placeholder`-only scoping on the property-link guard, the restore function,
+`NOTIFY pgrst`). Full suite: **6,231 passed / 0 failed / 6 skipped** (pre-existing skips, unrelated).
+
+**No Railway redeploy needed or possible for this change** — nothing in `api/`/JS shipped; the entire fix is
+a Dialysis_DB migration (live immediately, per this repo's own "Supabase migration changes are live
+immediately" rule) plus a test file and two docs. The actual Python producer fix (stop `gpt-4o` emitting
+`ABC`/`XYZ` template-shaped names) is filed as **`OWNERGAP1-producer`**, cross-repo, not shippable from this
+session's read-only `Dialysis` access.
+
+## 2026-09-14 — OC-v2 de-risked by measuring triage before sending it (Cowork)
+
+Rather than send OC-v2 blind, forced a triage dry run against the deployed handler
+(`tranquil-delight` `cf04ae04ae52`, which reports `skipped: flag_off` / `registry_state: null` honestly
+and offers `?force=1`). Filed **two realistic notes** first, because the only queued note was meta
+("confirming the funnel accepts notes") and a meta note is a bad test of a classifier.
+**Result — `scanned 3, triaged 1, routed 1, unclassified 2, errors 0`:** an unambiguous **dialysis bug
+report** naming a route, a lane and a mechanism came back `unclassified`
+(`no_deterministic_rule_matched_and_model_declined`); the one success was a comps idea routed
+`deterministic`ally but with **`lane: null`**, despite "government deals" and "GSA lease".
+**So: only keyword rules fire, they lack market-brief/dialysis vocabulary, lane is never populated, and
+the model arm declines** (`triage_source: null` on both misses). ⚠️ **Flipping the flag as-is would route
+about one note in three and lose the rest silently** — the funnel would look alive while still dropping
+most of what Scott puts in it. MB-a measured Ollama reachable from Railway in the RSS path, so OC-v2 must
+check whether the TRIAGE path reaches the model at all: unreachable is a wiring bug, conservative is a
+prompt question, and they have different fixes. Both test notes left in the queue as fixtures.
+
+## 2026-09-14 — OWN-T0d shipped: 11 tombstone-duplicate-current properties cleaned up (Cowork)
+
+Continuing the ownership-truth-pipeline work after OWN-T0c's revert, picked up OWN-T0d next (my own
+recommendation, approved). Re-measured `v_lcc_property_multi_current` on LCC Opps: `tombstone_duplicate_current`
+unchanged at 11 properties from the 2026-09-02 audit (unlike OWN-T0c's population, which had nearly tripled).
+
+Reviewed existing machinery *before* building anything (the lesson from OWN-T0c) and found the fix already
+built and deployed: `lcc_repair_tombstone_portfolio_facts(p_dry_run, p_batch)` (P175) on `lcc_entity_portfolio_facts`
+-- finds current-fact rows still sitting under a tombstoned (`entities.merged_into_entity_id is not null`)
+entity_id where the survivor already holds an equal-or-better current row for the same property, and
+dedup-deletes the ghost row (or repoints it if the survivor lacks the property). It explicitly leaves alone
+any case where the ghost claims current and the survivor claims ended -- a genuine conflicting claim, not a
+duplicate -- for `v_lcc_portfolio_ownership_conflict` to surface separately, so it never over-corrects.
+
+Dry run found **12** ghost fact rows (not 11 properties -- one extra, gov/1708, was bucketed under the
+*other* defect class `multi_current_distinct_parties` by the view because it also carries a genuine second
+rival owner; the repair function operates at the fact-row level so it caught it anyway). Ran live, batch tag
+`own_t0d_2026-09-14`, fully logged to `lcc_p175_portfolio_repair_log` (old-row snapshot per fact) and
+reversible via `lcc_unrepair_tombstone_portfolio_facts('own_t0d_2026-09-14')`.
+
+Re-measured after: `tombstone_duplicate_current` **0** (was 11/12). `multi_current_distinct_parties` unchanged
+at 747/\$876,981,134, confirming no genuine rival-party conflict was touched. gov/1708 now correctly shows
+exactly its 2 real current owners (The Greystone Group vs. the Silverstone Company survivor) with only the
+duplicate Silverstone ghost row gone. No migration needed -- the repair function pre-existed; this was a
+live-data operation only, documented in `PLANNED-BACKLOG.md`'s OWN-T0b/c/d/f/g row and
+`docs/architecture/ownership-truth-pipeline-state.md`.
+
+Housekeeping: checked `docs/claude-code/responses/` -- empty, nothing to reconcile.
+
+Next recommendation: Stage 4's contact-linkage gap (13% owner-to-person linkage), or the smaller
+mechanical OWN-T0f (`ownership_source` per-row UUID noise) / OWN-T0g (`lcc_finalize_entity_portfolios`
+supersession-window gap) follow-ons. OWN-T0b/c (1,183 `duplicate_entity` merges) stay blocked on the
+trailing-"The" human decision from the prior entry.
+## 2026-09-14 — MB2e verified live; then found the operator funnel has no consumer (Cowork)
+
+**MB2e confirmed independently.** All **13 feeds now contribute ≥1** — Federal Register (GSA) 6→**4**
+after cutoff, Tax Foundation 15→**5** — **zero feeds at zero**, zero open alerts of either kind, and the
+11:15 UTC cron genuinely calls **both** monitors (checked the cron command, not the claim). The feed
+thread is complete and self-monitoring. No doc entry was needed for the confirmation itself.
+**Closed a stale blocker:** `MB2a` still read `⛔ blocked on edge-function deploy` two days after that
+deploy landed (v21 → v25 since). Now ✅ — and it is exactly the stale-dated-blocker class **XB2** exists
+to catch automatically.
+🚨 **The operator funnel accepts notes and nothing processes them.** OC-v's blocker #1 IS resolved —
+the standalone MCP redeploy happened, `log_operator_note`/`get_operator_inbox` are live, intake works
+end to end. But: `operator_notes` holds **1** note, filed 2026-09-12, still `open` / `note_type=null` /
+`routed_to=null`; the **`OPERATOR_NOTE_TRIAGE` registry row does not exist at all** (OC2 shipped the
+handler and never registered the flag, so it cannot be turned on); and there is **no triage cron**.
+This is worse than not having the funnel — Scott was told it is live, so a note filed there looks
+captured, is captured, and is then silently ignored. Same class as a dead feed reporting healthy.
+→ **OC-v2** (`prompts/OC-v2-notes-go-in-and-nothing-happens.md`).
+
+## 2026-09-14 — MB2e: two more feeds green + contributing nothing (Federal Register GSA, Tax Foundation)
+
+MB2b's `items_after_cutoff` column found its next two customers on day one. Same class as FEED2
+(a fixed window vs. a slower producer cadence, worst on Monday): `maxAgeHours` set 24*7 on both
+`government/Federal Register (GSA)` and `tax_policy/Tax Foundation` (measured: newest item 82h/92h
+old, 5 items each land inside 7d, 0 inside 72h). Deployed to LCC Opps (v24 → v25), body re-read to
+confirm. Forced live: both feeds went from `items_after_cutoff: 0` to **4** and **5** respectively
+on the same day's real feed. Monitor half also shipped (migration `20260914130000`):
+`v_market_brief_feed_health_no_contribution` + `lcc_check_market_brief_feed_no_contribution` — a
+DISTINCT alert_kind from `market_brief_feed_stale`, counting consecutive checks (never calendar
+days, FEED2's fix applied from the start) that parsed items but contributed 0; rides the same
+11:15 UTC cron. Guard `test/mb2e-feed-cutoff-window.test.mjs`. Full suite green (6,212 tests).
+Backlog **MB2e** ✅; canonical lesson filed in `docs/architecture/data-coherence-invariants.md` I11
+section (fixed-window-vs-cadence is a class, not a one-off).
+
+## 2026-09-14 🚨 — The tax feed has written 228 fabricated owner names into production, and the owner gap is NOT recoverable (Cowork)
+
+Set out to size the recoverable half of **PDR2-noowner** (the 4,021 dia properties — **34% of the book** — that
+render "owner unknown" now that the operator no longer stands in). **Both halves of what I found are worth more
+than the sizing was.**
+
+🚨 **1. `tax_records` contains 228 invented owner names, and the producer is still writing them.**
+`raw_payload->>'mailing_owner'` holds **12 distinct `ABC`/`XYZ` names** — `XYZ Dialysis Centers Inc./LLC`,
+`XYZ Healthcare Trust`, `ABC Properties LLC` and siblings — across **228 rows and 119 counties**, first seen
+**2026-05-20**, last **2026-08-24**. **Of the 824 non-placeholder `mailing_owner` values in that table, 228
+(28%) are fabricated.** ✅ None are linked to a property, so nothing displays them today — **but they are in the
+table ownership answers come from.** A further **142 rows hold the literal `"Unknown"`**, a placeholder written as
+though it were a fact (**P180**). This is the *never fabricate* rule failing in the data layer rather than in
+prose, which is the harder place to notice it.
+
+⚠️ **CORRECTED 2026-09-14 (OWNERGAP1 containment) — the writer named above was wrong.** `sidebar-pipeline.js`
+in *this* repo never writes `mailing_owner` (verified by grep — zero hits). The real producer is
+**`src/public_record_ingest.py` in the sibling `Dialysis` repo**, and it is the SAME class already recorded
+twice elsewhere in this file: no county HTTP call at all, one call to `gpt-4o` seeded with the property's own
+address/owner and asked to "extract" parcel facts — a generator, not a source. See PR1/PR1a/PR1b above; this
+is the fourth instance of the identical mechanism, on a field (`mailing_owner`) those rounds did not touch.
+Unit 1 (SQL-side containment: detector, reversible quarantine, write-time guard) is now shipped on Dialysis_DB
+— see the OWNERGAP1 entry below. The Python producer fix is a separate, cross-repo follow-up
+(`OWNERGAP1-producer`, filed, not built here — this session has read-only access to `Dialysis`).
+
+✅ **2. The owner is NOT recoverable from anything we hold — and establishing that is the point.** The tempting
+conclusion was *"the data is in the payload, we just never parsed it."* **Tested, and false:**
+
+- **25,331** tax rows carry a `mailing_owner` key; **24,365 are null or empty.** The source returned nothing —
+  **not an extraction gap.**
+- Of the 4,021 owner-unknown properties, **3,048 join tax records and exactly ONE has a `mailing_owner`** — value
+  `"Unknown"`.
+- `deed_records`: **203 rows total, zero overlap** with the 4,021.
+- Only **56** of the 4,021 carry a `parcel_number`, and **0** join a `parcel_records` row with an `owner_name`.
+
+That is **B4/B5 applied in the direction it is usually skipped** — *"we must acquire the data" is the most
+expensive conclusion available, so enumerate every table first.* I enumerated them, and this time the expensive
+conclusion is the correct one. Writing it down stops the repo re-asking, and stops someone building a parser for
+data that is not there.
+
+**Prompt written:** `prompts/OWNERGAP1-a-third-of-the-book-has-no-owner-and-the-tax-feed-invents-some.md`.
+Unit 1 is containment (find where the fabricated values enter — CoStar payload, a fixture, or our own fallback,
+**say which** — stop the write, quarantine reversibly, never guess a real owner in their place). Units 2–3 are
+measurement whose output is 👤 **a costed decision for Scott** — county-recorder path vs a paid bulk provider vs
+accepting "owner unknown" and ranking those properties last — with the 4,021 broken down by state and county,
+**because if a few counties hold most of them the cheapest path is narrow, not national.** It explicitly forbids
+starting the acquisition build.
+
+⚠️ It also tells CC to re-measure all four of my numbers and to say so loudly if it finds a source I missed —
+that would be the most valuable outcome available here.
+
+## 2026-09-14 — PDR2 reconciled: live positive control PASSES on the deployed endpoint; two items promoted out of the closed row (Cowork)
+
+PR #2429 merged and **running** — `/version` = `953b7a00` == `main`, and `api/_shared/true-owner-operator-guard.js`
+is on main. Response and prompt filed to `done/`.
+
+✅ **The live positive control the prompt required — run against the DEPLOYED endpoint, not a code trace.** CC
+reported *"live trace confirmed against 4 real dia rows — matches the new code's logic exactly"*, which is a trace
+of the logic, not a call. Called `get_property_context(property_id=39874, domain='dia')` for real:
+
+```
+ownership: { recorded_owner_name: "Living Trust & Gina M Decarion Living Tr",
+             true_owner_name: null, true_owner_is_operator: true,
+             operator_name: "DaVita Kidney Care" }
+```
+
+**And it is independently corroborated inside the same packet:** that property's transaction history shows the
+2019-02-01 sale, **buyer *Phil Decarion*, seller *Davita*** — so the Decarion trust genuinely is the owner and
+DaVita genuinely is not. The packet now answers the question a net-lease broker actually asks. Before the fix it
+named the tenant.
+
+🟠 **Promoted out of the closed row: `PDR2-denorm`.** CC documented a remaining leak **inside the PDR2 row**,
+which is now ✅ — **the same "a gap filed inside a closed row disappears" defect caught on `HP1-P2misparse`**, and
+worth naming as a recurring pattern rather than a one-off. The leak is real: `entities-handler.js` §1.6 re-queries
+**`properties.true_owner_name`**, a **denormalized column `sidebar-pipeline.js` populates unguarded**. Sized live:
+populated on **830** properties, **134 of which hold an operator's name**. CC was right not to repoint it inline —
+the write path has to be audited first or the dossier silently regresses. Fix the **writer** first.
+
+🔵 **And the honest consequence, filed as `PDR2-noowner`:** with the operator no longer standing in as the owner,
+**4,021 dia properties now render "owner unknown"** — operator-flagged `true_owner_id`, no `recorded_owner_id` to
+fall back to. That is **34% of the 11,815 dia properties**. The fix did not create this gap; **it stopped a wrong
+answer from concealing it.** 👤 This is the actionable half for Scott: a third of the dialysis book is property
+LCC cannot tell him who to call about — and that is now visible instead of masked by a confident wrong name.
+Sizing the recoverable subset (county deed grantee, tax mailing owner, SOS filings, several already ingested) is
+its own measured unit and is plausibly the highest-value BD work left in the backlog.
+
+**Queue:** 6 open prompts — `BR1`, `HCRIS-TIMEOUT`, `HP1-P2misparse-fp`, `ID3b`, `ID3d`, `MB2bc`.
+## 2026-09-14 — OWN-T0c: shipped a canonical-key change, found it contradicted a tested contract, reverted fully (Cowork)
+
+Continuing the ownership-connectivity work after ID3b, picked up `OWN-T0c` (417 `duplicate_entity`
+conflicts, audit-dated 2026-09-02) as the next entity-dedup slice. Re-measured live first, per
+doctrine: population is now **1,183**, not 417 — re-measure again before trusting either number.
+
+Reviewed the existing merge machinery (`lcc_merge_entity` — mature, snapshot-backed, fully
+reversible, no extension needed) and traced the audit's named root cause: `lcc_entity_name_tokens`
+strips a LEADING "the" but not a TRAILING one, so `"XYZ Company"` and `"XYZ Company, The"` get
+different canonical keys and are invisible to each other as duplicates. Measured the fix's real
+blast radius before touching anything (43 live entities affected, ~6 that would newly collide)
+and shipped it live to LCC Opps (`xengecqvemvfknjvbvrq`): fixed the tokenizer, then ran the
+**existing** `lcc_n15c_backfill_canonical_names` (dry-run first, then live) to resync the stored
+`entities.canonical_name` column — 25 rows rewritten, 18 correctly held stale by its own guard.
+
+**Then found the contradiction, before updating any doc or committing anything to git**:
+`test/entity-canonical-key.test.mjs`, dated 2026-08-27 (a week *before* the OWN-T0c audit), carries
+a deliberate SQL-verified corpus that explicitly keeps a trailing "The" as part of the canonical
+key — `'Penstar Group, The' → 'penstar group the'`, commented "leading article only; a trailing
+'The' is part of the name." Two tested, considered positions disagree on what "the same owner"
+means for this exact shape. That is a decision for Scott, not something to resolve unilaterally
+mid-build by picking whichever doc I read most recently.
+
+**Reverted fully, live, same session**: `lcc_entity_name_tokens` restored to its original body
+(exact function definition, not a patch); all 25 `entities.canonical_name` rows restored to their
+logged prior values via `lcc_n15c_canonical_backfill_log` (batch `own_t0c_trailing_the_2026-09-14`
+— the fix's own audit log is what made an exact revert possible, not a guess). Parity re-verified:
+67,234/67,234 live entities' stored `canonical_name` matches what the function now computes.
+`test/entity-canonical-key.test.mjs` re-run green (8/8). No entity was ever merged; only the
+canonical-key computation was touched, briefly, and undone before it reached git. `PLANNED-BACKLOG.md`
+`OWN-T0b/c/d/f/g` row updated with the re-measured count and this open question, flagged for a
+human call rather than closed.
+
+No migration shipped, nothing to redeploy. Docs housekeeping: moved `MB2a`/`MB2b` desktop response
+files to `docs/claude-code/responses/done/` — both confirmed already merged (PR #2418, #2426) by
+other sessions before I reached them, no new work needed.
+
+
+## 2026-09-14 — PDR2: closed the operator-as-owner read-path gap in `assemblePropertyPacket` (systemic, 7,937 dia properties)
+
+Re-measured the blast radius live (do not requote the 2026-09-11 figures) — **7,937 dia
+properties** resolve `true_owner_id` to a `true_owners` row with `is_operator_not_owner=true`;
+**4,022** of those also have `recorded_owner_id IS NULL`, so even a correctly-guarded reader
+falling back to `recorded_owner_name` has nothing to fall back to. Top offenders: Fresenius
+Medical Care 3,077 · DaVita Inc. 2,625 · DaVita Kidney Care 1,182 · U.S. Renal Care 343 ·
+Dialysis Clinic Inc 256 · American Renal Associates 221 — every major operator, not one bad
+placeholder row. **gov's `true_owners` has NO `is_operator_not_owner`/`owner_type` column at
+all** (confirmed live) — only `owner_role`, and 0 gov properties currently key `owner_role=
+'operator'`, so gov's contribution to this defect is 0 today but the guard must not 400 there.
+
+Fix (read-path only, no domain-DB writes): extracted one shared predicate,
+`api/_shared/true-owner-operator-guard.js::isTrueOwnerOperator` (ORs `is_operator_not_owner` /
+`owner_type='operator'` / `owner_role='operator'`, mirroring the two pre-existing correct copies
+in `entities-handler.js` §1.6 and `sf-link-reconcile.js::isOperator()`) plus
+`trueOwnerOperatorSelectFields(domain)` so the `true_owners?select=` never asks gov for a column
+it doesn't have. `api/operations.js::assemblePropertyPacket`'s ownership block now selects those
+signals alongside `name`, and when the true owner is an operator: `ownership.true_owner_name`
+stays `null` (never the tenant), `ownership.true_owner_is_operator: true`,
+`ownership.operator_name: '<tenant name>'`; `recorded_owner_name` is untouched either way; when
+both are null/operator-only the honest answer is "owner unknown" — no backfill from the operator
+name. Both `ownership = {...}` initializer sites (domain-linked and no-domain-linkage) carry the
+new fields so every packet shape is consistent.
+
+**§3 audit of the other true-owner readers, per the task list:**
+- `api/_handlers/entities-handler.js` §1.6 — already correctly guarded (re-queries
+  `is_operator_not_owner` itself). **NOT repointed at the packet's verdict** — it also falls back
+  to `prop.true_owner_name`/`prop.recorded_owner_name` (denormalized columns on `properties` that
+  `sidebar-pipeline.js` populates from `true_owners.name` **unguarded**, line ~10140), so if the
+  packet's `true_owner_name` reads null on an operator, that fallback could still surface the
+  operator name — repointing needs that write path audited/fixed first (filed, not this unit's
+  scope: the denormalized `properties.true_owner_name` column is a separate, real leak worth its
+  own prompt).
+- `api/admin.js` `harvestResolveOwnersWithoutContacts` (~line 5567, the W9.4 create-contact
+  target resolver) — **fixed**. It fetched `true_owners.name` for entities lacking a domain
+  contact and fed it to a `create_contact` proposal keyed on `true_owner_id`; an operator-flagged
+  true_owner would have let the harvest propose minting a contact under the tenant's
+  `true_owner_id`. Now selects the operator signals per-domain and skips any operator-flagged row
+  before building the target map.
+- `api/_handlers/intake-promoter.js` `resolveOwnerLinksDia` (~2027) and its gov analogue
+  (~2198) — **left as-is, different root cause.** These resolve/link `true_owner_id` from a
+  deal-extracted `seller_name` via fuzzy match; `result.true_owner.resolved_name` feeds
+  `sf_sync_flags` (an SF-match-status telemetry array), not a display of "the owner" to a
+  user/agent. The matched party is whatever the OM stated as seller, not a domain-flag lookup —
+  a different defect class if the OM itself named the operator, out of scope here.
+- `api/operations.js` ~562 (`ownerName` in a Teams "Ownership Research Complete" alert) —
+  **left as-is.** Sourced from caller-supplied `entity_fields`/`metadata`, not a `true_owners`
+  read; guarding it would need threading the operator flag through the research-closure payload,
+  a separate, smaller unit.
+- `api/operations.js` `bridgeCreateLead` (~2280–2360) — **already correct**, an input contract:
+  the caller passes `true_owner_is_operator` and the function anchors the lead on the recorded
+  owner when it's set. No change needed.
+- `sidebar-pipeline.js` true-owner lookups — several are WRITERS (create/match `true_owner_id`,
+  or denormalize `true_owner_name` onto `properties`), not READERS presenting an owner to a
+  human; the one write-path leak found (line ~10140, unguarded denormalization) is noted above,
+  filed as a follow-up rather than fixed in this read-path-only unit.
+
+**Live positive control** (Supabase MCP, Dialysis_DB, read-only): traced the new logic by hand
+against 4 real rows — `property_id=39874` (Donna, TX; `true_owner=DaVita Kidney Care`,
+`is_operator_not_owner=true`, `recorded_owner=Living Trust & Gina M Decarion Living Tr`) →
+under the fix: `true_owner_name=null`, `true_owner_is_operator=true`,
+`operator_name='DaVita Kidney Care'`, `recorded_owner_name` unchanged. `21924` (Anderson, IN;
+Fresenius operator, recorded owner present) → same shape. `21893` (Waipahu, HI; U.S. Renal Care
+operator, `recorded_owner_id IS NULL`) → `recorded_owner_name=null`, `true_owner_name=null`,
+`operator_name='U.S. Renal Care'` — honest "owner unknown", never backfilled. `21867` (Mobile,
+AL; `PMG Leasing, L.L.C.` non-operator control, `is_operator_not_owner=false`) →
+`true_owner_name='PMG Leasing, L.L.C.'` unchanged, flag false. All four match the shipped code's
+behaviour exactly (encoded as the corresponding test cases).
+
+**Files:** `api/_shared/true-owner-operator-guard.js` (new), `api/operations.js`,
+`api/admin.js`, `test/pdr2-operator-owner-guard.test.mjs` (new, 11 tests, all green).
+`npm run check:boot` green. `docs/os/PLANNED-BACKLOG.md` PDR2 row updated ✅ shipped.
+
+Not touched, per the task's exclusions: PDR12 (Rock Hill planner), PDR14/14b machinery, the 167
+`needs_human` entities, any domain-DB write, any `GENERATED`-headed or canon/surface file.
+## 2026-09-14 — MB2b/MB2c/FEED2 landed; the new column immediately found two more silent feeds (Cowork)
+
+**Verified live after CC's PR #2426 (v23 → v24).** `items_after_cutoff` column present, PRSS correctly
+**off**, zero open feed alerts, ESRD now contributes (1 of 1) under its `maxAgeHours = 30d`. CC's PRSS
+judgment stands and is the right call — the Google News **query** is the blocker, not the plumbing.
+🚨 **On its first day the new column exposed two feeds that are green and contribute nothing:**
+**Federal Register (GSA)** 6 items → **0 after cutoff**, and **Tax Foundation** 15 → **0**. MB2b set
+`maxAgeHours` on ESRD only. Measured both directly: FR GSA newest item **82h** old, Tax Foundation
+**92h** — so 0 within 72h, but **5 each within 7 days**. Live consequence: `government` contributes from
+ONE feed (FEED1 only half-fixed it) and **`tax_policy` is empty in the daily email** while reading green.
+⭐ **This is FEED2's twin.** FEED2 was a monitor counting calendar days against a weekday producer; this
+is a cutoff counting calendar hours against feeds that publish a few times a week. A fixed calendar
+window aimed at a slower-cadence source is empty by construction on some days, and **Monday is worst —
+72h on a Monday excludes everything before Friday morning.** Today is Monday. The 72h default is a NEWS
+window and we keep pointing it at non-news sources. → **MB2e** (`maxAgeHours = 7d` on both, then a
+distinct `no_contribution` alert arm so the monitor catches this class itself).
+
+## 2026-09-14 — MB2b/MB2c/FEED2: fixed the instrumentation, then judged PRSS off (Claude Code)
+
+**Shipped + deployed + live-verified, all three.** MB2c: `splitGoogleNewsTitle()`'s publisher regex
+widened `[^-–—]+`→`.+` (one char) — a hyphenated outlet ("Honolulu Star-Advertiser") used to fail
+the whole match, leaving `publisher: null` and the raw suffix stuck on the headline. MB2b: Federal
+Register (ESRD) got its own `maxAgeHours` (30d, not the global 72h) plus a new additive
+`market_brief_feed_health.items_after_cutoff` column, so "parsed 3, contributed 0" is now a visible
+number instead of a green `ok=true` row. FEED2: added the missing test
+(`test/feed2-streak-checks-not-days.test.mjs`) over the streak-counting migration's four cases +
+structural guards on the SQL. Deployed `briefing-intel-snapshot` v23→v24 to LCC Opps, deployed body
+re-read and confirmed byte-identical; migration `20260914120000` applied live. Forced a POST →
+confirmed `Honolulu Star-Advertiser` now parses and Federal Register (ESRD) reads
+`item_count:1, items_after_cutoff:1` on the real feed.
+
+**Then judged `MARKET_BRIEF_PRSS`, per the task's own instruction — flag stays OFF.** Forced the RSS
+tick dry-run against `stream=dialysis` (5 articles, real on-box Ollama): 4/5 "relevant", 4 would-write
+facts, **0 of the 4 a broker could cite** — a capital-markets headline restated with no numbers, a
+market-research report title, local EMS coverage. The one genuinely on-topic item (a Federal Register
+ESRD document) was marked not relevant. Reproduces Cowork's 2026-09-12 finding even with the pipeline
+fixed: the defect is the broad Google News query, not the instrumentation. Filed as a follow-up
+(tighten to `cap rate`/`clinic`/`acquisition`/`when:7d`, re-measure) rather than guessed at blind.
+
+Full suite: 6,180 pass / 0 fail / 6 skipped.
+## 2026-09-14 — `HCRIS-TIMEOUT` response reviewed: both timeout root causes found and fixed, plus an unprompted finding much bigger than scoped — the same silent budget cutoff has likely been dropping several downstream steps for months
+
+`HCRIS-TIMEOUT`'s response (`"HCRIS TIMEOUT surface response.docx"`, saved by Scott) read in full and
+transcribed to
+`docs/claude-code/responses/done/HCRIS-TIMEOUT-cost-report-ingestion-times-out-every-run-facility-cost-reports-stale-182-days.response.md`.
+**Repo: `Dialysis`.** All four catalog items answered with real root causes, not guesses.
+
+**(a) Two distinct bugs, not one.** `hcris_cost_reports`'s download used a bare `requests.get(timeout=300)`
+— a single float timeout only bounds each socket read, so a trickling connection never trips it (the exact
+bug class this repo already fixed elsewhere via `_safe_get`, just never applied here). `hcris_propagation`
+called `save_estimate()` once per CCN with 2–3 sequential round trips each — an unbatched N+1 over the full
+national HCRIS population, the same anti-pattern already fixed in `patient_count_ingestor.py` but never
+ported to this module.
+
+**(b) Fixed**: bounded connect/read timeouts plus an explicit wall-clock deadline on the download; a new
+`save_estimates_batch()` (prefetch + chunked bulk writes, exact business rule preserved, other callers
+untouched); sized per-step timeout overrides matching what `medicare_ingestion` already has.
+
+**(c) The unprompted finding — bigger than the prompt scoped.** `run_timeout` isn't a third failed step —
+it's the overall 90-minute budget check run before each step; once exceeded, the loop just breaks and
+**every remaining step is silently skipped, no exception, no log line**, swept into "Failed steps" so it
+reads like an ordinary failure. Since HCRIS sits 9th/10th of 15+ steps, its hang routinely burned the whole
+budget — meaning `financial_estimates`, `property_financials`, `trend_detection`, `target_flagging`, and
+other downstream steps have likely frequently never run at all, for months, invisibly. Fixed to name every
+dropped step, not just the one it happened to be checking.
+
+**(d) Confirmed**: `hcris_cost_report_ingestor.py`'s `.upsert()` is the sole writer of
+`facility_cost_reports` anywhere in the repo — this timeout fully explains the 182-day staleness.
+
+Tests: 26 new, full suite 3,262 passed / 9 skipped / 1 xfailed (1 pre-existing unrelated failure disclosed).
+**Live re-check performed before filing**: the currently-running cycle predates this fix and is still on old
+code — `facility_cost_reports` remains frozen at 2026-03-16 as expected; the next full cycle after this
+deploys is the real proof point.
+
+PR opened on branch `claude/hcris-timeout-fix-01BWJTdN` — **merge status unconfirmed**, asked Scott directly.
+`PLANNED-BACKLOG.md`'s `HCRIS-TIMEOUT` row updated to 🟡. Prompt moved to `docs/claude-code/prompts/done/`.
+Response `.docx` pending archive to `responses/done/` on Scott's machine.
+
+## 2026-09-12 — ID3b shipped: gov owner fuzzy-variant merge (Cowork)
+
+Continued the "ownership connectivity" redirect (Scott: audit property→recorded-owner→developer
+chain→true-owner→contact discovery/enrichment across LCC/Outlook/WebEx/Salesforce) by executing
+**ID3b**, the highest-leverage concrete step per `docs/architecture/ownership-truth-pipeline-state.md`'s
+own finding that entity-dedup fixed once upstream benefits multiple stages at once, and per Scott's
+own "THIRD by Scott 2026-09-12" sequencing.
+
+Re-measured live before building (RO2a's numbers were a day old): gov `recorded_owners` fuzzy-variant
+population unchanged at 1,380 groups / 2,870 rows; gov `true_owners` at 227 groups / 461 rows (down
+from the prior day's 237/483 as other identity work kept chipping at it). Confirmed the existing merge
+machinery (`apply_owner_merge`, `apply_true_owner_merge`) needs no extension — both already accept
+arbitrary caller-supplied survivor/loser pairs. Confirmed no reusable SQL guard exists for bank/lender
+exclusion (`lenderNamePasses` in `sidebar-pipeline.js` was checked and rejected — it deliberately does
+NOT exclude banks, wrong model for "bank captured as owner should route to review").
+
+Shipped two new tick functions, `gov_owner_variant_merge_tick(p_dry_run)` and
+`gov_true_owner_variant_merge_tick(p_dry_run)`: group by `gov_owner_strict_core` (core ≥4 chars),
+survivor = highest-property-count member, guard every group through `gov_owner_name_is_brokerage`,
+`is_generic_gov_owner`, and a new bank/lender/lienholder regex — any hit routes the WHOLE group to
+`entity_match_candidates`/`gov_owner_merge_review_log`, never auto-merged. Dry-run matched the live run
+exactly on both tables.
+
+**Live results:** `recorded_owners` 1,380 groups seen, 1,466 merged, 24 routed to review (22 groups —
+hand-checked: correctly caught `CBRE`, four `U.S. Bank National Association` casings, JPMorgan Chase,
+TD Bank, Umpqua, SunTrust, World Bank, a title/land-trust company, and three brokerage names —
+Colliers, Northmarq, Marcus & Millichap — riding inside one JV description string). `true_owners` 227
+groups seen, 232 merged, 2 routed to review (TD Bank / U.S. Bank). **Parity confirmed bit-for-bit**:
+`total_properties` (20,509), `properties_with_recorded_owner` (9,327), `properties_with_true_owner`
+(9,848) were unchanged before/after both live runs — only unmerged-owner-row counts dropped by exactly
+the merged-loser counts. No property silently moved to a different real owner. dia confirmed untouched
+(already zero exact AND fuzzy dups, no build needed).
+
+Migration: committed in `government-lease` (`sql/20261013_gov_id3b_owner_variant_merge.sql`) --
+the owning repo per ID3a-d, not life-command-center. **Correction, 2026-09-14:** this file was
+first committed to life-command-center's now-retired `supabase/migrations/government/` directory
+by mistake; PR #2420's CI caught it (`test/gov-migrations-directory-retired.test.mjs` -- the exact
+regression guard ID3a-d built for this exact mistake). Moved to `government-lease` where it
+belongs; the live database change itself was correct and unaffected throughout. `PLANNED-BACKLOG.md`
+ID3b and RO2a rows marked executed with the live numbers. `ownership-truth-pipeline-state.md`
+Stage 3 refreshed to note the entity-dedup residue this closes.
+
+No Railway redeploy needed (DB-only, no application consumer changed). Left for a human: the 26
+review-lane rows (`gov_owner_merge_review_log`); Stage 3's remaining `OWN-T0b/c/d/f/g` (417
+`duplicate_entity` merges) and Stage 4's contact-linkage gaps are the next candidates in this pipeline,
+not yet started.
+## 2026-09-14 — Prompt-queue audit: two prompts existed in BOTH `prompts/` and `prompts/done/`; PDR2's blast radius is ~2× what it says (Cowork)
+
+Before adding a fourth prompt to Scott's queue, checked whether the queue is accurate — an earlier XB2 pass found
+shipped prompts still sitting in `prompts/`, and the failure mode is worse than untidiness: a future chat re-runs
+finished work.
+
+**Found and fixed:**
+- ⛔ **`PRI4` and `PRI5` were in `prompts/` AND `prompts/done/` — byte-identical (md5 verified).** Both are shipped
+  and deployed (PRI5 confirmed by Scott 2026-09-11; PRI4 merged via PR #2293/#2297). A file in two places is worse
+  than a stale one: a reader cannot tell which is canonical. Active-queue copies moved to
+  `_superseded/prompt-queue-audit-2026-09-14/` with a manifest row — not deleted, and `prompts/done/` keeps the
+  canonical copy.
+- **`MB2a` was ✅ BUILT with a response already filed, but its prompt was still in the active queue** → `done/`.
+  (Its follow-on `MB2a-deploy` stays 🚨 open — a separate row, correctly.)
+- Two new prompts arrived from parallel Claude Code work (`HCRIS-TIMEOUT`, `MB2bc`). **Queue is now 7, all
+  genuinely open**: `BR1`, `HCRIS-TIMEOUT`, `HP1-P2misparse-fp`, `ID3b`, `ID3d`, `MB2bc`, `PDR2`.
+
+🔴 **And the audit turned up the thing that should be built next — PDR2, whose own headline understates it by
+about half.** The prompt says *"~4,026 properties"*; that is the **no-fallback subset**. Re-measured live in
+Dialysis_DB: **7,937** properties point `true_owner_id` at an `is_operator_not_owner=true` row, and **4,022** of
+those also have `recorded_owner_id IS NULL` — so even the readers that guard correctly have **nothing to fall back
+to**. Top offenders: **Fresenius 3,077 · DaVita Inc. 2,625 · DaVita Kidney Care 1,182 · U.S. Renal Care 343 ·
+Dialysis Clinic Inc 256 · American Renal 221** — **every major operator, not one bad DaVita placeholder.**
+
+**Why it outranks the rest of the queue:** for a net-lease broker the entire job is identifying and calling the
+**owner**. `get_property_context` — the MCP tool and the property packet Scott actually reads — currently answers
+*"the owner is DaVita"* when DaVita is the **tenant**. And two other readers in this same repo already guard it
+correctly (`assemblePropertyDossier` §1.6, `sf-link-reconcile.js::isOperator()`), so it is a **one-file
+inconsistency, not a data problem** — cheap to fix, expensive to leave.
+
+Corrected the figure in the prompt header and on the backlog row rather than leaving a dated number to be quoted
+again (*"re-measure a dated blocker before quoting it"*). §1 of the prompt still requires CC to re-measure rather
+than inherit even these.
+
+## 2026-09-14 — HP1-P2misparse-fp prompt: the guard blocks real people, and a shape fix cannot repair it (Cowork)
+
+Sized the last 🔴 under HP1 before writing anything, and the sizing changed the shape of the fix.
+
+**Root cause, exact:** `STREET_SUFFIX_RE` at **`api/_shared/tm-misparse.js:42`** matches a street-suffix token at
+the **end** of a name. A person whose **surname is a street word** therefore flags as a misparsed address.
+**`Brian Lane <blane@northmarq.com>` — a Northmarq colleague, Scott's own firm — fires under *two* reasons**
+(`misparse_name` and `person_junk_name`), and every CoStar capture of him has been silently discarded for as long
+as the arm has been live. Live sizing: **3 rejections / 2 distinct people**, both person-shaped, both carrying an
+email, and **zero** street-suffix blocks in that lane start with a house number.
+
+⛔ **The obvious fix is wrong, and the prompt says so up front.** "Only flag if it doesn't look like *First
+Last*" **fails against this file's own fixtures**: `Hinckle Walk` and `Jack Kerouac Aly SE` are real TrafficMetrix
+street captures that are **exactly as person-shaped as `Brian Lane`**. Any shape rule admitting one admits the
+other. Checking that before drafting is what stopped this being a prompt that shipped a regression.
+
+✅ **The discriminator is the corroborating email local part** — a street capture has no personal mailbox; a real
+person has one that matches the name (`blane@` ↔ **B**rian **Lane**). And **the matcher already exists**:
+`localPartMatchRule()` (`api/_shared/misparse-disposition.js:150`), shipped by HP1-P2misparse for the fan-out
+recovery. Reuse, not a second copy — a second matching shape is the drift that produced `inbox_items.domain`'s
+four spellings.
+
+⚠️ **Honest scope, stated in the prompt rather than discovered later:** this rescues Brian Lane. It does **not**
+rescue `Jim Street <mgreencre@gmail.com>`, whose generic mailbox corroborates nothing — nothing in the data
+distinguishes him from a street capture, so he stays blocked and is filed as a residual. **A fix that rescues one
+real person and says so beats one that rescues two and cannot prove the second.**
+
+⚠️ **And a false comment to correct in the same change:** `tm-misparse.js` asserts *"real people must NOT flag —
+the never-flag-clean-'First Last' guarantee is preserved."* True for `sentence_fragment`, `doc_label` and
+`bare_title`; **false for `street_suffix`**, and the comment does not say so. A comment claiming a guarantee the
+code no longer keeps is a defect in its own right.
+
+**Gate is two-sided (Class 11)**, because a guard change can fail in both directions: every one of the 22 fixtures
+must still return `street_suffix`, **and** the real people must mint, **and** a name that is *only* a street must
+stay blocked even with a corroborating-looking email. If no rule separates them, the prompt says **report and
+stop** — a documented open false positive is a legitimate outcome; widening the guard until the fixtures pass by
+luck is not.
+
+## 2026-09-14 — HP1-P2f-urgent shipped AND running; HP1 closed out with a topic page (Cowork)
+
+PR #2419 merged. Response and prompt filed to `done/`. **CC's own caveat resolved by measurement, not assumption:**
+it closed saying *"this takes effect after the next Railway redeploy."* Checked — `/version` on `tranquil-delight`
+reports **`ba22b8abac78`**, which **is** `main`. Merged **and** running. (The repo's own "merged is not running"
+rule, applied to the sentence that raised it.)
+
+**Live, today:** Significant **518** · Important **46** · **Urgent 59** · Inbox **92**. Urgent was ≈**1,664**; the
+**1,603** `contact_writeback` rows now sit behind a pointer linking to the BD worklist's pre-existing
+**"Push to CRM"** chip — a destination this change did not touch, and verified reachable before it. ⚠️ That
+population **moves** (1,664 → 1,730 → 1,669 → 1,603 across four reads in a day) — quote it at read time.
+
+📘 **The consolidation Scott has been asking for, made concrete: `docs/architecture/HOMEPAGE-ATTENTION-SURFACE.md`.**
+Until now the entire HP1 arc existed only as **17 open backlog rows, ~20 STATUS entries (most already archived),
+and a dozen files in `prompts/done/`** — a future chat would have had to reconstruct it from fragments, which is
+exactly the misdirection this cleanup exists to prevent. The page is the **one door**: what each of the three
+symptoms turned out to be (vs what it looked like), what Today and the Inbox contain now with live numbers, where
+the code lives, which guards protect it, and what is still open — with an explicit instruction to re-read the live
+rows rather than trust its own list. `PLANNED-BACKLOG.md`'s HP1 section header and `CURRENT-STATE.md` now point at
+it, and it states plainly that the **backlog remains the canonical open-work list; the page is the map, not a
+second backlog** (a second copy of the open work is how `MB3`×4 happened).
+
+**The five rules the arc produced, now written down in one place** rather than scattered across the entries that
+earned them: check the destination before routing anything off a surface · never verify on an HTTP 200 · a monitor
+must be producer-keyed, not table-keyed · a detector that has never fired is not a detector · a skipped step must
+emit to a counter, not to the broker.
+
+**What HP1 was, in one line:** three symptoms that looked like UI problems and were not — an unhandled abort
+killing three lanes at once, a six-week silent write failure hiding under an HTTP 200, and two lanes of machine
+output rendered as broker decisions. **What remains under `HP1-` is follow-on work, not the original report.**
+
+## 2026-09-14 — FEED2 held through a real weekend; MB2b/MB2c/FEED2-test bundled and measured (Cowork)
+
+**FEED2 verified in production, not just at apply time.** The health cron has run twice since the fix
+(Sun 09-13, Mon 09-14): **zero alerts, max streak 1**, today 13 feeds all returning items. Sunday is
+precisely the run the old `9999`-sentinel logic would have turned into **16 false alerts**.
+**MB2c measured on the live feed — it is one character.** `([^-–—]+)$` → `(.+)$`; the greedy `(.*)`
+already anchors to the last separator. Across **101 real titles** with a separator: old parsed 98, new
+parses **101**, **0 previously-correct parses changed**. Fixes `Honolulu Star-Advertiser` and two
+`ad-hoc-news.de` items. Regression corpus named in the prompt, since hyphens *before* the separator are
+what make a naive rewrite dangerous.
+**Sharper MB2b diagnosis, correcting my own earlier note:** the ESRD feed's problem is its narrow
+query's low volume, **not** Federal Register — the FR GSA-agency feed on the same service publishes
+daily. So: per-feed `maxAgeHours` (default 72), not a blanket "policy feed" exemption, and not a global
+widening of the 72h window.
+All three bundled into `prompts/MB2bc-fix-the-instrumentation-then-judge-PRSS.md` — they are one theme
+(our instrumentation is wrong, not the sources) and together they decide whether PRSS can flip.
+## 2026-09-14 — `PRI6` confirmed merged both sides; the "stuck for 2+ days" run turned out to be four run cycles chained back-to-back, all hitting a separate, months-old timeout defect (`HCRIS-TIMEOUT`), not a hang
+
+Scott confirmed `Dialysis` PR `#7409` merged — `PRI6` closed to ✅ in `PLANNED-BACKLOG.md`, both sides now
+confirmed.
+
+Scott then reported a CMS ingestion run as running "more than 2 days" and asked whether to keep it going.
+**Checked live rather than trusting the log excerpt alone (again a short, healthy-looking snippet) — this
+is not one continuous run.** `ingestion_tracker` shows **four separate run cycles chained back-to-back**
+since 2026-09-12, each roughly 10–16 hours, a new cycle starting the instant the previous one ends. The
+core `cms_medicare_clinics` fetch is correctly a no-op every cycle (already-confirmed benign, near-annual
+CMS cadence) — **not the problem**.
+
+**The real, previously-unflagged defect, found by reading `run_log` payloads in full rather than just the
+uploaded excerpt**: every recent cycle's summary reads `"Failed steps: hcris_cost_reports, hcris_propagation,
+run_timeout"`. This is not new — the identical signature appears in `run_log` going back to **2026-06-25**,
+predating this entire `PRI` arc. **Confirmed live**: `facility_cost_reports` (what `hcris_propagation`
+presumably writes) hasn't been touched in **182 days**, `max(updated_at)` = 2026-03-16. Each cycle burns
+most of its 10–16 hour runtime on this one step (`elapsed_seconds` 48,921s / 53,660s on the two most recent)
+before timing out.
+
+**Net read for Scott**: not a hang, genuinely fine to keep running — the currently-active cycle (started
+06:03 UTC 9/14) is alive and writing real data elsewhere (`properties.estimated_annual_revenue` updating in
+real time, matching "now"). But it will very likely follow the same pattern and time out on the same two
+steps again, same as the last several cycles — worth fixing rather than continuing to silently eat most of
+every run's wall-clock time. Filed as a new, separate backlog item — `HCRIS-TIMEOUT` — distinct from
+`B6d-cms-restart`'s already-fixed 30-day-skip throttle bug and from `PRI6`'s self-reclaim bug; this is a
+third, still-open failure mode in the same pipeline.
+
+`PLANNED-BACKLOG.md`'s `PRI6` row closed to ✅; new `HCRIS-TIMEOUT` row filed at 🔴. Prompt drafted:
+`docs/claude-code/prompts/HCRIS-TIMEOUT-cost-report-ingestion-times-out-every-run-facility-cost-reports-stale-182-days.md`.
+
+
+## 2026-09-12 — HP1-P2f-urgent: `contact_writeback` moved off Today's Urgent lane, not hidden (Claude Code)
+
+**Shipped.** Urgent's ranked union (`buildUrgentSection`, `api/_shared/today-sections.js`) no longer
+admits `v_lcc_bd_worklist`'s `contact_writeback` rows — CRM plumbing (push an already-resolved contact
+to Salesforce), measured at 96% of the lane's HP1-badge population against 66 real `action_items` of
+deal correspondence. `owner_source_conflict` and `action_items` are untouched. `getTodaySections`
+(`api/operations.js`) drops the signal from `urgentTrueCount`'s sum (now three producers, not four) and
+threads the SAME exact `v_lcc_bd_worklist` count probe it already ran into a new `urgent.pointer` field
+— `{source_type, count, label, surface}`, `null` (never `0`, P180) on a failed probe — mirroring
+HP1-P2a's `inboxHygienePointer`. `app.js::_renderUrgentHygienePointer` renders it as a persistent row
+below Urgent's items, linking to `renderBdWorklist('contact_writeback')` — the BD worklist's own
+pre-existing "Push to CRM" chip (`ops.js:3785/3803`) and handler (`api/_handlers/contact-writeback.js`),
+**neither of which was touched** — the destination was reachable before this change and is reachable
+identically after it.
+
+**Live population, re-measured via Supabase MCP at ship time** (`select count(*) from
+v_lcc_bd_worklist where signal_type='contact_writeback'`): **1,603** — it moves (1,664 → 1,730 → 1,669
+→ 1,603 across four reads inside one day; quoted at read time, never a stale prior figure).
+
+**Gate:** (1) `test/uxt1a-today.test.mjs` proves `contact_writeback` rows never reach `items` or
+`total_open` regardless of `rank_value`, that `pointer` carries a distinct true count, `null` when
+unsupplied, and a genuine `0` (never conflated with "unknown"); (2) `test/hp1-badge-today-total-open.test.mjs`
+proves the handler sums only the three remaining producers into `total_open` (excluding the stubbed
+1,598 contact_writeback rows) and passes that same 1,598 through as `pointer.count`; (3) a failed
+count-probe path (existing coverage) still renders `null`, never `0`; (4) Significant/Important and
+their `total_open` are byte-identical — untouched code paths. Full suite: **6,167 pass / 0 fail / 6
+skipped.**
+
+⚠️ **Not yet observed end-to-end on the deployed app.** `main` is protected (branch → PR → CI green →
+merge → Railway redeploy); this sandbox has Supabase MCP access (used for the population read above)
+but no route to the live Railway app. The DB-side count and the pure-function/handler-test behaviour
+are verified; the rendered Today page is confirmed only after the next redeploy.
+
+**Docs:** `PLANNED-BACKLOG.md` (`HP1-P2f-urgent` → ✅), `CURRENT-STATE.md` (new HP1-P2f-urgent row + the
+BD-ranking paragraph's stale "filed, not routed off yet" corrected).
+
+## 2026-09-12 — FEED1 landed; reconciling it found the feed monitor itself was broken (Cowork)
+
+**FEED1 verified live.** CC re-fetched every URL itself rather than trusting Cowork's table (its sandbox
+has no egress), swapped the three dead feeds, deployed **v22 → v23**, and re-read the deployed body.
+Confirmed independently: all three dead URLs are gone from `RSS_FEEDS`, and today's health rows show
+`government` on 2 feeds (Federal Register GSA 14 + GovExec 15), `healthcare` 4, `net_lease` 4.
+🚨 **Then the monitor turned out to be broken — caught before its cron had ever fired.** Every feed read
+`zero_item_streak_days = 9999`, including ones that had just returned 15 items. Two bugs in one
+expression: (1) it measured **calendar days**, but `lcc-briefing-intel-snapshot` runs `0 10 * * 1-5`
+(weekdays) while the check runs `15 11 * * *` (daily) — so **Monday − Friday = 3** tripped the threshold
+on healthy feeds; (2) a **9999 sentinel** stood in for "no history", so the FIRST run alerted on all 16.
+Proven by simulation: a feed returning 15 items on EVERY check alerts on run 1 and every Monday. The
+monitor blamed feeds for days nobody looked — an **I11 inversion**, now written up in the invariants.
+**Fixed and applied live** (`20260912190000`, FEED2): the measure counts **checks, not days**
+(`zero_item_streak_checks`). After the fix: 13 healthy feeds **0**, the 3 retired feeds **1**,
+`lcc_check_market_brief_feed_health(3)` returns **0 opened / 0 resolved**. Both positive controls pass —
+a truly dead feed (3 zero-item checks) alerts, a healthy feed spanning a weekend stays silent. Tomorrow's
+11:15 UTC run would otherwise have opened **16 false alerts**.
+⚠️ This entry was written twice: the first copy was lost when a parallel session's STATUS archive
+rewrote the file while it sat uncommitted in the shared checkout. The rest of the FEED2 work (migration,
+backlog rows, invariants note) was swept into that session's commit `ba9da224`.
+
+## 2026-09-12 — HP1-badge + HP1-P2misparse reconciled: both verified live, CC's own corrections held, one new finding (Cowork)
+
+PRs #2414 and #2415 merged. Three responses filed to `done/` (badge, P2misparse, FEED1). **Verified against the
+live DB and the shipped code rather than read from the reports** — and this time the verification mostly *confirms*:
+
+**HP1-badge — correct, and built the way the prompt hoped.** `total_open` now comes from `resolveTotalOpen(opts,
+all)`: a present `trueTotalOpen` key wins **even carrying `null`** (= "the count probe failed"), and only an
+entirely absent key falls back to `all.length` — which is only ever the module's own uncapped unit fixtures. The
+counts are **separate, parallel, single-column `limit=1` `count=exact` probes** in the same `Promise.allSettled`
+batch as the row fetches, never reattached to the row-fetch request — which is exactly the ~750 ms/request cost
+HP1-P0 measured and removed. Both dead ends the prompt named were avoided, and **P180 is honoured**: a failed
+probe renders *unknown*, never `0`, never the page length.
+
+**HP1-P2misparse — shipped, and CC's live re-measurement beat the brief.** Measured here: misparse rows
+**130 → 25** (CC) / **31 open now** (re-measured hours later — the feed keeps adding), **105 disposed**; the whole
+Inbox **196 → 91**, header agreeing. ✅ **CC found things the prompt missed and filed rather than patched:** a real
+false positive — **Brian Lane `<blane@northmarq.com>`, a Northmarq colleague**, blocked because the guard treats
+"Lane" as street chrome (I confirmed: 5 rows, under **two** different reasons, and a **second** case, `Jim Street`);
+class C's root cause is in the **Chrome extension's** `costar.js` person-boundary logic, not the ops-side guard;
+and **BR1 does not exist yet**, so class B was left visible with a handoff filed instead of a second firm path
+being built. Every one of those is now its own open row.
+
+✅ **CC's own numbers, checked:** it reported 4 recovered fan-out contacts; **3 are on the graph** (Dail Longaker,
+Jacob Fahner, William M. Collins) and **James D. Collins is not** — which is precisely what its own
+`HP1-P2misparse-jcollins` row already says ("3 already exist, 1 has nowhere to land"). The report's headline was
+looser than its filing; the filing was right.
+
+🟠 **One finding that is mine and is NOT covered by `-fanout-legacy`** (that row is about the wrong *email* on a
+real person): **12 junk-chrome entities are live on the graph**, minted before the guard existed — `Equity Funds`
+**×3 as `entity_type='person'`**, `General Partner` (person + organization), `View Less`, `Demographics`,
+`Vice Chair`, `Vice Chairman`, `Executive Vice Chairman`, `Public REIT`, `CoStar Property Contact`. The guard now
+**blocks every one of those strings**, so the live blocks and the stored entities disagree about the same name.
+Filed as **HP1-P2misparse-junkents**, pairing with `-fanout-legacy` as one reversible identity-cleanup unit —
+⚠️ a write to curated identity, so relationships get checked first and the guard's own vocabulary gets reused
+rather than a second hand-written list.
+
+✅ **And the gate `HP1-P2f-urgent` was waiting on is now answered with evidence:** unlike `contact_misparse_review`
+(zero readers), **`contact_writeback` has a working home** — `api/_handlers/contact-writeback.js`, rendered at
+`ops.js:3785` as **"Push to CRM"** with its own chip filter at `ops.js:3803`. Routing it off Today **moves** it
+rather than hiding it. Prompt written: `prompts/HP1-P2f-urgent-route-crm-plumbing-off-today.md` — the last
+structural piece of HP1, with P2a's pointer gate carried forward and, deliberately, **no target count**.
+
+**Where Today stands:** Significant 516 · Important 46 · Urgent ~1,664 of which **1,598 is CRM plumbing** — so
+P2f-urgent is what turns Urgent into the ~66 rows of real deal correspondence.
+
+## FEED1 — three more dead RSS feeds (outside dialysis) replaced + deployed (2026-09-12)
+
+MB2a's `market_brief_feed_health` monitor found three more dead feeds nobody was checking:
+`government` (GSA News, 404), `healthcare` (Health Affairs, 410 Gone — retired), `net_lease`
+(GlobeSt, 403). Sandbox had zero egress (same policy denial as MB2a); re-verified all six
+URLs via `net.http_get` from LCC Opps instead of trusting Cowork's prior fetch — all 200,
+counts matched. `RSS_FEEDS` updated, deployed to LCC Opps (`v22 → v23`), deployed body
+re-read to confirm, then triggered a live `dry_run=1` and read `market_brief_feed_health`
+for today: all six new feeds wrote `ok=true` with real item counts. No `market_brief_feed_stale`
+alert had opened for the three dead ones, so nothing to resolve. See `PLANNED-BACKLOG.md` FEED1.
+
+## 2026-09-12 — HP1-P2misparse: the Inbox's 130 misparse rows were success notifications (Inbox 196 → 91)
+
+**Shipped.** `contact_misparse_review` `status='new'` **130 → 25**; the whole Inbox **196 → 91**;
+`mv_work_counts.inbox_new` **91** (list and header still agree — HP1-P2a's invariant, held);
+`entities` **69,764 → 69,764**, so **not one guard decision moved**. Migrations `20261102120000`
+(disposition, reversible via `lcc_hp1p2misparse_disposition_log` batch `hp1p2misparse_20260912`) and
+`20261102130000` (`v_lcc_contact_guard_blocks`), both applied live. JS:
+`api/_shared/misparse-disposition.js` + `api/_handlers/sidebar-pipeline.js`. Guard
+`test/hp1-p2misparse-guard-disposition.test.mjs` (17 tests). Full suite **6,161 pass / 0 fail**.
+
+⚠️ **I had filed this row as "117 rows with no resolution surface — give the lane a review surface."
+That was the wrong question and the prompt superseded it.** These were never work awaiting a
+decision — they are the contact guard announcing, one Inbox row at a time, that it successfully
+blocked something. **B6a over-applied:** a skipped step must emit, but to a counter, not to the
+broker's homepage. Re-measured before building: **130 rows, not 117** (still growing), carrying
+**307 rejections across only 42 distinct (name, reason) pairs / ~26 properties** — `Equity Funds`
+blocked 31×, `View Less` 29×, `Marcus & Millichap` 26×.
+
+Two **notification-only** rules, neither touching mint-vs-block: class-A CoStar page furniture is
+counted not notified (**EXACT match, never substring** — P158a: `Demographics Research Group LLC`
+must survive); and one notification per **(property, name, reason)**, which alone removed 90 of the
+105. Split: `all_chrome` 15 · `chrome_and_duplicate` 39 · `all_duplicate` 51.
+
+**Class D recovered 4 real people with 0 false positives on the live batches** — James D. Collins ←
+`jcollins@southpace.com`, William M. Collins ← `william.collins@cushwake.com`, Dail Longaker, Jacob
+Fahner. `Paul J. Collins` and `Drew A. Flood` sit on the *same* mailbox and were correctly refused.
+⚠️ **3 of the 4 already exist in `entities`**, so the historical recovery is nearly a no-op; only
+James D. Collins is absent, and he was **not** hand-minted in SQL (minting is `ensureEntityLink`'s
+job — `HP1-P2misparse-jcollins`).
+
+⚠️ **`v_lcc_contact_guard_blocks` reads 0 runs today.** That is the Railway deploy gap — *merged is
+not running* — not a quiet guard. **P180: 0 runs means NOT MEASURED.** Re-read it after the deploy
+and the next sidebar capture.
+
+**Four things the measurement contradicted, all filed:** the prompt's *"every block measured here is
+correct"* is **false** — `Brian Lane` (**`blane@northmarq.com`, our own colleague**) and `Jim Street`
+are real people caught by the street-suffix arm (`HP1-P2misparse-fp`, with the free corroboration:
+the mailbox's local part names them); the class-C cause is an **extension** vocabulary gap
+(`isTitleLine` knows no `chair`/`chairman`/`mgr`), not an ops-guard gap, and is contained — reported,
+not fixed, because widening it changes person boundaries (`HP1-P2misparse-titleparse`); **BR1 does
+not exist yet**, so class B's ~60 firm rows stay deduped-and-visible rather than getting a second
+firm path (`BR1-misparse-handoff`); and the pre-guard fan-out damage is **live in `entities`** —
+`Drew A. Flood` and `Paul J. Collins` both carry William Collins's mailbox
+(`HP1-P2misparse-fanout-legacy`).
+## 2026-09-12 — BACKLOG-ids reconciled: 0 duplicates, guard positive-controlled, and the race behind it now a doctrine (Cowork)
+
+PR #2410 merged. Response and prompt filed to `done/`. **Verified independently rather than read from the report:**
+a fresh scan of `PLANNED-BACKLOG.md` finds **0 duplicate IDs across 551 rows**, and I re-ran the new guard's
+positive control myself — seeding a duplicate `HP1-badge` row makes `test/backlog-id-uniqueness.test.mjs` fail
+(*"PLANNED-BACKLOG.md row IDs are unique"*), restoring the file makes it pass 6/6. It is a real detector, not a
+green run.
+
+**CC's pass was better than the prompt that asked for it, and said so.** It re-measured from scratch instead of
+inheriting my 26 and found **27** — my parser had missed `COPILOT-OPEN` (its ID carries a trailing
+`(was COPILOT-CHAT-OPEN)` annotation) and `ID3e`. **13 collisions renamed** (`SEC1-4`→`SEC9-12`,
+`A5d/A5e`→`A5i/A5j`, `D1/D3/D4/D5`→`D1-monitor`/`D3-digest`/`D4-recall`/`D5-dealname`, `R1/R2/R3`→`R1b/R2b/R3b`),
+keeping each ID where the citations already pointed — checked, and none needed updating, including
+`OPERATOR-ACTIONS.md`'s `SEC2`. **14 restatements collapsed**, ten of which I had not enumerated. ✅ **And it did
+the thing the prompt cared most about:** the two `ID3a-d` copies **disagree** on whether `ID3a-d-dia` is closed —
+both readings kept with the conflict stated, not silently resolved.
+
+🚨 **The real finding is the race CC hit while fixing it, and it is now a CLAUDE.md doctrine.** Its correct fix
+was reintroduced as duplication by a *concurrent* PR adding `MB2a`/`MB3`/`MB4` rows: **git's 3-way merge sees two
+pure insertions at different offsets, finds no textual conflict, and keeps both.** Nobody is warned. That is the
+same mechanism that broke `STATUS.md`'s line budget twice today (passed locally at 2,465, failed CI at 2,503 after
+a merge from `main`). Filed under *"TWO BRANCHES THAT BOTH ADD TO A SHARED DOC MERGE CLEANLY AND SILENTLY
+DUPLICATE IT"* with four rules: a shared append-mostly doc needs a **guard, not a convention** (prose failed five
+times in one day on a single rule); **a green local run proves nothing about the merge** — re-run the doc guards
+after merging `main`, and archive before pushing; **never resolve a doc duplicate by deleting** — classify
+collision vs restatement first, and report disagreements; **edit the row, don't restate it** — every one of the 14
+restatement groups began as a session appending instead of amending.
+
+Four live doc guards now: `backlog-id-uniqueness`, `backlog-table-shape`, `status-header-integrity`,
+`status-line-budget`.
+
+⚠️ **Fixed a stale note of my own**: `HP1-P1a-sec` still warned *"there are TWO rows numbered SEC2"*. There
+aren't, as of this PR — rewritten to say the §P9 one is now `SEC10`. A caution that has been resolved is
+misdirection with a longer half-life than the defect it described.
+
+## 2026-09-12 — BACKLOG-ids: the 27 duplicate row IDs, measured and repaired (Claude Code)
+
+Executed `docs/claude-code/prompts/BACKLOG-ids-collisions-and-restatements.md`. Re-measured from
+scratch rather than trusting the prompt's counts: **27 duplicate IDs**, not 26 — the prompt's own
+scan missed `COPILOT-OPEN` (a trailing `(was COPILOT-CHAT-OPEN)` annotation broke a naive regex)
+and `ID3e` (paired deliberately with `ID3e (original measurement)`).
+
+**Class A collisions renamed (13), citations checked, none needed updating** (every real external
+citation for SEC1-4/A5d/A5e/D1/D3/D4/D5/R1-R3 pointed at the KEPT row; verified via targeted grep
+per ID, not assumed):
+- `SEC1`/`SEC2`/`SEC3`/`SEC4` — §P0s (security-definer audit / wave0-config-values.txt exposure)
+  kept all four; §P9's versions renamed **SEC9/SEC10/SEC11/SEC12**. `docs/os/OPERATOR-ACTIONS.md`'s
+  SEC2 citation already pointed at §P0s — no fix needed there. §P0s `SEC2`'s ⏸️ deferral content
+  (Scott 2026-09-12) carried across byte-identical, untouched.
+- `A5d`/`A5e` — the A5-family block (~line 444, cited by `CURRENT-STATE.md`, the A5 audit doc,
+  C1/C2a/C2e) kept both; the isolated pair near N15/N20 (~line 74) renamed **A5i/A5j**.
+- `D1`/`D3`/`D4`/`D5` — the P0d data-coherence I-series (cited by `CLAUDE.md` "Campaign P0d / D1–D5")
+  kept all four; the P5 "Deal-intelligence spine" series renamed **D1-monitor/D3-digest/
+  D4-recall/D5-dealname**.
+- `R1`/`R2`/`R3` — the P6 cross-cutting series (cited by `BUILD-BACKLOG.md`, `cross-cutting-design.md`)
+  kept all three; the DOC-TABLE1 R1-R14 series (only 1 external cite, a STATUS.md history span)
+  renamed **R1b/R2b/R3b**, leaving R4-R14 untouched.
+
+**Class B restatements merged (14), no content dropped** — `AC2`, `AC3`, `B6d-cms-escalation`,
+`B6d-cms-restart` (3 copies → 1, chronology from 2026-08-29 through 09-12 folded together),
+`B6d-cms-step` (2, includes the "premise refuted" correction), `B6e-fred`, `B6e-fred-cm-exposure`,
+`B6e-fred-verify`, `COPILOT-OPEN`, `ID3a-d` (2 — **genuine disagreement found and reported, not
+silently picked**: one copy says Scott closed `ID3a-d-dia` by deciding LCC owns Dialysis_DB, the
+other still files `ID3a-d-dia` as open pending confirmation — both readings kept, flagged
+explicitly in the merged row), `MB3` (4 → 1), `MB4` (4 → 1), `PR1d` (2). In every case the LATEST
+occurrence was already a superset of the earlier ones (verified by diff, not assumed), except
+`B6d-cms-escalation`/`B6d-cms-step`/`ID3a-d`/`PR1d`/`AC2`/`AC3`/`B6e-fred-verify` where a distinct
+earlier fact was folded in explicitly.
+
+**`ID3e` / `ID3e (original measurement)`** — not a true duplicate (the file already disambiguated
+these as a shipped-result + preserved-original pairing); renamed the latter's row ID to
+**`ID3e-orig`** for mechanical uniqueness only, content untouched.
+
+Row count `docs/os/PLANNED-BACKLOG.md` **1172 → 1154 lines** (18 rows collapsed away; every
+collapsed row's distinct facts survive inside its merged sibling — verified by re-reading each
+merged row against all its source rows).
+
+**Guard shipped:** `test/backlog-id-uniqueness.test.mjs`, modeled on
+`test/status-header-integrity.test.mjs`. Parses only cells at split-position 1 of a `|`-leading
+line (never a prose mention elsewhere in a row's body) as a row-defining ID; positive-controlled
+both ways (a seeded prose cross-reference does NOT count as a duplicate; a seeded real duplicate
+DOES fail, with a message naming the repair procedure). Live-tested against the real file: seeded
+a duplicate `SEC9` row, confirmed the test fails with a useful message, reverted, confirmed green.
+`DUPLICATE_ALLOWLIST` is empty (every 2026-09-12 duplicate was resolved in this change, not
+deferred) but wired with the same by-ID / reason / re-measure-date / stale-entry-fails convention
+as `test/retired-identifiers-guard.test.mjs`.
+
+Full suite: **6,140 pass / 0 fail / 6 skipped** (unchanged from before this change — pure
+documentation + one new test file).
+
+Closed `BACKLOG-ids` in `docs/os/PLANNED-BACKLOG.md` §P0d (added as a done row, since the item
+existed only as the standalone prompt file, not a backlog row).
+## 2026-09-12 — FEED1 scoped: five replacement feeds fetched live for the three dead ones (Cowork)
+
+Verified via pg_net, with newest-pubDate recorded per feed because MB2a proved 200-with-items is not the
+same as contributing: `government` → Federal Register GSA-agency feed (**200, 14**, newest 09-11);
+`healthcare` → STAT News (**200, 20**, 09-12) + Healthcare Dive (**200, 10**, 09-11); `net_lease` →
+Connect CRE (**200, 10**) + REBusinessOnline (**200, 20**), both 09-11. Measured and rejected: Modern
+Healthcare **403**, The Real Deal **403**. Government Executive re-verified (**200, 23**) — the only
+reason that lane is not at zero. **All five publish daily, so all five clear the 72h cutoff as-is**,
+which keeps FEED1 a clean URL swap and leaves MB2b out of it. Sharper read on the ESRD feed while here:
+its problem is a narrow query returning 3 items spanning weeks, **not** Federal Register — the GSA
+agency feed on the same service is high-volume and behaves normally. Prompt carries the deploy step
+explicitly (`--project-ref` required; merged is not running).
+
+## 2026-09-12 — MB2a deployed: the dialysis stream is live, and its first run found 3 OTHER dead feeds (Cowork)
+
+Scott deployed `briefing-intel-snapshot` (CLI, `--project-ref xengecqvemvfknjvbvrq`). Verified live via
+pg_net dry-run: **`sector_news.dialysis` = 6 items**, where the key did not exist at all before.
+🚨 **The monitor's first run found three long-silent dead feeds in OTHER streams**, each confirmed
+independently: **GSA News 404**, **Health Affairs 410 Gone**, **GlobeSt 403**. The government lane is
+running on ONE feed, net_lease on two of three, healthcare on two of three — and the daily email's
+Sector Watch has been quietly built on that. → **FEED1**.
+**PRSS stays OFF, now on evidence:** of the 6 dialysis items, **0 are market signal** — local EMS
+coverage, a Canadian wildfire item, a $4,100 clinic refund, a PFAS suit, a supplier award, and a DaVita
+one-day stock move we already read straight off the DVA ticker. → **MB2b**.
+**Federal Register is healthy and contributes nothing:** 3 items parsed, 0 survive the shared **72h
+cutoff** — its documents are weeks old by design, which is exactly what the policy section wants. So
+`item_count` measures PARSING, not CONTRIBUTION, and a feed can look green while adding zero.
+**Publisher parser bug:** the suffix regex forbids hyphens in the outlet name, so
+"… - Honolulu Star-Advertiser" yields `publisher=null` AND leaves the suffix in the headline.
+
+## 2026-09-12 — MB2a reconciled live: feeds confirmed, migration applied, and the code is NOT DEPLOYED (Cowork)
+
+**Both replacement feeds re-verified independently** via pg_net (the check CC's sandbox could not run —
+zero egress): Federal Register ESRD **200, 3 items**; Google News operator query **200, 100 items**.
+**Migration applied live to LCC Opps** — `market_brief_feed_health`, `v_market_brief_feed_health_stale`,
+`lcc_check_market_brief_feed_health` (runs clean, 0 opened / 0 resolved), both `market_brief_facts`
+citation columns, cron `lcc-market-brief-feed-health` at 11:15 UTC.
+🚨 **The blocker is a deploy, not the feeds.** Deployed `briefing-intel-snapshot` is **v21 and has NO
+`dialysis` stream at all** — MB-b's three dead URLs were never deployed either, so nothing MB-b or MB2a
+wrote to `RSS_FEEDS` has ever run. **This repo has no workflow that deploys edge functions** (checked
+`.github/workflows/`), so merging one changes nothing by itself. New **I16** instance; DRIFT1's census
+called this function "committed, not in scope" on 2026-09-07 — true then, stale now. → **MB2a-deploy**.
+`MARKET_BRIEF_PRSS` stays OFF, correctly: relevance survival cannot be measured until the deploy lands.
+Verified separately that CC handled the bucket hazard — `fetchSectorNews()` derives its result keys from
+`RSS_FEEDS` in both the initializer and the catch fallback, so a new stream cannot throw.
+
+## 2026-09-12 — MB2a: dead dialysis RSS feeds replaced, feed-health monitor added, PRSS stays off
+
+`RSS_FEEDS.dialysis` now points at Federal Register (ESRD) + Google News (operator query) in place of
+the three dead URLs (403/404/404). No third feed added — this sandbox has zero verified egress and a
+spoofed UA was refused, per the task. Handled Google News's redirect-URL + broad-noise caveats
+(`source_publisher`/`source_url_is_redirect` columns; a title-suffix parser). Shipped
+`scripts/verify-rss-feeds.mjs` (opt-in, parses feeds from source so it can't drift) and
+`market_brief_feed_health` + `lcc_check_market_brief_feed_health` (I11: alerts on 3+ zero-item days,
+auto-resolves on a real item). `MARKET_BRIEF_PRSS` left OFF — no live egress this session to confirm
+facts actually flow; Cowork's prior fetch predates this code. Suite 6,130/0/6-skipped. Backlog
+`docs/os/PLANNED-BACKLOG.md` §P18 MB2a; spec addendum in `EXEC-BRIEFS-SPEC.md`.
+
+## 2026-09-12 — MB9: collapsed the redundant net-lease lane, redesigned the homepage Market Briefs widget (Cowork)
+
+Scott, after seeing the live Market Briefs tab for the first time (3 screenshots): the homepage widget
+looked wrong ("two dialysis briefs" with no government brief), asked for a short-snapshot-then-detail
+redesign, and called `net_lease`/`broad_net_lease` redundant — one lane is enough.
+
+**Verified before touching anything:** `select lane, count(*) from market_brief_facts group by lane` and
+the same for `market_brief_issues` — both returned only `dialysis` (31 facts, 1 issue). Zero rows existed
+under `net_lease` or `broad_net_lease`, so the collapse is a pure schema/UI narrowing, no data migration.
+
+**What "two dialysis briefs, no government brief" actually was:** not a bug — `renderMarketBriefsWidget()`
+only ever fetched the `dialysis` lane and printed its top-2 raw fact bullets with no lane label, which reads
+like two unrelated blurbs. Government/net-lease show nothing because **no producer has ever written a fact
+for them** — MB1/MB2's P-SQL/P-RSS producers are dialysis-only by original scope (spec §3: "no new gov/NL
+lanes here"). That gap is real and unscoped — filed as part of MB9 in `PLANNED-BACKLOG.md`, not silently
+built here.
+
+**Changed:**
+- `api/_shared/market-brief-render.js` — `KNOWN_LANES`/`LANE_LABELS` narrowed to `dialysis`/`government`/`net_lease`.
+- `app.js` — new shared `MARKET_BRIEF_LANES`/`MARKET_BRIEF_LANE_LABELS` consts (replacing the old inline
+  `laneTabs`/`laneLabels` literals in `renderMarketBriefsPage`, so frontend/backend can't drift again).
+  `renderMarketBriefsWidget()` rewritten: one snapshot line per lane with the flag on (`<Lane> — N live
+  facts`, the single freshest claim, "Open full brief →"), plus a muted "no live facts yet (producer not
+  built)" line for an enabled-but-empty lane instead of silent omission.
+- `index.html` — dropped the widget's static "Open Dialysis brief →" header link (now redundant with each
+  lane's own link inside the widget body).
+- `docs/architecture/EXEC-BRIEFS-SPEC.md` — §0 swimlane row + weekly-email lane count updated to 3.
+- New migration `supabase/migrations/20261101200000_lcc_mbb2_lane_collapse_net_lease.sql` — narrows
+  `chk_mbf_lane`/`chk_mbi_lane`/`v_market_brief_staleness`'s lane set to 3. **Applied live** to project
+  `xengecqvemvfknjvbvrq`, verified via `pg_get_constraintdef`.
+- `docs/os/PLANNED-BACKLOG.md` — MB8 marked superseded, new MB9 row, EB0 corrected in place.
+
+**Guards:** new `test/mbb2-lane-collapse.test.mjs` (4 tests, comment-stripped-SQL structural guard
+mirroring `eb1-market-brief-foundation.test.mjs`'s own pattern), `test/market-brief-render.test.mjs` +
+`test/market-brief-tick-handlers.test.mjs` updated to assert 3 lanes. Targeted suite: 53/53 pass, 0 fail.
+**Full 423-file suite not run to completion this session** — the device shell's per-call timeout can't
+cover it and a backgrounded run didn't survive between calls; every `KNOWN_LANES`/`broad_net_lease` call
+site was grepped repo-wide first and confirmed covered by the targeted tests instead. Stated plainly
+rather than claiming a full-suite number I didn't actually observe.
+
+**Not done, deliberately:** no government or net-lease producer built (a real, separate, unscoped decision
+— GSA lease-event source for gov, the general-NL on-market store gap shared with BUY0/UX-T4 for net-lease);
+`docs/claude-code/prompts/done/EB1-exec-briefs-foundation.md`'s historical 4-lane note left untouched (it
+accurately describes what that original migration did, not current state).
+
+## 2026-09-12 🚨 — 26 backlog IDs are used twice, and `SEC2` is two different issues. One of them bit me today. (Cowork)
+
+Two prompts are already queued for CC (**HP1-P2misparse**, **HP1-badge**), so rather than deepen the queue I took
+stock of the HP1 block — and found the misdirection Scott has been asking me to remove, partly of my own making.
+
+**`PLANNED-BACKLOG.md` has 26 IDs appearing on more than one row**, and they split into two classes needing
+**opposite** fixes:
+
+**Class A — COLLISION, one ID on two unrelated issues.** **`SEC2` is `wave0-config-values.txt` is tracked in git**
+(§P0s, line 263) **and** **rotate the Supabase `service_role` key** (§P9, line 624). Same shape on `SEC1`/`SEC3`/
+`SEC4`, `A5d`/`A5e`, `D1`. 🚨 **This already misfired: I folded `HP1-P1a-sec` into "the pre-existing SEC2" without
+knowing there were two.** The reference is now pinned to §P0s by hand, but it was ambiguous when written, and
+anything else citing SEC2 — `OPERATOR-ACTIONS.md` does — still is.
+
+**Class B — RESTATEMENT, the same issue written repeatedly:** `MB3`×4, `MB4`×4, `MB2a`×3, `B6d-cms-restart`×3 and
+others, accumulated exactly the way `PR5c-enforce`'s four copies did before today's consolidation — sessions
+restating a row instead of editing it.
+
+**Fixed in place now, because all three were provably mine:** three **byte-identical** `HP1-P1a-sec` rows → one;
+two `HP1-P1a-fix` rows → the richer (the shorter predated the parallel-session note); and `| HP1-P1b |✅`'s missing
+pipe space, which had been hiding the row from ID greps entirely. 28 → 26.
+
+**The remaining 26 are NOT a bulk edit and I did not treat them as one.** A collision that gets "collapsed"
+destroys one of two real issues; a restatement that gets "renamed" mints a second ID for one problem. Classifying
+each pair is judgment against citation counts. Written up as **`prompts/BACKLOG-ids-collisions-and-restatements.md`**,
+which requires: rename collisions (keeping the ID on whichever row more citations already point at, counted not
+guessed) with a pointer left on the renamed row so old references still resolve — the never-delete rule applied to
+an identifier; collapse restatements keeping **every** distinct fact, and **report rather than silently pick**
+where two copies disagree on a number.
+
+✅ **And the durable fix: a CI guard.** A duplicate ID should fail the build, the way
+`test/status-header-integrity.test.mjs` now catches a STATUS H1 burial — written today after a prose convention
+note failed five times to stop the same mistake. The prompt specifies the two things that guard must get right or
+it will be disabled by the first person it annoys: deliberate cross-references are not duplicates, and an
+unresolvable duplicate is allowlisted **by ID with a reason and a re-measure date**, with a stale entry itself a
+failure.
+
+⚠️ Flagged explicitly in the prompt: §P0s `SEC2` carries Scott's ⏸️ deferral decision and its trigger condition —
+**carry it across intact, do not restate it.**
+
+## 2026-09-12 — HP1-badge prompt: the count lies, and fixing it honestly exposes that Urgent is 96% hygiene (Cowork)
+
+REPO1 sweep confirmed in `main` (`docs/flows/README.md` present, root `err.txt` gone). Drafted the next prompt and
+re-measured all three Today lanes live first.
+
+**The defect:** `total_open: all.length` (`today-sections.js` 79/103/182) is the **capped page length**, not the
+population — while the module header promises *"the full population"* and cites **P159a**. The honest-counts rule
+failing inside the module written to enforce it.
+
+| lane | badge | true | |
+|---|---|---|---|
+| Significant | **200** | **516** | −61% |
+| Important | 46 | **46** | ✅ correct — only because it sits under the cap |
+| Urgent | **≤200** | **1,664** | −88% |
+
+Ranking is unaffected — `order by` precedes the cap, so the rendered eight really are the top eight. Only the
+count lies.
+
+⚠️ **Two dead ends measured, so CC does not walk into either.** Re-enabling `count=exact` is precisely what
+**HP1-P0** removed — ~750 ms on the seller view alone, on the endpoint that was 500ing all three lanes; fixing a
+badge by reintroducing the outage is not a trade worth making. And `countMode:'estimated'` **cannot work here at
+all**: `reltuples` on `v_lcc_seller_prospect_queue` is **-1** — a view, never analyzed — so PostgREST has no
+estimate to hand back. The current setting is not a slightly-wrong number; for these lanes it is **no number**.
+✅ The answer is likely the pattern HP1-P2a already shipped: `inboxHygienePointer()` — exact probe, `limit=1`,
+read off the base table never the capped view, `null` on failure. **P180** made explicit: a failed count renders
+*unknown*, never `0`.
+
+🚨 **The part that matters more than the badge.** Fixing the count honestly makes Urgent read **1,664** — and
+**1,598 of those (96%) are `contact_writeback`**, CRM plumbing, against just **66** `action_items` of real deal
+correspondence. **That is the same class HP1-P2a removed from the Inbox, sitting in the Urgent lane of Today.** The
+prompt fixes the count and **files** the population as **HP1-P2f-urgent** rather than folding them together —
+leaving the cap in place to keep the number comfortable would be choosing a pretty lie, which is the exact failure
+the row exists to correct. And it carries P2a's expensively-learned caution forward: **establish where
+`contact_writeback` is actually worked before routing it anywhere** — `contact_misparse_review` had zero readers,
+and routing it off would have deleted the only place it was visible.
+
+Prompt also warns about the line-budget trap that cost two PRs today: **archive before you push, 200+ lines of
+headroom**, because STATUS.md grows on `main` while a branch is open.
+
+## 2026-09-12 — Repo sweep done by the filed method; a duplicate SEC row folded; HP1-P1b's hold lifted (Cowork)
+
+Scott asked again for the repo to be cleaned and consolidated by topic so a future chat picks up without
+misdirection. Did the **REPO1-root-clutter** sweep using the method filed earlier today — grep every candidate
+first, move only the unreferenced, document the rest — rather than a bulk move.
+
+**Moved (12, all verified unreferenced outside `STATUS.md`/`docs/history`)** → `_superseded/scratch-2026-09-12/`,
+with a manifest row in the graveyard README: `err.txt` (0 bytes), `draft1/draft2/draftsave.json`, `harvest.json`,
+`twin.json`, `seed-apply/seed-dryrun.json`, `acq-dryrun.json`, `fix-allother-pagination.patch`, `_commit.bat`,
+`_deploy_hardening.bat`.
+
+**Deliberately NOT moved — and this is the point of the sweep, not a shortfall.** Three groups are referenced by
+name from live docs, code comments or a guard test, so moving them converts accurate references into stale ones,
+which is worse than an untidy root. Recorded under `_superseded/README.md`'s own *"left in place — documented
+instead"* convention:
+
+- **The 15 `flow-*.json`** — cited in `CLAUDE.md`, `.env.example`, `api/_shared/outlook-draft.js`,
+  `api/draft-assist.js` and ~10 docs. **Consolidated by TOPIC in documentation instead: new
+  `docs/flows/README.md`** names every flow, what it does, and the write-up to read — find the flow there, open
+  the JSON at the root.
+- **The ~10 loose `.docx`/`.xlsx`** — cited from `audit/ROUND_2_FINDINGS_2026-05-19.md` and several
+  `audit/patches/*/COMMIT_MSG.txt`. Historical; nothing live reads them, and none should be cited as current state.
+- 🔐 **`wave0-config-values.txt`** — `test/retired-identifiers-guard.test.mjs` allowlists it **BY PATH**, so a move
+  breaks that guard. `ACTIVATE_unit4.sql` likewise (cited in `document-capture-ocr-and-deeds.md`).
+
+⛔ **The sweep caught me duplicating an existing row — exactly the misdirection it was meant to find.** I filed
+`HP1-P1a-sec` this morning as a new escalation on discovering the committed `LCC_API_KEY`. **`SEC2` had already
+recorded precisely that on 2026-08-28**, with a better remediation order than mine (rotate → update Railway →
+`git rm --cached` → *only then* consider history) and a warning I did not have: **do not reach for
+`filter-branch`** — this repo nearly lost a 475 MB mailbox that way. My row is now a pointer at SEC2, and the one
+fact worth keeping moved onto SEC2: the committed value is **byte-identical to the live Bearer token in the
+Salesforce flow**, so it is the live key, and a rotation must update every `flow-*.json` header carrying it in the
+same change — a flow left on the old key fails silently under an HTTP 200, which is exactly how HP1-P1a hid a
+six-week outage. `OPERATOR-ACTIONS.md` already carries SEC2 as ⏸️ DEFERRED, consistent with Scott's decision today.
+
+✅ **HP1-P1b's hold is lifted — a held row whose condition has cleared is stale documentation.** It said *"build
+after the feed is restored and P1d is watching it."* Both happened today. Two stale figures inside it corrected
+while there: the feared mass auto-retire **did not happen** (six weeks of drift was 10 stage changes, not the
+569+37 the row was written on — re-measure live), and **there is no `deal_next_step` table** —
+`lcc_generate_deal_next_steps()` writes into `action_items`. Also cross-linked to **HP1-P1a-orphan**: decide the
+`sf_absent` rule first, or P1b will ask Scott to confirm deals Salesforce no longer has.
+## 2026-09-12 — REPO1 sweep failed CI on the line budget; archived a fourth span (Cowork)
+
+The REPO1 root sweep could not merge: `test/status-line-budget.test.mjs` went red at **2,503 lines**, 3 over.
+**My fault, and worth naming precisely** — the branch passed locally at 2,465, then merging `main` brought in
+another 74 lines of STATUS entries and pushed it over. **This file grows on the branch and on `main`
+simultaneously, so passing locally proves nothing about what happens at merge.** It is the second time today
+(PR #2383 hit the identical thing) and my own entries, which have been long, ate the headroom.
+
+Fixed by the documented procedure, not by raising the budget: the **OWN-T0j URL-length → MB-a reconcile** span of
+2026-09-11 (5 entries, 175 lines) moved **verbatim** to
+`docs/history/STATUS_claude-code_2026-09-11_ownt0j_urllen_to_mba.md` with an archive pointer left in place.
+Nothing reworded or dropped; every still-open item in it is already tracked in `PLANNED-BACKLOG.md`. **2,465 →
+2,298 locally**, so ~165 lines of headroom survive the merge.
+
+Added the trap to the file's own convention block so the next session does not rediscover it: **archive before you
+push, leave 200+ lines of headroom, and keep entries tight** — findings belong in `PLANNED-BACKLOG.md`, which is
+canonical; `STATUS.md` is the narrative, not a second copy of it.
+
+⚠️ **Also, a cleanup note that is mine to own:** three stray `asc-manifest.*.tmp.json` files are sitting in
+`test/fixtures/healthcare-discovery/`. The healthcare lane tests write them and unlink them — but this bridge
+cannot unlink on Scott's machine (the same EPERM that keeps hitting `.git/index.lock`), so a test run from here
+leaves them behind. They are untracked and **must not be committed**; `git add -A` would sweep them in. The
+commit commands for this change name explicit paths instead.
+
+## 2026-09-12 — `PRI6` response reviewed: three real defects found (not the two-explanation guess from the prompt), the self-reclaim bug explains months of failed daily runs — cross-referenced with a parallel session's own live re-check
+
+`PRI6`'s response (`"PRI6 surface response.docx"`, saved by Scott) read in full and transcribed to
+`docs/claude-code/responses/done/PRI6-ingestion-lock-survives-redeploy-and-reclaim-safety-window.response.md`.
+**Repo: `Dialysis`.** Stronger than either Section-0 guess in the prompt — neither "different Railway
+service" nor "silently reused stale lock" was quite right; the actual mechanism is a self-reclaim bug.
+
+**(a) No real time cap exists — confirmed, not assumed.** `CMS_ORPHAN_RECLAIM_HOURS` (2h) and
+`DEFAULT_STALE_HOURS` (6h) both rested on the same "~90 minutes" observation `PRI5` used, but that budget
+is env-tunable for catch-up runs and only blocks *launching* the next step, never preempts one in flight —
+exactly what this session's own live check proved by finding a genuinely in-flight run at 17.9+ hours.
+Fixed with a new `probe_recent_activity()`: corroborates any reclaim (age-based or `force=True`) against a
+real recent write to the dataset's own table before touching the row — age alone is no longer sufficient.
+
+**(b) The actual `acquire_ingestion_lock` behavior, and the real root cause — not a guess.** With `force`
+resolving true, it unconditionally marks the existing row `failed` and opens a new one — no age check, no
+self-exclusion. The mechanism making `force` true on every call: `ingest_medicare_clinics()` calls
+`acquire_ingestion_lock(force=force or force_refresh)`, and the **daily production entry point hard-codes
+`force_refresh=True` on every single call** — so every day's run force-reclaims its own just-opened row.
+Caught live: three `"Reclaimed by ingestion_lock (force)"` events, including one row reclaiming itself
+**0.0 hours** after creation.
+
+**(c) Both root causes fixed, and the two Section-0 hypotheses were both wrong.** This was one continuous
+process the whole time (started 2026-09-11 19:45:43 UTC, ~18h runtime) — its own startup self-reclaimed its
+own row via the `force_refresh` bug, then kept running unaffected by it. Separately,
+`facility_patient_counts`'s lock never closes on success because `release_ingestion_lock(status="success")`
+sat in an unreachable `else:` clause after a `return` inside a `try` — confirmed live as a completed no-op
+(0 new rows in 18h), not a stall.
+
+**This directly explains a much bigger, previously-unconnected problem.** A parallel documentation session
+today (`docs(doc-contra)` commit `2346713e`, merged as PR #2394) independently re-verified `cms_ingestion`
+live and found it **failing 34 of 36 runs in the last 30 days**, `last_success_at` frozen at **2026-04-04**
+— five months — with `medicare_clinics.source_last_seen` stuck at 2026-08-31 (2.9% refreshed) for 12 days,
+and every recent failed row reading `"Reclaimed by ingestion_lock (force) after 0.0h in 'started'"`. That is
+this exact bug, hitting the daily production schedule for months, not just this one long run. `PRI6`'s fix
+is a materially bigger deal than the prompt framed it as — cross-referenced in `B6d-cms-restart`.
+
+**Live-rechecked this session, unchanged as expected**: the two lock rows this arc has been tracking
+(`8c9978b3…` `cms_medicare_clinics`, `3093e28a…` `facility_patient_counts`) are still open at ~19 hours old
+— correct and expected, since the fix hasn't reached this already-running process (no redeploy has
+happened yet) and nothing in this arc's discipline touches live rows without Scott's own trigger.
+`properties.estimated_annual_revenue` still shows real recent writes (992 rows in the trailing 15 minutes at
+last check) — the run itself remains healthy, unaffected by any of this.
+
+Tests: 12 new (`test_pri6_lock_reclaim_safety.py`), 8/12 independently confirmed red against pre-fix code
+(mutation-style, the other 4 are correctly-green positive controls) — a step further than most rounds in
+this arc, which usually report post-fix green only. Full suite: **3,131 passed, 0 failed**.
+
+**PR `sbriggssjc/Dialysis#7409` opened this round** — Scott's "This PR is merged" this round most likely
+refers to the `life-command-center` documentation PR that filed this review (same recurring ambiguity as
+every prior round in this arc) — **the `Dialysis`-side PR #7409's merge status needs Scott's separate
+confirmation before this is treated as deployed.** `PLANNED-BACKLOG.md`'s `PRI6` row updated to 🟡 pending
+that. Prompt moved to `docs/claude-code/prompts/done/`. Response `.docx` pending archive to `responses/done/`
+on Scott's machine.
+
+## 2026-09-12 — HP1-P2misparse: the 117 Inbox rows are the guard saying "I blocked it", not work (Cowork)
+
+Drafted the next prompt — and the measurement changed what it is. **I filed this row yesterday-ish as *"117 rows
+with no resolution surface — build one, or decide they're machine-fixable."* That was the wrong question**, and the
+prompt says so in §0 rather than quietly building the better thing.
+
+**What they actually are.** The contact guard blocks a suspect contact and then files an Inbox row announcing the
+block. A correct block needs no broker judgment — so this is **B6a over-applied**: a skipped step must emit, but to
+a counter, not to Scott's homepage. **117 rows carry 294 rejected contacts across only 42 distinct names and ~26
+properties**: `View Less` blocked **23 times**, `Equity Funds` **31**, re-notified on every capture.
+
+**Four classes, four different right answers — they are not one problem:**
+
+| class | examples | n | disposition |
+|---|---|---|---|
+| **A** CoStar UI chrome | `View Less`, `Demographics`, `Public REIT`, `CoStar Property Contact` | ~100 | block and **say nothing** |
+| **B** firms parsed as persons | `Marcus & Millichap`, `Colliers`, `Cushman & Wakefield`, `NAI Columbia` | ~60, most **with real emails** | blocking as a *person* is right, **discarding is not** → **BR1** firm registry |
+| **C** job titles in the name slot | `Executive Vice Chairman`, `Vice Chair`, `General Mgr \| CEO` | ~25, with emails | a **parser bug** — report it, don't queue it |
+| **D** `email_fanout` | `James D. Collins`, `Edward C. Mann`, `Conrad Buhler` | **86 / 15 names / 4 properties** | see below |
+
+🔑 **The one piece of real value hiding in there.** `email_fanout` fires when the scraper staples **one** broker's
+email onto **every** name on the page — `jcollins@southpace.com` landed on 5 names (including the firm itself and a
+department); `william.collins@cushwake.com` on 3. Blocking the batch is **correct**, 4 of 5 are misattributions.
+But the name matching the email's **local part** is the true owner: **jcollins@ ↔ James D. Collins**,
+**william.collins@ ↔ William M. Collins**, **jfahner@ ↔ Jacob Fahner**. That contact is real, correctly paired, and
+currently discarded with the collateral. The prompt recovers it mechanically under a strict matching rule, mints
+nothing on a tie, and leaves every other name in the batch blocked. Expect **~4–8 people** — small, but they are
+brokers on properties we track, and we were throwing them away.
+
+**Deliberately no target count in the prompt.** HP1-P2a taught that lesson today: my §5 set a target of 65 that
+contradicted my own §3, and CC was right to report 182 instead of forcing my number. This prompt asks for the
+after-count and forbids tuning the rules to hit one.
+
+**What it does not do:** it does not weaken the guard — every block measured here is **correct**; it changes what
+gets *announced*. It builds no review surface (§0), mints nothing in A/B/C, and leaves `email_alert` (**P2b**) and
+the ranking work (**P2c/P2e**) alone.
+
+Prompt: `prompts/HP1-P2misparse-the-guard-notifies-instead-of-disposing.md`.
+
+## 2026-09-12 — HP1-P2a reconciled: shipped and verified live; my own target number was wrong; one gap promoted out of a closed row (Cowork)
+
+PR #2389 merged. Response and prompt filed to `done/`. **Verified independently against the live DB rather than
+read from the report** — every claim holds:
+
+| check | reading |
+|---|---|
+| `inbox_items` at `status='new'` | **1,061** |
+| `v_inbox_triage` at `status='new'` (what the Inbox shows) | **182** |
+| `new_contact_qualify` excluded | **879**, and **0 leak** into the view |
+| `contact_misparse_review` still visible | **117** |
+| destination `v_lcc_contact_qualify_worklist` | **868** live rows |
+| `mv_work_counts.inbox_new` (the header) | **182** — agrees with the list |
+
+✅ **The honesty gate held, and in the right shape.** `inboxHygienePointer()` reads the excluded population
+**straight off `inbox_items` with `countMode:'exact'` and `limit=1`** — never the view, never a page — and returns
+`null` on failure rather than a wrong number. Exactly the P159a-safe construction, inside the change meant to make
+the surface honest.
+
+⛔ **My own prompt contradicted itself, and CC was right to ignore the wrong half.** §5 set *"Target: the homepage
+Inbox shows 65 items"* while §3 of the same prompt instructed leaving `contact_misparse_review` in place if it had
+no resolution surface. It has none. The target was unreachable by construction and **182 is correct**. CC reported
+it and stopped rather than bending the filter — precisely what the next sentence of §5 asked for. Corrected in the
+prompt file in place before filing it: a prompt that argues with itself teaches the wrong lesson to whoever reads
+it next.
+
+🔴 **One real filing defect, found and fixed: a gap was recorded inside a row that then closed.** CC correctly
+established that `contact_misparse_review` has **zero readers anywhere in the repo** — written at
+`sidebar-pipeline.js:2114`, never read — and correctly left it on the Inbox rather than routing it into
+invisibility (P131). But it wrote that finding **into the HP1-P2a row**, which is now ✅ SHIPPED. **A gap filed
+inside a closed row is a gap that disappears.** Promoted to its own open row, **HP1-P2misparse** — and it matters:
+those 117 rows are **64% of the remaining Inbox (117 of 182)**, the single biggest thing still between Scott and
+*"a view of the work that needs the broker's attention."* 117 rows written since 2026-08-10 and never once read is
+itself evidence about whether they want a review surface or an automated repair.
+
+⚠️ **Minor, filed as HP1-P2a-count:** three numbers a broker meets in two clicks — pointer **881**
+(`status IN (new,triaged)`), exclusion **879** (`new` only), destination **868** (11 junk rows dropped by design).
+Each defensible alone; clicking a pointer promising 881 and landing on 868 is an unexplained 13-row gap — the same
+*rendered ≠ population* confusion one layer out. Not urgent, not a defect in the exclusion.
+
+🛡️ **The H1 burial is now a CI guard, not a convention.** This file's header was buried a **fifth** time today —
+including once *after* the prose convention note was added telling sessions not to. A convention nobody is forced
+to read is not a convention. `test/status-header-integrity.test.mjs` now fails the build if the H1 leaves line 1,
+if a duplicate appears, or if the convention block goes missing, with the repair procedure in the assertion text.
+
+**Net for Scott:** the Inbox went **1,061 → 182**, the header agrees with the list, and nothing was hidden. The
+remaining 182 is 117 misparses (P2misparse) + 20 personal alerts (P2b) + 45 genuine broker items — so **P2b and
+P2misparse together are what turn 182 into ~45**, and the ranking work (P2c/P2e) still belongs after them.
+
+## 2026-09-12 — MB-b: first user-facing P18 surface built (Lane Briefs email block + homepage tab); flag OFF, not deployed
+
+Built `docs/claude-code/prompts/MBb-lane-briefs-daily-block-and-tab.md` end to end. §0 producer cleanups:
+operator identity (§0.1) was already closed by ID2b-caps-2 before this build started (nothing to do, verified
+with a new guard `test/market-brief-operator-canonicalization.test.mjs`); the trades fact's date-suffixed
+`fact_key` (§0.2, re-minting a fresh zero-fact every day) is fixed — `TRADES_FACT_KEY = 'trades_trailing_7d'`
+is now a single stable key, the tick reads a fixed trailing 7-day window, and it retires any old-format live
+fact it finds; a `dialysis` RSS stream (§0.3, Renal & Urology News / Nephrology News & Issues / CMS Newsroom)
+was added to `briefing-intel-snapshot`'s `RSS_FEEDS`, **not egress-verified from this sandbox** (no outbound
+reach). Built: the daily email's "Lane Briefs" block (`renderMarketBriefLanes`, above Sector Watch, which
+stays below it), the homepage `#/briefs/<lane>` tab (`GET /api/market-brief-tab`, new page + route), and
+shared selection/diff logic (`api/_shared/market-brief-render.js`) so both read the same live facts. Both
+ship behind a new flag `MARKET_BRIEF_RENDER` (registered off). Every number in the rendered block traces to
+a fact object, asserted by a dedicated tripwire test. New guards: `test/market-brief-render.test.mjs` (14),
+`test/market-brief-lane-briefs-email.test.mjs` (11, incl. diff/gap/omitted-empty-lane), `test/market-brief-
+operator-canonicalization.test.mjs` (3), plus additions to the existing MB-a suites. **Full repo suite green:
+6,114 pass / 0 fail / 6 skipped** across 962 suites (this session had to `npm ci` first — 0 dependencies were
+installed at session start, which produced 28 misleading `ERR_MODULE_NOT_FOUND` failures on the first run;
+none were real regressions, confirmed by re-running after install).
+
+**Nothing here is deployed or live-verified** — no Railway/Supabase write access this session. Two new
+migrations are committed, unapplied: `20260912120000_lcc_mbb_rss_dialysis_stream_cron.sql` and
+`20260912121500_lcc_mbb_market_brief_render_flag.sql`. `MARKET_BRIEF_RENDER` stays off. Operator sequence
+(spec §5): apply both migrations, redeploy Railway (both services), run the P-SQL tick once via POST with
+the flag forced on and confirm the trades supersede chain clears the old date-suffixed fragments, preview
+the email block and load `#/briefs/dialysis`, verify each new RSS feed URL parses, THEN flip
+`MARKET_BRIEF_RENDER`. Full detail: `docs/architecture/EXEC-BRIEFS-SPEC.md` §9 "MB-b" addendum;
+`docs/os/CURRENT-STATE.md` §2 "MB-b" subsection; `docs/os/PLANNED-BACKLOG.md` §P18 MB1e/MB3/MB4.
+
+
+## 2026-09-12 — HP1-P2a prompt: 94% of the homepage Inbox is data hygiene, and the destination already exists (Cowork)
+
+With the 500 fixed (P0), the deal backbone fixed and watched (P1a-fix, P1d), this is Scott's **third and last
+untouched symptom** — *"data and emails and notices that should be automated and not the top of our inbox's
+homepage."*
+
+**Re-measured live before drafting.** `inbox_items WHERE status='new'` = **1,052**:
+
+| source_type | n | broker judgment? |
+|---|---|---|
+| `new_contact_qualify` | **876** | no |
+| `contact_misparse_review` | **111** | no |
+| `email_om` / `sidebar_om` / `folder_feed_om` | 33 | **yes** |
+| `email_alert` (`domain='personal'`) | 20 | no (P2b) |
+| `flagged_email` | 12 | **yes** |
+
+**987 of 1,052 — 93.8% — is hygiene. 65 rows are actual broker work.**
+
+✅ **This is a routing change, not a build, and the prompt says so in the first line.**
+`v_lcc_contact_qualify_worklist` already exists as a junk-filtered, value-ranked worklist over exactly these rows
+(**865 live**, i.e. 876 minus the 11 it already drops), with `bridgeQualifyContact` per-item and
+`bridgeQualifyContactsBulk` for the high-confidence subset. ⚠️ And it is **not a classifier problem**: 13,496 rows
+already sit in a non-`new` status — the machine disposes at scale. These 987 are correctly classified and rendered
+on the wrong surface.
+
+🚨 **The gate is that excluding ≠ hiding.** The homepage must render a persistent pointer row — *"Data hygiene —
+987 items (876 contacts to qualify · 111 misparses) →"* — carrying the **true population**, not a capped page
+length. Filtering 987 rows out of view without emitting anything is the B6a skipped-step failure, and a capped
+count there would repeat **HP1-badge** inside the very change meant to make the surface honest. The prompt says:
+if you cannot render the pointer, do not ship the exclusion.
+
+⚠️ **One real risk flagged, not waved through:** `new_contact_qualify` has a proven surface;
+**`contact_misparse_review` (111 rows) may not.** It is written at `sidebar-pipeline.js:2114` — if nothing reads
+and resolves it, routing it off the homepage deletes the only place it is visible. The prompt requires verifying
+that first, routing only `new_contact_qualify` if not, and filing the gap (P131) rather than building a new
+misparse surface in the same turn.
+
+⚠️ **Found in passing, filed not absorbed:** `inbox_items.domain` carries **four spellings for two domains** —
+`government` 505 / `gov` 8, `dialysis` 314 / `dia` 1, plus 48+ NULL. A domain-keyed rule strands 57 rows, so the
+prompt keys on `source_type` (clean) and files the drift as **HP1-P2-domain**.
+
+**Sequencing recorded on P2c and P2e:** both rank the Inbox, and ranking a list that is 94% noise ranks noise.
+They come after this, not beside it.
+
+Prompt: `prompts/HP1-P2a-route-data-hygiene-off-the-homepage-inbox.md`.
+
+## 2026-09-12 — HP1-P1d reconciled: monitor verified independently, my own row arithmetic corrected, two SF ghosts found (Cowork)
+
+PR #2383 merged. Response and prompt filed to `done/`. **CC's work holds up under independent measurement** — re-ran
+the gate from this side rather than reading the report:
+
+- `lcc_check_sf_opportunity_freshness(p_stale_hours DEFAULT 3)` **exists live**; cron
+  `lcc-sf-opportunity-freshness-check` is **active, hourly at :20**, 1 run, succeeded.
+- **Live now → green:** `{stale:false, age_hours:0.2, sf_linked_rows:612, max_last_synced_at:13:30:44Z}`.
+- ✅ **The B6a trap test passes — the one that mattered.** In a rolled-back transaction, back-dating every SF-linked
+  `last_synced_at` by 30 days **and** writing `now()` to the non-SF rows still returns
+  `{stale:true, age_hours:720.2, alerts_opened:1}`. The assertion is genuinely producer-scoped, not table-keyed in
+  disguise. CC chose `producer_runs` over a `feed_freshness_registry` row for exactly that reason, and made
+  `ingestBatch` write its run row on a **3-arg** `opsQuery` call so the P1a-fix Prefer-mangling class cannot recur.
+- CC's disclosed limitation — the historical replay fires on **13 of 16** checkpoints, the 3 misses being windows
+  where fresh INSERTs briefly kept a MAX-based predicate clean while UPDATEs were 100% broken — is real and **is
+  already written into `PLANNED-BACKLOG.md` and `STATUS.md`**, not left in the response. Checked, because a disclosed
+  limitation that lives only in a chat transcript is an undisclosed one.
+
+⚠️ **My own arithmetic was wrong and is corrected in place.** I wrote *"619 rows against the feed's 608 — 11 rows a
+second producer mints"* into the prompt, the backlog and CURRENT-STATE. The real split is **612 SF-linked / 7
+non-SF**. The 7 are the second producer (all `last_synced_at IS NULL`, `metadata->>'source'='priority_queue'`) — CC
+measured this correctly and I did not. P1d's conclusion is unchanged; the number behind it was mine and it was sloppy.
+
+🚨 **The 612-vs-608 gap turned out to be a real finding — filed as HP1-P1a-orphan.** Two rows carry an `sf_opp_id`,
+are **still open at `stage='qualified_lead'`**, and the feed **stopped sending them**:
+
+- **`Action Behavior Centers — Duncanville — TX`** (`006Vs00000fQ1nFIAS`), last synced **2026-08-04**. A *second, live*
+  Duncanville opportunity correctly moved `loi_executed → in_escrow` on the first good run — so this is a
+  **superseded duplicate** stranded at a stage that has been false for five weeks.
+- **`Test Property SN 05032024`** (`006Vs00000gT8mnIAC`), last synced **2026-08-20** — a **Salesforce test record**
+  sitting in the production deal backbone as an open deal.
+
+**Both render in the Important lane right now.** This is Scott's original *"My Work is well behind where the actual
+status of each deal is"* complaint — still live after P1a-fix, because fixing the feed fixes rows the feed *sends*
+and says nothing about rows it has **stopped** sending. ⚠️ **Do not just delete them:** on a full-refresh feed,
+"absent from the payload" is indistinguishable from "deleted in Salesforce", so the rule comes first (mark
+`sf_absent` after N consecutive full payloads — surfaced, never silently dropped), and test records should be excluded
+at ingest. 👤 Cheaper first move: confirm in Salesforce whether the Duncanville duplicate and the test record should
+simply be deleted there.
+## 2026-09-12 — Live-checked the "still running, redeploy interrupted it" run: pipeline is genuinely alive, but `PRI5`'s reclaim mechanism has a real gap this run exposes; `PRI6` drafted
+
+Scott reported the CMS ingestion run as ~10 hours in, interrupted by a `Dialysis` redeploy, and the
+resumed run now ~7 hours in on its own — asking whether it's on track. Checked live against Supabase
+rather than trusting the uploaded log excerpts (both uploads this round were 19–22 second snippets of the
+same healthy repetitive pattern, not proof of overall health on their own — same method used for the prior
+"8 hours in" check).
+
+**Good news, confirmed live: the pipeline is genuinely alive and writing right now, not hung.**
+`properties.estimated_annual_revenue` shows a newest `updated_at` of essentially "now" (0.4 seconds old at
+query time) with **1,923 rows updated in the preceding 15 minutes**. This is real, ongoing, healthy write
+throughput — the strongest possible signal against a hang, independent of anything in the log excerpt.
+
+**Also good, confirmed live: `PRI5`'s reclaim mechanism is working.** The exact orphaned `ingestion_tracker`
+rows this arc flagged in `PRI4` (`c6975255…`) and `PRI5` (`c817274e…`) are now both closed out
+(`run_status='failed'`, `finished_at` populated) — consistent with `reclaim_stale_started_runs()` running
+and sweeping them once they crossed the 2-hour safety window.
+
+**A real gap, not previously seen, found by this live check — recommend a `PRI6` prompt:** two
+`ingestion_lock` rows (`cms_medicare_clinics` and `facility_patient_counts`) are still open
+(`run_status='started'`, `finished_at=null`) at **17.9 hours old** — both acquired at
+2026-09-11 19:45:55 UTC, right after the last batch of tracker rows got reclaimed. That is nearly 10× past
+the "well past the pipeline's own 90-minute wall-clock cap" assumption `PRI5`'s response used to justify
+its 2-hour reclaim safety window, and this run is real evidence that assumption doesn't hold — a run can
+legitimately still be in flight at 17.9+ hours. No `ingestion_tracker` or `run_log` row of any kind has
+been created since that same timestamp (19:45:55 UTC on 9/11), despite Scott's redeploy — meaning either
+(a) the redeploy restarted a different Railway service than the one holding this lock, or (b) the resumed
+process reused the pre-existing lock/row instead of re-acquiring it and re-logging, which would itself be
+worth knowing. **The arithmetic lines up with Scott's own report**: 10h (first stretch) + 7h+ (post-redeploy
+stretch) ≈ 17h, close to the lock's actual 17.9h age — consistent with one continuous lock held since
+before the redeploy, never released, rather than two genuinely separate runs.
+
+**Net read for Scott, stated plainly**: the run is not hung and is producing real output right now — no
+action needed there. But two back-to-back very-long stretches (10h, then 7h+) on top of a lock that's been
+open for 17.9 hours without a fresh tracker/lock/log row is worth a real look, not just individual
+reassurance each time it's asked about — both because the reclaim window's safety assumption needs
+revisiting given a real run now exceeds it by an order of magnitude, and because it's not yet established
+whether a redeploy is supposed to release and re-acquire this lock or not.
+
+`PRI6` prompt drafted: `docs/claude-code/prompts/PRI6-ingestion-lock-survives-redeploy-and-reclaim-safety-window.md`.
+No `STATUS`/`PLANNED-BACKLOG` closure yet — pending Scott's read on whether to send this to `Dialysis` now
+or let the current run finish first.
 
 ## 2026-09-12 — CONSOLIDATE2's first flagged contradiction resolved: the stale "FINAL STATE" box defused (Cowork)
 
@@ -63,6 +1816,125 @@ already-merged CONSOLIDATE2 commit `9364ec1e`).
 
 Docs updated: `docs/architecture/document-capture-and-ocr-status.md` (FINAL STATE box retitled).
 
+| thread | backlog rows | last entry | state (one line) |
+|---|---|---|---|
+| **Identity / operator canonicalization (ID-series)** | ID0–ID4, ID2a-cleanup, ID2b, ID2b-caps, ID2b-caps-2, ID3a–ID3e, ID3a-d | 2026-09-12 | ID2b-caps-2 shipped + live-verified (3rd comp source fixed at source); ID3a-d retired LCC's stale gov migration copy; ID2b's remaining 45 views/12 modules still group on operator text |
+| **Market briefs (MB/EB)** | MB1d, MB2a, MB3, MB4, MB5, MB6, MB7, EB1b, P18 | 2026-09-12 | **LIVE**: `MARKET_BRIEF_PSQL` + `MARKET_BRIEF_RENDER` on; the daily email carries the Lane Briefs block (cap-rate bands, on-market, honest CMS staleness gaps, link to `#/briefs/dialysis`), the tab serves live facts, first `market_brief_issues` row frozen. Next: MB2a (the 3 new dialysis RSS URLs all fail 403/404), MB5 P-WEB (blocked on EB1b Anthropic credit), MB6 weekly long-form, MB7 MCP recall |
+| **Operator funnel (OC / HP1)** | HP1, HP1-P1a, HP1-P1a-fix, HP1-P1a-dup | 2026-09-12 | HP1-P1a-fix CLOSED live (608 rows UPDATED, first-ever Salesforce UPDATE to `bd_opportunities`); HP1 P0 (Today 500 badge) fixed+deployed+verified |
+| **Ownership (OWN/RO)** | OWN-T0a–T0j, RO3, B1b, AC2/AC3/AC6–AC11 | 2026-09-12 | OWN-T0j verified end-to-end live; RO3 field-mapping design drafted; OWN-T0a/B1b/AC-series propagation work still open |
+| **CoStar sidebar / public records (PR5/PRI)** | PR5d, PR-scanner-3, PRI2–PRI5 | 2026-09-12 | PR-scanner-3 shipped (`county_records_needed` action); PRI5 merged+deployed, awaiting another live CMS ingestion test run to confirm the hang is actually cleared |
+| **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
+| **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
+| **Broker identity (BR) / BROKER1** | BR1, BR2, BROKER1, BROKER1-sf | 2026-09-11 | BROKER1 prospect-assignment applied live (1,303 assigned) with a real bug found+fixed in production; BROKER1-sf (Salesforce write-back) correctly left unbuilt — no write path exists |
+| **gov agency canonicalization (ID3a\*)** | ID3a, ID3a-b, ID3a-c, ID3a-d, ID3e, I14, I16 | 2026-09-12 | ID3a-b/c/d/e all shipped and live-verified; repo-ownership hazard (I16) found and closed — `government-lease` owns the gov DB's migrations, LCC's copy retired |
+| **CI / producer health (B6d/B6e)** | B6d-cms-*, B6d-assessor-*, B6d-pri-*, B6e-ci-*, B6e-fred-* | archived 2026-09-11 | Suite is a real merge gate (`Run Tests` unmasked, green once on `main`); `pip-audit`/secrets-grep/ruff still masked; full detail in the 2026-08-29→09-11 archive and `docs/architecture/producer-health-and-ci-enforcement.md` |
+
+> **📦 ARCHIVE (2026-09-08):** entries for **2026-08-31 → 2026-09-01** (the CMS-ingestion restart,
+> DOC1–DOC18 document pipeline, C13/C14 entity-role work, and the trailing pointers for two earlier
+> cuts) were moved **verbatim** to
+> [`docs/history/STATUS_claude-code_2026-08-31_to_2026-09-01.md`](../history/STATUS_claude-code_2026-08-31_to_2026-09-01.md).
+> Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
+
+---
+
+## 2026-09-12 — MB2a scoped with feeds fetched live: 3 dead URLs replaced by 2 verified ones + a feed-health guard
+
+Cowork tested MB-b's three dialysis feeds and six candidates live. Dead: `renalandurologynews.com/feed/` **403**,
+`nephrologynews.com/feed/` **404** (and `/rss/`), `cms.gov/newsroom/rss` **404** (the `rss-feeds` page is an HTML
+listing, not a feed); also dead: `fiercehealthcare.com/rss/xml` **403**, `kidney.org/rss.xml` **404**. Working and
+parsed: **Federal Register ESRD query feed** (200, 3 items, real CMS documents — the authoritative ESRD-rule source)
+and **Google News operator query** (200, ~100 items). Two caveats recorded in the prompt rather than glossed: Google
+News links are redirect URLs with the publisher only in the title suffix, and the feed is broad enough that today's
+first item was local EMS news — so the Ollama relevance filter's survival rate gets measured before `MARKET_BRIEF_PRSS`
+is flipped. The real deliverable is the guard: a test that fetches every `RSS_FEEDS` URL and fails on non-200/zero
+items, plus per-stream feed health so an empty stream is a **named gap** (I11), not silence.
+Prompt: `prompts/MB2a-dialysis-feeds-that-actually-respond.md`.
+## 2026-09-12 — MB-b is fully LIVE: migrations applied, and the full flip-and-verify sequence actually ran (Cowork/Scott)
+
+Applied both pending MB-b migrations (the RSS-cron repoint and the `MARKET_BRIEF_RENDER` flag
+registration) after confirming both were additive, idempotent, and default-off. The flag insert's
+`ON CONFLICT DO UPDATE` found the row already existed with `state='on'` — Scott (or an operator
+session) had run the real live-verify sequence in parallel: `MARKET_BRIEF_PSQL` flipped on at 14:48
+UTC, the tick wrote **31 live facts**, the render froze a `market_brief_issues` row for
+`dialysis`/`daily`/2026-09-12 at 14:49, and `MARKET_BRIEF_RENDER` was flipped on. My migration
+correctly left that live `on` state untouched rather than clobbering it back to the file's own
+default `off`.
+
+**MB-b (Lane Briefs email block + homepage Market Briefs tab) is now genuinely live**, not just
+deployed-in-code. `MARKET_BRIEF_PRSS` stays off (no dialysis RSS content yet — unrelated to this).
+Updated `MB3`/`MB4` in `PLANNED-BACKLOG.md` to `✅ live`. This closes the loop that started with
+"the redeploy already happened, just never reported" a few hours ago — the whole remaining sequence
+happened live today.
+
+
+## 2026-09-12 — MB-b reconciled and TURNED ON: the market brief is live in the daily email and on the homepage tab
+
+Cowork applied MB-b's two unapplied migrations (`MARKET_BRIEF_RENDER` registration, `lcc-market-brief-rss` cron),
+flipped `MARKET_BRIEF_PSQL` on, ran the producer once (**15 facts written, run `completed`**, 31 live facts), then
+flipped `MARKET_BRIEF_RENDER` on and verified both surfaces on deployed `6b28835f28ac`: `GET /api/market-brief-tab`
+returns `enabled:true, has_facts:true` with sourced facts, and `/api/briefing-email` (117 KB) now contains the **Lane
+Briefs block** — cap-rate band, on-market count, the CMS staleness gap rendered honestly, and the link to
+`#/briefs/dialysis` — with the first `market_brief_issues` row frozen. Three clean operator bands (DaVita, Fresenius
+Medical Care, US Renal Care), no duplicates. **One defect found:** MB-b's three new dialysis RSS URLs all fail —
+Renal & Urology News **403**, Nephrology News **404**, CMS Newsroom **404** — so `MARKET_BRIEF_PRSS` stays **off** and
+the stream would yield nothing; filed as **MB2a**. MB-b's own note said the URLs were never egress-verified.
+⚠️ Concurrency note: this entry was written twice — a parallel session's REPO1 root sweep (`68de2540`) discarded the
+first copy while it sat uncommitted in the shared checkout. Commit doc edits immediately in this repo.
+
+## 2026-09-12 — MB-b's "needs a Railway redeploy" blocker is already cleared; two small migrations are the real remaining gap (Cowork)
+
+Continuing planned-vs-completed-vs-gaps. `MB3`/`MB4` (MB-b's Lane Briefs email block + homepage tab)
+were filed as "not deployed/live-verified — no Railway/Supabase write access" the day they were built.
+Checked live via `net.http_get` from Supabase (the same pg_net technique earlier Cowork dry-runs used):
+`tranquil-delight-production`'s `/version` reads **`54ca77699efe`**, confirmed **10 commits past the
+MB-b merge** (`git merge-base --is-ancestor 94a08eca 54ca7769` → true). **The redeploy already
+happened** — just never reported back into the backlog rows that were still waiting on it.
+
+**What's actually still missing:** the two MB-b migrations were never applied — `feature_flags_registry`
+has no `MARKET_BRIEF_RENDER` row yet, confirmed live. Both migrations
+(`...mbb_rss_dialysis_stream_cron.sql`, `...mbb_market_brief_render_flag.sql`) are additive, idempotent,
+default-off, and carry reversal runbooks — low-risk once applied. The remaining live-verify call
+(`POST /api/market-brief-psql-tick`) 401s from this session — needs an operator's `X-LCC-Key`, which
+this session doesn't hold.
+
+Updated `MB3`/`MB4` in `PLANNED-BACKLOG.md` to reflect the narrowed gap rather than leave the stale
+"needs a redeploy" framing standing. Did not apply the migrations myself this pass — flagging the
+exact remaining steps rather than acting past what this documentation-focused turn asked for.
+
+
+## 2026-09-12 — Continuing planned-vs-completed-vs-gaps: re-verified the "CMS ingestion repaired" claim live and it does not hold (Cowork)
+
+Following the FRED/CMS thread `CONSOLIDATE3` left open, re-measured both live rather than trusting the
+2026-09-01/02 doc claims. **FRED is genuinely fine** — `economic_indicators` max observation date is
+2026-09-10, writing daily, no action needed. **CMS ingestion is not.** `v_dia_producer_health` self-reports
+`cms_ingestion` as `status='failing'`: 34 of 36 runs failed in the last 30 days, `last_success_at`
+2026-04-04 (five months, not the 67 days the "repaired" narrative was about). `medicare_clinics
+.source_last_seen` has been frozen at 2026-08-31 — 249 of 8,547 rows (2.9%) — for 12 days, exactly the
+stall-at-249 risk `B6d-cms-step` flagged on 2026-09-01 as "the only thing left on this thread." No run
+fired at all today against the `0 6 * * *` schedule.
+
+**The failure signature has also changed** since the doc was last touched: no longer silent
+`abandoned`/NULL-error kills, but `"Reclaimed by ingestion_lock (force) after 0.0h in 'started'"` and
+`"Reclaimed by reclaim_stale_started_runs…"` — `PRI5`'s own reclaim mechanism (shipped 2026-09-11) is now
+the thing terminating most of these runs, several within the same second they start. Whether PRI5 is
+correctly killing something already broken, or itself killing runs that would otherwise finish, is not
+determined from this session — flagged as further evidence for the already-open `PRI6` thread (the two
+17.9-hour locks on this same producer), not a new defect.
+
+Corrected `DATA-PROCESS-AUDIT-HANDOFF.md`'s "CMS ingestion repaired" line to point at the backlog row
+instead of asserting current state; appended the live finding to `B6d-cms-restart` (never deleted its
+prior text). Needs Railway deploy logs no agent here can reach — same blocker the row already named.
+
+
+## 2026-09-12 — DOC-CONTRA #2 found a live bug, not just a stale doc: TIER0_AUTO_ATTACH silently off for 16 days (Cowork)
+
+Re-verifying `tier0-owner-contact-system.md` against reality (CONSOLIDATE2's 2nd flagged
+contradiction) found the flag's 2026-08-28 "RESOLVED" note was never actually verified: the tick's
+run log shows `flag_off` on all 17 runs since, because `tier0-auto-attach-tick.js:208` called the
+shared `flagEnabled()` helper with one argument instead of two — every other of 7 callers in the
+repo got it right. Fixed the call, added a source-guard test, corrected the doc's live-state table
+and history (kept the wrong 08-28 note verbatim, marked corrected). New backlog row
+`TIER0-flag-arity`. DOC-CONTRA now 2 of 3; FRED/CMS scattered verdict still open.
 
 ## 2026-09-12 — CONSOLIDATE2 reconciled: STATUS 10,742 → 2,461 lines; two structural fixes + next cadence filed
 
@@ -138,7 +2010,6 @@ all), a real build decision, not a measurement.** Docs updated: `PLANNED-BACKLOG
 re-measured with the live numbers and the DOC3/DOC6 link made explicit; DOC2 left as-is).
 
 ## 2026-09-12 — HP1-P1a-fix reconciled: code is merged, but live production is NOT confirmed running it (Cowork)
-# Claude Code queue — STATUS
 
 ## 2026-09-12 ✅ — HP1-P1d SHIPPED: the SF opportunity feed now has a real freshness assertion (Claude Code)
 
@@ -539,1828 +2410,7 @@ guarded `operator_id`), plus the invariant this class needs — **no two live ba
 a test. Audit doc `ID2b_caps_RPC_QUERY_COMPS_OPERATOR_ID_2026-09-12.md` has an addendum recording the failed gate; its
 original claim was left intact.
 
-## 2026-09-12 — HP1-P1a CORRECTED: the opportunity feed never STOPPED — its upsert has never UPDATED a row, since the day it was built
 
-Six hours ago I filed *"the feed ran once and stopped."* **That was wrong in a way that understated
-it.** The flow is healthy and delivers **608 records every 30 minutes**. What has never worked is the
-WRITE. Prompt filed: `prompts/HP1-P1a-fix-opportunity-upsert-never-updated.md`.
-
-**Measured end to end, 2026-09-12 06:00 UTC.** PA run **Succeeded**; `Get records` → **608 rows**;
-POST `/api/pipeline/ingest-opportunities` → **HTTP 200**; body
-`{"ok":true,"total":608,"succeeded":0,"failed":608}`, every `errors[].error` = `upsert_failed` /
-`status 502`. Postgres logs at `06:00:43`–`44Z`, **608 times**:
-`duplicate key value violates unique constraint "bd_opportunities_workspace_id_sf_opp_id_key"`.
-**PostgREST is running a plain INSERT — `Prefer: resolution=merge-duplicates` never takes effect.**
-
-**Ruled out live, do not re-walk:** the constraint exists and is a plain two-column btree (so NOT the
-documented partial/expression-index case); **direct SQL `ON CONFLICT … DO UPDATE` succeeds** (probed in
-a rolled-back transaction); the upsert call is unchanged since `83cd873f` (2026-07-27) and the
-constraint since 2026-05, so **nothing regressed**; `deal_name`/`property_address` were added 07-28 and
-wrote fine on 08-03, so not a stale PostgREST schema cache; and a duplicate-key error proves the INSERT
-reached the table, so not auth and not RLS.
-
-**Why 2026-08-03 looked like a start date: it is the day the table was POPULATED.** Empty table → 590
-inserts, no conflicts; 15 more on 08-04. Every run since collides. The only writes that have landed are
-**5 brand-new `sf_opp_id`s**, and **all five have `created_at == last_synced_at` to the second — all
-five are INSERTs. Zero UPDATEs have ever succeeded on this path.**
-
-🚨 **So no stage change and no close has EVER propagated from Salesforce into LCC.** The backbone learns
-a deal at creation and is frozen at that instant permanently. **This is the single root cause under all
-of HP1 Finding 2** — the 22 open deals past their close date (ECU Physicians MOB **746 days**, ATEK
-Brainerd 683, GSA-MSHA Oakwood 515), the frozen stages, 57 of 66 overdue `action_items`, the My Work
-graveyard. Not task hygiene. Not Salesforce hygiene. One unexecuted `ON CONFLICT`.
-⚠️ **`closed_at` on all 569 closed rows is the Aug 3/4 insert timestamp, not the real close date** —
-never captured, not recoverable from LCC.
-
-⚠️ **And the reason six weeks of 100% failure was invisible from BOTH ends:** `ingestBatch` ends
-`return res.status(200).json({ ok: true, ...summary })` **unconditionally**. It answered **`ok: true`
-with `failed: 608`**. Power Automate reads the status code, sees 200, reports Succeeded — while
-`summary.errors[]` carried the truth nobody was reading. **A batch endpoint that cannot fail its caller
-is not instrumented, whatever its summary says.** Unit 3 of the fix.
-
-**Method note worth keeping.** Three successive readings of this feed were wrong, each from reading a
-convenient column instead of the honest one: `max(updated_at)` said the pipe was alive (LCC-side writers
-move it); `last_synced_at`'s history said it stopped (only INSERTs ever stamped it); the truth needed
-`created_at == last_synced_at` to prove no row had ever been UPDATED. **Each reading was plausible, and
-only the one that could distinguish an insert from an update was decisive.**
-
-**Next:** `HP1-P1a-fix` — RPC-first write (the repo's own standing conclusion about PostgREST's write
-surface), a non-2xx on a fully-failed batch, and `closed_at` preservation. **Verify on
-`UPDATED_not_inserted` in the hour after a run — a number that has been 0 for this feed's entire life —
-never on a 200.** ⚠️ Snapshot `bd_opportunities` first: 608 rows and six weeks of stage drift land in
-one batch, and a large `deal_next_step` auto-retire follows.
-
-## 2026-09-12 — Sized the 40-property residual from B2: a small, named slice of C2g (Cowork)
-
-Continuing after B2's retirement, sized the 40-property residual flagged there (gov properties with a
-working `asset` anchor that were never resolved to an owner in `lcc_property_owner` at all — distinct
-from the 2,496-property mint gap, which is `C2e-T2b`).
-
-**Findings:** these 40 are stuck, not merely queued — anchors range from 2026-04-24 to 2026-08-19 (up
-to ~4.5 months old) with no resolution having landed. Two sub-shapes: 10 of 40 carry a real
-`assessed_owner` name (LLCs, a trust, an individual, a corp, a city) and simply never resolved; the
-other 30 have no `assessed_owner` at all despite a `true_owner_id` and a working anchor — thinner data
-than the first ten, worth separating before diagnosing either. Checked and ruled out: not a
-`cmbs_discovery`-status artifact (all 40 are `status='active'`); not a timing/backlog-catch-up issue
-(ages rule that out).
-
-**This is very likely the same machinery as `C2g`** ("why are 489 anchored owner-orgs still
-unresolved?" — `lcc_reconcile_property_owner`'s 0.55 confidence gate, a dia-operator-in-owner-slot
-case, or a cross-domain anchor), just counted at the property level with no Salesforce-people filter,
-so the two counts (40 vs 489) aren't directly comparable. Filed as `C2g-40` right under `C2g` in
-`PLANNED-BACKLOG.md` rather than as a new independent row — per the repo's own standing rule against
-building a second detector for the same defect class, this should be diagnosed alongside C2g's own
-investigation, not separately.
-
-No build taken. Docs updated: `PLANNED-BACKLOG.md` (new `C2g-40` row).
-
-## 2026-09-12 — B2 retired: it's `C2e-T2b`, not a separate gap; asset-anchor coverage re-measured live (Cowork)
-
-Picked B2 as the next gap after PR-scanner-3, per the standing "measure before building" discipline
-and the row's own `owner_needs_salesforce` warning about wrong-key artifacts. Re-derived the real join
-chain instead of trusting the row's 9,830/6,362/3,468 figures: `properties.true_owner_id` (gov) →
-`external_identities(source_system='gov', source_type='true_owner')` (LCC Opps) → gov `asset` anchor →
-`lcc_property_owner`.
-
-**Found: B2's premise was itself a wrong-key artifact, the exact class its own warning named.** Of
-9,842 live gov properties carrying a `true_owner_id`, only 163 (1.7%) are unindexed at the identity
-layer — 97.7% already ARE indexed as a `gov/true_owner` identity. "Never reached the entity graph" is
-false at that layer. The real bottleneck is asset-anchor coverage: **2,496 properties have no gov
-`asset` entity anchor at all** (resolution can't even be attempted — the anchor-then-resolve chain
-never starts), plus a small, previously-uncounted **40-property residual that IS anchored but was
-never resolved to an owner link**.
-
-**This 2,496-property gap is not new — it is `C2e-T2b`** (`connectivity-and-open-threads.md` §4k.1),
-sized 2026-08-28 at 2,241 properties / 2,054 owners, already measured safe-to-run and low-value, and
-already left as an explicit, un-taken decision for Scott ("safe to run, low-value to run. No default
-taken."). The two-week population growth (2,241 → 2,496) is ordinary property-intake drift, not a new
-finding. `PLANNED-BACKLOG.md`'s `B2` row had drifted out of sync with `C2e-T2b` and was carrying stale,
-wrong-key numbers as if it were a distinct, still-unsized gap — retired into a pointer at `C2e-T2b` so
-there is one authoritative row for this population, not two disagreeing ones.
-
-**New, smaller finding not previously counted anywhere:** 40 gov properties that DO have an asset
-anchor but were never resolved to an owner in `lcc_property_owner` — distinct from T2b's mint-eligible
-population (T2b is entirely about properties with no anchor yet). Small enough to be worth a quick
-look on its own rather than folding into the T2b decision.
-
-**No build taken** — T2b remains explicitly Scott's call, and this session did not override that.
-Docs updated: `PLANNED-BACKLOG.md` (`B2` row retired/redirected to `C2e-T2b`).
-
-
-## 2026-09-12 — ID2b-caps SHIPPED: rpc_query_comps carries operator_id, the cap-rate band fragmentation is fixed
-
-Closed the row filed earlier today (ID2b-caps, prompt `prompts/ID2bcaps-comps-engine-operator-id-passthrough.md`
-→ `prompts/done/`). `rpc_query_comps` (Dialysis_DB, applied live) now returns `operator_id`/`operator_canonical`
-(ID2a registry, survivor-resolved via `dia_operator_survivor`) on the sale and listing arms, additive-only —
-appended via `jsonb || jsonb_build_object(...)`, never editing an existing key, so `mcp/comps-tools.js`'s comp
-SELECTION/scoring (`operatorTier`/`compTenantText`, which read only the pre-existing fields) cannot have
-changed. New pure `planOperatorCapRateBands()` in `market-brief-psql-tick.js` groups the TTM cap-rate band on
-`operator_id` when resolved, falls back to the old raw-tenant-text grouping for the ~20% of dia properties
-ID2a hasn't backfilled yet, and supersedes the stale text-keyed fragments a resolved id makes obsolete via a
-new `retireStaleFact()`.
-
-**Verified live on the tick's own TTM window (2026-09-12):** the exact fragmentation the earlier dry-run
-found — `Fresenius` vs `Fresenius Medical Care`, `DaVita` vs `DaVita Dialysis` — is gone: DaVita (72 comps)
-and Fresenius Medical Care (68 comps) each collapse into ONE band, both well clear of the `MIN_N_CAP_BAND=5`
-floor. The residual `:fresenius_medical_care`(13)/`:davita_dialysis`(12)/`:davita_kidney_care`(5) text bands
-are comps whose linked property has no resolved `operator_id` at all — a coverage gap (ID2a backfill sits at
-80.1%), not the fragmentation defect re-emerging; they are correctly kept separate rather than guessed into a
-bucket.
-
-**One defect caught by the test suite before shipping, not by a live probe:** the first draft of the
-retire-stale-key logic would have retired a `fact_key` the SAME run's own unresolved comps still needed as a
-genuinely live band, whenever a resolved operator and an unresolved property happened to share the identical
-raw tenant text. Added a guard (never retire a key this run also emitted) and a regression test for it before
-this went anywhere near the live DB.
-
-Guard `test/id2b-caps-operator-id-bands.test.mjs` (12 tests, all pass). Full suite: 6,044 pass / 0 fail / 6
-skipped (all pre-existing skips, unrelated). `MARKET_BRIEF_PSQL` not touched (MB-b's call). Full writeup +
-sized ID2b-remaining follow-up (CM views, dossier, MCP tools): `docs/audits/ID2b_caps_RPC_QUERY_COMPS_OPERATOR_ID_2026-09-12.md`.
-Backlog rows ID2b-caps and MB1e (item 1) updated to ✅ in `docs/os/PLANNED-BACKLOG.md`;
-`docs/architecture/EXEC-BRIEFS-SPEC.md` §9 addendum added.
-## 2026-09-12 — HP1-P1a ANSWERED read-only: it is NOT a Salesforce hygiene gap. The opportunity feed has written 5 rows in 36 days.
-
-HP1 framed the frozen deal backbone as *"a Salesforce hygiene gap or a Power Automate scope gap — do
-not assume"* and sent Scott to check Salesforce. **Both options were wrong, and one column settled it
-without leaving the database.** `bd_opportunities.last_synced_at` is stamped unconditionally on every
-ingest write (`mcp/opportunity-sync.js:217`), so it records *the feed touched this row*, independently
-of whether anything changed. Its write history:
-
-| date | rows written by the SF feed |
-|---|---:|
-| **2026-08-03** | **590** ← one bulk backfill |
-| 2026-08-04 | 15 |
-| 2026-08-20 | 1 |
-| 2026-09-03 | 1 |
-| 2026-09-07 | 2 |
-| 2026-09-09 | 1 |
-
-**Five rows in 36 days — and one of the five is `Test Property SN 05032024`.** Of 569 CLOSED
-opportunities, **zero have been synced since the backfill** (`max(last_synced_at)` on closed rows is
-2026-08-04 21:00:45, the backfill itself). A brokerage does not go 36 days with no closes. **The feed
-ran once and stopped.** The surviving five carry `:00:4x`-second timestamps on the hour, which reads
-like a scheduled flow that still fires and delivers almost nothing — a too-narrow filter or a broken
-query, not a dead trigger. Distinguishing those two is a **Power Automate run-history** question, not
-a Salesforce one.
-
-⚠️ **This corrects my own HP1 finding 2c, which said the opposite.** It read *"the table as a whole is
-still being written (`max(updated_at)` 2026-09-10, 619 rows), so the pipe is not dead — the
-transaction-stage rows specifically have not changed."* **`updated_at` was the wrong column.** It also
-moves for LCC-side writers, and the proof is on one row: `DaVita Dialysis - Succasunna - NJ` reads
-`last_synced_at` **2026-09-07** against `updated_at` **2026-09-10** — that later change came from
-inside LCC, not from Salesforce. Reading `updated_at` as feed liveness produced a confident, plausible
-and wrong conclusion, and it is the same class this file documents a dozen times: *the convenient
-counter answered instead of erroring.* **For any pushed feed, read the column the WRITER stamps
-unconditionally, never the row's own mtime.**
-
-**This re-orders HP1's P1 and kills one premise.** The stale tasks, the 22 past-close deals and the
-graveyard My Work are **symptoms of a dead feed**, not of missing task hygiene — so **P1d (the
-backbone freshness assertion) is now FIRST**, not last. It should have fired on 2026-08-05 and there
-was nothing to fire it: `lcc-bd-sync-health-check` (05:00) and `lcc-feed-freshness-sync` (05:30) watch
-other feeds, and `bd_opportunities` is in neither registry. ⚠️ **Do NOT build P1b (the deal-status
-confirmation lane) next** — on a stopped feed it becomes a surface that asks Scott to hand-reconcile
-data we stopped receiving, which is the producer/consumer inversion, and it would make the outage
-*more* comfortable to live with rather than fixing it.
-
-⚠️ **And note what a restarted feed will do on its first run:** 569 closed rows and 37 frozen open rows
-will all arrive at once. `lcc_generate_deal_next_steps()` retires on stage change, so a backlog of
-real closes lands in one batch — expect a large auto-retire and verify it against the ledger rather
-than being surprised by it.
-
-**👤 Scott's step changed:** not "check the stage in Salesforce" but **"open the Power Automate
-opportunity-sync flow and read its run history since 2026-08-04"** — is it failing, is it succeeding
-with 0 records, or has it been turned off? Each answer is a different fix. Backlog **HP1-P1a** rewritten.
-
-**Next:** HP1-P1d (freshness assertion on the deal backbone) once the flow's state is known; HP1-badge
-is unaffected and still ready to build.
-
-## 2026-09-12 — PR-scanner-3 reconciled against the merged desktop response (Cowork)
-
-Read the pasted Claude Code desktop response for PR-scanner-3 in full and independently re-verified
-its claims live against both Supabase projects rather than trusting the report text:
-
-- `v_lcc_ownership_history_lane_split` action distribution on LCC Opps matches exactly:
-  `agrees` 147, `county_records_needed` 126 (27 human_actionable), `sponsor_spe` 110,
-  `mismatch` 101 (37 human_actionable), `all_guarded` 27 (4 human_actionable), 1 null —
-  `human_actionable` total unchanged at 68. Confirms the response's "predicted-vs-actual delta
-  was exact" claim rather than assuming it.
-- The new mirror table `lcc_gov_property_record_coverage` has exactly 254 rows, all synced at one
-  single timestamp (`2026-09-12 05:26:52.77913+00`) — confirms it was seeded once, live, and is
-  not yet on a recurring sync, exactly as both the response and `PLANNED-BACKLOG.md`/`STATUS.md`'s
-  own PR-scanner-3 entries already disclose.
-- **Deploy status, both Railway services** (per the repo's standing "redeploy both" rule for engine
-  changes): `tranquil-delight-production-633f.up.railway.app/version` returns `bd679c4321c8` —
-  byte-identical to this change's merge commit (`bd679c43`), so it is live at the correct commit.
-  The standalone MCP service (`life-command-center-production.up.railway.app`, the `mcp/` directory)
-  does not import any file this change touched (`ops.js`, `api/_shared/gov-property-record-coverage.js`,
-  `api/_shared/ownership-lane-split.js` are all outside `mcp/`) and exposes no git-sha `/version` route
-  to check directly — its own `/health` reports a static `"version":"1.0.0"`. **Conclusion: this
-  shipment did not require a second-service redeploy, and none is owed.**
-- CC's own doc updates (`PLANNED-BACKLOG.md` PR-scanner-3 row, `ownership-history-lane.md` §5,
-  `research-workbench.md` §7d, and this file's PR-scanner-3 entry above) were read in full and found
-  accurate, complete, and consistent with the live numbers above — no corrections needed.
-
-**Outstanding decision for Scott, not yet made:** the `lcc_gov_property_record_coverage` mirror was
-seeded once (254/254 rows) and has no recurring sync. It will silently drift stale as A2/A3 apply
-tasks and PR-scanner-1/2 scans change gov's `parcel_records`/`tax_records`/`deed_records` — a stale
-mirror can only ever fail *safe* (an unsynced row stays at its base action, `IS FALSE` not `= false`),
-but it will under-report `county_records_needed` over time rather than staying accurate. Options:
-(a) schedule `syncGovPropertyRecordCoverageForOwnershipLane()` on a cron now (a small follow-up build,
-mirroring cron 244/245's cadence), or (b) leave it manual/on-demand until PR-scanner-1/2 show real
-adoption (their writers still show 0 rows on either domain as of this reconciliation), since a cron
-syncing an unused signal has no payoff yet. No action taken pending Scott's call.
-
-Response filed: `docs/claude-code/responses/done/PR-scanner 3 desktop response.docx`.
-
-## 2026-09-12 — ID2b reconciled: real but not yet visible — the cap-rate fragmentation Scott flagged is unchanged; ID2b-caps drafted
-
-Filed `responses/ID2b desktop response.docx` → `done/`; prompt → `prompts/done/`. **ID2b (PR #2359) shipped one switch:**
-`v_market_brief_cms_operator_counts` now groups on `properties.operator_id` through `dia_operator_survivor` — verified live,
-0 rows lost (6,695 → 6,695), Satellite's two spellings collapsed into one bucket of 69, plus a repo-wide class-guard test.
-It corrected the prompt's own figure (**96** grouping-relevant views, not 45 — the remainder are review/audit surfaces where
-raw text is intentionally correct) and **refused to switch `comps-tools.js` blind** because the 5-subject comp-set diff
-hadn't been run — the right call, filed as ID2b-c. **What the reconcile found:** the switched view feeds the CMS clinic
-counts, which MB1d already withholds behind the staleness gate, so **nothing user-visible changed**. Cowork re-ran the
-P-SQL tick's dry run against the deployed build: `cap_rate_ttm_band:fresenius` **n=63** alongside `:fresenius_medical_care`
-**n=11**, `:davita` **n=67** alongside `:davita_dialysis` **n=9** — the exact defect that started the identity thread on
-2026-09-11, still live. Root cause named: the bands group on the comps RPC's `comp_tenant` **text** and key on
-`normKey(text)`, so `operator_id` never reaches the engine's output and every engine consumer re-fragments the same way.
-New row **ID2b-caps** with prompt `prompts/ID2bcaps-comps-engine-operator-id-passthrough.md`: return `operator_id` +
-`operator_canonical` from `rpc_query_comps` **additively** (existing fields byte-identical, so `operatorTier()` selection
-cannot change — proven on 5 subjects), group bands on the id, supersede the text-keyed fragments. Gate: Fresenius 63+11 →
-one band n=74, DaVita 67+9 → n=76, whole-market n≈167 unmoved.
-
-## 2026-09-12 — HP1 P0 reconciled: the Today 500 is fixed, DEPLOYED and verified — and the "See all (N)" badge was never honest
-
-Filed `responses/HP1 desktop response.docx` → `done/`; prompt → `prompts/done/`. **PR #2358 merged
-(`42158f17`) and LIVE — `/version` reads `42158f174956`** (probed from LCC Opps via `net.http_get`,
-the sandbox-reachable route), so this one is *running*, not merely merged.
-
-**What shipped, verified live in the merged source rather than from the response:** `Promise.all` →
-**`Promise.allSettled`** with a `settledQueryResult()` mapper (1b); explicit **`timeoutMs: 20000`** on
-the seller-prospect read and 12 s on the other three ops calls (1a); **`countMode` `'exact'` →
-`'estimated'`** on all four (1c); and a real per-lane failure state (1e) — `today-sections.js` now
-returns **`source_error`** per section, `app.js` renders *"This section is unavailable right now"*
-instead of the blanket "Today unavailable — HTTP 500", and `assembleTodaySections` folds a
-per-request degradation note into the existing **`named_gaps`** contract reading *"Section shown
-empty, not exhausted."* That last distinction is the whole point: before this, a lane whose source
-died rendered **"Nothing here right now. ✓"** — a green checkmark over a failure. CC also found and
-wrapped a **seventh** previously-unguarded `opsQuery` in the same handler (the entity-name lookup),
-which the brief had not named. Guard `test/today-sections-degraded-source.test.mjs` asserts a thrown
-source empties exactly its own lane, leaves the other two intact, and the endpoint returns **200**;
-full suite 6,013 pass / 0 fail / 6 skipped.
-
-🔴 **NEW FINDING, mine, found while reconciling — `total_open` is the CAPPED PAGE LENGTH, not the
-population, and two of the three "See all (N) →" badges under-report.** Every section returns
-`total_open: all.length` (`today-sections.js:79/103/182`) where `all` is the rows the query
-returned — and every source query carries **`limit=200`**. Measured live 2026-09-12:
-
-| lane | badge reads | true population | honest? |
-|---|---:|---:|---|
-| Significant (`v_lcc_seller_prospect_queue`) | **200** | **517** | ❌ under-reports 61% |
-| Urgent (`v_lcc_bd_worklist` contact_writeback half) | **≤200** | **1,587** | ❌ under-reports 87% |
-| Important (`bd_opportunities` open) | 50 | 50 | ✅ (below the cap) |
-
-**The module's own header promises the opposite** — *"`total_open` (the full population, for the
-'See all →' link)"* — and cites **P159a**, the rule that a rendered count and a population must be
-two distinct numbers and never blended. It is the honest-counts rule (Consumption Layer §5) failing
-inside the module written to enforce it. **Be precise about the blast radius: the RANKING is not
-affected.** Each query is `order=rank_value.desc` before the `limit=200`, so the eight rows rendered
-really are the top eight; only the badge lies.
-
-⚠️ **And this corrects my own filing, in place.** HP1's 1c said *"the only consumer of `total_open`
-is the 'See all (N) →' button text"*, which implies the PostgREST header count fed it. **It never
-did** — CC checked and reported correctly that `.count` is read nowhere in the handler, which is
-exactly why the downgrade to `'estimated'` was safe. What that check actually exposed is that the
-exact `COUNT(*)` we were paying ~750–800 ms for on every page load was **pure waste**, and the badge
-has been wrong since UX-T1a-today shipped. **Re-enabling `count=exact` is NOT the fix** — an
-estimated planner count over one of these views is the documented ~58× trap, and an exact one
-re-imposes the cost 1c just removed. Filed as **HP1-badge**: either a cheap dedicated count-only
-read, or render the badge as *"top 200"* and stop claiming a total. 👤 A count nobody can afford to
-compute may simply not belong on the card.
-
-**1d re-measured and correctly NOT built.** Post-1c the 200-row page is **~1.2 s warm** and the
-separate exact COUNT that 1c removed was **~0.8 s** (my own pre-fix measurement was 815 ms + 750 ms;
-wall-clock on this box moves 2–4× between sessions, so read the structural facts, not the
-milliseconds). The structural cost is untouched — seq scans on `entities` / `lcc_property_attributes`
-/ `lcc_entity_portfolio_facts` plus the `activity_events` subplan at `loops=1518` — so the
-materialized-view question stays open as **HP1-1d** rather than being taken on a number that moved.
-
-**Still open, unchanged:** **P1** (deal-backbone freshness + the deal-status confirmation lane) is
-held 👤 pending Scott's determination of whether the frozen transaction stages are a Salesforce
-hygiene gap or a Power Automate scope gap — *do not assume*. **P2** (Inbox routing/ranking, My Work
-re-rank onto the shared function) untouched. The 12 s front-end race in `renderTodaySections` was
-correctly left alone.
-
-⚠️ **Deploy note:** the doctrine is *redeploy BOTH Railway services*. `tranquil-delight` is confirmed
-on `42158f17` and serves this endpoint and `app.js`; the standalone MCP service does not serve
-`today_sections`, so the surface is fixed either way — but confirm the MCP redeploy before assuming
-any other engine change in the same merge is live.
-
-**Next:** HP1-badge (smallest, and it is an honest-counts defect on an operator surface), then P2's
-inbox routing. P1 stays 👤-blocked.
-## 2026-09-12 — PR-scanner-3 shipped: `county_records_needed`, the sixth ownership-history-lane action
-
-Re-measured live before building (unchanged from the 2026-09-12 sizing already in `PLANNED-BACKLOG.md`):
-of gov's 68 `human_actionable` `mismatch`/`all_guarded` tasks in `v_lcc_ownership_history_lane_split`,
-27 (40%) carry no trustworthy `parcel_records`/`tax_records`/`deed_records` on file; fleet-wide (254
-tasks) it is 126 (49.6%). The spec's `ai_gpt4o_presumed` model-leg label does not exist as a literal in
-gov's tables — the live tag is `ai_recall_gpt` (11 deed / 23 parcel / 14 tax rows), used instead.
-Shipped as a RECLASSIFICATION inside the existing split (mirroring A3's `sponsor_spe` precedent) rather
-than a new lane/table. Cross-database constraint (the view is on LCC Opps, the source tables on the gov
-project) solved with a small mirror table (`lcc_gov_property_record_coverage`) synced by
-`api/_shared/gov-property-record-coverage.js`; the SQL CASE in the view stays the single owner of the
-classification, and an unsynced property (`IS FALSE`, never `= false`) is left at its base action —
-never guessed into the reclassification on an absence of information. Reuses B1's existing
-`lcc_chain_human_value_floor()` unchanged.
-
-Predicted-vs-actual delta was **exact**: `mismatch` 192→101, `all_guarded` 62→27,
-`county_records_needed` 0→126, `human_actionable` held at 68 (split 37/4/27), `agrees`/`sponsor_spe`
-untouched. Wired the first live consumer of PR-scanner-5's previously-unwired `/api/recorder-portal`
-route: a "County portal →" button on these cards (`researchOpenCountyPortal`, `ops.js`).
-
-Migration `supabase/migrations/20260912150000_lcc_pr_scanner3_county_records_needed_action.sql`
-(applied live to LCC Opps + coverage table seeded for today's 254-property population). Guards:
-`test/ownership-lane-split.test.mjs` (6 new/updated assertions) + `test/gov-property-record-coverage.test.mjs`
-(7 behavioural tests, injected deps). Full suite: 6,022 pass / 0 fail (6 pre-existing skips, unrelated).
-
-**Not done — an operator/scheduling step:** `syncGovPropertyRecordCoverageForOwnershipLane()` is not
-yet wired to a cron; today's mirror was seeded once against the live population this measurement
-covers. As PR-scanner-1/2's capture writers get adopted (still 0 rows on either domain per the
-2026-09-12 research-workbench.md §7c note), the mirror needs a periodic re-sync to stay current.
-Docs updated in the same change: `PLANNED-BACKLOG.md` (row `PR-scanner-3`), `research-workbench.md`
-§7d, `ownership-history-lane.md` §5.
-## 2026-09-12 — ID2b partially shipped: market brief's operator-count source switched to `operator_id`; comps/CM/dossier measured and deferred
-
-Executed `prompts/ID2b-consumer-switch-to-operator-id.md`. **Re-measured the population first: the real grep hit is
-96 views, not 45** — most are review/audit queues where raw operator text IS the deliverable (switching would hide
-the ambiguity they surface), correctly left alone. **Shipped:** `v_market_brief_cms_operator_counts` (the market
-brief's only CMS-operator-count source) now groups on `properties.operator_id` (survivor-resolved via
-`dia_operator_survivor`), fill-blanks fallback to raw text for the 14.7% of clinics with no resolved operator.
-Measured live: row-count parity 6,695→6,695, `Satellite Healthcare`(54)+`Satellite Dialysis`(14)→one bucket of 69.
-`market-brief-facts.js` needed no code change — it was already agnostic to the grouping key, so it is unblocked.
-Migration `supabase/migrations/dialysis/20260912120000_dia_id2b_market_brief_operator_id.sql`; guard
-`test/id2b-consumer-operator-id.test.mjs` (6 tests, incl. a repo-wide class guard against a NEW module grouping on
-raw operator text). Full suite 6,017/0/6-skipped.
-
-**Deferred, named, not silently declared done** (per the prompt's own "ship the highest-value subset, name the
-rest" instruction): `mcp/comps-tools.js` fuzzy comp SELECTION (`operatorTier`/`tenantMatches`) was read — its
-substring filter already tolerates most alias variance, but the required 5-subject live comp-set before/after diff
-was NOT run (needs a live MCP tick invocation this session's budget didn't reach) — filed **ID2b-c**, Scott's call.
-`cm_dialysis_operator_unit_economics`/`v_dia_econ_operator_benchmark` already ILIKE-bucket via `dia_operator_bucket()`
-(so the exact Fresenius/DaVita string split mostly doesn't occur there today, but it's a heuristic, not the
-registry); `cm_dialysis_available_by_tenant[_q]` and `cm_dialysis_industry_participants` still group on raw/
-precomputed text — filed **ID2b-cm**. `dossier-generator.js`/`rent-projection.js`/`team-context.js`/
-`sidebar-pipeline.js` and the ~85 remaining views not read this round — filed **ID2b-remaining**/**ID2b-mods**.
-Full report: `docs/audits/ID2b_OPERATOR_ID_CONSUMER_SWITCH_2026-09-12.md`. Branch `claude/dreamy-pascal-i97j44`.
-
-## 2026-09-12 — ID2b scoped: the identity fix is stored but unread — 45 views + 12 modules still group on operator text
-
-With ID2a/ID2a-cleanup live (`operator_id` on 9,449/11,804, guards on, 207 aliases, 71-row queue) Cowork measured how far
-the canonical truth actually reaches: **45 Dialysis_DB views reference an operator text column and never mention
-`operator_id`**, and at least 12 repo modules do the same (`mcp/comps-tools.js`, `api/_shared/dossier-generator.js`,
-`market-brief-facts.js`, `rent-projection.js`, `team-context.js`, `api/_handlers/sidebar-pipeline.js`). So the split Scott
-flagged is still live in every report — only storage is fixed. Drafted `prompts/ID2b-consumer-switch-to-operator-id.md`:
-inventory every consumer with its current numbers as the parity baseline, switch by category (grouping → `operator_id`,
-display → registry canonical name with the existing `short_operator` chart label, filtering → accept canonical **and**
-aliases), and state per surface how the 2,355 properties with no `operator_id` are treated so nothing silently drops out of
-a count. **One surface is deliberately not switched blind:** `comps-tools.js` scores comps with `operatorTier()` over joined
-tenant/operator text, so an id-based switch changes **which comps are selected**, not just their labels — the prompt
-measures 5 real subjects and hands the decision to Scott. Switching grouping also drops MB-b's
-`operator_identity_pending:ID2` gap and unblocks the per-operator brief bands. **Also open:** PR #2352 (ID3a-d) to merge,
-ID3a-e (the real drift run, needs both repos), ID3e (county vocabulary), OC-v (redeploy the standalone MCP so the notes
-funnel goes live).
-
-## 2026-09-12 — ID3a-d reconciled: ownership table settled (LCC owns Dialysis_DB); blast radius measured at 188 live objects; drift run still owed
-
-Filed `responses/ID3a-d desktop response.docx` → `done/`; prompt → `prompts/done/`. ID3a-d shipped on branch
-`claude/id3a-d-db-ownership` — **PR #2352 is OPEN, not merged; `main` is still at #2351**, so the retirement README, the
-CI guard and the drift-check design are not on `main` yet. It wrote the ownership table into `CLAUDE.md`/I16/`REGISTRY.md`,
-marked all 213 `migrations/government/*` files historical (README + per-file header, naming the stale canonicalizer and the
-two mappings a re-apply would restore), added a CI guard against new gov migrations landing here, and **refused to fabricate
-a drift result** it had no DB access to produce — the right call. **Cowork measured what ID3a-d could not:** of the 194
-objects those retired files define, **188 are live right now (86 functions, 102 views)** — the retirement is a live-overwrite
-hazard, not housekeeping. Live gov census: 277 functions, 252 views, 91 triggers. 👤 **Scott decided: `life-command-center`
-owns Dialysis_DB**, not the Dialysis repo as ID3a-d proposed — the operator registry, aliases, guards, comps engine and
-market-brief producers all ship from here, and declaring otherwise would orphan this week's ID2a work; the Dialysis repo owns
-CMS/NPI **ingestion** (rows, not schema). That closes **ID3a-d-dia**: LCC's 277 `migrations/dialysis/*` stay live and owned,
-and must NOT be retired. New row **ID3a-e**: run the drift detector for real in a session that has both repos, report the
-drift list, then schedule it. **Next:** merge PR #2352, then ID3e (county vocabulary) or MB-b (the visible brief).
-## 2026-09-12 — HP1 filed: the homepage Today 500 root-caused, and My Work / Inbox measured as pre-doctrine widgets
-
-Live read-only Cowork triage of Scott's screenshot (all three Today lanes showing `HTTP 500`; My Work
-and Inbox behind actual deal status). Filed `prompts/HP1-homepage-attention-surface-triage.md`. Nothing
-built, nothing written to the DB.
-
-**The 500 is one endpoint and one unhandled throw.** `GET /api/operations?action=today_sections`
-(`api/operations.js:2038`) fires six queries in `Promise.all`; `opsQuery` (`ops-db.js:63`) calls
-`fetchWithTimeout` with an **8 s default and no try/catch**, and an `AbortController` abort makes
-`fetch` **throw**, not resolve `{ok:false}` — so the handler's `sellerQR.ok ? … : []` guard is dead
-code for the timeout case and the rejection reaches `withErrorHandler` as a 500. All three lanes
-render from that one response, which is why one failure draws three errors. The slow source, measured
-with `EXPLAIN ANALYZE`: `v_lcc_seller_prospect_queue` = **815 ms** for the 200-row page + **750 ms**
-for the exact `COUNT(*)` PostgREST runs alongside it under `count=exact`, on a plan carrying two
-`Seq Scan`s of `entities` (56,289 rows), a `Seq Scan` of `lcc_property_attributes` (30,928), 33,812
-heap fetches on `entity_relationships`, and a `SubPlan` executed 1,518×. Cold cache on first load
-after idle is what crosses 8 s — matching "every so often when we log into the app." **The fix already
-exists in this repo and was never applied here:** `ops-db.js:80-84` documents the R6 `timeoutMs`
-option added for exactly this ("heavy aggregate views … need more headroom so a slow-but-successful
-read isn't aborted into a blanket 500"); `getTodaySections` passes none on any of its six calls.
-
-**My Work is stale because the deal backbone froze, and no task ever ages out.** 66 open
-`action_items`, **57 overdue, 38 by more than 30 days**; 37 are `deal_next_step` from
-`source_type='deal_stage_engine'`. `lcc_generate_deal_next_steps()` (cron `lcc-deal-next-steps-daily`,
-active) retires a task ONLY when `bd_opportunities.stage` changes or the deal closes — **there is no
-time-based retirement**. And the stage data it keys on has not moved: `off_market_listing` and
-`loi_executed` last updated **2026-08-03**, `bov` **2026-08-04**, while **22 of the 50 open deals have
-an `expected_close_date` already in the past** (ECU Physicians MOB 2024-08-27; Pops Mart Fuels
-2025-09-25). Scott's two screenshot cards trace exactly here: *DaVita Portfolio 4 - Realty Income* is
-still `loi_executed` with close 2026-07-16 (58 days past, task due = close−14 = Jul 2), *Queens - NY*
-still `listing_signed`. `bd_opportunities` is **pushed** from Salesforce via Power Automate into
-`/api/pipeline/ingest-opportunity` — nothing pulls, and there is no freshness assertion on the deal
-backbone even though `lcc-bd-sync-health-check` and `lcc-feed-freshness-sync` exist for other feeds.
-**Not determined read-only, and NOT to be assumed: whether the frozen stages are a Salesforce hygiene
-gap or a PA scope gap — 👤 Scott.**
-
-**The Inbox is a reverse-chronological mailbox holding mostly machine work.** 953 items at
-`status='new'`, of which **850 are `new_contact_qualify` and 38 `contact_misparse_review` — 93% data
-hygiene**, not broker judgment. The human-facing residue is market data, not decisions: a competitor's
-Spokane DaVita listing blast present **twice** (original + FW, not deduped), an SSA Minden new-listing
-announcement, a Fresenius Pittsboro SOLD COMP notice, and a **bank balance alert**. Four of the 21 new
-`email_om` rows are titled from the raw MIME filename (`OM: email-body-AAVtKA8aAAA.txt`) because no
-property resolved. `inbox_items.priority_score` **exists and is dead**: written only by
-`api/intake.js:1054` for `domain='infra'` rows, never read — `v2GetInbox` (`api/queue.js:517`) orders
-`received_at.desc`. The classifier is fine (3,847 triaged + 2,252 dismissed vs 21 new); this is a
-routing-and-ranking problem, not a classification one.
-
-**The design finding underneath all three:** the homepage runs three widgets at three orderings —
-Today (client-value ranked, per operator-doctrine 1.8.0, and the one that 500s), My Work
-(`due_date.asc`, so the most-ignored task is pinned to the top), Inbox (`received_at.desc`). My Work
-and Inbox are **pre-doctrine widgets never re-cut when UX-T1a-today shipped 2026-09-03**. The
-alignment Scott is asking for is finishing that cut: make Today reliable, make My Work its Urgent
-detail view on the same ranking function, and reduce the Inbox to items needing a human verdict.
-
-**Next:** HP1 P0 (`allSettled` + timeout budget + count mode + per-lane error, with a guard test that
-a thrown source degrades one lane and still returns 200), then P1 (backbone freshness + deal-status
-confirmation lane) after Scott settles the SF-vs-PA question.
-
-## 2026-09-12 — ID3a-c reconciled: agency class closed (live-verified), and a repo-ownership hazard found — gov DB now owned by `government-lease`
-
-Filed `responses/ID3a-c desktop response.docx` → `done/`; prompt → `prompts/done/`. **Verified live (Cowork, read-only):**
-`Immigration & Customs Enforcement` → **ICE** (root cause: `&` never normalized to `and`, so ICE fell through CBP's bare
-`customs` match), `Border Patrol` → CBP, `Dept of Homeland Security` → DHS; **9 federal `Department of X` patterns were
-matching state departments of the same name** — `TEXAS DEPARTMENT OF AGRICULTURE` → USDA, now NULL with `US Department of
-Agriculture` intact, via one shared state-qualifier guard. GSA rule **474/624 → 624/624** (Scott's own `GSA - Social
-Security Admin` example was the broken one). Registry **65 → 79**; `properties.agency_id` **7,369 → 8,875**;
-`property_agencies.agency_id` **119,361 → 120,471**; review lane gained a retire mechanism (348 retired, 1,135 open).
-**The finding that outranks all of it:** this work shipped in the **`government-lease`** repo (PR #398), while
-`life-command-center` holds 213 `migrations/government/*` files — including its own copy of this same function **without**
-the state guard and with the old ICE branch order. Re-applying it would silently restore both defects. 👤 **Scott decided:
-`government-lease` owns the government DB.** Recorded as a new `CLAUDE.md` core doctrine, as the repo-level instance of
-invariant **I16**, and as backlog **ID3a-d** (retire LCC's gov migrations with a pointer, name the owning repo for dia and
-LCC Opps, ship the deployed-vs-committed drift check). **Next:** `prompts/ID3ad-db-ownership-and-drift-guard.md`, then ID3e
-(county vocabulary, ready). Deferred from ID3a-c: USFS/BLM/NSF regex gaps, 10 FK granularity judgment calls, the
-drift-detector views (built, unscheduled).
-
-## 2026-09-12 — ID3a-b reconciled: agency contamination fixed live (NAVY 150→3, STATE 213→9), but registry + wiring didn't land; new invariant I16
-
-Filed `responses/ID3a-b desktop response.docx` → `done/`; prompt → `prompts/done/`. **Verified live (Cowork, read-only):**
-`canonicalize_agency()` now returns NULL for `Navy Federal Credit Union`, `State of Texas`, `Handel's Homemade Ice Cream`,
-bare `DOC` and `RICHMOND FIELD OFFICE (VA)`, while `Department of the Navy` still resolves to NAVY. NAVY 150→3, STATE 213→9,
-ICE 44→43, DOC 16→1. The `(XX)` state-suffix rule is general across 15 `<CITY> FIELD OFFICE (XX)` strings. `using_agency_*`
-columns exist on properties/leases/sales_transactions, 456 of 623 GSA-compound rows populated. **ID3a-b's own key discovery:
-the DEPLOYED `canonicalize_agency()` had drifted from its committed migration** (undocumented hand-patch; the regexes already
-had word boundaries and were merely too permissive) → new invariant **I16: running is not committed** — the inverse of the
-repo's "MERGED is not RUNNING" doctrine — with the detector specified and the interim rule (read the deployed definition
-before editing any DB object). **Three gaps found by the live check → ID3a-c:** (1) `Immigration & Customs Enforcement`
-canonicalizes to **CBP** (the `customs` branch wins), so 16 properties carry the wrong DHS component; `Border Patrol` and
-`Dept of Homeland Security` resolve to NULL though DHS is in the registry. (2) The GSA-compound rule is inconsistent —
-150 `GSA - Social Security Admin` rows put SSA in the lease-counterparty column while 473 others correctly keep GSA there;
-Scott's rule is *tenant is GSA, user is whatever is second*. (3) §3/§4 never landed: `government_agencies` still 65 rows
-(no NAVY/ARMY/LSC/…), `properties.agency_id` still **7,369/20,509**, 1,347 canonicalized-but-unlinked, review lane 1,483 open.
-**Next:** send `prompts/ID3ac-agency-finish-registry-wiring-and-dhs-components.md`. ID3e (county vocabulary) remains ready.
-
-## 2026-09-12 — ID3a-b SHIPPED: canonicalize_agency() contamination fixed (NAVY/STATE/DOC/ICE), GSA using-agency added
-
-Ran the ID3a-b prompt live against gov (`scknotsqkcheojiaewwh`). Migration
-`supabase/migrations/government/20260912030000_gov_id3ab_agency_canonicalizer_contamination_fix.sql`,
-applied and backfilled (properties/leases/sales_transactions), reversible via
-`_gov_id3ab_agency_backup_20260912`. Guard `test/gov-id3ab-agency-canonicalizer.test.mjs` (14
-tests); full suite green (5,992 pass / 0 fail / 6 skipped).
-
-**The regex fixes, live-measured before/after (properties table):**
-- NAVY **150 → 3** — `*federal credit union` excluded before the NAVY branch (145 *Navy Federal
-  Credit Union* rows now resolve NULL → review `private_company_name_collision`).
-- STATE **213 → 9** — bare `\mstate\M` replaced with a closed allowlist. It was matching the
-  ordinary English word inside 213 STATE-GOVERNMENT names: "State of Texas", "Washington State
-  Dept of Social and Health Services", and "DEPARTMENT OF STATE HEALTH SERVICES" (Texas DSHS),
-  which contains the literal substring "department of state" and would have survived a
-  substring-only fix.
-- Bare DOC **16 → 1** (the 1 survivor is "North Carolina Department of Commerce", spelled-out
-  phrase). The other 15 (`DOC`, `DOC/P&PO`, `DOC&PS`) route to review as
-  `ambiguous_doc_commerce_or_corrections` — never auto-linked to Commerce.
-- **Found while shipping, not in the original brief:** ICE **44 → 43** — `\mice\M` was matching
-  "Handel's Homemade Ice Cream & Yogurt". Same shape as NAVY, fixed the same way.
-- `RICHMOND FIELD OFFICE (VA)` and every trailing `"(<two letters>)"` state-code suffix are now
-  stripped BEFORE any keyword match, generally — not a Richmond/VA-specific patch.
-- ACE aliased to USACE **case-sensitively on the raw input only** — a bare lowercase `\mace\M`
-  was deliberately NOT added (this exact repo's gov CLAUDE.md documents an "Ace Hardware" sale
-  existing in this database; a lowercase word-boundary match would misread it as the Army Corps).
-- NAVY/ARMY/DOC/LSC/DOL/USGS/NRC/NIH/NLRB/USAF/TREAS were **already live** in
-  `canonicalize_agency_full()` — a QA-24/QA-30 hand-patch the committed migration never reflected
-  (a "running but not merged" case). Committed the live body verbatim rather than re-adding rows
-  that already existed.
-- `GSA - <AGENCY>` measured at **624 properties / 106 distinct raw strings** (not the ~168–330
-  estimated). `agency_canonical` stays GSA (lease counterparty, unchanged); a second pair of
-  columns, `using_agency_canonical`/`using_agency_full`, carries the occupying agency — one lease,
-  two facts. 456 of 624 resolve today; the rest use an abbreviated form ("dept of" not "department
-  of") the comparator doesn't expand — a stated gap, NULL not guessed.
-
-**Still live, confirmed, filed as ID3a-c, NOT fixed here (scope discipline):** DOJ (includes
-`TEXAS JUVENILE JUSTICE DEPARTMENT` ×5), EPA (a Georgia state environmental dept), DOL (two
-Pennsylvania Dept-of-Labor-and-Industry variants), ED (Alabama's + a NJ school board's education
-depts), DOT (California's + NY State's transportation depts) each fold in a same-named STATE
-agency, the identical shape STATE just had fixed. The separate `government_agencies`/
-`gov_agency_aliases` FK registry ID3a wired is untouched by this change — display column and FK
-registry are two different systems on purpose (`ID3a-regdup`, `ID3a-registry-gaps`,
-`ID3a-detector-schedule`, `ID3a-consumer-switch` all remain open, unrelated to this fix).
-
-Docs updated in the same change: `PLANNED-BACKLOG.md` (§P0d rows ID3a-b, ID3a-canonical-repair,
-ID3a-gsa-compound closed/updated; new row ID3a-c filed), `data-coherence-invariants.md` (I13),
-`CURRENT-STATE.md`.
-## 2026-09-12 — ID3e SHIPPED: county/city vocabulary fold (I14), never merges across state
-
-Built from the pre-written prompt (`docs/claude-code/prompts/ID3e-county-city-vocabulary-fold.md`) and its own
-measurement note. Re-measured live before building (numbers move slightly, as expected): gov `properties.county`/`state`
-2,445→1,611 (834 collapse), gov `city`/`state` 3,454→3,225 (229 collapse), dia `medicare_clinics.city`/`state`
-4,367→3,635 (732 collapse). **This is I14 controlled-vocabulary work, not ID3a's FK-wiring pattern** — no registry
-table, no `_id` column: one IMMUTABLE normalizer (`gov_normalize_place_token`/`dia_normalize_place_token`) + STORED
-generated columns (`county_norm`/`city_norm`) keyed on `(normalized_name, lower(trim(state)))` as a **pair, never name
-alone**. Verified live: `St Louis|mn` ≠ `St Louis|mo` (cross-state same-name counties never fold); `RICHMOND (CITY)`
-and `Richmond city` fold to one `richmond city|va` key (VA independent cities fold across punctuation, never with a
-same-named county — punctuation normalizes to a **space**, never deleted, which is what keeps the `city` token alive).
-The two corrupted-state rows (`property_id 6638` state=`M`, `property_id 16465` state=`|`) route to
-`v_gov_place_vocab_state_review`, untouched. Parity views `v_{gov,dia}_{county,city}_fold_groups` expose every merged
-group. `property_type` (96 values, only 9 collapse) confirmed a taxonomy question, not a case-fold — scoped out as
-`ID3e-property-type-taxonomy`. Migrations applied live + committed
-(`supabase/migrations/{government,dialysis}/20260912120000_*_id3e_*_vocab_fold.sql`); offline structural guard
-`test/id3e-migration-shape.test.mjs` (13/13 pass, comments stripped before matching); live positive-control
-`test/sql/id3e-place-vocab-fold.live.test.mjs` (kept out of the `npm test` glob per the hermetic-suite doctrine — it
-reaches Supabase directly, so it's a manual/CI-secret-gated check, not a `npm test` member). Full suite: 5,991 pass /
-0 fail / 6 skipped. **Not built:** no consumer repointed to read the new columns yet — that's a separate decision.
-
-## 2026-09-12 — ID2a-cleanup + ID3a reconciled: operator registry clean; gov agency WIRED but the NAVY regex is still live
-
-Both responses filed. **ID2a-cleanup (PR #2337) verified live:** aliases 42 → 207, review queue 1,020 → 71 open, 807
-category/payer rows routed to `properties.operator_class`, 5 subsidiaries parented (not merged), 9 junk rows
-reclassified, `operator_id` 9,307 → 9,449, parity byte-identical on the 7 canonicals. **ID3a (PRs #2338/#2339)
-measured before building** — and caught a live contamination bug: `canonicalize_agency()` prefix-matches `^navy`
-with no word boundary, so 145 **Navy Federal Credit Union** rows (a private bank) carry `agency_canonical='NAVY'`.
-Wiring shipped anyway: `properties.agency_id` 0 → **7,369/20,509**, `property_agencies.agency_id` 0.12% → **90.3%**,
-alias/review tables and both guards live. **Cowork live check: the bug is NOT fixed** — the NAVY rows are unlinked only
-because no `NAVY` registry row exists, and `canonicalize_agency('Navy Federal Credit Union')` still returns `NAVY`, so
-adding that row would promote a credit union to a federal agency across 145 properties. Also open: 1,732 rows
-canonicalized-but-unlinked, 8,838 with agency text and no canonical, and the registry lacks NAVY/ARMY/DOC/LSC/DOL/
-USGS/NRC/NIH/NLRB/USAF/TREAS (it has `USACE` but no `ACE` alias — the 614 Tully Rd twin, ID3i). **Scott decided
-(2026-09-12):** `RICHMOND FIELD OFFICE (VA)` is **Virginia**, not Veterans Affairs; bare `DOC` is state **Corrections**
-— verify all 16, auto-link none; **`GSA - <AGENCY>` is SINGLE-TENANT** — *"the tenant is the GSA but the user is whatever
-is second"* — so keep one lease and add a using-agency field beside the lease-counterparty agency. New row **ID3a-b**
-carries all of it, regex fix first. **Next:** send `prompts/ID3ab-agency-canonicalizer-fix-and-finish-wiring.md`.
-
-## 2026-09-12 — ID2a-cleanup SHIPPED and live-verified against Dialysis_DB (aliases 42→207, review 1,020→71)
-
-Ran the ID2a-cleanup prompt against live Dialysis_DB (`mcp__Supabase__apply_migration`, real writes,
-measured before AND after in the same session — not a static-analysis prediction). Migration
-`supabase/migrations/dialysis/20260912120000_dia_id2acleanup_operator_registry_finish.sql`.
-
-The fix that shrank everything else: **seeded an exact-match alias for every live company operator's
-own name + `dba_names`** — `dia_resolve_operator` only ever knew the 6 hardcoded families, so a
-property whose raw text was literally a registered operator's own name (Northwest Kidney Centers,
-Wake Forest University, Sanford Health, ...) still hard-blocked into the review queue. Aliases
-42 → 207; review queue 1,020 open → **71 open** (142 resolved onto 14 real operators, verified
-byte-exact against the parity table; 807 dismissed as classifications, see next). Also: merged the
-two byte-identical `Us Renal Care Inc` / `Dialysis Clinic Inc` duplicates ID2a's exact-string array
-missed; parented (never merged) BMA Quincy / BMA OF NORTH CHARLOTTE / KNICKERBOCKER under Fresenius
-and DCI East Gainesville under DCI; reclassified 9 person/junk rows to a new `kind='junk'`; added
-additive `properties.operator_class` (category/payer/non_operator) so those rows never occupy a human
-queue slot again, backfilled on the 807 already-existing rows too; shipped the orphan-registry-gap
-detector (`v_dia_operator_orphan_registry_gap`, reads 0 today) for the ID3a-class generalization.
-**Parity proven, not asserted:** the 7 pre-existing merged canonicals are byte-identical
-before/after (0 properties moved by the two new dedup merges — both duplicates carried 0 properties).
-Guard `test/id2a-cleanup-operator-registry.test.mjs` (13 tests) + full suite green (5,966/0).
-**ID2b is now unblocked on the registry side** — `operator_id` covers 9,449/11,804 (80.1%), see
-`PLANNED-BACKLOG.md` §P0d ID2a-cleanup/ID2b/ID2c-payer. **Next:** ID2b (consumer switch) or ID3a
-(gov agency wiring), per Scott's priority.
-## 2026-09-12 -- ID3a measured before wiring: the canonicalizer itself has a live contamination bug
-
-Picked up ID3a next (Scott's #1 identity class, ranked first 2026-09-12). Before touching the
-alias/backfill/guard build the drafted prompt calls for, did its own Section 1 ("measure before
-wiring") live against the gov database -- the same discipline that caught OWN-T0h's counting bug and
-RO4's root cause.
-
-Two findings that change the prompt's scope, both live-verified:
-
-1. The "811 distinct uncanonicalized agency strings" population is contaminated by literal archived
-   junk: 2,670 rows / 20 strings carry `data_source='junk_backfill_archived_2026-06-09'` (e.g. "10
-   Federal Self Storage" duplicated across 10+ property_id rows at one address). Excluding them, the
-   real population is 6,168 rows / 804 distinct strings.
-
-2. More important: even the ALREADY-canonicalized 8,674 rows have drift -- 887 carry a code with no
-   matching row in the 65-row `government_agencies` registry. Read each code's raw strings rather than
-   assuming they're all registry gaps, and found one is not a gap at all but a live bug: `NAVY` (150
-   rows) is 145 rows of "Navy Federal Credit Union" -- a private bank -- because
-   `canonicalize_agency()`'s own regex (`gov_round_76bg_agency_canonicalizer.sql` line 53,
-   `x ~ '^navy|department of the navy'`) prefix-matches "Navy" with no word boundary. `DOC` (16 rows,
-   mostly bare `DOC`/`DOC/P&PO`/`DOC&PS`) is plausibly the same class -- likely a state Department of
-   Corrections abbreviation read as federal Commerce -- flagged as unconfirmed rather than guessed. The
-   other 9 missing codes (LSC/DOL/USGS/ARMY/NRC/NIH/NLRB/USAF/TREAS, ~400 rows) are genuine, safe
-   registry gaps -- real federal agencies just missing a row.
-
-This flips the ID3a build order: wiring `properties.agency_id`/`property_agencies.agency_id` to the
-existing canonicalizer BEFORE fixing the NAVY regex would durably promote a private credit union to a
-federal-agency record on every property it touches -- a worse defect than the unwired FK it was meant
-to fix. Documented both findings in the ID3a backlog row and added a warning block directly to
-`docs/claude-code/prompts/ID3a-gov-agency-wiring-and-first-detector.md` (the artifact a build session
-will actually read) so this isn't rediscovered the hard way mid-build.
-
-No code changed -- this was measurement only, same as RO4/RO5's pattern. The safe registry-gap
-backfill (9 codes) can proceed independently since it's additive and doesn't touch the regex; the NAVY
-fix and the DOC verification are prerequisites for the FK wiring itself.
-
-## 2026-09-12 -- checked the response queue (both already merged), then wrote RO3's field-mapping design
-
-Two pasted Claude Code responses were waiting in docs/claude-code/responses/: ID2a (the operator
-registry backfill, including its live schema-mismatch fix, multi-tenant write-bug fix, and parity
-fan-out fix) and ID4 (the identity-integrity baseline measurement + resolver framework design). Traced
-both through git history rather than assuming -- ID2a's full branch (`claude/affectionate-feynman-ozqb87`,
-all three follow-up commits) is merged via PR #2333, and ID4's docs-only PR #2329 is merged via
-`c3f10537`. Nothing to reconcile; moved both .docx files to responses/done/ (gitignored, no commit
-needed for the move itself).
-
-Then did the RO3 next step I'd recommended in the last PR: wrote the field-mapping design rather than
-touching code. Added a new section to `docs/architecture/ownership-history-lane.md` (the canonical
-page for this whole thread) covering: the population query (`v_ownership_resolution`'s 761-row
-filter -> the reconciled store's gov `conflict`-state properties, 1,752 today), which card fields move
-unchanged (still read from gov's own `recorded_owners`/`true_owners`), which fields map from the
-reconciled store's shape but aren't a 1:1 rename (`proposed_owner_name`, `primary_signal`, `evidence`,
-`recommended_action`, `owner_guards_pass`), and which fields have no reconciled-store equivalent at all
-(the deed/lessor/discrepancy-specific columns -- `latest_deed_date`, `deed_conflict_kind`,
-`suspected_grantor/grantee`, etc.). Flagged two real design calls for Scott rather than guessing:
-whether `sponsor_family_confirmed` properties should surface on the card at all (OWN-T0e already
-confirmed them), and whether to drop the deed/lessor/discrepancy-only fields or keep reading
-`v_ownership_resolution` alongside the reconciled store just to backfill them (which would undercut the
-whole point of the migration). The write side (`keep`/`update_owner`/`confirm_sale`/`research`) needs
-no changes -- it already writes to gov's own tables, not the reconciled store.
-
-Updated `docs/os/PLANNED-BACKLOG.md`'s RO3 row to point at the design section. No code changed --
-still waiting on Scott's answer to the two open questions before writing the actual repoint.
-
-## 2026-09-12 — ID2a + ID4 reconciled: operator FK live (9,307/11,804); the CMS 2,450 tie is OUR dedup, not CMS; ID3 order set
-
-Filed both responses → `done/`. **ID2a (merged):** registry gained `kind`/`parent_operator_id`/`merged_into_operator_id`,
-`dia_operator_aliases` (42) and `dia_operator_write_review` shipped, **hard write guards live on `properties` and `leases`**,
-backfill applied (9,309 auto / 1,018 review). It also self-caught two defects while verifying: the DaVita regex matching the
-first token of the piped multi-tenant artifacts, and a parity-view fan-out — both fixed in SQL and the JS mirror in lock-step.
-**Cowork verified live:** `operator_id` 9,307/11,804; review 1,020 open; parity DaVita 4,435 · **Fresenius Medical Care 3,769
-(= 3,733 + 36, the approved merge)** · US Renal Care 465 · DCI 301 · ARA 244 · Satellite 92 · DaVita at Home 1.
-**Two corrections to ID4's baseline:** (1) it read `operators` as 14 rows — live it is **67**, and inside `kind='company'` the
-duplicates, clinic-level rows (BMA/Knickerbocker = Fresenius subsidiaries) and person/junk rows survive unmerged, with only 1
-parent link → new row **ID2a-cleanup**, which also records that **683 `Independent` + 84 `Other` of the 1,020 review rows are
-categories, not review work**, and that the remaining ~253 are known operators absent from the 42-row alias table because the
-resolver still knows only 6 families. (2) Its I15 retraction was half right: raw counts are 2,796/2,768, but on eligible rows
-both are **exactly 2,450** — cut by **our own dedup pass, 2026-07-22 16:01:22**, which demoted 346 + 318 rows → new row
-**B6d-cms-dedup**. ID4's framework lesson stands and is stronger than the original plan: **per-class comparators, never one
-shared normalizer** (broker surnames collide). ID4's duplicate backlog section merged into §P0d. **Scott decided:** ID3a
-(gov agency wiring) first, then ID3e (county vocabulary), then ID3b/ID3d; **ID3c holds for BR1–BR5**; detectors prove out on
-the agency class before generalizing. **Next:** ID2a-cleanup + ID3a.
-
-## 2026-09-11 -- RO5 sized: joined the 761 gov disputes to the reconciled store; Scott decided RO3
-
-Scott answered the RO3 design question directly: repoint `resolve_ownership` at the reconciled
-store (merge into OWN-T0's conflict lane), not build it as a separate door. Before touching a live
-financial-write lane, did RO5's sizing first -- read the full current `resolve_ownership` GET/apply
-contract in `api/admin.js` (GET ~line 8757, apply ~line 12386), then pulled `v_ownership_resolution`'s
-761 genuine-dispute gov properties from the gov project and `v_lcc_property_ownership_reconciled`'s
-gov-domain current/primary rows (9,717 properties) from LCC Opps, and joined them locally in Python
-(cross-project SQL join isn't possible -- separate Postgres instances).
-
-Result: 742 of 761 (97.5%) disputed properties are present in the reconciled store; 19 absent
-(mostly person-name-format mismatches, e.g. `LIDDELL ANDY` / `Andy Liddell`). Of the 742 present:
-169 (23%) match the lane's `proposed_owner_name`, 198 (26%) match only `current_recorded_owner_name`
-(reconciled store rejected the lane's proposal), 253 (33%) match only `true_owner_name` (reconciled
-store already agrees with gov's own true-owner field), and 122 (16%) are hard disagreements where
-the reconciled store's primary owner matches none of the lane's three names -- 88 of those still
-carry the reconciled store's own `conflict_class` (mostly `unclassified_rival`, largely the Boyd
-Watterson/Easterly/Gardner Tanenbaum sponsor-family SPE shapes OWN-T0e already handles), 57 are
-`is_domain_true_owner=true` (high confidence) vs 65 not.
-
-This means repointing the lane isn't a narrow fix: the reconciled store's gov `conflict` population
-is 1,752 properties today, not 761 -- a larger, different population (it carries lessor/
-relationship-graph disagreements the deed-only lane never saw, and drops the 253 that already agree
-with true_owner). Documented the migration scope in RO3's row rather than writing code: the four
-write-verdict paths (`keep`/`update_owner`/`confirm_sale`/`research`) call real gov RPCs behind
-existing guards (`DECISION_GOV_WRITEBACK`, $50k floor) and should be preserved as-is; only the
-source population/context query needs repointing, with a field mapping from the reconciled store's
-ranked-candidate shape onto the card's recorded/proposed/true-owner fields (not a 1:1 rename).
-Recommended a written field-mapping design before any code change, given this lane's live write
-actions.
-
-Updated `docs/os/PLANNED-BACKLOG.md`'s RO5 row (closed, sized) and RO3 row (decision recorded,
-migration scope documented, not built).
-
-## 2026-09-11 -- RO4 root-caused: the missing deed dates are genuinely unknown, not lost
-
-Picked up RO4 next (why 391 of 598 deed-arm properties carry no `latest_deed_date`, and whether
-`is_newer_than_recorded` is misnamed as the audit suspected). Re-measured live: 391 of 599 today
-(65.3%, matches). Traced the whole path rather than guessing: `v_ownership_resolution`'s
-`DISTINCT ON ... ORDER BY latest_deed_date DESC NULLS LAST` already prefers a dated row when one
-exists, so the view isn't swallowing dates. `properties.latest_deed_date` is fed from
-`deed_records.recording_date` via a write path (`deed-parser.js`) that always writes the grantee but
-only writes the date when one parses. Checked `deed_records` directly for all 391 properties: zero
-have a `recording_date` that `properties` is failing to pick up -- every one is null all the way down
-to the raw capture. Sampled the raw payload: a minimal grantee-only stub (`grantor`, `deed_type`,
-`document_number` all null, `consideration: 0`) across 229 distinct counties nationwide -- not one
-source's formatting bug, a genuine capture limitation spread across the whole footprint.
-
-Conclusion: nothing upstream to fix -- the date is truly unknown for these 391, not lost by a bug.
-The real, actionable finding is the one the audit already named: `is_newer_than_recorded`
-(`latest_deed_date IS NOT NULL`) collapses "confirmed not newer" and "we don't have a date" into the
-same `false`. Documented that whoever eventually builds RO3's card should expose
-`latest_deed_date IS NULL` as its own explicit "date unknown" state. Not built here -- RO3 (whether
-this lane should exist beside OWN-T0e or become OWN-T0's gov arm) is a design question for Scott,
-not decided yet, so there's no card today to fix.
-
-Updated `docs/os/PLANNED-BACKLOG.md`'s RO4 row (closed, root-caused).
-
-## 2026-09-11 — ID2a SHIPPED (unapplied): operator registry + alias table + resolver + hard write guard + reviewed backfill
-
-`prompts/ID2a-operator-registry-resolver-and-guard.md` executed. Migration
-`supabase/migrations/dialysis/20260911200000_dia_id2a_operator_registry.sql` (Dialysis_DB) rebuilds
-`operators` (kind company/category/payer/non_operator, `parent_operator_id` for brand children,
-`merged_into_operator_id` for retired dupes — retire, never delete), adds `dia_operator_aliases`
-(seeded), the single resolver `dia_resolve_operator(text)` (fails closed, never mints), `operator_id`
-FKs on `properties`/`leases`, a **hard-block** write-guard trigger on `properties.operator` (RAISEs on
-an unresolved non-blank value; leases guarded only if it turns out to carry a raw text `operator`
-column — unverified from this sandbox), and a dry-run-default reviewed backfill function.
-`api/_shared/operator-normalize.js` renamed the canonical Fresenius/US Renal Care targets to match
-Scott's §11 decisions, in lock-step with the SQL mirror re-declared in the same migration, and gained
-`resolveOperatorAgainstRegistry()` — the JS wrapper over the SQL resolver RPC. Guard
-`test/id2a-operator-registry.test.mjs` (22 tests, full suite 5,950/5,950 green).
-
-⚠️ **NOT live.** This sandbox has no Dialysis_DB credentials — the migration was never applied and
-none of its own numbers (registry before/after, alias count, auto/review split, FK coverage, the §4
-cap-band parity gate) were measured. The migration ships the exact verification queries (§13); Cowork
-or Scott must run the dry-run backfill first, read the split, apply, then run the parity check before
-ID2b (consumer switch) relies on anything here.
-
-🔴 **New finding, from this guard's own first run, not either audit pass:** `api/_shared/tenant-canonical.js`
-is a live, pre-existing FOURTH operator canonicalizer (writes `dia.leases.tenant`, not
-`properties.operator`) whose spellings now DISAGREE with the ID2a decision
-(`'DaVita Kidney Care'`/`'U.S. Renal Care'`/`'DCI'`/`'Innovative Renal Care'` vs the registry's
-`'DaVita'`/`'US Renal Care'`/`'Dialysis Clinic, Inc.'`/`'American Renal Associates'`). Out of scope
-for ID2a (different column, and "no new normalizer" means adding none, not retrofitting a pre-existing
-one) — filed as **ID2c** in `PLANNED-BACKLOG.md`.
-
-Backlog: `PLANNED-BACKLOG.md` ID2a marked shipped-unapplied; ID2b (consumer switch) and ID2c (the
-tenant-canonical.js finding) opened.
-## 2026-09-11 -- RO2a sized: 1,380 gov recorded_owners name-variant groups, merge lane deferred
-
-Picked up RO2a next (fleet-wide sizing of same-party name variants in gov `recorded_owners`, named
-but not run by the 2026-09-08 audit). Grouped live (unmerged) owners by `gov_owner_strict_core`,
-gating on core length >= 4 after finding the suffix-stripper produces false-positive collisions
-below that (`GLP` strict-cores to `g` because its trailing `lp` reads as the "Limited Partnership"
-suffix token -- 26 short-core groups / 60 rows excluded on this basis).
-
-Split what's left into two real populations rather than one number: 311 exact-duplicate-name groups
-(628 rows, 589 properties touched) where the identical literal name sits on multiple separate
-`recorded_owner_id` rows -- the safest, purely mechanical class -- and 1,069 true name-variant groups
-(2,242 rows, 800 property-referenced, 1,218 properties touched) that are genuine punctuation/
-abbreviation/suffix variants of one party. Spot-checked both the largest groups and the short (4-6
-char) end; mostly clean, but found the SAME risk class RO2b just fixed sitting inside this
-population too -- `CBRE` / `CBRE, Inc.` and a 4-way `U.S. Bank National Association` group are a
-brokerage and a lienholder, not obviously real owners to blind-merge. Flagged that any future merge
-sweep must run every group through `isCompetitorBroker` / `isFederalOwnerAntiPattern` / a bank-lender
-check before merging, same guards RO2b just added.
-
-Recommendation: this population (1,380 groups / 2,870 rows / ~1,807 properties combined) is big
-enough to be its own build, not a quick follow-on -- the merge itself has to move
-`properties.recorded_owner_id` and any deed/lease FK refs, log a reversible batch, and dry-run first.
-Did not build it this pass; sized and documented only, per the row's own ask ("size... before
-proposing a merge lane").
-
-Updated `docs/os/PLANNED-BACKLOG.md`'s RO2a row (closed, sized).
-
-## 2026-09-11 — ID2 decisions settled by Scott; ID2a prompt drafted (registry + resolver + hard guard)
-
-Scott decided the four 👤 items ID1 raised: canonical **`Fresenius Medical Care`** (with `short_operator: 'Fresenius'`
-kept for chart labels) and **`US Renal Care`**; the registry lives in **Dialysis_DB** with LCC referencing it through
-`external_identities` (`source_type='operator'`), not a second identity; the write guard is a **hard block plus alert**
-(unresolvable text is refused and routed to a review lane); gov agency identity is a **separate** build (ID3a). ID2 is
-split into **ID2a** (registry with parent/brand hierarchy, alias table, one resolver replacing the second canonical,
-`operator_id` FK, hard guard, reviewed backfill with a cap-rate-band parity gate) and **ID2b** (consumer switch with
-per-surface parity). Audit §11 records the decisions. **Next:** send `prompts/ID2a-operator-registry-resolver-and-guard.md`;
-`prompts/ID4-identity-integrity-program.md` is also unblocked and can run in parallel (detectors only, no data writes).
-
-## 2026-09-11 -- RO2b fixed: RMR/USPS/hedge-phrase can never become a recorded owner again
-
-Picked up RO2b next (the 9 named deed-grantee capture artifacts the 2026-09-08 audit found passing
-`granteePassesOwnerGuards`). Fixed at the guard, not just the 9 existing rows: `RMR` / `The RMR
-Group` (the property MANAGER of GPT/OPI-portfolio assets, 7 of the 9) and `USPS` (the federal
-TENANT, 1 of the 9) are now a small literal-name reject inside `granteePassesOwnerGuards` -- the
-audit was right that 2 capture artifacts don't earn a generalized regex class. The hedge-phrase row
-(`CIM Group or affiliated investors`, the 9th) is different: OWN-T0i sized that exact shape
-fleet-wide earlier today (57 live entities in LCC `entities`), so it IS a real class, not a one-off
--- reused the same regex here rather than writing a second one.
-
-This closes the loop the guard was supposed to close: any FUTURE deed capture of these names is now
-rejected before it can become a recorded owner, not just the 9 instances the audit already found.
-Added 3 new unit tests covering all three (RMR variants, USPS variants, two different hedge
-phrases); ran the full `owner-deed-propagation` (39/39) and `deed-parser` (58/58) suites clean.
-
-One bump along the way worth naming honestly: my first attempt at the hedge-phrase regex silently
-wrote literal backspace bytes instead of `\b` word-boundary escapes (a Python string-literal
-footgun in the edit script, not a JS issue) -- caught it because the new test for that exact case
-failed, fixed by writing the JS source as a raw string, re-ran clean. Recorded here so the pattern is
-recognized faster next time a generated regex needs debugging.
-
-Updated `docs/os/PLANNED-BACKLOG.md`'s RO2b row (closed, fixed).
-
-## 2026-09-11 — ID1 reconciled (PRs #2323/#2325 merged): figures confirmed live; composite attribution resolved; ID3i (multi-tenant + cross-lane twins); 4 decisions gate ID2
-
-Filed `responses/ID1 desktop response.docx` → `done/`; ID1 prompt → `prompts/done/`. ID1 produced
-`docs/audits/ID1_OPERATOR_IDENTITY_AUDIT_2026-09.md` (writer inventory W1–W10, registry duplication across dia `operators`,
-LCC `lcc_operator_affiliate_patterns` and `operator-normalize.js`, design §5), then a live follow-up (§9): gov already has
-`agency_canonical` (45 codes) and a 65-row `government_agencies` registry, but **neither is wired** (`agency_id` 0/20,509); LCC
-`entities` is polluted with operator-named asset entities; `cortex_market_intel` exists (writer outside the repo). Claude
-Code also merged the two ID backlog blocks into one table. **Cowork (read-only) confirmed** the gov and LCC figures exactly and
-**resolved open item 3**: the `DaVita | …` values are multi-tenant buildings stored as one piped tenant string; operators
-70–80 were minted in one bulk batch on 2026-04-28 04:26 UTC. **New:** 614 Tully Rd, San Jose exists as dia 30681 **and** gov
-30447 (`agency='ACE'`, canonical NULL) with no link → **ID3i** (multi-tenant modeling + cross-lane twins, ties to P10a). Audit
-§10 added. **ID2 waits on Scott's 4 decisions** (canonical names, registry home, DB guard, gov sequencing). **ID4 is ready to send.**
-
-## 2026-09-11 — ID1/ID2/ID3 backlog blocks reconciled (two parallel threads, one table)
-
-`docs/os/PLANNED-BACKLOG.md` §P0d carried two independently-sourced `ID1`→`ID2`→`ID3` blocks: the
-Cowork-prompted operator-identity audit (this file's own ID1 entries above) and a separately-run,
-more granular ID0 probe (`docs/audits/ID0_IDENTITY_VALUE_DOMAIN_PROBE_2026-09-11.md`) with its own
-`ID1`/`ID2`/`ID3a–f` rows. Per this repo's own "two windows, one file" doctrine, folded into ONE
-table rather than adjudicated: the duplicate pre-audit `ID1`/`ID2` restatements are retired in
-place with a note (nothing deleted from history), the ID0 probe's six sub-classes (`ID3a`–`ID3f`)
-are kept verbatim and cross-referenced against the audit's own §9.1/§9.5 findings where they
-overlap (gov agency identity, `ID3a` — the two passes corroborate, not duplicate, each other's
-numbers), and the audit's two NEW findings not in the ID0 probe are added as `ID3g` (LCC Opps
-entity-name operator-substring pollution) and `ID3h` (`cortex_market_intel.tenant`, confirmed
-real). `ID4`'s prompt was written to fire "after the ID1 response is reconciled" — that gate is now
-satisfied, and its row is marked unblocked/ready to send.
-
-## 2026-09-11 — ID1 live-DB follow-up: government + LCC Opps measured (PR #2323); corrects the sibling ranking below
-
-The ID1 entry immediately below this one shipped with no live DB credentials and marked
-government/LCC Opps as proposed-but-not-run queries. This pass had live Supabase access
-(read-only `SELECT`/`information_schema` only — no writes, no migrations, no flag flips) and ran
-them. New `§9` appended to `docs/audits/ID1_OPERATOR_IDENTITY_AUDIT_2026-09.md` (nothing above §9
-was rewritten — corrections point back to it, per this repo's own "correct in place with the
-measurement, never delete" doctrine).
-
-**Corrects a claim in the entry below: government does NOT have "no normalizer at all."**
-`gov.properties.agency_canonical` already collapses 1,286 raw strings to 45 clean codes (VA 2,174,
-GSA 1,911, SSA 1,408, USDA 672, …), and a 65-row `government_agencies` registry already exists.
-**The real defect is unwired plumbing, not a missing normalizer**: `properties.agency_id` is **0 of
-20,509** populated, and the multi-tenant bridge `property_agencies` (132,243 rows, 7,865
-properties) sits at **160/132,243 (0.12%) FK coverage** against **498 distinct, unnormalized**
-`agency_code` values — worse FK coverage than dialysis operator (30–78%), via a different
-mechanism. Still ranked #1 sibling by reach, now for a cheaper reason: wire two already-existing FK
-columns to an already-existing registry, don't build a normalizer from nothing.
-
-**Resolves an open item: the LCC Opps `lcc_operator_affiliate_patterns` seed did NOT degrade.** 230
-patterns / **29 distinct parent entities** live — well beyond the four operators named in the
-migration's own text. Confirms the live canonical Fresenius entity is stored as `fresenius medical
-care` (lowercase), directly from the row, not just from reading the seed SQL.
-
-**Confirms `cortex_market_intel` exists and is live**, resolving the "could not locate" flag from
-the prior pass: 922 rows, 897 carry a `tenant` value, **671 distinct strings**, no FK column at
-all. Its writer is still not located in this repo — flagged as an open attribution gap, since this
-repo's doctrine requires fixing a fact at its source of record and the source is unidentified.
-
-**New finding, not in the original prompt: `entities.canonical_name` on LCC Opps carries 250+ rows
-with `davita`/`fresenius` as a bare substring** — almost entirely `domain='dia'` property/deal
-names minted by the asset-entity mint path (`asset-entity.js`), not operator identities (e.g.
-`davita corpus christi padre island drive tx`, `fresenius kidney care center located in
-hillsboro`). Worse: the operator's own bare name has been independently re-minted — **4 distinct
-entity rows literally named `davita`**, **4 named `fresenius medical care`** — and only one of each
-is the row the affiliate-pattern registry actually points at. This directly blocks the ID2 design's
-planned "link entities to the operator registry by name match" step: a naive match would mismerge
-hundreds of properties into the operator identity. Moved into the ranked sibling list at #3.
-
-Backlog: `docs/os/PLANNED-BACKLOG.md` §P0d ID1/ID3 rows updated with the corrected government
-ranking, the resolved seed/`cortex_market_intel` open items, and the new §9.4 entity-pollution
-finding as a ranked sibling. **Still open, unchanged by this pass**: Scott's 👤 canonical-name
-decision (§5.2 of the audit), the `DaVita | ...` composite-string attribution gap, and the
-`cortex_market_intel` writer identity.
-## 2026-09-11 -- OWN-T0i sized and filed: 57 hedge-phrase entities queued to junk_entity_review
-
-Picked up OWN-T0i next (a small, well-scoped item OWN-T0e's design doc had already named but not
-run). Sized `entities.name ~* '\m(or|and/or) (affiliated|related)\M'` fleet-wide: 57 live entities
-(one match was already a merged tombstone, excluded) -- names like `GRE Partners LLC or affiliated
-individuals`, `FGF Management LLC or affiliated individuals`, `Mercantil Servicios Financieros or
-related stakeholders`. These are an extractor's stated uncertainty written as an owner name, never a
-real party -- the same class RO2b already named one database over (`CIM Group or affiliated
-investors`).
-
-Sized the blast radius before filing anything: these 57 touch 50 distinct properties in
-`lcc_entity_portfolio_facts` (38 current rows) and are a contributing owner-candidate on 24 of the
-2,065 conflict properties from today's corrected OWN-T0h count -- so clearing them where possible
-would shrink the real conflict count by up to that many.
-
-Filed all 57 to `junk_entity_review` (`entities`/`lcc` is already a registered JUNK_TARGET with an
-FK guard on `lcc_entity_portfolio_facts`) as `proposed_verdict='dismiss'`, `status='proposed'`,
-`source_run_id='own_t0i_sql_2026-09-11'` -- queued for the existing human-gated apply path in
-`api/admin.js` (`planJunkApply`), not auto-retired. That apply path's own FK guard means any of
-these still standing as a property's ONLY current owner will route to a conflict card for a human to
-pick a real replacement, rather than silently leaving the property with no owner on file.
-
-Updated `docs/os/PLANNED-BACKLOG.md`'s OWN-T0i row (closed, sized + filed).
-
-## 2026-09-11 — ID1 shipped: the operator-identity audit, and a THIRD registry the queuing note above missed
-
-Executed the ID1 prompt in full (read-only against every live DB; no writes, no migrations, no flag
-flips — no live DB credentials in this sandbox, so the deliverable cites Cowork's 2026-09-11 numbers
-already on record plus a fresh repo-side writer inventory, per the doctrine's own "re-measure a dated
-blocker" and "never fabricate" rules). Full deliverable:
-`docs/audits/ID1_OPERATOR_IDENTITY_AUDIT_2026-09.md`.
-
-**The queuing note below said "operator-normalize.js and the registry disagree on the canonical
-Fresenius name" — singular registry. There is a THIRD.** `supabase/migrations/20260522340000_lcc_
-operator_affiliate_registry.sql` seeds `lcc_operator_affiliate_patterns` (LCC Opps), a subsidiary-
-name-pattern registry keyed to `entities.id`, independent of both `dia.operators` and
-`operator-normalize.js`. **Its seed resolves the Fresenius parent entity by `LOWER(name) = 'fresenius
-medical care'`** — so 2 of the now-3 stores, plus CMS `chain_organization`, already say `Fresenius
-Medical Care`; only `operator-normalize.js` says the shorter `Fresenius`, and by its own comment it
-chose that spelling only because it was the majority instance of the free-text defect it exists to
-clean up, not because any external authority uses it. This is the audit's central finding: a fix to
-any one of the three stores alone cannot close the split, because none references either of the
-others.
-
-Also produced: a 9-writer inventory (this repo's OM promoter, sidebar/CoStar lease carry-forward,
-the LCC-Opps entity-mint fallback that reads `properties.operator` as a name source with no FK back
-to any registry, the P113 owner-guard reader, plus the Dialysis-repo CMS ingester); a ranked sibling
-list (**government agency naming ranked #1** — same free-text-no-FK shape with *no* normalizer at
-all, worse off than dialysis operator today); an 👤 canonical-name decision for Scott (Fresenius vs
-Fresenius Medical Care, with the export-layer `short_operator` display token already able to absorb
-either choice); and an open attribution gap on the `DaVita | ...` composite strings that needs a
-direct row read to resolve. Backlog: ID1 marked ✅ shipped, ID2 gated on the 👤 decision, ID3 revised
-with the ranked list (one item, `cortex_market_intel.tenant`, could not be located in this repo's
-`api`/`mcp`/`scripts` this session and needs a direct DB check before it can be ranked at all).
-
-**Next:** Scott's naming decision (ID1 §5.2), then ID2 (the build) split into the safe steps ID1 §5
-lays out, starting with the comps engine as the shared substrate every other consumer reads from.
-## 2026-09-11 -- Correction: OWN-T0h's "conflict count doubled to 4,478" was my own counting bug
-
-Caught and fixed my own error from the OWN-T0h entry earlier today. That entry re-measured the
-reconciled store's conflict count with `count(*)` and reported it had more than doubled since the
-2026-09-02 audit (2,097 -> 4,478). That number was wrong: `count(*)` on
-`v_lcc_property_ownership_reconciled` counts owner-CANDIDATE ROWS, not properties -- and every
-conflict property carries >=2 rows by construction (that's what makes it a conflict), so `count(*)`
-systematically inflates the property count.
-
-Re-ran it correctly as `count(distinct (source_domain, source_property_id))`:
-**2,065 conflict properties today (gov 1,752 / dia 313) -- essentially flat vs. the audit's 2,097**
-(gov 1,769 / dia 328). The small drop is fully explained by OWN-T0e's confirm lane, which has been
-converting `unclassified_rival` pairs into `sponsor_family_confirmed` (1,617->1,508 rival, 64->142
-confirmed) plus a handful of merges (`duplicate_entity` 417->415). No mystery growth, no root-cause
-follow-up needed -- retracting that flag entirely.
-
-I'd already written the false "doubled" claim into three docs (`PLANNED-BACKLOG.md`'s OWN-T0h row,
-`ownership-history-lane.md`, `CURRENT-STATE.md`) and told Scott directly. All three are corrected in
-this commit, and this entry says so plainly rather than quietly overwriting the earlier claim.
-Lesson for this lane going forward: always `count(distinct property)` on
-`v_lcc_property_ownership_reconciled`, never `count(*)` -- the row/property distinction is easy to
-miss because most other counts in this codebase (fact ledger rows, task rows) ARE the thing being
-measured.
-
-## 2026-09-11 — ID0: identity/value-domain probe across dia + gov — the operator split is a class, not an incident; ID4 drafted
-
-Scott (after sending ID1): *"protection and cleaning code in place so we aren't operating a database with divergent
-naming and connections… one intelligent and reconciled source of truth for all properties."* Cowork ran a read-only
-probe on both domain DBs: for every identity/grouping-like text column, raw distinct vs normalized distinct (case,
-punctuation, corporate suffix). Findings: `docs/audits/ID0_IDENTITY_VALUE_DOMAIN_PROBE_2026-09-11.md`. Worst:
-**gov agency** (SSA split 4+ ways, VA 5+, ~3,300 properties; `RICHMOND FIELD OFFICE (VA)` ambiguous); **gov owners**
-(`true_owners` 1,278 collapsible names + 81 identical-canonical groups; `recorded_owners` 1,241 / 115); **gov county**
-(832 county/state pairs split by case); **dia guarantor** (DaVita/Fresenius legal entities split; subsidiaries must link,
-not merge); **dia brokers** (116 identical-normalized groups). New invariants **I13 identity, I14 controlled
-vocabularies, I15 import completeness** in `data-coherence-invariants.md` (detector table updated). Backlog §P0d:
-ID3 → ID3a–f, plus **ID4** (standing detectors + shared resolver framework). Probe gotcha recorded: Postgres regex ``
-is backspace; use `\y`. **Next:** ID1 is running; send `prompts/ID4-identity-integrity-program.md` after ID1 is reconciled.
-
-## 2026-09-11 — Doctrine: truth is fixed at its source of record; operator-identity audit (ID1) queued ahead of MB-b
-
-Scott, on the MB1e operator-name split: *"for any of these factual errors, we want to track the source to ensure that the
-truth persists in all places, not just a patch… include a deeper review to ensure that there are not greater problems
-underlying these naming and sorting issues."* Added as the first **Core doctrine in `CLAUDE.md`** (trace to the
-source of record and every writer, fix with provenance, guard writers, move consumers to canonical ids, look one level
-deeper). Cowork's read-only probe of Dialysis_DB confirms a **systemic identity defect**: the comps engine groups on
-free-text `properties.operator` (no FK, 45 variants); the `operators` registry has duplicates (USRC ×3, DCI ×2, DaVita ×5)
-plus categories and non-operators; `operator-normalize.js` and the registry disagree on the canonical Fresenius name;
-FK coverage is partial (leases 30%); 979 clinics have no chain and no operator and drop out of every count. Backlog §P0d
-gains **ID1** (audit, prompt drafted), **ID2** (build), and **ID3** (sibling sweep, linked to PDR2/OWN4/B6d-cms). MB1e item 1
-re-scoped to ID; MB-b §0.1 now consumes `operator_id` (per-operator bands withheld as a named gap until ID2); spec design
-rule 5. **Next:** send `prompts/ID1-operator-identity-source-of-record-audit.md`.
-
-## 2026-09-11 -- OWN-T0h decided: reconciled store is canonical conflict count; found it doubled since 09-02
-
-Picked up OWN-T0h next (the "756 vs 2,097 conflict denominators" question CURRENT-STATE.md had been
-flagging as open since OWN-T0). Read both view definitions in full: `v_lcc_property_multi_current`
-only checks whether `lcc_entity_portfolio_facts` disagrees with itself (>1 distinct current-survivor
-entity on one property); `v_lcc_property_ownership_reconciled` additionally admits the resolver's
-`lcc_property_owner` proposal and the domain true_owner mirror as competing current-owner candidates
--- which is what the property panel and Decision Center actually read, per OWN-T0's own "one door"
-doctrine. **Decision: the reconciled store's count is canonical**, not `multi_current`'s -- they
-answer different questions (data-hygiene-within-one-table vs. genuine cross-source ownership
-disagreement), and the original audit had already said as much in its own §9.6 without finishing the
-thought.
-
-Re-measuring live to write the decision down surfaced something bigger than the original question:
-the reconciled conflict count has **more than doubled since the 2026-09-02 audit -- 2,097 -> 4,478**
-(gov 1,769->3,635, dia 328->843; by class: `unclassified_rival` 3,229, `duplicate_entity` 942,
-`sponsor_family_confirmed` 307), confirmed stable on a second read minutes later. `multi_current`
-itself barely moved (756->740, expected drift -- nothing end-dates those facts). Fleet size is flat
-(8,068->8,070 current properties), so the growth isn't more properties -- it's more competing
-current-owner-candidate claims landing on an unchanged fact ledger (more `lcc_property_owner`
-resolver rows and/or `lcc_property_owner_facts` domain-mirror rows). **Did not investigate why** --
-flagged plainly in all three docs so nobody quotes 4,478 as settled, and left as a named follow-up
-rather than guessing at a cause I hadn't verified.
-
-Updated `docs/os/PLANNED-BACKLOG.md` (OWN-T0h closed, decided + re-measured),
-`docs/architecture/ownership-history-lane.md` § OWN-T0 (canonical page, replaced the stale
-2,097/756 callouts with the decision and the live re-measurement), and `docs/os/CURRENT-STATE.md`'s
-OWN-T0 row (same).
-
-## 2026-09-11 — PRI5 merged and deployed; recommended another live CMS test run
-
-Scott confirmed `Dialysis` PR `#7408` merged. `PLANNED-BACKLOG.md`'s `PRI5` row moved to ✅. Recommended
-triggering another CMS ingestion run to verify live: does `ingestion_tracker`'s `reclaim_stale_started_runs()`
-actually run and does a fresh run's own row close correctly this time; and does `census_demographics`
-now either succeed or fail with an honest, recorded `run_status='failure'` instead of orphaning a
-snapshot row. Every fix in this arc so far has been proven or caught out by an actual run, not by tests
-alone — same discipline applies here.
-
-## 2026-09-11 — PRI5 merged and deployed; recommended another live CMS test run
-
-Scott confirmed `Dialysis` PR `#7408` merged. `PLANNED-BACKLOG.md`'s `PRI5` row moved to ✅. Recommended
-triggering another CMS ingestion run to verify live: does `ingestion_tracker`'s `reclaim_stale_started_runs()`
-actually run and does a fresh run's own row close correctly this time; and does `census_demographics`
-now either succeed or fail with an honest, recorded `run_status='failure'` instead of orphaning a
-snapshot row. Every fix in this arc so far has been proven or caught out by an actual run, not by tests
-alone — same discipline applies here.
-## 2026-09-11 — MB-a3 reconciled (PR #2313 merged): deployed + dry-run verified by Cowork; MB1e found; MB-b drafted
-
-Filed `responses/MB-a3 desktop response.docx` → `done/`; prompt → `prompts/done/`. MB-a3 fixed `source_date` (source
-as-of, never run time; justified exceptions for on-market count and zero-trades), added the CMS 45-day feed gate,
-confirmed the DaVita = Fresenius = 2,450 tie is a single import batch (17 s apart; B6d-cms, Dialysis repo), declined to
-flip because its sandbox saw a pre-fix build. **Cowork (read-only):** `/version` via pg_net = `78082f46` (the MB-a3 merge),
-so the fix is live. GET dry-runs via pg_net with the vault key: **P-SQL `gaps:[]`**, 17 candidates — TTM band median
-7.00% IQR 5.69–8.03% n=169; 211 on-market, 6.00% median ask; 8 `cms_census_gap:*` facts, no stale counts. **P-RSS:
-Ollama reachable** (6 articles, 0 model failures), 0 facts (no dialysis content). New **MB1e**: operator-band
-fragmentation (`Fresenius` vs `Fresenius Medical Care`, `DaVita` vs `DaVita Dialysis`), windowless/daily-keyed trades
-zero-fact, no dialysis feed. Removed the duplicate 🔴 MB1d row the merge left behind. Spec design rule 4 (canonical fact
-identity). **MBa-hold can lift — Scott's call** (flip SQL in OPERATOR-ACTIONS). OC-v still half done: standalone MCP not
-redeployed (still 21 tools), 0 notes, no triage flag row. **Next:** `prompts/MBb-lane-briefs-daily-block-and-tab.md`.
-
-## 2026-09-11 -- B1b graded: developer-chain floor NOT lifted (only 1.4% resolvable)
-
-Picked up B1b as the next recommended step after OWN-T0j closed out. B1's own audit had
-deliberately left `trace_ownership_to_developer`'s 983 below-floor skips (gov 514, dia 469) ungated,
-pending grading its consumer (cron 145 / `developer-chain-resolve-tick`) the way A2 was graded for
-`establish_ownership_history`.
-
-Confirmed cron 145 is active (`cron.job`, every 6h, gov-only, limit=50) and its handler
-(`api/_handlers/developer-chain-resolve.js`) is a mature, already-fully-automated, correctly
-auth-gated consumer with two auto-write tiers (`bts_origin` conf 0.85, `developer_keyword` conf
-0.7). But `lcc_chain_lane_has_auto_consumer()` is **hardcoded** to `gov + establish_ownership_history`
-only -- it was never updated to recognize this lane, so `lcc_b1_reopen_below_floor()` is gated off
-for it (`gov_has_consumer=false`, `dia_has_consumer=false`, confirmed live via
-`pg_get_functiondef`).
-
-Replicated the handler's exact classifier (`classifyDeveloperOrigin` -- read in full from source,
-faithfully ported the bank/REIT/financier/agency/junk-shape/placeholder/dev-keyword/dev-brand
-regexes into SQL) against the live 514 gov below-floor properties, joined to
-`v_developer_chain_candidate` (0 missing from the view). Result: **only 7/514 (1.4%) would
-auto-resolve** -- all 7 via Tier A `bts_origin`, zero via Tier B `developer_keyword`. The rest: 465
-`ambiguous_generic_org`/`origin_is_person`, 36 `origin_equals_current`, 6 `no_chain`. dia's 469 have
-no automated consumer at all -- the handler hard-returns a no-op for any domain other than `gov`.
-
-This is a real, load-bearing contrast with A2's 89% automation rate for the other lane -- it
-confirms B1a's "expect COVERAGE, not depth" caution was correct, and gives a live number behind it.
-**Recommendation: do not lift the floor for this lane.** Reopening all 514 would mostly just refill
-the queue with tasks cron 145 will immediately not-resolve (`origin_is_person`/`ambiguous_generic_org`
-stay queued, retried every 7 days, forever). The 7 `bts_origin` resolves are few enough to hand-verify
-and write directly if wanted, without reopening the other 507.
-
-Also corrected a stale note found along the way: B1b's row said "Do B5 first" -- B5
-(`docs/audits/B5_GOV_SELLER_EXIT_FEEDER_2026-08-28.md`) already shipped 2026-08-28. This grading ran
-against B5's already-updated `gov.ownership_history`, so the prerequisite is satisfied; the note was
-just never removed. Fixed in the same edit.
-
-`PLANNED-BACKLOG.md` B1b row rewritten with the full grading result and marked closed
-(graded · declined -- deliberately not automating this lane further, not a build left undone).
-
-## 2026-09-11 -- MB-a3: freshness-honest on-box facts (CMS feed gate) -- flags withheld pending redeploy
-
-Closed MB1d (`market-brief-facts.js`/`market-brief-psql-tick.js`): every P-SQL-derived fact's
-`source_date` now comes from the SOURCE's own as-of, not the tick's run date. CMS operator counts
-gate per-operator on `max(last_seen_date)` vs a 45-day SLA (mirrors dia `feed_freshness_registry`);
-a stale operator (DaVita and Fresenius both measured live at max(last_seen_date)=2026-01-22, ~8
-months stale, while their `cms_last_checked`/`source_last_seen` touch columns read days-old --
-exactly the B6d-cms nightly-reupsert trap one column over) writes a named `cms_census_gap:<op>`
-fact instead of a confident count. Cap-rate bands and the trades-since-last-run fact now date off
-the newest comp `sale_date`, not `asOfIso`. Migration applied to Dialysis_DB (appended
-`source_as_of` to `v_market_brief_cms_operator_counts`). 15 new tests, full suite 5,925/0/6-skipped.
-
-Investigated the DaVita=Fresenius=2,450 tie (read-only): both operators' live rows share an
-identical `created_at` batch window ending 2026-01-22 (max timestamps 17s apart) -- strong evidence
-of a shared import-cap/pagination artifact in the last real CMS ingest before the outage, not
-coincidence. Filed to the Dialysis repo's B6d-cms backlog; not fixed here (cross-repo, out of scope).
-
-Verified live via `net.http_get` from LCC Opps: `tranquil-delight` `/version` still reads
-`fc863b43d48f` -- this fix is committed, not deployed. **Deliberately did NOT flip
-`MARKET_BRIEF_PSQL`/`MARKET_BRIEF_PRSS`** -- both are DB-controlled (`feature_flags_registry.state`,
-via the env-OR-registry resolver), so flipping now would activate the OLD pre-fix code the moment it
-next runs, re-shipping the exact staleness bug this unit closes. Flip only after a post-merge
-Railway redeploy is confirmed (`/version` + `merge-base --is-ancestor`). P-RSS's `OLLAMA_URL`
-reachability from `tranquil-delight` could not be confirmed from this session (no Railway env
-access) -- named as an operator-verification item, not assumed either way.
-
-See `docs/os/PLANNED-BACKLOG.md` §P18 row MB1d and `docs/architecture/EXEC-BRIEFS-SPEC.md` §9
-"MB-a3" addendum for full detail.
-## 2026-09-12 — ASC50 governed review workbench built and locally verified; publication pending
-
-The completed 50-property source pass exposed two execution gaps: only the six source exceptions had review
-rows, and their legacy property-form vocabulary did not match `healthcare_property_review:1.0`. Implemented an
-authenticated `/asc-review.html` workbench plus `/api/asc-research-review`, exact request validation, and two
-invoker RPCs for primary and independent second review. The migration maps persisted legacy forms to the
-aggregate contract, retains `unresolved` only as a pre-scorecard exception sentinel for compatibility, stores
-the two reviewer identities/timestamps separately, rejects self-second-review, and preserves disagreement.
-Existing `final_disposition` values are never overwritten by primary scorecards. No candidate judgment or
-production row-level review was made.
-
-Verification: focused ASC/property-review suite **37/37 passed**; full suite **5,933 total / 5,927 passed /
-0 failed / 6 skipped**; app boot passed after lockfile dependency install; changed files pass syntax and whitespace checks. Repository-wide lint remains red on pre-existing,
-unrelated errors in `sidebar-pipeline.js`, `bridge-handlers-outlook.js`, and other files; this change introduced
-no lint error in its API files. Protected-PR checks remain to run.
-
-## 2026-09-11 — BUY0 Phase 0 complete: Geller Round 1 client deliverable + email draft; build handoff written (spec §9) and backlog rows BUY1a/1b + BUY-G1…G6 filed
-
-Cowork. Round 1 for Jordan Geller is client-ready in `Team Briggs - Documents/Clients/Jordan Geller/2026 Industrial Search/Deliverables/Round 1 - Sep 2026/`
-(Buyer Showing: 19 Focused ranked best→worst on Credit/Lease/Real Estate, Market Ranking, 207-row Broad Market, Sources & Notes, How to Use; full MSA
-workbook; email draft in Scott's voice). Client folder reorganized with `00-README.md` as the pickup file. Credit leg automated on a bond-style scale
-(American Airlines Ba3/B+ and Oil States ratings looked up). Spec gains §4.7 (OM sourcing, BUY-G3) and §9 (deliverable contract, seed code, gaps, build
-order). Supersedes the unpushed local branch `docs/buy0-om-sourcing-layer` (its §4.7 content is included here). **Next:** Scott sends Round 1; build
-starts with BUY1a when authorized.
-## 2026-09-11 -- OWN-T0j verified end-to-end: real write succeeded, cache populated, closed out
-
-Triggered the real POST directly via `select public.lcc_cron_post('/api/ownt0j-sponsor-classify-tick',
-'{}'::jsonb, 'railway')` after the auth-convention fix deployed (Railway `a95fef46`, confirmed via
-git merge-base against the fix commit). Got back `200 {"written":2462}`.
-
-**Cache table now holds real data**: `sponsor_family_confirmed=482`, `unclassified_rival=1,980` --
-byte-for-byte the same numbers every earlier independent measurement produced (this session's direct SQL
-replication, the live GET dry-run before this write, the build's own original claim). The reporting view
-(`v_lcc_ownt0j_sponsor_disagreement_report`) reads them back correctly too.
-
-OWN-T0j is now genuinely done: built, two real bugs found post-ship and fixed (both in the untested
-handler-level HTTP/auth code, not the well-tested pure classifier), and the whole path verified working
-end-to-end rather than trusted on a response's say-so. Condensed the PLANNED-BACKLOG.md row (it had grown
-through three separate verification passes into one very long entry) into a single closing summary; this
-file keeps the full blow-by-blow.
-
-**Next step.** Genuinely nothing left open on OWN-T0j. The ownership/contact-propagation thread's remaining
-open items: `B1b` (developer chain, gated behind an unstarted `B5`) is the one entirely untouched item;
-`OWN-T0e`'s own confirm lane still has the four candidates from the earlier investigation
-(Realty Income, Elman Investors, Gardner Tanenbaum, USAA Real Estate) sitting for a human decision; and the
-`gov`-token precision caveat above is worth a look before anyone confirms more short-token sponsor families.
-
-## 2026-09-11 — MB-a2 reconciled (PR #2307 merged): fixes confirmed live; new blocker MB1d (false-fresh CMS facts); MB-a3 drafted
-
-Filed `responses/MB-a2 desktop response.docx` + the already-reconciled `OWN-T0j desktop response.docx` (that thread's
-review is the 2026-09-11 "OWN-T0j reviewed" entry) → `done/`; MBa2 prompt → `prompts/done/`. **Cowork live check
-(read-only):** MB-a2 confirmed — `fact_key` + index, `MARKET_BRIEF_PSQL/PRSS` = off, crons `lcc-market-brief-psql`
-07:15 / `-rss` 10:10 UTC active, `v_market_brief_cms_operator_counts` faithful (sum 6,695). App `tranquil-delight`
-redeployed at `e42dbcb7` (per the OWN-T0j thread) → ticks are live behind OFF flags; 0 `producer_runs` yet. Standalone
-MCP still lacks `log_operator_note`/`get_operator_inbox` → not redeployed; `operator_notes` still 0. **New defect
-MB1d:** `buildCmsOperatorFacts` dates CMS counts with the run date (confidence 0.9) while the census is stale —
-DaVita/Fresenius last seen 2026-01-22, `last_ingested_at` NULL, no inactive rows (B6d-cms outage) — and
-**DaVita = Fresenius = 2,450 exactly** (likely capped import). Flipping PSQL now would publish a January census as
-today's fact. Spec §9 design rule 3 (source-as-of dating + feed gate); OPERATOR-ACTIONS MBa-hold extended; OC-v item 1
-marked half-done. **Next:** send `prompts/MBa3-freshness-honest-facts-and-live-flip.md`; after it merges, redeploy BOTH
-services (carries OC-a's MCP tools).
-
-## 2026-09-11 — ASC frozen 50 source collection complete; review gate is now the named next step
-
-Read-only production reconciliation against the four healthcare research tables confirms Scott completed the
-full frozen collection pass: **50/50 resolved, 0 pending — 44 captured and 6 reviewed source exceptions**.
-The 44 captured candidates have 54 distinct payload rows (retry history retained); CoStar covers 44 candidates,
-RCA covers 1, and only 1 has both licensed sources. Exception dispositions are 4
-`licensed_sources_not_found`, 1 `parcel_owner_evidence_only`, and 1 `parcel_situs_evidence_only`.
-
-Latest-capture identity distribution is 22 exact-token and 22 governed/non-exact or historical-mode-missing.
-**Sixteen captured candidates plus all six exceptions require second review: 22/50, with 0 second reviewers
-recorded.** Two historical captures have no stored identity mode; that is instrumentation missingness and must
-not be silently backfilled. Structured collection coverage is strong for lot size (44/44), contacts and land SF
-(43/44), tenant fields (42/44), parcel (41/44), and building class/SF (40/44), but weak for occupancy (12/44),
-cap rate (10/44), and NOI (2/44). Those are availability measures, not commercial gate results.
-
-Canonical docs now distinguish **collection complete** from **aggregate review complete**. New aggregate-only
-checkpoint: `docs/audits/HEALTHCARE_ASC_50_PROPERTY_CAPTURE_CHECKPOINT_2026-09-11.md`. Updated the economics/
-sampling plan, property-identity contract, CURRENT-STATE, BUILD-BACKLOG, PLANNED-BACKLOG, and documentation map.
-
-**Next step:** complete the 22 independent second reviews, populate exactly one governed scorecard for each of
-the 50 frozen fingerprints using the latest capture per candidate while preserving retries and exceptions,
-run the existing privacy-safe aggregate-review contract, and apply the predeclared lane gates. Do not start
-PI2–PI3, IDTF, canonical/CRM writes, outreach, or production promotion on collection completion alone.
-
-## 2026-09-11 -- OWN-T0j: URL-length fix confirmed live, then a SECOND bug found -- POST always 401'd
-
-Confirmed the previous fix (fix/ownt0j-true-owners-url-length) deployed: Railway /version now reads e42dbcb7,
-an ancestor check confirms the fix commit is included, and curling the live GET route returns 200 with the
-exact classification counts independently verified earlier (5,133/2,462/482/1,980).
-
-Tried to trigger the real POST immediately rather than waiting ~30 min for the next cron fire -- called
-`select public.lcc_cron_post('/api/ownt0j-sponsor-classify-tick', '{}'::jsonb, 'railway')` directly (the exact
-call the cron makes, with the real X-LCC-Key pulled from Supabase Vault). It came back 401
-`{"error":"unauthorized"}` -- with the correct key. That is not how an auth check should ever behave, so this
-was investigated rather than shrugged off as a fluke.
-
-**Root cause, in the same handler as the last fix**: `authenticate(req, res)` (api/_shared/auth.js) is async
-and returns a user object, or null having already sent its own 401 -- the contract every other handler in this
-repo follows (`const user = await authenticate(req, res); if (!user) return;`, per that file's own header
-comment). OWN-T0j's tick instead called `authenticate(req)` with one argument and no `await`, then checked
-`auth.ok` -- a property that does not exist on the real return shape, and would not exist even if awaited
-correctly (authenticate() returns a user object or null, never {ok, status, error}). The unawaited Promise's
-`.ok` is always undefined, so the POST path 401'd unconditionally, key or no key.
-
-**Fixed** (branch `fix/ownt0j-auth-call-convention`): rewrote the auth check to the real calling convention.
-node --check clean; the 11 existing classifier tests (pure functions, untouched) still pass.
-
-**Why two bugs shipped in one handler**: both are HTTP/auth-layer mistakes in the one part of OWN-T0j that
-had no test coverage -- the 11 shipped tests are all against the pure classifier functions
-(api/_shared/ownt0j-sponsor-classifier.js), and nothing exercises api/_handlers/ownt0j-sponsor-classify-tick.js
-itself end-to-end. Worth a look for a follow-up: a lightweight handler-level test (mocked domainQuery/opsQuery)
-would have caught both.
-
-**Docs**: PLANNED-BACKLOG.md OWN-T0j row appended again.
-
-**Next step.** Get this fix merged and deployed, then re-trigger via lcc_cron_post (or wait for the next
-`39 */4 * * *` fire) and confirm the cache table actually populates -- that's still the one thing not yet
-verified end-to-end.
-
-## 2026-09-11 — MB-a2: P-SQL source defects fixed against the live schema + both migrations applied; flags still OFF, live tick unverified
-
-Fixed all four MB1c defects (verified live via Supabase MCP, not guessed). Cap-rate band + trades-since-
-last-run now call the comps engine's own `rpc/rpc_query_comps` RPC (the same one `query_comps` uses)
-instead of a raw `sales_transactions` select missing `operator_name/address/city/state`; cap value reads
-`reliableCompCap()` (the engine's displayed rent÷price basis via `displayedCompCap()` imported from
-`mcp/comps-tools.js`, falling back to the RPC's own `coalesce(cap_rate_final, cap_rate)`) — measured live:
-RPC returns 200 TTM rows (175 dialysis_db + 25 salesforce, 98+21 with a cap) vs the raw table's 94
-market-eligible, a proper superset. `v_dia_on_market` now reads `current_cap_rate`. CMS operator counts
-now read a new server-side view `v_market_brief_cms_operator_counts` (migration
-`dialysis/20260911190000_dia_mba2_cms_operator_counts_view.sql`, **APPLIED to Dialysis_DB**,
-`sum(clinic_count)=6695` confirmed against the full 6,695-row population). Every paged read carries a
-`truncationGap()` tripwire. Migration `20260911180000_lcc_mba_market_brief_producers.sql` is now
-**APPLIED to LCC Opps** (`fact_key` + partial unique index present; both flags `off`; both crons scheduled,
-no collision checked against live `cron.job`). Guard: `test/mba2-market-brief-psql-source-fixes.test.mjs`
-(12 tests, mutation-verified). Full repo suite: 5,913 pass / 0 fail / 6 skipped. MB2 (P-RSS) swept for the
-same defect class and found clean (ops-side JSON, no domain-DB row limits). **⚠️ NOT verified: a live tick
-call** — this session has Supabase DB access but no Railway/API reach, so the code is committed and the
-DB is applied, but `/api/market-brief-psql-tick` has not been redeployed to or exercised, and the flags
-stay `off`. **Operator next step:** merge the PR, redeploy both Railway services, `GET
-/api/market-brief-psql-tick?lane=dialysis` and confirm `gaps[]` is empty, one flag-forced `POST`, compare
-against a direct `query_comps` call for the same window, flip both flags.
-## 2026-09-11 -- OWN-T0j reviewed: classification logic verified correct, but the deployed route 502s -- found and fixed a real bug
-
-Scott: "the OWN-T0j prompt is done and the response is saved... review and update all documentation and plans
-accordingly." Reviewed by independently reproducing the numbers, not by re-reading the response.
-
-**Classification logic verified correct, byte-for-byte.** Ran the identical classification directly against
-both live Supabase projects (not through the app): 5,133 comparable / 2,462 disagree / 482 sponsor_family_confirmed
-(19.6%) / 1,980 unclassified_rival (80.4%) -- matches the shipped PLANNED-BACKLOG claim exactly. The Boyd
-Watterson positive control also holds live.
-
-**But the deployed route is broken -- curled it directly and got a 502.** `GET /api/ownt0j-sponsor-classify-tick`
-on the live Railway deploy (confirmed current: `/version` matches this session's git HEAD) returns
-`{"error":"gov true_owners fetch failed at chunk 0"}`. Root cause: the true_owners fetch batches up to 1,000
-UUID ids into a single PostgREST `in.(...)` filter -- roughly 39KB of query string, which Railway's edge
-rejects. The properties fetch just above it uses the identical shape but with short numeric ids (~8KB for
-1,000), which is why only this one fetch failed -- and why the shipped 11-test suite (pure classifier functions
-only) could not have caught it; nothing in that suite exercises an HTTP fetch.
-
-**Fixed** (branch `fix/ownt0j-true-owners-url-length`): scan `true_owners` unfiltered, paged by limit/offset
-like the transitions fetch already does, and keep only the needed ids via a client-side Set lookup -- no
-`in.()` filter, no URL-length ceiling regardless of population size (16,274 total true_owners today).
-`node --check` clean; the 11 existing classifier tests (they test pure functions, untouched by this fix)
-still pass.
-
-**The cache table remains empty in production** -- this fix hasn't shipped yet. Once it's merged and Railway
-redeploys, the next `lcc-ownt0j-sponsor-classify-refresh` cron fire should populate it for real; that's the
-thing to re-check next, not the classification math (already independently confirmed correct).
-
-**Docs**: `PLANNED-BACKLOG.md` `OWN-T0j` row appended with the verification + bug fix. Did not touch the
-`OWN-T0a`/`OWN-T0e`/`AC11` rows from the prior entry -- nothing here changes those findings.
-
-**Next step.** Get this fix branch pushed and merged, confirm the Railway redeploy, then re-check the cache
-table and the reporting view actually populate on the next cron fire.
-
-## 2026-09-11 — PRI5 response reviewed: both real root causes found and fixed (not "undetermined" again), the orphaned-row gap resolved with live before/after, `census_demographics`'s months-old bug finally identified — held pending `Dialysis` PR #7408 merge confirmation
-
-`PRI5`'s response (`"PR15 surface response.docx"`, saved by Scott) read in full and transcribed to
-`docs/claude-code/responses/done/PRI5-orphaned-tracker-row-on-start-run-failure-and-census-demographics.response.md`.
-A strong round — this is the first time `census_demographics` got an actual root cause instead of
-"confirmed vulnerable, cause undetermined."
-
-**(a) The orphaned `ingestion_tracker` row — fixed with live proof.** `start_run()` returns `None` on
-exhausted retries but is never checked by its caller — the pipeline just proceeds, and nothing ever
-revisits the row it tried to create. Confirmed this session's own flagged row
-(`c817274e…`) is exactly this mechanism. **Found a second, distinct orphan class unprompted**:
-`ingestion_lock`'s own acquire call can leave a second row type orphaned the same way — 6 total orphans
-existed, not the 5 this session's own live count caught (which only checked one source). Fixed with a
-new `reclaim_stale_started_runs()` — deliberately not a lock, only touches rows past a 2-hour safety
-window so an in-flight run's own row is never touched — with a real rejected alternative explained (why
-reusing `acquire_ingestion_lock` for the outer row would create a lock collision with the inner sub-step).
-**Live before/after applied**: 2 of 6 orphans (past the safety window) closed immediately; the other 4,
-including this session's own flagged row, correctly left alone since they're still within the window.
-
-**(b) `census_demographics` — actual root cause found.** `_fetch_acs_data()` is a bare, unguarded HTTP
-call to `api.census.gov` (unrelated to this arc's Supabase connection-instability story) with no retry
-and no auth (`CENSUS_API_KEY` never configured, so every call hits Census's more rate-limited
-unauthenticated tier). The tell: `oig_leie_ingestor`'s equivalent fetch already has this exact guard
-pattern — `census_demographics_ingestor.py`'s own comment claims it was fixed "alongside" LEIE in an
-earlier round, but only the upsert-loop hardening was copied, never the fetch guard. **Confirmed against
-live data**: 3 snapshot rows from April/May/June 2026 show the identical months-old orphan pattern. Fixed
-to mirror LEIE's guard exactly. **Bonus fix found while wiring this in**: the step-loop's own success/
-failure check would have silently treated a clean `{"error": ...}` return as success — generalized the
-check to every step so this and `oig_leie_exclusions` (same latent gap) report honestly. Recommended
-(not required) setting `CENSUS_API_KEY` in Railway as a config action to reduce recurrence.
-
-**(c) The "benign all-zeros" conclusion — actually re-checked, not re-asserted.** Traced which modules
-populate the summary counter machinery — neither `run_cms_ingestion.py` nor
-`census_demographics_ingestor.py` appears in that list, so structurally `census_demographics` cannot be
-the cause either way. Confirmed live for this specific run: `facility_patient_counts` (the sub-step that
-does feed the counter) had zero new rows this date, matching the repo's documented near-annual CMS
-publish cadence — an expected no-op, not a defect.
-
-Tests: 7 new, full adjacent surface 285/286 passing (1 pre-existing, unrelated failure disclosed
-explicitly, reproduces on unmodified `main`).
-
-**PR `sbriggssjc/Dialysis#7408` was actually opened this round** (a step further than `PRI3`/`PRI4`,
-which only referenced a tracking PR number) — **merge status still unconfirmed**, same open item as every
-round. Asked Scott to confirm directly.
-
-`PLANNED-BACKLOG.md`'s `PRI5` row updated to 🟡. Prompt moved to `docs/claude-code/prompts/done/`.
-Response docx pending archive to `responses/done/` on Scott's machine.
-
-## 2026-09-11 — MB-a reconciled (PR #2301 merged): live check finds 4 source defects; MB-a2 fix prompt drafted
-
-Processed `responses/MB-a desktop response.docx` → `done/` (CC had already filed the prompt). MB-a built MB1 (P-SQL)
-+ MB2 (P-RSS, Ollama-only, verbatim-number check), 74 tests, 5,890/0, filed MB1a (`cortex_market_intel` writer) and
-MB1b (CMS closures are net-count only). **Cowork live check (read-only):** migration `20260911180000` **not applied**;
-0 `producer_runs`. Against Dialysis_DB: `sales_transactions` has no `operator_name/address/city/state` (→ 400);
-raw `cap_rate` on 37 TTM rows vs `cap_rate_final` on 106 with 66 excluded rows (→ band must come from the shared comps
-engine); `v_dia_on_market` has `current_cap_rate` not `cap_rate` (→ 400); `medicare_clinics` read capped at 1,000 of
-6,695 (→ **silent** undercount). New backlog row **MB1c**; two design rules added to spec §9 (comps-engine parity for
-every cap-rate fact; SQL aggregation + truncation tripwire + column contracts). OPERATOR-ACTIONS **MBa-hold**: do not
-flip MB flags. **OC-v unchanged** (0 notes, no triage flag row, MCP not redeployed). **Next:** send
-`prompts/MBa2-psql-source-fixes-and-live-verify.md`; redeploy both Railway services after it merges (ships OC-a too).
-## 2026-09-11 — OWN-T0j shipped: gov OWN-T0a disagreement split into `sponsor_family_confirmed` vs `unclassified_rival`
-
-Built the cross-database classifier the prompt above asked for. **Node-layer job, not SQL** — gov's
-`v_ownership_transitions_portfolio` (project `scknotsqkcheojiaewwh`) and LCC Opps'
-`lcc_ownership_sponsor_family` (project `xengecqvemvfknjvbvrq`) are separate Supabase projects; no SQL
-join is possible between them.
-
-**Shipped:**
-- `api/_shared/ownt0j-sponsor-classifier.js` — pure functions (`normalizeGovNameKey` is a byte-for-byte
-  JS port of gov's own key expression from `v_ownership_transitions_portfolio`'s view def, confirmed by
-  reading `pg_get_viewdef` live; `classifyDisagreement`/`classifyDisagreementBatch` do the split).
-- `api/_handlers/ownt0j-sponsor-classify-tick.js` — GET dry-run (reads both sides, classifies, no
-  writes), POST writes the cache (paged at 1000/PostgREST's hard cap on both the gov and ops reads).
-  Wired in `api/admin.js` (`case 'ownt0j-sponsor-classify-tick'`) and `server.js`
-  (`/api/ownt0j-sponsor-classify-tick`).
-- Migration `supabase/migrations/20260911190000_lcc_own_t0j_sponsor_disagreement_classifier.sql`,
-  **applied live to LCC Opps** — cache table `lcc_ownt0j_sponsor_disagreement_cache` (default grants
-  revoked from `public`/`anon`/`authenticated` per the B6d/OCR2 lesson, verified with
-  `has_table_privilege`), reporting view `v_lcc_ownt0j_sponsor_disagreement_report` (plain view, no
-  SECURITY DEFINER function — nothing here needed elevated privilege, so the definer-privilege stanza
-  rule doesn't apply), and cron `lcc-ownt0j-sponsor-classify-refresh` at `39 */4 * * *` (OWN-T0e's own
-  4-hourly cadence, offset 12 minutes to avoid two ~5,000-row cross-source jobs landing in the same
-  minute).
-- Test `test/own-t0j-sponsor-disagreement-classifier.test.mjs` — 11 tests, spot-checked against two
-  mutations (both went RED: removing the `confirmed_at` guard, removing the substring-match line).
-
-**Real measured counts (live, both projects, 2026-09-11):**
-- Reproduced the OWN-T0a comparison exactly as specified: **5,133 comparable / 2,462 disagree**
-  (drift from the brief's 2,510 is normal re-measurement noise, not a defect — population definition
-  identical). Restricted to `gsa_lease_diff`/`acquisition`: 3,523 comparable / 1,641 disagree (brief:
-  3,523 / 1,648 — matches almost exactly).
-- LCC Opps `lcc_ownership_sponsor_family` currently holds **21 confirmed rows / 18 distinct tokens**
-  (agree, arc, boyd, briarcliff, east, elliott, gip, gov, greenleaf, highwoods, jlb, kilroy, ngp,
-  rainier, rxr, sunflower, uirc, wmc).
-- Classified against the full 2,462-row disagreement population: **`sponsor_family_confirmed` = 482
-  (19.6%)**, **`unclassified_rival` = 1,980 (80.4%)**. Both counts reported, not just the residual.
-- **Positive control — Boyd Watterson:** all 192 gov properties whose disagreeing true_owner name-key
-  contains the confirmed token `boyd` classify **entirely** `sponsor_family_confirmed` (0 leak into
-  `unclassified_rival`, as required — the match is by construction). Restricted to
-  `gsa_lease_diff`/`acquisition` alone: 115 (close to the OWN-T0e investigation's quoted "~111";
-  the small gap is a population-definition detail, not a defect).
-- ⚠️ **Precision caveat, stated honestly, not swept under the 19.6%:** the confirmed token `gov` (2
-  entities: "gov san antonio", "gov ft myers") is a 3-character substring that will match ANY
-  true_owner name containing "gov" anywhere — a real precision risk for a token this generic, distinct
-  from the Boyd/UIRC/NGP/Highwoods cases where the token is a genuine surname/brand fragment. Not
-  fixed here (matches spec: port the classification rule as designed, report what it does — this is
-  new information for whoever curates future sponsor-family confirms, not a defect in this build).
-
-**What this is NOT:** it does not touch gov's `properties.true_owner_id` or `ownership_history`, does
-not build a second sponsor/SPE confirm mechanism (reads `lcc_ownership_sponsor_family`, routes
-genuinely-unclassified pairs conceptually to OWN-T0e's existing `sponsor_family_confirm` lane rather
-than duplicating it), and does not re-implement gov's name normalizer independently.
-
-**Deviations from the prompt, stated:** (1) The gov side is fetched via `domainQuery('government', ...)`
-against `v_ownership_transitions_portfolio` + `properties` + `true_owners` directly rather than reading
-a single pre-joined view, because no such view exists — this matches the two-step read the prompt's own
-Step 1 SQL performs. (2) No dedicated "reporting UI" was built beyond the plain SQL view + the cache
-table itself, per the "simple reporting view or query a human can run" instruction — no Decision Center
-lane, consistent with the explicit prohibition. (3) The live cache table is currently EMPTY — the tick
-has not run in production yet because it ships on the next Railway deploy of merged `main` ("merged is
-not running" — this repo's own doctrine); the counts above come from a direct one-off measurement run
-against both live projects during this session, not from the tick itself, and are reported as such.
-
-Branch: `claude/own-t0j-sponsor-classifier`, pushed to origin (not merged, no PR opened per instructions).
-
-## 2026-09-11 — Not actually a crash: `ownership_linker`'s fix confirmed working live for the first time; one new orphaned-tracker-row gap found, `census_demographics` still failing — filed as `PRI5`
-
-Scott reported the latest CMS ingestion run as "crashed" and sent logs. **It wasn't a crash** — no
-traceback, no hang; the process ran its full course and printed a complete, orderly summary. Two pieces
-of real good news:
-
-- **`PRI3`'s `ownership_linker` fix is confirmed working live for the first time**: `Properties →
-  true_owners: {'from_recorded_chain': 1, 'from_tenant_match': 0, 'from_cms_chain': 6570}` and `Contacts
-  → Salesforce: {..., 'by_company': 19}` — real, non-zero linkage counts, versus the original crash where
-  all 9 sub-steps failed with every counter at `0`. This is the live-fix proof this arc has been waiting
-  on since `PRI3` first shipped.
-- The process did **not** hang this time, consistent with (though not proof of) `PRI4`'s daemon-thread +
-  `os._exit(2)` mitigation.
-
-**One real, distinct new gap found and filed as `PRI5`**: `ingestion_tracker.start_run` failed after
-retries again (same persistent connection instability — expected per `PRI3`'s Section 2 conclusion), but
-this time **the pipeline continued anyway and completed successfully**, leaving that run's
-`ingestion_tracker` row permanently orphaned (`run_status='started'`, `finished_at=null`, 30+ minutes
-later — confirmed live). A live count shows this isn't isolated: **5 of `cms_medicare_clinics`'s
-`ingestion_tracker` rows are stuck at `started` forever, out of 118 `success`** — every stuck one traces
-to this arc's problem runs. This is a distinct code path from `PRI4`'s catalog (which covered the
-*preflight-abort* exit only) — this is the *pipeline proceeds and finishes normally after `start_run`
-itself failed* path, never revisited to close its own tracker row.
-
-Also filed in `PRI5`: `census_demographics` failed again (`PRI3`'s still-unresolved catalog item (g),
-recurring rather than a one-off), and the same all-zero-counters + "not recorded" warning `PRI3` called
-"two conflated but benign phenomena" — asked the next round to re-confirm that conclusion against this
-specific run rather than re-assert it, since it keeps recurring in the identical shape.
-
-Prompt: `docs/claude-code/prompts/PRI5-orphaned-tracker-row-on-start-run-failure-and-census-demographics.md`.
-Not urgent — the pipeline is genuinely producing real writes now — but worth closing since this arc has
-leaned on `ingestion_tracker` for run-timing correlation throughout, and orphaned rows undermine that.
-
-## 2026-09-11 -- all three recommended next steps done: OWN-T0j prompt drafted, OWN-T0e confirm-lane gap found (not forced), AC11 re-measured (still 0, now explained)
-
-Scott: "let's do it all in the order you recommend" (build the gov-side classifier; prioritize OWN-T0e confirms
-on the big sponsors; re-measure AC11). Did all three.
-
-**1. OWN-T0j prompt drafted and sent to CC** (`docs/claude-code/prompts/OWN-T0j-gov-side-reconciled-classifier.md`).
-Scoped from the 2026-09-11 OWN-T0a re-measurement directly -- reuses the exact comparison query, points at
-OWN-T0e's cache-table shape as the architecture template, and is explicit that this has to be a cross-database
-Node job (the sponsor registry lives in LCC Opps, the comparison population lives in gov -- no SQL join is
-possible). Explicit "do not build a sweep that forces agreement" guardrail, citing OWN-T0/RO2's prior refusals
-of the identical shape.
-
-**2. OWN-T0e confirm-lane prioritization -- investigated before forcing anything, and the investigation is the
-finding.** Checked whether the 22 gov-side sponsors with >=5 disagreeing properties (from the 2026-09-11
-measurement) are even reachable through OWN-T0e's existing confirm lane before confirming any of them. Only 4
-of 22 appear in `lcc_ownt0e_sponsor_family_proposals_cache` at all, each at a small fraction of their gov-side
-count (Gardner Tanenbaum: 32 gov-side properties vs 1 in the LCC cache) -- live, concrete confirmation of the
-already-filed `OWN-T0b` gap (no LCC mirror of the domain's transition chain): the two populations barely
-overlap, so confirming through this lane, however many sponsors get confirmed, cannot move OWN-T0a's number.
-That alone is why `OWN-T0j` (a build that reads gov's population directly) is the right next step, not more
-confirms. Of the 4 that do exist as candidates, none were blind-confirmed -- each had a specific reason not to:
-`Realty Income Corporation` is a flagged generic token, `Elman Investors`'s only SPE name IS itself a hedge
-phrase (`OWN-T0i` material), `Gardner Tanenbaum Holdings`'s SPE name looks like a same-party name variant (a
-merge question, not a family confirm), and `USAA Real Estate` is a single property, immaterial either way. All
-four left for a human on OWN-T0e's own lane.
-
-**3. AC11 re-measured -- still zero, and now the finding is specific.** `entity_relationships` carries 0 rows
-of type `llc_member`/`llc_manager`, fleet-wide, nine days after `PR-scanner-2` shipped the writer. This is not
-the producer being broken -- it's a forward capture-path fix that only fires when someone actually scans an
-SOS/bizfile page through the extension, and nobody has done that yet since it shipped. So the population is
-correctly zero today; it isn't evidence the fix doesn't work, and re-checking on a calendar basis again won't
-change that -- the next real re-measurement should follow the first live SOS scan, not another date.
-
-**Docs**: `PLANNED-BACKLOG.md` -- new `OWN-T0j` row, `AC11` row appended with the re-measurement. **⚠️ Branch
-note**: local `main` in this session's clone is stale (git fetch/pull fails here, the standing proxy
-limitation) -- `docs/own-t0a-reinvestigate`'s local ref shows "behind origin by 6 commits," meaning more has
-landed on that branch name upstream than this session can see. This entry's new commit is built on this
-session's last-known-good local tip of that branch; reconcile against the real origin state before merging,
-not assumed clean.
-
-**Next step.** `OWN-T0j` needs a Claude Code build session to pick it up. `AC11` stays filed, waiting on real
-SOS-scan usage rather than a rebuild. `B1b` (developer chain, gated behind `B5`) remains the one entirely
-untouched item on the ownership/contact-propagation thread.
-## 2026-09-11 — MB-a: MB1/MB2 market-brief producers built (dialysis lane), flags OFF, NOT live-verified
-
-Branch `claude/sweet-gates-83wyu7` → PR (see docs). Built `MB1` (P-SQL, `api/_handlers/market-brief-psql-tick.js`)
-and `MB2` (P-RSS, `api/_handlers/market-brief-rss-tick.js`) per `prompts/MBa-market-brief-producers-dialysis.md`,
-producers only — no rendering, no email, no UI, no cloud-model calls. Migration
-`20260911180000_lcc_mba_market_brief_producers.sql` adds `market_brief_facts.fact_key` (+ a partial unique index
-scoped to `status='live'`, the identity a source-url-less SQL derivation needs — EB1's own
-`uq_mbf_source_identity` only fires when `source_url`+`source_date` are both present), registers
-`MARKET_BRIEF_PSQL`/`MARKET_BRIEF_PRSS` in `feature_flags_registry` (both `off`), and schedules both crons
-(guarded `NOT EXISTS`, not flag-gated — the P138 pattern: an unscheduled job is invisible even when its flag is
-off). New shared modules `api/_shared/market-brief-facts.js` (fact builders + the pure `decideFactWrite`
-supersede/skip/conflict decision + the RSS verbatim-number check) and `api/_shared/market-brief-rss.js`
-(extraction prompt/parse/verbatim-filter, fails closed with no cloud fallback — mirrors the OC2/Analyst's-Take
-on-box pattern). 74 new tests (`market-brief-facts.test.mjs`, `market-brief-rss.test.mjs`,
-`market-brief-tick-handlers.test.mjs`), all fixture-based, no network. Full suite 5,890/0/6-skipped.
-
-**Measured (repo-only, no live Supabase/Railway reach this session):** dia sources wired are
-`sales_transactions` (TTM cap-rate band, per-operator with a 5-comp floor, and trades-since-last-run),
-`v_dia_on_market` (on-market count + median ask cap), `medicare_clinics` (top-8 operator counts + net-change vs.
-prior run). **NOT wired:** `cortex_market_intel` (writer still unlocated across two sessions — new row **MB1a**)
-and gov GSA lease events (dialysis-first per the prompt). CMS "closures" are a count net-change, not a real
-open/close event feed — no termination/status column could be confirmed from the repo (new row **MB1b**).
-PLANNED-BACKLOG §P18 rows MB1/MB2 updated with the full source list, gaps, and the exact live-verify steps.
-
-**What could NOT be done here, per this repo's own doctrine (dry-run-first, verify-live-then-flip):** running
-either tick against live Supabase/Railway, confirming `v_dia_on_market`'s actual column names (the GET dry run's
-`gaps[]` array is designed to surface a 400 there before any POST), the before/after `v_market_brief_staleness`
-snapshot for the dialysis lane, and sampling 5 real facts with citations. **Next: an operator/session with live
-reach runs the GET dry run for both ticks, reads `gaps[]`, runs one POST with the flag forced on, reports the
-five things above, then flips both flags and confirms the cron minutes (`7:15`/`10:10` UTC, picked without
-reach to `cron.job` — check for a collision before relying on them).**
-
-## 2026-09-11 — OC-a reconciled (PR #2298 merged): funnel built, NOT yet a live loop; MB-a prompt drafted
-
-Processed `responses/OC-a desktop response.docx` → `done/`; prompt → `prompts/done/`. OC-a shipped EB1a (applied
-live: 16 facts, staleness view 20 cells) + OC1 (endpoint, in-app Note button, MCP `log_operator_note`, Outlook
-`LCC-Note` — regex bug that silently dropped the category fixed), OC2 (triage tick, deterministic + Ollama, flag
-OFF), OC3 (OPERATOR-INBOX render + `get_operator_inbox` + session-start hook). 62 new tests, 5,839/0.
-**Live measurement (Cowork, read-only):** `operator_notes` = 0 rows; `OPERATOR_NOTE_TRIAGE` **absent** from
-`feature_flags_registry` (flag-flip step must insert it); no pg_cron job for the tick; the connected LCC MCP
-exposes neither new tool after refresh → **standalone MCP not redeployed**. Fixed `CURRENT-STATE.md` (claimed
-the hook was not wired — it is). New backlog row **OC-v** collects the six operator steps; `OPERATOR-ACTIONS.md`
-OCa rows annotated. **Next:** Scott redeploys both Railway services + runs OC-v; Claude Code gets
-`prompts/MBa-market-brief-producers-dialysis.md` (does not depend on OC-v or EB1b).
-
-## 2026-09-11 — BUY0 cont.: Geller Round 1 sourcing — 1,683 exported rows → 213 in-metro industrial → Focused 24
-
-Cowork. Scott's CoStar / CREXi ×5 / Salesforce Comps exports normalized, metro-assigned on OMB county lists,
-de-duped and screened; preliminary Derived leg scores; delivered `Jordan Geller - Buyer Showing - Sep 26 (Round 1
-draft).xlsx` (Focused = top 8 per DFW / Austin / Charlotte). Spec §4.6 records the import pipeline + per-source quirks;
-seed scripts saved to the client Data folder. Austin supply is thin (11 industrial) → re-pull requested.
-## 2026-09-11 — OC-a: operator funnel v1 shipped — EB1a applied live, intake + triage + inbox built
-
-`prompts/OCa-operator-funnel-v1.md` executed end to end on branch `claude/oca-operator-funnel-v1`.
-
-**EB1a — applied live to LCC Opps** (was not applied per the 2026-09-11 reconcile note): all 5 tables +
-2 views verified present via Supabase MCP; the dialysis exemplar's 16 facts inserted (11 `[UNVERIFIED]`
-items correctly excluded); `v_market_brief_staleness` returns 20 (lane, section) cells, 5 populated /
-15 `is_missing` (only the `dialysis` lane has facts yet — expected, MB producers are unbuilt). Re-run is
-idempotent (the migration's own `uq_mbf_source_identity` unique index — not re-verified by a second
-insert in this session, but the constraint is live).
-
-**OC1 — intake v1, three of four channels built:**
-- **In-app Note button** (`operator-note-client.js`, mounted in `index.html`): floating button + one-
-  textbox modal on every page, auto-captures `route` (hash), open entity id/type (best-effort off
-  `_detailStack`), and the last 10 client-side errors (a small ring buffer added to `index.html`'s
-  existing global error handler). POSTs to `POST /api/operator-notes`.
-- **MCP `log_operator_note`** (`mcp/server.js`), sibling of `log_memory`, same auth/session shape.
-  Write tool, no HTTP route (matches `log_memory`'s Claude/MCP-only convention).
-- **Outlook** (`intake-tagged-comm.js`) — **dormancy diagnosed and fixed, not just diagnosed.** The
-  pre-existing `LCC`/`LCC:<hint>` category gate (`parseLccCategoryHint`, regex `^lcc$` / `^lcc[:=](.+)$`)
-  structurally could never match a category literally named `LCC-Note` (the hyphen fails both patterns)
-  — every note tagged that way has always silently fallen through to `no_lcc_category` and been dropped.
-  This is a DIFFERENT, narrower defect than the broader "6 rows ever / dormant since 2026-08-07" finding
-  the 2026-09-11 reconcile recorded for the whole tagged-Outlook flow — that finding is about whether the
-  PA category-assigned trigger itself still fires at all, which this fix does not by itself prove (needs
-  a live post through the flow — see OPERATOR-ACTIONS.md). Added a second arm: a plain reply (`Re:`) to a
-  recognizable briefing subject with no LCC tag at all, per the contract's `outlook_reply` channel.
-- **Teams**: endpoint-ready only (`/api/operator-notes` accepts `channel:'teams'` authenticated via the
-  existing `PA_WEBHOOK_SECRET` pattern, mirroring `intake-tagged-comm.js`'s `authenticateWebhook()`
-  exactly) — the PA flow itself is an operator step (OPERATOR-ACTIONS.md), no bot built.
-
-**OC2 — triage tick built and flag-gated OFF** (`OPERATOR_NOTE_TRIAGE`, `/api/operator-triage-tick`,
-GET=dry-run/POST=apply). Deterministic rules first (error signatures → bug, "stuck loading" →
-not-connecting, "missing/no data" → data-gap, "would be nice"/idea language → idea, "confusing"/"hard to
-find" → ux, trailing `?` → question); on a miss, falls to on-box Ollama (`invokeOnPremGeneration` — fails
-closed, no cloud fallback, matching `briefing-analyst-take-tick.js`'s pattern) for type/lane/severity/
-title. Dedupes against prior open notes (Jaccard token overlap ≥0.5) AND a generated PLANNED-BACKLOG
-index (`scripts/generate-operator-note-backlog-index.mjs` → `docs/os/operator-note-backlog-index.json`,
-181 rows parsed). Routes via `docs/os/operator-note-routing.json` (7 threads seeded from the spec's own
-list). Logs to `producer_runs` (`producer='operator_triage'`) on the P123 open-before-work lifecycle.
-An unclassified note stays `open` with a named reason — never guessed at.
-
-**OC3 — the one to-do list built.** `scripts/render-operator-inbox.mjs --write` renders
-`docs/os/OPERATOR-INBOX.md` (GENERATED header) from `operator_notes`, grouped by `routed_to` thread
-(severity-sorted within a thread, unrouted last). MCP `get_operator_inbox` read tool (+ `/api/operator-
-inbox` HTTP route for ChatGPT/Copilot) reads the identical query, so every surface sees the same list.
-Not yet wired into `.claude/hooks/session-start.sh` or `NEW-CHAT-KICKOFF.md` — filed as a follow-up
-(the render script itself is done and tested; the hook wiring is a one-line addition once a live
-Railway deploy exists to read from).
-
-**What was NOT done, per the spec's own scope fence:** no market-brief producers/rendering/email
-changes; no cloud-model calls anywhere in triage; no canon edits; PLANNED-BACKLOG promotion from an
-inbox item stays a manual session-loop step. **Also deferred, stated plainly:** the live multi-channel
-verification (§6 — post one note through each channel, run the tick with the flag on, confirm a fresh
-inbox) could not be completed in this session — it needs a live Railway deploy of this branch's merged
-`main`, which has not happened yet. `OPERATOR_NOTE_TRIAGE` therefore stays off in
-`feature_flags_registry` until that live verify runs.
-
-**Tests:** 62 new (`test/operator-notes.test.mjs` 34, `test/operator-triage-tick.test.mjs` 6,
-`test/operator-inbox-render.test.mjs` 8, `test/operator-note-outlook-channel.test.mjs` 8, plus fixing
-one pre-existing guard — `mcp/server.js`'s `READ_ONLY_HTTP_TOOLS` allowlist needed `get_operator_inbox`
-added, caught immediately by `test/chatgpt-curated-spec.test.mjs`). Full suite: **5,839 pass / 0 fail /
-6 skipped** (pre-existing skips, unrelated).
-
-PR opened: branch `claude/oca-operator-funnel-v1` → `main`. Not merged (CI + Scott's call).
-## 2026-09-11 — PRI4 merged and deployed live; no new prompt needed — next step is another live test run
-
-Scott confirmed `Dialysis` PR `#7407` merged and the redeploy live. `PLANNED-BACKLOG.md`'s `PRI4` row
-moved to ✅. **Not yet independently re-verified** — this fix hasn't been proven against a real run yet,
-same discipline as every other round in this arc (a green PR is not the same as a proven fix).
-
-**No new prompt is warranted right now.** Everything currently open in this arc — `PRI3`'s original
-live-fix proof (never exercised because every run so far died before reaching those call sites) and
-`PRI4`'s own open questions (the (b) tracker-close discrepancy, (c)'s unconfirmed root cause) — is best
-answered by **triggering another CMS ingestion run and watching what actually happens**, not by more
-code-reading. Recommended to Scott: trigger the run now. On the next report-back, verify directly against
-Dialysis_DB: does `facility_patient_counts`'s preflight step now succeed or retry-and-recover instead of
-failing outright; does the run get **past** preflight this time (the first real test of `PRI3`'s fixed
-call sites); if it still hits trouble, does the process now exit promptly via the new `os._exit(2)` path
-instead of hanging; and does whichever `ingestion_tracker` row this run creates actually close out
-(`finished_at` set, `run_status` not stuck at 'started') — directly answering the (b) discrepancy this
-round couldn't resolve from the code alone.
-
-## 2026-09-11 -- OWN-T0a re-investigated: the finding changed shape, nothing built, a real decision surfaced for Scott
-
-Picked OWN-T0a (gov's own 43.4% recorded-transition-grantee vs true_owner_id disagreement) as the next lever
-per the ownership/contact-propagation thread. Read the source audit first (OWN_T0_PROPERTY_OWNERSHIP_RECONCILED_2026-09-02.md,
-per this repo's own citation doctrine), then re-measured live against scknotsqkcheojiaewwh rather than re-quoting
-the 2026-09-02 number.
-
-**Re-measured, still real and if anything slightly larger**: plainest replication reads 48.9% (5,133 comparable /
-2,510 disagree) today vs 43.4% nine days ago -- consistent with population growth from ongoing ingestion, not a
-regression. The gsa_lease_diff/acquisition-restricted population (3,523 comparable) lands closest to the original
-3,474 and disagrees at 46.8%.
-
-**Read the actual disagreeing rows -- same sponsor<->SPE shape OWN-T0's own audit already named** (e.g. property 180:
-"GOVERNMENT PROPERTIES INCOME TRUST LLC" the SPE/transition-grantee vs "RMR" the sponsor/true_owner -- both true).
-Ruled out the boring explanations: only 3.3% tombstoned true_owner rows, only 2.2% hedge-phrase owner names
-(OWN-T0i's class). The sponsor population is a long tail -- 1,163 distinct sponsor names, only 22 with >=5
-properties each (21.4% of the disagreement) -- not concentrated the way OWN-T0e's boyd-family case was.
-
-**The real finding: OWN-T0e's sponsor-family confirms do not move this metric, even for big already-confirmed
-names.** Boyd Watterson (confirmed 2026-08-27), UIRC (2026-09-09/10), NGP (2026-09-09), Highwoods (2026-08-27) are
-all live rows in lcc_ownership_sponsor_family -- and still read 111, 24, 14, and 5 disagreeing gov properties
-respectively today. The confirm only changes how the LCC-facing reconciled view classifies the conflict; it never
-touches gov's properties.true_owner_id or the transition grantee, which is what OWN-T0a's raw comparison reads.
-So OWN-T0a as defined can never reach zero, and a fix that forced the two sides to agree would be wrong -- the
-same conclusion OWN-T0 (LCC side) and RO2 (gov's own v_ownership_resolution vs true_owner, an adjacent store)
-already reached on this identical shape.
-
-**Nothing built.** The correctly-scoped fix is a measurement fix, not a sweep: a domain-side reconciled view
-(gov mirror of v_lcc_property_ownership_reconciled's conflict_class logic, reading the existing
-lcc_ownership_sponsor_family registry) that would split the flat 43-49% into "sponsor_family_confirmed" (expected,
-not a problem) vs a genuinely unclassified residual -- turning an alarming-looking number into an honest, much
-smaller one. That's real scope, so it's surfaced to Scott as a decision rather than assumed or built blind.
-
-**Docs**: PLANNED-BACKLOG.md OWN-T0a row rewritten with the re-measurement, the root-cause read, and the OWN-T0e
-non-effect finding; cross-referenced to OWN-T0e, OWN-T0i, and RO2.
-
-**Next step.** Waiting on Scott: build the gov-side reconciled classifier, prioritize OWN-T0e confirms on the 22
-big-population sponsors even though it won't move this specific metric (it does fix what brokers actually see in
-the LCC panel), or move on to AC11's population re-measurement instead.
-
-## 2026-09-11 — BUY0 cont.: Geller Phase 0 deliverables shipped; living-engagement design + sourcing audit added to spec
-
-Cowork session (Jordan Geller 2026 industrial search). Delivered to the client folder: `Jordan Geller - Industrial
-MSA Ranking - Sep 26 (Draft v2).xlsx` (75 MSAs × 15 public factors — Census PEP V2025, ACS 2024, BLS QCEW 2019/2024,
-Tax Foundation 2026, CNBC Top States 2026; editable weights) and `Jordan Geller - Buyer Showing - Sep 26.xlsx`
-(lightweight client file on the Team Briggs Buyer Showing Template: static Market Ranking tab 1 + Focused / Broad
-Market / Passed with Credit / Lease / Real Estate leg scoring). Both restyled to BDPS (`bov_constants.py` palette,
-Calibri, role heights). Spec `BUYER-ENGAGEMENT-MODULE-SPEC-v0.1.md` gained §4.4 (living engagement = reuse deal
-spine + W7 matcher/propagation + Ollama proposals, no parallel pipeline), §4.5 (sourcing audit: email alerts lack
-location → **BUY-G1**; no SF path for industrial `Comp__c` → **BUY-G2**), §6a (Scott's answers: files-in-folder,
-query-on-demand, three-leg scoring, rent evidence hierarchy) and §7a (egress: census/bls/bea blocked from sandbox
-and local shell). **Next:** top-3 markets (DFW, Austin, Charlotte) sourcing — Scott exports CoStar/LoopNet/RCA + an
-SF report; Claude normalizes into Broad Market. No build authorized yet.
-
-> **📦 ARCHIVE (2026-09-12):** entries for **2026-08-29 → 2026-09-11** (the B6d/B6e CI-and-producer-
-> health arc tail, the PRI2–PRI5 ingestion-hang investigation, BROKER1, the P18/BUY0 design opens, the
-> AC-series contact/address work, and a long ID-series/C13-C14 run) were moved **verbatim** to
-> [`docs/history/STATUS_claude-code_2026-08-29_to_2026-09-11.md`](../history/STATUS_claude-code_2026-08-29_to_2026-09-11.md).
-> Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
->
-> **📦 ARCHIVE (2026-09-12, second span):** a further **PRI4 → BROKER1** run of 2026-09-11 entries
-> (preflight/tracker/timeout defects; EB1 Executive Briefs foundation; AC2/AC3 bench-ranking flip;
-> BROKER1 prospect assignment) sat ABOVE this pointer — STATUS.md is not strictly date-sorted — and
-> was moved **verbatim** to
-> [`docs/history/STATUS_claude-code_2026-09-11_pri4_to_broker1.md`](../history/STATUS_claude-code_2026-09-11_pri4_to_broker1.md)
-> to bring the file back under its line budget (`test/status-line-budget.test.mjs`). Nothing was
-> dropped; every still-open item named in that span was already tracked in `PLANNED-BACKLOG.md`.
-
----
-
-## 2026-09-12 — ID3a-d: named the owner of every database, retired LCC's government migrations (Claude Code)
-
-`government-lease`'s ID3a-c fix (PR #398) showed that two repos ship migrations to the same
-government database, and `life-command-center`'s own copy of the same canonicalizer fix
-(`supabase/migrations/government/20260912030000_gov_id3ab_agency_canonicalizer_contamination_fix.sql`)
-was **stale relative to what is actually deployed** — no state-qualifier guard, old ICE/CBP branch
-order. Re-applying it would have silently restored `TEXAS DEPARTMENT OF AGRICULTURE → USDA` and
-`Immigration & Customs Enforcement → CBP`.
-
-**Shipped:**
-- **Ownership table** (all three Supabase projects, measured, not guessed) in `CLAUDE.md` →
-  "ONE REPO OWNS EACH DATABASE'S OBJECTS", mirrored in `docs/architecture/data-coherence-invariants.md`
-  I16 and pointed-to from `docs/os/REGISTRY.md`. government → `government-lease` (settled by
-  Scott); Dialysis_DB → `Dialysis` (proposed from evidence — 555 migration files there vs. LCC's
-  277 duplicate copy, 👤 not yet Scott-confirmed); LCC Opps → `life-command-center` (this repo IS
-  the app that reads/writes it).
-- **Retired `supabase/migrations/government/`** — a `README.md` marking the directory historical
-  and naming both defects the stale canonicalizer file would restore, plus a per-file historical
-  header prepended to all 213 `.sql` files (script-generated, verified). Searched for any tooling
-  that globs and applies this directory live against the government database — **found none**.
-- **Guard:** `test/gov-migrations-directory-retired.test.mjs` (6 tests, all pass, includes a
-  positive control that proves the detection logic can actually fail). Existing tests that read
-  the retired canonicalizer migration (`test/gov-id3ab-agency-canonicalizer.test.mjs`,
-  `test/id3a-gov-agency-identity.test.mjs`) still pass unchanged — the header is comment-only and
-  those tests strip comments before asserting.
-- **I16 drift-check design:** `scripts/db-drift/gov-deployed-vs-committed-drift.sql` +
-  `scripts/db-drift/README.md`. Computes the live-side definition hash for every
-  function/view/materialized-view/trigger in the government database's `public` schema; documents
-  the "expected"-side replay of `government-lease`'s migrations and the final diff query inline.
-  **NOT executed** — this sandbox has no network access to Supabase, so no drift result is
-  reported (would be fabrication). Run it for real under credentials with access to the
-  government project before scheduling anything on the I11 alert path.
-- **ID3a-c deferred items closed/filed:** the "10 FK-vs-canonicalizer granularity judgment calls"
-  are already surfaced by `government-lease`'s own `v_gov_agency_fk_display_drift` view
-  (`sql/20260912_gov_id3a_c_agency_class.sql` §12) rather than a fresh list — filed as
-  `ID3a-c-fk-granularity` in `PLANNED-BACKLOG.md`, pointed at `government-lease`, with the
-  recommendation that Scott review that view's 10-row output in one pass. USFS/BLM/NSF
-  canonicalizer gaps: the registry seed rows exist (`sql/20260305_phase4_financials.sql`) but no
-  confirmed live regex branch was found — filed as `ID3a-c-usfs-blm-nsf`, low urgency pending an
-  orphan-string volume measurement.
-- **Not built, filed:** retiring LCC's `supabase/migrations/dialysis/*` (277 files) the same way —
-  needs Scott to confirm `Dialysis` as the formal owner first (`ID3a-d-dia`).
-
-**Not touched:** no live gov/dia/LCC-Opps DB object was edited. No migration was deleted. Full
-suite not re-run wholesale in this pass (repo has thousands of tests); the new test file and every
-test that reads a file this change touched were run directly and are green — see the branch's own
-commit for the exact list.
-
-## 2026-09-12 — ID2b-caps-2: the third comp source, fixed at the source of record, live-verified (Claude Code)
-
-Cowork's live re-check of ID2b-caps found the gate had not actually held: `sf_comp_staging` (Team
-Briggs' own Salesforce-staged closed comps) has no `properties` join, so `rpc_query_comps` could
-only ever emit `operator_id: null` for that arm — 196 `DaVita Dialysis` + 179 `Fresenius Medical
-Care` rows, exact matches of already-registered aliases, were minting a second, text-keyed band
-under the identical canonical label the id-keyed band already carried.
-
-**Shipped:**
-- `sf_comp_staging.operator_id` — a new first-class column, fill-blanks resolved via the SAME
-  ID2a resolver (`dia_resolve_operator`) every other caller uses, through a `BEFORE INSERT/UPDATE
-  OF tenant` trigger that never raises (deliberately lighter than the `properties` hard-block
-  guard, because this table is fed by an external Salesforce sync this repo does not control) and
-  a dry-run-default backfill mirroring `dia_id2a_backfill_property_operator_ids` exactly.
-- `rpc_query_comps`'s SF arm now resolves `operator_id`/`operator_canonical` from that column
-  through `dia_operator_survivor`, identically to the sale/listing arms — every other key
-  byte-identical.
-- A structural duplicate-display-label invariant in `planOperatorCapRateBands()`
-  (`market-brief-psql-tick.js`): two DIFFERENT resolved `operator_id` groups may never render
-  under one canonical label. Scoped to id-keyed groups only — the documented ID2a coverage-gap
-  fallback (an unresolved property sharing a raw-text label with a resolved sibling) is explicitly
-  exempted, per the pre-existing accepted test for that case. On collision it logs loudly, keeps
-  the larger-n band, and routes the loser through the existing `retireStaleFact()` supersede path.
-
-**Live-verified against `zqzrriwuavgrquhisnoa`** (had DB access this session, unlike some prior
-rounds): dry-run backfill predicted `406 candidates / 400 auto-apply / 6 review`, applied and
-matched exactly. Re-ran the tick's own TTM window afterward: exactly three bands clear the small-n
-floor (`id:4` DaVita, `id:5` Fresenius Medical Care, `id:73` US Renal Care); the one residual
-same-label fragment (n=1) traces to an unrelated ID2a property-coverage gap on the `dialysis_db`
-arm, not a recurrence of the SF-staging defect, and never clears the floor regardless.
-
-Migrations: `supabase/migrations/dialysis/20260912140000_dia_id2bcaps2_sf_comp_staging_operator_id.sql`,
-`.../20260912150000_dia_id2bcaps2_rpc_query_comps_sf_operator_id.sql` (both applied live). Guard:
-`test/id2bcaps2-sf-operator-resolution.test.mjs` (13 tests). Full suite: 6,057 pass / 0 fail / 6
-skipped (up from 6,044). Docs updated in this change: `docs/os/PLANNED-BACKLOG.md` §P0d (ID2b-caps-2
-row), `docs/audits/ID2b_caps_RPC_QUERY_COMPS_OPERATOR_ID_2026-09-12.md` (addendum),
-`docs/architecture/EXEC-BRIEFS-SPEC.md` §9 (correction appended in place, not rewritten).
-
-**Not done, deliberately:** `MARKET_BRIEF_PSQL` not flipped; no change to comp SELECTION/scoring,
-the registry merge machinery, or any alias-table write beyond calling the existing resolver; the 6
-unresolvable `sf_comp_staging` tenants sit in `dia_operator_write_review` like any other unresolved
-operator string, resolvable the normal way (`dia_id2a_resolve_review`).
+> **📦 ARCHIVE (2026-09-14, twelfth span):** a further run of 2026-09-12 entries was moved **verbatim** to
+> [`docs/history/STATUS_claude-code_2026-09-12_tail4.md`](../history/STATUS_claude-code_2026-09-12_tail4.md).
+> Nothing was dropped; every still-open item it named is tracked in `PLANNED-BACKLOG.md`.
