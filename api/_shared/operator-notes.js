@@ -153,35 +153,65 @@ const UX_SIGNATURES = [
   /hidden away/i, /can'?t find/i,
 ];
 
-/** Pure. Returns a {note_type, severity, matched_rule} verdict or null when
- * no deterministic rule fires (the caller then falls to on-box Ollama). */
+// OC-v2 — deterministic LANE detection. classifyDeterministic previously
+// decided note_type/severity only and left `lane` (domain/lane this note
+// concerns — spec §6) permanently null unless Ollama answered, which on a
+// plain GET dry run never even ran. This is a coarse domain keyword map,
+// distinct from DEFAULT_ROUTING_TABLE's "owner thread" (routed_to) — a lane
+// is WHAT the note is about (dialysis, government, comps…), a thread is WHO
+// owns following up. Both may fire on the same note. Never guess: no match
+// leaves lane null exactly as before.
+const LANE_KEYWORDS = [
+  { lane: 'dialysis', keywords: ['dialysis', 'davita', 'fresenius', 'medicare', 'cms', 'clinic', 'ccn', 'npi'] },
+  { lane: 'government', keywords: ['gsa', 'government', 'federal lease', 'firm term', 'agency', 'frpp'] },
+  { lane: 'comps', keywords: ['comp', 'comps', 'cap rate', 'bov', 'capital markets'] },
+  { lane: 'market-brief', keywords: ['market brief', 'exec brief', 'brief', 'briefing'] },
+  { lane: 'buyer-engagement', keywords: ['buyer', 'tier 0', 'owner contact', 'call sheet', 'prospecting'] },
+  { lane: 'automation', keywords: ['cron', 'tick', 'pipeline', 'sync', 'ingest', 'ingestion', 'flow', 'power automate'] },
+  { lane: 'data-coherence', keywords: ['wrong data', 'incorrect', 'conflicting', 'duplicate', 'mismatch', 'stale', 'missing data', 'data gap'] },
+  { lane: 'surfaces/canon', keywords: ['canon', 'copilot', 'chatgpt', 'northmarq claude', 'surface sync'] },
+];
+
+/** Pure. Returns a lane string or null (never guess). */
+export function detectLane(rawText, context = {}) {
+  const text = `${rawText || ''} ${JSON.stringify(context?.route || '')}`.toLowerCase();
+  for (const l of LANE_KEYWORDS) {
+    if (l.keywords.some((kw) => text.includes(kw))) return l.lane;
+  }
+  return null;
+}
+
+/** Pure. Returns a {note_type, severity, matched_rule, lane} verdict or null when
+ * no deterministic rule fires (the caller then falls to on-box Ollama). `lane`
+ * is attached whenever a deterministic keyword match fires, even if it is null. */
 export function classifyDeterministic(rawText, context = {}) {
   const text = String(rawText || '');
   const recentErrors = Array.isArray(context?.recent_errors) ? context.recent_errors.join(' ') : '';
   const combined = `${text} ${recentErrors}`;
+  const lane = detectLane(rawText, context);
 
   const hit = (patterns) => patterns.find((re) => re.test(combined));
 
   let m = hit(ERROR_SIGNATURES);
   if (m || recentErrors) {
     const severe = /\bfatal\b|\bcrash/i.test(combined) || /\b5\d{2}\b/.test(combined);
-    return { note_type: 'bug', severity: severe ? 'high' : 'medium', matched_rule: m ? String(m) : 'recent_errors_present' };
+    return { note_type: 'bug', severity: severe ? 'high' : 'medium', matched_rule: m ? String(m) : 'recent_errors_present', lane };
   }
 
   m = hit(NOT_CONNECTING_SIGNATURES);
-  if (m) return { note_type: 'not-connecting', severity: 'medium', matched_rule: String(m) };
+  if (m) return { note_type: 'not-connecting', severity: 'medium', matched_rule: String(m), lane };
 
   m = hit(DATA_GAP_SIGNATURES);
-  if (m) return { note_type: 'data-gap', severity: 'medium', matched_rule: String(m) };
+  if (m) return { note_type: 'data-gap', severity: 'medium', matched_rule: String(m), lane };
 
   m = hit(IDEA_SIGNATURES);
-  if (m) return { note_type: 'idea', severity: 'low', matched_rule: String(m) };
+  if (m) return { note_type: 'idea', severity: 'low', matched_rule: String(m), lane };
 
   m = hit(UX_SIGNATURES);
-  if (m) return { note_type: 'ux', severity: 'low', matched_rule: String(m) };
+  if (m) return { note_type: 'ux', severity: 'low', matched_rule: String(m), lane };
 
   if (/\?\s*$/.test(text.trim())) {
-    return { note_type: 'question', severity: 'low', matched_rule: 'trailing_question_mark' };
+    return { note_type: 'question', severity: 'low', matched_rule: 'trailing_question_mark', lane };
   }
 
   return null;
