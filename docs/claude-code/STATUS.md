@@ -1,12 +1,16 @@
 # Claude Code queue — STATUS
 
 <!-- =====================================================================     CONVENTION — READ BEFORE PREPENDING AN ENTRY.
-     This file is newest-first. New entries go DIRECTLY BELOW this block, never
-     above it. The `# Claude Code queue — STATUS` H1 above must remain line 1.
+     This file is newest-first. New entries go DIRECTLY BELOW the Open-threads
+     table's `---` that follows this block — NOT directly below this block, and
+     never above it. (Prepending right below this block is what buried the
+     Open-threads table 1,741 lines deep by 2026-09-14: this comment and the
+     table's own header gave contradictory instructions, and the guard that
+     would have caught it was never merged. See test/status-line-budget.test.mjs.) The `# Claude Code queue — STATUS` H1 above must remain line 1.
      This is enforced by test/status-header-integrity.test.mjs — CI fails if the
      H1 moves off line 1 or a second copy appears. Five sessions on 2026-09-12
      buried it (lines 25, 29, 57, 83, 212) before the guard existed.
-     Line budget: 2,500 (test/status-line-budget.test.mjs). When you approach it,
+     Line budget: 3,000 (test/status-line-budget.test.mjs), with a soft warning at 80%. When you approach it,
      archive BEFORE you push, not when CI fails. ⚠️ This file grows on YOUR
      branch AND on main at the same time, so a branch that passes locally can go
      over the budget the moment main is merged in — it has happened twice
@@ -16,6 +20,54 @@
      move the OLDEST contiguous span verbatim to docs/history/ and extend the
      archive pointer — never reword or drop an entry to make room.
      ============================================================================ -->
+
+
+## Open threads (updated 2026-09-12 — table moved to the TOP of this file by Cowork; new entries go BELOW the `---`)
+
+One-line read on each active multi-round thread. Full narrative for anything older than this file's
+current window lives in `docs/history/STATUS_claude-code_*.md`; durable state lives in
+`docs/os/PLANNED-BACKLOG.md` and `docs/os/CURRENT-STATE.md`.
+
+| thread | backlog rows | last entry | state (one line) |
+|---|---|---|---|
+| **Identity / operator canonicalization (ID-series)** | ID0–ID4, ID2a-cleanup, ID2b, ID2b-caps, ID2b-caps-2, ID3a–ID3e, ID3a-d | 2026-09-12 | ID2b-caps-2 shipped + live-verified (3rd comp source fixed at source); ID3a-d retired LCC's stale gov migration copy; ID2b's remaining 45 views/12 modules still group on operator text |
+| **Market briefs (MB/EB)** | MB1d, MB2a, MB3, MB4, MB5, MB6, MB7, EB1b, P18 | 2026-09-12 | **LIVE**: `MARKET_BRIEF_PSQL` + `MARKET_BRIEF_RENDER` on; the daily email carries the Lane Briefs block (cap-rate bands, on-market, honest CMS staleness gaps, link to `#/briefs/dialysis`), the tab serves live facts, first `market_brief_issues` row frozen. Next: MB2a (the 3 new dialysis RSS URLs all fail 403/404), MB5 P-WEB (blocked on EB1b Anthropic credit), MB6 weekly long-form, MB7 MCP recall |
+| **Operator funnel (OC / HP1)** | HP1, HP1-P1a, HP1-P1a-fix, HP1-P1a-dup | 2026-09-12 | HP1-P1a-fix CLOSED live (608 rows UPDATED, first-ever Salesforce UPDATE to `bd_opportunities`); HP1 P0 (Today 500 badge) fixed+deployed+verified |
+| **Ownership (OWN/RO)** | OWN-T0a–T0j, RO3, B1b, AC2/AC3/AC6–AC11 | 2026-09-12 | OWN-T0j verified end-to-end live; RO3 field-mapping design drafted; OWN-T0a/B1b/AC-series propagation work still open |
+| **CoStar sidebar / public records (PR5/PRI)** | PR5d, PR-scanner-3, PRI2–PRI5 | 2026-09-12 | PR-scanner-3 shipped (`county_records_needed` action); PRI5 merged+deployed, awaiting another live CMS ingestion test run to confirm the hang is actually cleared |
+| **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
+| **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
+| **Broker identity (BR) / BROKER1** | BR1, BR2, BROKER1, BROKER1-sf | 2026-09-11 | BROKER1 prospect-assignment applied live (1,303 assigned) with a real bug found+fixed in production; BROKER1-sf (Salesforce write-back) correctly left unbuilt — no write path exists |
+| **gov agency canonicalization (ID3a\*)** | ID3a, ID3a-b, ID3a-c, ID3a-d, ID3e, I14, I16 | 2026-09-12 | ID3a-b/c/d/e all shipped and live-verified; repo-ownership hazard (I16) found and closed — `government-lease` owns the gov DB's migrations, LCC's copy retired |
+| **CI / producer health (B6d/B6e)** | B6d-cms-*, B6d-assessor-*, B6d-pri-*, B6e-ci-*, B6e-fred-* | archived 2026-09-11 | Suite is a real merge gate (`Run Tests` unmasked, green once on `main`); `pip-audit`/secrets-grep/ruff still masked; full detail in the 2026-08-29→09-11 archive and `docs/architecture/producer-health-and-ci-enforcement.md` |
+
+> **📦 ARCHIVE (2026-09-08):** entries for **2026-08-31 → 2026-09-01** (the CMS-ingestion restart,
+> DOC1–DOC18 document pipeline, C13/C14 entity-role work, and the trailing pointers for two earlier
+> cuts) were moved **verbatim** to
+> [`docs/history/STATUS_claude-code_2026-08-31_to_2026-09-01.md`](../history/STATUS_claude-code_2026-08-31_to_2026-09-01.md).
+> Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
+
+---
+
+## 2026-09-14 — CONSOLIDATE3 was never actually shipped, and STATUS had buried its own index (Cowork)
+
+Extracting the test file from the rescued branch `docs/consolidate3-headroom-and-table-fix-2026-09-12`
+turned up a **false ✅**: `PLANNED-BACKLOG` has claimed since 2026-09-12 that CONSOLIDATE3 shipped
+"budget raised to 3,000 with an 80%-mark soft warning" and a table-placement guard. **`main` had
+`LINE_BUDGET = 2500`, no warning, and no guard** — all of it lived only on that unmerged branch. Third
+"claimed shipped, actually isn't" of the day, after the undeployed edge function and the unregistered
+flag row; precisely the doc-contradiction rule **XB2** is meant to catch without a human looking.
+**The guard, once applied, immediately failed against `main` — correctly.** `## Open threads` sat at
+line **1,781**, not the first 40. Cause: **this file gave two contradictory instructions.** The
+convention block said *"new entries go DIRECTLY BELOW this block"*, while the table's own header said
+*"new entries go BELOW the `---`"*. The header won, so every session prepending above the table pushed
+it down — **Cowork's own ~8 entries today are the bulk of that drift.**
+Fixed: table moved back to the top (now line 25), the convention block rewritten to point at the
+table's `---` so the two no longer disagree, and the stale "Line budget: 2,500" text corrected to 3,000
+with the 80% warning. Guards: 10/10 green. ⚠️ PRs **#2448** and **#2452** should be **closed unmerged** —
+#2448 carries a 2-day-old STATUS snapshot that would overwrite this, and #2452 would revert a
+2026-06-20 brand-font fix in the lease-comps template. Both branches stay on origin (BRANCH1).
+
 
 ## 2026-09-14 — N3c decided and shipped: banks/CMBS trustees excluded; full open-decisions list compiled (Cowork)
 
@@ -1778,32 +1830,6 @@ Also filed: `responses/consolidate 2 desktop response.docx` moved to `responses/
 already-merged CONSOLIDATE2 commit `9364ec1e`).
 
 Docs updated: `docs/architecture/document-capture-and-ocr-status.md` (FINAL STATE box retitled).
-## Open threads (updated 2026-09-12 — table moved to the TOP of this file by Cowork; new entries go BELOW the `---`)
-
-One-line read on each active multi-round thread. Full narrative for anything older than this file's
-current window lives in `docs/history/STATUS_claude-code_*.md`; durable state lives in
-`docs/os/PLANNED-BACKLOG.md` and `docs/os/CURRENT-STATE.md`.
-
-| thread | backlog rows | last entry | state (one line) |
-|---|---|---|---|
-| **Identity / operator canonicalization (ID-series)** | ID0–ID4, ID2a-cleanup, ID2b, ID2b-caps, ID2b-caps-2, ID3a–ID3e, ID3a-d | 2026-09-12 | ID2b-caps-2 shipped + live-verified (3rd comp source fixed at source); ID3a-d retired LCC's stale gov migration copy; ID2b's remaining 45 views/12 modules still group on operator text |
-| **Market briefs (MB/EB)** | MB1d, MB2a, MB3, MB4, MB5, MB6, MB7, EB1b, P18 | 2026-09-12 | **LIVE**: `MARKET_BRIEF_PSQL` + `MARKET_BRIEF_RENDER` on; the daily email carries the Lane Briefs block (cap-rate bands, on-market, honest CMS staleness gaps, link to `#/briefs/dialysis`), the tab serves live facts, first `market_brief_issues` row frozen. Next: MB2a (the 3 new dialysis RSS URLs all fail 403/404), MB5 P-WEB (blocked on EB1b Anthropic credit), MB6 weekly long-form, MB7 MCP recall |
-| **Operator funnel (OC / HP1)** | HP1, HP1-P1a, HP1-P1a-fix, HP1-P1a-dup | 2026-09-12 | HP1-P1a-fix CLOSED live (608 rows UPDATED, first-ever Salesforce UPDATE to `bd_opportunities`); HP1 P0 (Today 500 badge) fixed+deployed+verified |
-| **Ownership (OWN/RO)** | OWN-T0a–T0j, RO3, B1b, AC2/AC3/AC6–AC11 | 2026-09-12 | OWN-T0j verified end-to-end live; RO3 field-mapping design drafted; OWN-T0a/B1b/AC-series propagation work still open |
-| **CoStar sidebar / public records (PR5/PRI)** | PR5d, PR-scanner-3, PRI2–PRI5 | 2026-09-12 | PR-scanner-3 shipped (`county_records_needed` action); PRI5 merged+deployed, awaiting another live CMS ingestion test run to confirm the hang is actually cleared |
-| **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
-| **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
-| **Broker identity (BR) / BROKER1** | BR1, BR2, BROKER1, BROKER1-sf | 2026-09-11 | BROKER1 prospect-assignment applied live (1,303 assigned) with a real bug found+fixed in production; BROKER1-sf (Salesforce write-back) correctly left unbuilt — no write path exists |
-| **gov agency canonicalization (ID3a\*)** | ID3a, ID3a-b, ID3a-c, ID3a-d, ID3e, I14, I16 | 2026-09-12 | ID3a-b/c/d/e all shipped and live-verified; repo-ownership hazard (I16) found and closed — `government-lease` owns the gov DB's migrations, LCC's copy retired |
-| **CI / producer health (B6d/B6e)** | B6d-cms-*, B6d-assessor-*, B6d-pri-*, B6e-ci-*, B6e-fred-* | archived 2026-09-11 | Suite is a real merge gate (`Run Tests` unmasked, green once on `main`); `pip-audit`/secrets-grep/ruff still masked; full detail in the 2026-08-29→09-11 archive and `docs/architecture/producer-health-and-ci-enforcement.md` |
-
-> **📦 ARCHIVE (2026-09-08):** entries for **2026-08-31 → 2026-09-01** (the CMS-ingestion restart,
-> DOC1–DOC18 document pipeline, C13/C14 entity-role work, and the trailing pointers for two earlier
-> cuts) were moved **verbatim** to
-> [`docs/history/STATUS_claude-code_2026-08-31_to_2026-09-01.md`](../history/STATUS_claude-code_2026-08-31_to_2026-09-01.md).
-> Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
-
----
 
 ## 2026-09-12 — MB2a scoped with feeds fetched live: 3 dead URLs replaced by 2 verified ones + a feed-health guard
 
