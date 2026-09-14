@@ -1,7 +1,6 @@
 # Claude Code queue — STATUS
 
-<!-- ============================================================================
-     CONVENTION — READ BEFORE PREPENDING AN ENTRY.
+<!-- =====================================================================     CONVENTION — READ BEFORE PREPENDING AN ENTRY.
      This file is newest-first. New entries go DIRECTLY BELOW this block, never
      above it. The `# Claude Code queue — STATUS` H1 above must remain line 1.
      This is enforced by test/status-header-integrity.test.mjs — CI fails if the
@@ -18,6 +17,29 @@
      archive pointer — never reword or drop an entry to make room.
      ============================================================================ -->
 
+## 2026-09-14 — MB2b/MB2c/FEED2: fixed the instrumentation, then judged PRSS off (Claude Code)
+
+**Shipped + deployed + live-verified, all three.** MB2c: `splitGoogleNewsTitle()`'s publisher regex
+widened `[^-–—]+`→`.+` (one char) — a hyphenated outlet ("Honolulu Star-Advertiser") used to fail
+the whole match, leaving `publisher: null` and the raw suffix stuck on the headline. MB2b: Federal
+Register (ESRD) got its own `maxAgeHours` (30d, not the global 72h) plus a new additive
+`market_brief_feed_health.items_after_cutoff` column, so "parsed 3, contributed 0" is now a visible
+number instead of a green `ok=true` row. FEED2: added the missing test
+(`test/feed2-streak-checks-not-days.test.mjs`) over the streak-counting migration's four cases +
+structural guards on the SQL. Deployed `briefing-intel-snapshot` v23→v24 to LCC Opps, deployed body
+re-read and confirmed byte-identical; migration `20260914120000` applied live. Forced a POST →
+confirmed `Honolulu Star-Advertiser` now parses and Federal Register (ESRD) reads
+`item_count:1, items_after_cutoff:1` on the real feed.
+
+**Then judged `MARKET_BRIEF_PRSS`, per the task's own instruction — flag stays OFF.** Forced the RSS
+tick dry-run against `stream=dialysis` (5 articles, real on-box Ollama): 4/5 "relevant", 4 would-write
+facts, **0 of the 4 a broker could cite** — a capital-markets headline restated with no numbers, a
+market-research report title, local EMS coverage. The one genuinely on-topic item (a Federal Register
+ESRD document) was marked not relevant. Reproduces Cowork's 2026-09-12 finding even with the pipeline
+fixed: the defect is the broad Google News query, not the instrumentation. Filed as a follow-up
+(tighten to `cap rate`/`clinic`/`acquisition`/`when:7d`, re-measure) rather than guessed at blind.
+
+Full suite: 6,180 pass / 0 fail / 6 skipped.
 ## 2026-09-14 — `HCRIS-TIMEOUT` response reviewed: both timeout root causes found and fixed, plus an unprompted finding much bigger than scoped — the same silent budget cutoff has likely been dropping several downstream steps for months
 
 `HCRIS-TIMEOUT`'s response (`"HCRIS TIMEOUT surface response.docx"`, saved by Scott) read in full and

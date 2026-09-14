@@ -400,3 +400,33 @@ that is not deployed look identical from the outside — both produce nothing, q
 is "done" only when the deployed body is re-read and confirmed to contain the change, never when the
 PR merges. `MARKET_BRIEF_PRSS` stays OFF until that read succeeds and relevance survival is measured
 on real items.
+
+**Addendum 2026-09-14 "MB2b/MB2c/FEED2" — fixed the instrumentation, then judged the relevance
+question it was meant to answer.** MB2c: `splitGoogleNewsTitle()`'s publisher half was `[^-–—]+`
+(no dash allowed), so a hyphenated outlet ("Honolulu Star-Advertiser", "ad-hoc-news.de") failed the
+whole match and silently returned the citation to the pre-MB2a state (`publisher: null`, suffix stuck
+on the headline). Widened to `.+`; measured against 101 real titles, 98→101 parse, 0 previously-correct
+parses changed. MB2b: `market_brief_feed_health.item_count` recorded PARSING, never CONTRIBUTION —
+Federal Register (ESRD) sat `ok=true, item_count=3` while contributing 0 to the brief on every run
+(all 3 older than the shared 72h cutoff), invisible to the I11-style monitor MB2a shipped. Fixed with
+a per-feed `maxAgeHours` override (ESRD gets 30d, not the global 72h — the 72h default is untouched
+for every other feed, on purpose) and an additive `items_after_cutoff` column. Both deployed
+(`briefing-intel-snapshot` v23→v24, body re-read and confirmed byte-identical to source) and
+live-verified via `net.http_get`/`lcc_cron_post`: today's real feed shows `Federal Register (ESRD)`
+at `item_count:1, items_after_cutoff:1` (was silently 0-of-3) and `sector_news.dialysis` carries a
+live item with `"publisher": "Honolulu Star-Advertiser"`. FEED2's open test gap is closed:
+`test/feed2-streak-checks-not-days.test.mjs` covers the four named scenarios plus structural guards
+on the shipped migration SQL.
+
+**Then the relevance question, forced live, not simulated.** With the pipeline fixed, a forced dry-run
+of `market-brief-rss-tick` against `stream=dialysis` (5 real articles, on-box Ollama) marked 4/5
+"relevant" and would write 4 facts — **none of them a fact a broker could cite**: a capital-markets
+headline restated with the substance stripped, a market-research report title, local EMS coverage.
+The one genuinely on-topic item, a Federal Register ESRD document, was marked NOT relevant. This
+reproduces Cowork's 2026-09-12 measurement (0 of 6 items worth anything) even with MB2b/MB2c shipped —
+**the defect is the broad Google News query, not the instrumentation this addendum fixed.**
+`MARKET_BRIEF_PRSS` stays OFF. An empty news section is the correct outcome here, not a failure to
+deliver, per this spec's own §7 rule that a flag stays off until relevance survival is measured on
+real items — it now has been, and it did not survive. Next step (not done here, a hypothesis to test
+rather than ship blind): tighten the query (`cap rate`, `clinic`, `acquisition`, `when:7d`) and
+re-measure.
