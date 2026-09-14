@@ -17,6 +17,61 @@
      archive pointer — never reword or drop an entry to make room.
      ============================================================================ -->
 
+## 2026-09-14 — OWN-T0c: shipped a canonical-key change, found it contradicted a tested contract, reverted fully (Cowork)
+
+Continuing the ownership-connectivity work after ID3b, picked up `OWN-T0c` (417 `duplicate_entity`
+conflicts, audit-dated 2026-09-02) as the next entity-dedup slice. Re-measured live first, per
+doctrine: population is now **1,183**, not 417 — re-measure again before trusting either number.
+
+Reviewed the existing merge machinery (`lcc_merge_entity` — mature, snapshot-backed, fully
+reversible, no extension needed) and traced the audit's named root cause: `lcc_entity_name_tokens`
+strips a LEADING "the" but not a TRAILING one, so `"XYZ Company"` and `"XYZ Company, The"` get
+different canonical keys and are invisible to each other as duplicates. Measured the fix's real
+blast radius before touching anything (43 live entities affected, ~6 that would newly collide)
+and shipped it live to LCC Opps (`xengecqvemvfknjvbvrq`): fixed the tokenizer, then ran the
+**existing** `lcc_n15c_backfill_canonical_names` (dry-run first, then live) to resync the stored
+`entities.canonical_name` column — 25 rows rewritten, 18 correctly held stale by its own guard.
+
+**Then found the contradiction, before updating any doc or committing anything to git**:
+`test/entity-canonical-key.test.mjs`, dated 2026-08-27 (a week *before* the OWN-T0c audit), carries
+a deliberate SQL-verified corpus that explicitly keeps a trailing "The" as part of the canonical
+key — `'Penstar Group, The' → 'penstar group the'`, commented "leading article only; a trailing
+'The' is part of the name." Two tested, considered positions disagree on what "the same owner"
+means for this exact shape. That is a decision for Scott, not something to resolve unilaterally
+mid-build by picking whichever doc I read most recently.
+
+**Reverted fully, live, same session**: `lcc_entity_name_tokens` restored to its original body
+(exact function definition, not a patch); all 25 `entities.canonical_name` rows restored to their
+logged prior values via `lcc_n15c_canonical_backfill_log` (batch `own_t0c_trailing_the_2026-09-14`
+— the fix's own audit log is what made an exact revert possible, not a guess). Parity re-verified:
+67,234/67,234 live entities' stored `canonical_name` matches what the function now computes.
+`test/entity-canonical-key.test.mjs` re-run green (8/8). No entity was ever merged; only the
+canonical-key computation was touched, briefly, and undone before it reached git. `PLANNED-BACKLOG.md`
+`OWN-T0b/c/d/f/g` row updated with the re-measured count and this open question, flagged for a
+human call rather than closed.
+
+No migration shipped, nothing to redeploy. Docs housekeeping: moved `MB2a`/`MB2b` desktop response
+files to `docs/claude-code/responses/done/` — both confirmed already merged (PR #2418, #2426) by
+other sessions before I reached them, no new work needed.
+
+
+## 2026-09-14 — MB2b/MB2c/FEED2 landed; the new column immediately found two more silent feeds (Cowork)
+
+**Verified live after CC's PR #2426 (v23 → v24).** `items_after_cutoff` column present, PRSS correctly
+**off**, zero open feed alerts, ESRD now contributes (1 of 1) under its `maxAgeHours = 30d`. CC's PRSS
+judgment stands and is the right call — the Google News **query** is the blocker, not the plumbing.
+🚨 **On its first day the new column exposed two feeds that are green and contribute nothing:**
+**Federal Register (GSA)** 6 items → **0 after cutoff**, and **Tax Foundation** 15 → **0**. MB2b set
+`maxAgeHours` on ESRD only. Measured both directly: FR GSA newest item **82h** old, Tax Foundation
+**92h** — so 0 within 72h, but **5 each within 7 days**. Live consequence: `government` contributes from
+ONE feed (FEED1 only half-fixed it) and **`tax_policy` is empty in the daily email** while reading green.
+⭐ **This is FEED2's twin.** FEED2 was a monitor counting calendar days against a weekday producer; this
+is a cutoff counting calendar hours against feeds that publish a few times a week. A fixed calendar
+window aimed at a slower-cadence source is empty by construction on some days, and **Monday is worst —
+72h on a Monday excludes everything before Friday morning.** Today is Monday. The 72h default is a NEWS
+window and we keep pointing it at non-news sources. → **MB2e** (`maxAgeHours = 7d` on both, then a
+distinct `no_contribution` alert arm so the monitor catches this class itself).
+
 ## 2026-09-14 — MB2b/MB2c/FEED2: fixed the instrumentation, then judged PRSS off (Claude Code)
 
 **Shipped + deployed + live-verified, all three.** MB2c: `splitGoogleNewsTitle()`'s publisher regex
