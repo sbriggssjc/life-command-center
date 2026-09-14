@@ -57,6 +57,7 @@
 // ============================================================================
 
 import { authenticate, requireRole, handleCors } from './_shared/auth.js';
+import { isTrueOwnerOperator, trueOwnerOperatorSelectFields } from './_shared/true-owner-operator-guard.js';
 import { opsQuery, pgFilterVal, requireOps, withErrorHandler, insertEntityRelationship } from './_shared/ops-db.js';
 import { closeResearchLoop } from './_shared/research-loop.js';
 import { ensureEntityLink, normalizeCanonicalName, refreshPlaceholderEntityNameById, looksLikePersonName, recordContactFieldWrites } from './_shared/entity-link.js';
@@ -8925,7 +8926,20 @@ export async function assemblePropertyPacket(entityId, workspaceId, deps = {}) {
     if (listRes.ok) listings = listRes.data || [];
 
     // ownership — recorded/true owner names (domain) + related people/orgs (LCC graph).
-    ownership = { recorded_owner_name: null, true_owner_name: null, related_entities: [] };
+    // PDR2 (2026-09-14): the true_owner may be the TENANT/OPERATOR, not the landlord (P113 —
+    // 7,937 dia properties resolve true_owner_id to an operator-flagged row). Never return an
+    // operator-flagged true_owner as ownership.true_owner_name; surface it explicitly instead
+    // via true_owner_is_operator + operator_name (the same field names
+    // entities-handler.js::assemblePropertyDossier §1.6 already reads/produces), and leave
+    // recorded_owner_name as the owner of record. gov's true_owners has no
+    // is_operator_not_owner/owner_type column — trueOwnerOperatorSelectFields degrades the
+    // select per domain so this never 400s there, and isTrueOwnerOperator never throws on a
+    // row missing those keys.
+    ownership = {
+      recorded_owner_name: null, true_owner_name: null,
+      true_owner_is_operator: false, operator_name: null,
+      related_entities: []
+    };
     if (leaseData && (leaseData.recorded_owner_id != null || leaseData.true_owner_id != null)) {
       const ownerCalls = [];
       if (leaseData.recorded_owner_id != null) {
@@ -8934,14 +8948,20 @@ export async function assemblePropertyPacket(entityId, workspaceId, deps = {}) {
           .then(r => ({ kind: 'recorded', r })));
       }
       if (leaseData.true_owner_id != null) {
+        const toSelect = `true_owner_id,name,${trueOwnerOperatorSelectFields(domain)}`;
         ownerCalls.push(_domainGet(domain,
-          `true_owners?true_owner_id=eq.${encodeURIComponent(leaseData.true_owner_id)}&select=true_owner_id,name&limit=1`)
+          `true_owners?true_owner_id=eq.${encodeURIComponent(leaseData.true_owner_id)}&select=${toSelect}&limit=1`)
           .then(r => ({ kind: 'true', r })));
       }
       for (const { kind, r } of await Promise.all(ownerCalls)) {
-        if (r.ok && r.data?.[0]?.name) {
-          if (kind === 'recorded') ownership.recorded_owner_name = r.data[0].name;
-          else ownership.true_owner_name = r.data[0].name;
+        if (!(r.ok && r.data?.[0]?.name)) continue;
+        if (kind === 'recorded') {
+          ownership.recorded_owner_name = r.data[0].name;
+        } else if (isTrueOwnerOperator(r.data[0])) {
+          ownership.true_owner_is_operator = true;
+          ownership.operator_name = r.data[0].name;
+        } else {
+          ownership.true_owner_name = r.data[0].name;
         }
       }
     }
@@ -8974,7 +8994,11 @@ export async function assemblePropertyPacket(entityId, workspaceId, deps = {}) {
   } else {
     // No domain linkage — these sections are unavailable, not errors.
     fieldsMissing.push('lease_data', 'documents', 'transactions', 'ownership', 'investment');
-    ownership = { recorded_owner_name: null, true_owner_name: null, related_entities: [] };
+    ownership = {
+      recorded_owner_name: null, true_owner_name: null,
+      true_owner_is_operator: false, operator_name: null,
+      related_entities: []
+    };
   }
 
   // Related people/orgs from the LCC graph — resolve the "other" entity's name.
