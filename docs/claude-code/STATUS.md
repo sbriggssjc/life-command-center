@@ -61,6 +61,84 @@ No Railway redeploy needed (DB-only, no application consumer changed). Left for 
 review-lane rows (`gov_owner_merge_review_log`); Stage 3's remaining `OWN-T0b/c/d/f/g` (417
 `duplicate_entity` merges) and Stage 4's contact-linkage gaps are the next candidates in this pipeline,
 not yet started.
+## 2026-09-14 — HP1-P2f-urgent shipped AND running; HP1 closed out with a topic page (Cowork)
+
+PR #2419 merged. Response and prompt filed to `done/`. **CC's own caveat resolved by measurement, not assumption:**
+it closed saying *"this takes effect after the next Railway redeploy."* Checked — `/version` on `tranquil-delight`
+reports **`ba22b8abac78`**, which **is** `main`. Merged **and** running. (The repo's own "merged is not running"
+rule, applied to the sentence that raised it.)
+
+**Live, today:** Significant **518** · Important **46** · **Urgent 59** · Inbox **92**. Urgent was ≈**1,664**; the
+**1,603** `contact_writeback` rows now sit behind a pointer linking to the BD worklist's pre-existing
+**"Push to CRM"** chip — a destination this change did not touch, and verified reachable before it. ⚠️ That
+population **moves** (1,664 → 1,730 → 1,669 → 1,603 across four reads in a day) — quote it at read time.
+
+📘 **The consolidation Scott has been asking for, made concrete: `docs/architecture/HOMEPAGE-ATTENTION-SURFACE.md`.**
+Until now the entire HP1 arc existed only as **17 open backlog rows, ~20 STATUS entries (most already archived),
+and a dozen files in `prompts/done/`** — a future chat would have had to reconstruct it from fragments, which is
+exactly the misdirection this cleanup exists to prevent. The page is the **one door**: what each of the three
+symptoms turned out to be (vs what it looked like), what Today and the Inbox contain now with live numbers, where
+the code lives, which guards protect it, and what is still open — with an explicit instruction to re-read the live
+rows rather than trust its own list. `PLANNED-BACKLOG.md`'s HP1 section header and `CURRENT-STATE.md` now point at
+it, and it states plainly that the **backlog remains the canonical open-work list; the page is the map, not a
+second backlog** (a second copy of the open work is how `MB3`×4 happened).
+
+**The five rules the arc produced, now written down in one place** rather than scattered across the entries that
+earned them: check the destination before routing anything off a surface · never verify on an HTTP 200 · a monitor
+must be producer-keyed, not table-keyed · a detector that has never fired is not a detector · a skipped step must
+emit to a counter, not to the broker.
+
+**What HP1 was, in one line:** three symptoms that looked like UI problems and were not — an unhandled abort
+killing three lanes at once, a six-week silent write failure hiding under an HTTP 200, and two lanes of machine
+output rendered as broker decisions. **What remains under `HP1-` is follow-on work, not the original report.**
+
+## 2026-09-14 — FEED2 held through a real weekend; MB2b/MB2c/FEED2-test bundled and measured (Cowork)
+
+**FEED2 verified in production, not just at apply time.** The health cron has run twice since the fix
+(Sun 09-13, Mon 09-14): **zero alerts, max streak 1**, today 13 feeds all returning items. Sunday is
+precisely the run the old `9999`-sentinel logic would have turned into **16 false alerts**.
+**MB2c measured on the live feed — it is one character.** `([^-–—]+)$` → `(.+)$`; the greedy `(.*)`
+already anchors to the last separator. Across **101 real titles** with a separator: old parsed 98, new
+parses **101**, **0 previously-correct parses changed**. Fixes `Honolulu Star-Advertiser` and two
+`ad-hoc-news.de` items. Regression corpus named in the prompt, since hyphens *before* the separator are
+what make a naive rewrite dangerous.
+**Sharper MB2b diagnosis, correcting my own earlier note:** the ESRD feed's problem is its narrow
+query's low volume, **not** Federal Register — the FR GSA-agency feed on the same service publishes
+daily. So: per-feed `maxAgeHours` (default 72), not a blanket "policy feed" exemption, and not a global
+widening of the 72h window.
+All three bundled into `prompts/MB2bc-fix-the-instrumentation-then-judge-PRSS.md` — they are one theme
+(our instrumentation is wrong, not the sources) and together they decide whether PRSS can flip.
+## 2026-09-14 — `PRI6` confirmed merged both sides; the "stuck for 2+ days" run turned out to be four run cycles chained back-to-back, all hitting a separate, months-old timeout defect (`HCRIS-TIMEOUT`), not a hang
+
+Scott confirmed `Dialysis` PR `#7409` merged — `PRI6` closed to ✅ in `PLANNED-BACKLOG.md`, both sides now
+confirmed.
+
+Scott then reported a CMS ingestion run as running "more than 2 days" and asked whether to keep it going.
+**Checked live rather than trusting the log excerpt alone (again a short, healthy-looking snippet) — this
+is not one continuous run.** `ingestion_tracker` shows **four separate run cycles chained back-to-back**
+since 2026-09-12, each roughly 10–16 hours, a new cycle starting the instant the previous one ends. The
+core `cms_medicare_clinics` fetch is correctly a no-op every cycle (already-confirmed benign, near-annual
+CMS cadence) — **not the problem**.
+
+**The real, previously-unflagged defect, found by reading `run_log` payloads in full rather than just the
+uploaded excerpt**: every recent cycle's summary reads `"Failed steps: hcris_cost_reports, hcris_propagation,
+run_timeout"`. This is not new — the identical signature appears in `run_log` going back to **2026-06-25**,
+predating this entire `PRI` arc. **Confirmed live**: `facility_cost_reports` (what `hcris_propagation`
+presumably writes) hasn't been touched in **182 days**, `max(updated_at)` = 2026-03-16. Each cycle burns
+most of its 10–16 hour runtime on this one step (`elapsed_seconds` 48,921s / 53,660s on the two most recent)
+before timing out.
+
+**Net read for Scott**: not a hang, genuinely fine to keep running — the currently-active cycle (started
+06:03 UTC 9/14) is alive and writing real data elsewhere (`properties.estimated_annual_revenue` updating in
+real time, matching "now"). But it will very likely follow the same pattern and time out on the same two
+steps again, same as the last several cycles — worth fixing rather than continuing to silently eat most of
+every run's wall-clock time. Filed as a new, separate backlog item — `HCRIS-TIMEOUT` — distinct from
+`B6d-cms-restart`'s already-fixed 30-day-skip throttle bug and from `PRI6`'s self-reclaim bug; this is a
+third, still-open failure mode in the same pipeline.
+
+`PLANNED-BACKLOG.md`'s `PRI6` row closed to ✅; new `HCRIS-TIMEOUT` row filed at 🔴. Prompt drafted:
+`docs/claude-code/prompts/HCRIS-TIMEOUT-cost-report-ingestion-times-out-every-run-facility-cost-reports-stale-182-days.md`.
+
 
 ## 2026-09-12 — HP1-P2f-urgent: `contact_writeback` moved off Today's Urgent lane, not hidden (Claude Code)
 
