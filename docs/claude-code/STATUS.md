@@ -18,6 +18,45 @@
      archive pointer — never reword or drop an entry to make room.
      ============================================================================ -->
 
+## 2026-09-14 — `HCRIS-TIMEOUT` response reviewed: both timeout root causes found and fixed, plus an unprompted finding much bigger than scoped — the same silent budget cutoff has likely been dropping several downstream steps for months
+
+`HCRIS-TIMEOUT`'s response (`"HCRIS TIMEOUT surface response.docx"`, saved by Scott) read in full and
+transcribed to
+`docs/claude-code/responses/done/HCRIS-TIMEOUT-cost-report-ingestion-times-out-every-run-facility-cost-reports-stale-182-days.response.md`.
+**Repo: `Dialysis`.** All four catalog items answered with real root causes, not guesses.
+
+**(a) Two distinct bugs, not one.** `hcris_cost_reports`'s download used a bare `requests.get(timeout=300)`
+— a single float timeout only bounds each socket read, so a trickling connection never trips it (the exact
+bug class this repo already fixed elsewhere via `_safe_get`, just never applied here). `hcris_propagation`
+called `save_estimate()` once per CCN with 2–3 sequential round trips each — an unbatched N+1 over the full
+national HCRIS population, the same anti-pattern already fixed in `patient_count_ingestor.py` but never
+ported to this module.
+
+**(b) Fixed**: bounded connect/read timeouts plus an explicit wall-clock deadline on the download; a new
+`save_estimates_batch()` (prefetch + chunked bulk writes, exact business rule preserved, other callers
+untouched); sized per-step timeout overrides matching what `medicare_ingestion` already has.
+
+**(c) The unprompted finding — bigger than the prompt scoped.** `run_timeout` isn't a third failed step —
+it's the overall 90-minute budget check run before each step; once exceeded, the loop just breaks and
+**every remaining step is silently skipped, no exception, no log line**, swept into "Failed steps" so it
+reads like an ordinary failure. Since HCRIS sits 9th/10th of 15+ steps, its hang routinely burned the whole
+budget — meaning `financial_estimates`, `property_financials`, `trend_detection`, `target_flagging`, and
+other downstream steps have likely frequently never run at all, for months, invisibly. Fixed to name every
+dropped step, not just the one it happened to be checking.
+
+**(d) Confirmed**: `hcris_cost_report_ingestor.py`'s `.upsert()` is the sole writer of
+`facility_cost_reports` anywhere in the repo — this timeout fully explains the 182-day staleness.
+
+Tests: 26 new, full suite 3,262 passed / 9 skipped / 1 xfailed (1 pre-existing unrelated failure disclosed).
+**Live re-check performed before filing**: the currently-running cycle predates this fix and is still on old
+code — `facility_cost_reports` remains frozen at 2026-03-16 as expected; the next full cycle after this
+deploys is the real proof point.
+
+PR opened on branch `claude/hcris-timeout-fix-01BWJTdN` — **merge status unconfirmed**, asked Scott directly.
+`PLANNED-BACKLOG.md`'s `HCRIS-TIMEOUT` row updated to 🟡. Prompt moved to `docs/claude-code/prompts/done/`.
+Response `.docx` pending archive to `responses/done/` on Scott's machine.
+
+
 ## 2026-09-14 — HP1-P2misparse-fp prompt: the guard blocks real people, and a shape fix cannot repair it (Cowork)
 
 Sized the last 🔴 under HP1 before writing anything, and the sizing changed the shape of the fix.
