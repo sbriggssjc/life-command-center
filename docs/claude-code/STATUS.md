@@ -17,6 +17,45 @@
      archive pointer — never reword or drop an entry to make room.
      ============================================================================ -->
 
+## 2026-09-14 — County pilot run live: Harris works, Cook is human-only, LA publishes no owner at all (Cowork)
+
+Ran OWNERGAP1's recommended pilot in the browser rather than handing Scott an hour of clicking. It took minutes,
+and **it refutes the single-number framing of the question it was meant to answer.**
+
+⚠️ **A constraint the decision doc did not weight:** these properties carry essentially **no APNs** — Cook
+**0/73**, Harris **0/50**, LA **1/54** — so every lookup has to work from a **street address alone**. That is what
+the pilot actually tested.
+
+**The three counties resolved three different ways:**
+
+| county | props | verdict |
+|---|---:|---|
+| **Harris, TX** | 50 | ✅ free, address search, **returns the owner**, CSV/XLS/PDF export — looks automatable |
+| **Cook, IL** | 73 | ⚠️ free address search exists but **every search is CAPTCHA-gated** — human-only |
+| **Los Angeles, CA** | 54 | ⛔ free, no CAPTCHA, **but owner names are not published at all** |
+
+**Harris is a direct hit, and the county draws exactly PDR2's distinction.** `5040 Crenshaw` → three accounts:
+`FRESENIUS MEDICAL CARE GREATER SOUTHEAST HOUSTON LLC` and `FUSA MARKETING` as **Personal** property, and
+**`CRENSHAW MOB LLC`** (16,915 SF, $1,903,507) as **Commercial** — the real owner, a single-asset LLC, on a
+property LCC reports as "owner unknown" today.
+
+**LA is a hard no, established by reading rather than assuming.** Parcel detail for AIN 2350012065 carries situs
+address, use code, building characteristics, a 25-row assessment history, and an ownership *events* table with
+recording dates, doc numbers and sale prices — **and no owner name anywhere.** Not a scraping difficulty; the
+datum is not published.
+
+👤 **What it changes for Scott:** **there is no single "Option A yield."** Behind the 4,021 sit **1,266 distinct
+(state, county) combinations**, and the three largest split one-automatable / one-manual / one-impossible. A
+national county build would be sized against the worst case while delivering only the Harris-shaped subset.
+Revised to three options on **OWNERGAP1-decision**: build for Harris-shaped counties only (**sample 5–10 more
+first** — three proves the shapes differ, not how they split); a paid bulk provider, which is the only path that
+reaches LA-shaped counties because it does not depend on what a county chooses to publish; or accept "owner
+unknown" and rank those properties last — now a measured choice rather than a default.
+
+**The cheapest informative next step is more sampling, not a build** — the same logic that made this pilot worth
+running. Appended to `docs/audits/OWNERGAP1_FABRICATED_OWNER_AND_UNRECOVERABLE_GAP_2026-09-14.md` §6 rather than
+filed separately, so the decision and its evidence live in one place.
+
 ## 2026-09-14 — OC-v2 taken live: the operator funnel now triages, routes, and watches itself (Cowork)
 
 **Applied the migration CC could not** (`20261102140000`): flag row registered, `v_operator_notes_stale_open`,
