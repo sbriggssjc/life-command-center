@@ -1,7 +1,6 @@
 # Claude Code queue — STATUS
 
-<!-- ============================================================================
-     CONVENTION — READ BEFORE PREPENDING AN ENTRY.
+<!-- =====================================================================     CONVENTION — READ BEFORE PREPENDING AN ENTRY.
      This file is newest-first. New entries go DIRECTLY BELOW this block, never
      above it. The `# Claude Code queue — STATUS` H1 above must remain line 1.
      This is enforced by test/status-header-integrity.test.mjs — CI fails if the
@@ -41,6 +40,123 @@ fixed: the defect is the broad Google News query, not the instrumentation. Filed
 (tighten to `cap rate`/`clinic`/`acquisition`/`when:7d`, re-measure) rather than guessed at blind.
 
 Full suite: 6,180 pass / 0 fail / 6 skipped.
+## 2026-09-14 — `HCRIS-TIMEOUT` response reviewed: both timeout root causes found and fixed, plus an unprompted finding much bigger than scoped — the same silent budget cutoff has likely been dropping several downstream steps for months
+
+`HCRIS-TIMEOUT`'s response (`"HCRIS TIMEOUT surface response.docx"`, saved by Scott) read in full and
+transcribed to
+`docs/claude-code/responses/done/HCRIS-TIMEOUT-cost-report-ingestion-times-out-every-run-facility-cost-reports-stale-182-days.response.md`.
+**Repo: `Dialysis`.** All four catalog items answered with real root causes, not guesses.
+
+**(a) Two distinct bugs, not one.** `hcris_cost_reports`'s download used a bare `requests.get(timeout=300)`
+— a single float timeout only bounds each socket read, so a trickling connection never trips it (the exact
+bug class this repo already fixed elsewhere via `_safe_get`, just never applied here). `hcris_propagation`
+called `save_estimate()` once per CCN with 2–3 sequential round trips each — an unbatched N+1 over the full
+national HCRIS population, the same anti-pattern already fixed in `patient_count_ingestor.py` but never
+ported to this module.
+
+**(b) Fixed**: bounded connect/read timeouts plus an explicit wall-clock deadline on the download; a new
+`save_estimates_batch()` (prefetch + chunked bulk writes, exact business rule preserved, other callers
+untouched); sized per-step timeout overrides matching what `medicare_ingestion` already has.
+
+**(c) The unprompted finding — bigger than the prompt scoped.** `run_timeout` isn't a third failed step —
+it's the overall 90-minute budget check run before each step; once exceeded, the loop just breaks and
+**every remaining step is silently skipped, no exception, no log line**, swept into "Failed steps" so it
+reads like an ordinary failure. Since HCRIS sits 9th/10th of 15+ steps, its hang routinely burned the whole
+budget — meaning `financial_estimates`, `property_financials`, `trend_detection`, `target_flagging`, and
+other downstream steps have likely frequently never run at all, for months, invisibly. Fixed to name every
+dropped step, not just the one it happened to be checking.
+
+**(d) Confirmed**: `hcris_cost_report_ingestor.py`'s `.upsert()` is the sole writer of
+`facility_cost_reports` anywhere in the repo — this timeout fully explains the 182-day staleness.
+
+Tests: 26 new, full suite 3,262 passed / 9 skipped / 1 xfailed (1 pre-existing unrelated failure disclosed).
+**Live re-check performed before filing**: the currently-running cycle predates this fix and is still on old
+code — `facility_cost_reports` remains frozen at 2026-03-16 as expected; the next full cycle after this
+deploys is the real proof point.
+
+PR opened on branch `claude/hcris-timeout-fix-01BWJTdN` — **merge status unconfirmed**, asked Scott directly.
+`PLANNED-BACKLOG.md`'s `HCRIS-TIMEOUT` row updated to 🟡. Prompt moved to `docs/claude-code/prompts/done/`.
+Response `.docx` pending archive to `responses/done/` on Scott's machine.
+
+## 2026-09-12 — ID3b shipped: gov owner fuzzy-variant merge (Cowork)
+
+Continued the "ownership connectivity" redirect (Scott: audit property→recorded-owner→developer
+chain→true-owner→contact discovery/enrichment across LCC/Outlook/WebEx/Salesforce) by executing
+**ID3b**, the highest-leverage concrete step per `docs/architecture/ownership-truth-pipeline-state.md`'s
+own finding that entity-dedup fixed once upstream benefits multiple stages at once, and per Scott's
+own "THIRD by Scott 2026-09-12" sequencing.
+
+Re-measured live before building (RO2a's numbers were a day old): gov `recorded_owners` fuzzy-variant
+population unchanged at 1,380 groups / 2,870 rows; gov `true_owners` at 227 groups / 461 rows (down
+from the prior day's 237/483 as other identity work kept chipping at it). Confirmed the existing merge
+machinery (`apply_owner_merge`, `apply_true_owner_merge`) needs no extension — both already accept
+arbitrary caller-supplied survivor/loser pairs. Confirmed no reusable SQL guard exists for bank/lender
+exclusion (`lenderNamePasses` in `sidebar-pipeline.js` was checked and rejected — it deliberately does
+NOT exclude banks, wrong model for "bank captured as owner should route to review").
+
+Shipped two new tick functions, `gov_owner_variant_merge_tick(p_dry_run)` and
+`gov_true_owner_variant_merge_tick(p_dry_run)`: group by `gov_owner_strict_core` (core ≥4 chars),
+survivor = highest-property-count member, guard every group through `gov_owner_name_is_brokerage`,
+`is_generic_gov_owner`, and a new bank/lender/lienholder regex — any hit routes the WHOLE group to
+`entity_match_candidates`/`gov_owner_merge_review_log`, never auto-merged. Dry-run matched the live run
+exactly on both tables.
+
+**Live results:** `recorded_owners` 1,380 groups seen, 1,466 merged, 24 routed to review (22 groups —
+hand-checked: correctly caught `CBRE`, four `U.S. Bank National Association` casings, JPMorgan Chase,
+TD Bank, Umpqua, SunTrust, World Bank, a title/land-trust company, and three brokerage names —
+Colliers, Northmarq, Marcus & Millichap — riding inside one JV description string). `true_owners` 227
+groups seen, 232 merged, 2 routed to review (TD Bank / U.S. Bank). **Parity confirmed bit-for-bit**:
+`total_properties` (20,509), `properties_with_recorded_owner` (9,327), `properties_with_true_owner`
+(9,848) were unchanged before/after both live runs — only unmerged-owner-row counts dropped by exactly
+the merged-loser counts. No property silently moved to a different real owner. dia confirmed untouched
+(already zero exact AND fuzzy dups, no build needed).
+
+Migration: committed in `government-lease` (`sql/20261013_gov_id3b_owner_variant_merge.sql`) --
+the owning repo per ID3a-d, not life-command-center. **Correction, 2026-09-14:** this file was
+first committed to life-command-center's now-retired `supabase/migrations/government/` directory
+by mistake; PR #2420's CI caught it (`test/gov-migrations-directory-retired.test.mjs` -- the exact
+regression guard ID3a-d built for this exact mistake). Moved to `government-lease` where it
+belongs; the live database change itself was correct and unaffected throughout. `PLANNED-BACKLOG.md`
+ID3b and RO2a rows marked executed with the live numbers. `ownership-truth-pipeline-state.md`
+Stage 3 refreshed to note the entity-dedup residue this closes.
+
+No Railway redeploy needed (DB-only, no application consumer changed). Left for a human: the 26
+review-lane rows (`gov_owner_merge_review_log`); Stage 3's remaining `OWN-T0b/c/d/f/g` (417
+`duplicate_entity` merges) and Stage 4's contact-linkage gaps are the next candidates in this pipeline,
+not yet started.
+## 2026-09-14 — Prompt-queue audit: two prompts existed in BOTH `prompts/` and `prompts/done/`; PDR2's blast radius is ~2× what it says (Cowork)
+
+Before adding a fourth prompt to Scott's queue, checked whether the queue is accurate — an earlier XB2 pass found
+shipped prompts still sitting in `prompts/`, and the failure mode is worse than untidiness: a future chat re-runs
+finished work.
+
+**Found and fixed:**
+- ⛔ **`PRI4` and `PRI5` were in `prompts/` AND `prompts/done/` — byte-identical (md5 verified).** Both are shipped
+  and deployed (PRI5 confirmed by Scott 2026-09-11; PRI4 merged via PR #2293/#2297). A file in two places is worse
+  than a stale one: a reader cannot tell which is canonical. Active-queue copies moved to
+  `_superseded/prompt-queue-audit-2026-09-14/` with a manifest row — not deleted, and `prompts/done/` keeps the
+  canonical copy.
+- **`MB2a` was ✅ BUILT with a response already filed, but its prompt was still in the active queue** → `done/`.
+  (Its follow-on `MB2a-deploy` stays 🚨 open — a separate row, correctly.)
+- Two new prompts arrived from parallel Claude Code work (`HCRIS-TIMEOUT`, `MB2bc`). **Queue is now 7, all
+  genuinely open**: `BR1`, `HCRIS-TIMEOUT`, `HP1-P2misparse-fp`, `ID3b`, `ID3d`, `MB2bc`, `PDR2`.
+
+🔴 **And the audit turned up the thing that should be built next — PDR2, whose own headline understates it by
+about half.** The prompt says *"~4,026 properties"*; that is the **no-fallback subset**. Re-measured live in
+Dialysis_DB: **7,937** properties point `true_owner_id` at an `is_operator_not_owner=true` row, and **4,022** of
+those also have `recorded_owner_id IS NULL` — so even the readers that guard correctly have **nothing to fall back
+to**. Top offenders: **Fresenius 3,077 · DaVita Inc. 2,625 · DaVita Kidney Care 1,182 · U.S. Renal Care 343 ·
+Dialysis Clinic Inc 256 · American Renal 221** — **every major operator, not one bad DaVita placeholder.**
+
+**Why it outranks the rest of the queue:** for a net-lease broker the entire job is identifying and calling the
+**owner**. `get_property_context` — the MCP tool and the property packet Scott actually reads — currently answers
+*"the owner is DaVita"* when DaVita is the **tenant**. And two other readers in this same repo already guard it
+correctly (`assemblePropertyDossier` §1.6, `sf-link-reconcile.js::isOperator()`), so it is a **one-file
+inconsistency, not a data problem** — cheap to fix, expensive to leave.
+
+Corrected the figure in the prompt header and on the backlog row rather than leaving a dated number to be quoted
+again (*"re-measure a dated blocker before quoting it"*). §1 of the prompt still requires CC to re-measure rather
+than inherit even these.
 
 ## 2026-09-14 — HP1-P2misparse-fp prompt: the guard blocks real people, and a shape fix cannot repair it (Cowork)
 
