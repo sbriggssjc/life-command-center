@@ -46,8 +46,8 @@ separate, standing decision** (`account-based-contact-intelligence.md`).
 
 | | |
 |---|---|
-| candidate pairs | **742** (was 758 on 09-12, 684 on 08-27) — re-measured live 2026-09-14, down 16 after the 09-13 auto-attach batch |
-| lane cards shown to the operator | **72** (was 83 on 09-12, 91 on 08-27) — re-measured live 2026-09-14 |
+| candidate pairs | **735** (was 742 earlier 09-14, 758 on 09-12, 684 on 08-27) — 9-13 auto-attach batch (-16) then the N3c bank/trustee exclusion (-7) |
+| lane cards shown to the operator | **70** (was 72 earlier 09-14, 83 on 09-12, 91 on 08-27) |
 | parked, not shown | 141 as of 08-27 — not re-measured this pass |
 | human attaches recorded | **27**, unchanged since 08-27 (all human attaches predate the fix; see `tier0_auto` writes below for the newer channel) |
 | owner merges logged (all reversible) | **176** (was 66 on 08-27) — real growth, unrelated to auto-attach |
@@ -88,6 +88,7 @@ cron **241 at 06:55 UTC**. The GET is an ungated dry run and writes nothing.
 | **Only the strongest candidates are shown** | Scott 2026-08-26 | 255 → 96 cards |
 | **Sponsor map: 8 confirmed** | Scott 2026-08-26/27 | ngp, uirc, hpi, jbg, gardner, salus, oxford, savlan. **fcp and tmg deliberately held** |
 | **Rejected sponsors** | Scott 2026-08-27 | `royal` (common word), `maple` (the Mapletree place-word trap) |
+| **Banks and CMBS trustees excluded from prospecting** | Scott 2026-09-14 | Same category as public bodies/universities, `lcc_owner_name_is_bank_or_trustee`. Explicitly revisitable if lender prospecting via Northmarq debt-side coordination is decided later |
 | **A confirm lane, not an unattended promoter** | measured | link precision ~91% only above ~$16M, ~60–70% in the $2M SPE band |
 | **DST / Trust / LLC variants of one sponsor stay ONE entity — the TRUE OWNER** | Scott 2026-08-27 | Answers N15b §6 decision 1. `Rainier Rockford DST Trust` = `Rainier Rockford Llc`; `SE VALPO LLC` = `Se Valpo Dst`; `Chiapelone` = `Chiapelone Trust`. **So `lcc_owner_domain_core`'s `trust\|dst\|reit` strip is CORRECT and is the adopted rule** — what N15b listed as its "named residue" is the desired behaviour. ⚠️ **The aspirational future (individual investors as direct owners, and knowing they hold fractional positions in a DST/TIC/JV on similar deals) is a SEPARATE model and must NOT be built by splitting this dedup key** — see backlog **N17** |
 
@@ -176,9 +177,26 @@ cron **241 at 06:55 UTC**. The GET is an ungated dry run and writes nothing.
 - **Sidebar `_provider` stamp rate** — 0%, but the newest row predates the extension reload. One
   CoStar capture settles it.
 
-**👤 Needs Scott:** `fcp→fcpdc.com` and `tmg→tmgdc.com`; **N3c** bank/trustee scope (Truist $6.2M /
-15 candidates, Wells Fargo, the JP Morgan CMBS trust); **N15** whether the 1,475 Salesforce-campaign
-orphans get hub rows.
+✅ **N3c decided and shipped 2026-09-14 (Scott + Cowork):** banks and CMBS trustees excluded from
+prospecting permanently for now, as their own category (same mechanism as public bodies and
+universities) -- `lcc_owner_name_is_bank_or_trustee`, wired into `lcc_owner_name_is_not_prospected`
+so it reaches all seven consuming views. Sized before shipping: 11 owner names match live (10 national
+banks + 1 JPMorgan CMBS trust), 0 false positives against individual/family trustees, 0 credit unions
+swept in (deliberately -- they can be legitimate owner-occupant prospects). Truist and the 15
+candidates named in the original sizing are no longer live in the open lane (population moved since);
+what's excluded now is Wells Fargo Bank NA ($3,622,447 rent) and the JP Morgan CMBS trust ($2,377,718
+rent), verified gone from `v_lcc_tier0_owner_contact_lane_open`. **Explicitly revisitable** — Scott's
+words: "that might be a decision we reevaluate in the future if we decide to start prospecting
+lenders directly and work some coordinated capacity with the Northmarq debt side... for now, nothing
+though." Migration: `supabase/migrations/20261102150000_lcc_own_t0_bank_cmbs_trustee_exclusion.sql`.
+
+⚠️ **`fcp`/`tmg` sponsor-domain proposals are now STALE, re-checked 2026-09-14** — both have
+disappeared entirely from `v_lcc_tier0_sponsor_map_proposals` live (were present when this page was
+last measured 08-27/08-28). Whatever candidates generated them were resolved, merged, or reclassified
+since. Not re-raising a decision that no longer has a live population behind it; if the underlying
+owners resurface, re-measure before asking again.
+
+**👤 Still needs Scott:** **N15** whether the 1,475 Salesforce-campaign orphans get hub rows.
 
 **✅ Done 2026-08-27 16:28 UTC (P198 §5):** Scott approved and all three merges landed — Easterly,
 Cambridge, Gardner. Six cards became three; **Easterly is now ONE card at $114,864,150 / 89 assets /
