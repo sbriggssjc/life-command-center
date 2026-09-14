@@ -17,6 +17,24 @@
      archive pointer — never reword or drop an entry to make room.
      ============================================================================ -->
 
+## 2026-09-14 — XB scoped by running the audit by hand first; it found real debt (Cowork)
+
+Two of Scott's three original P18 asks are now live and self-monitoring (market briefs, operator funnel).
+**XB — the CDO/CTO build brief — is the third and was never started.** Rather than describe it, ran the
+XB2 rules by hand so the prompt carries a measured acceptance target:
+**618 local branches** (14 unmerged); **68 flags — 37 on / 29 off, 15 off >3 weeks, 11 off >60 days**,
+oldest dark since **2026-05-30**; `sidebar_contact_guard` **31 runs / 31 skipped / 0 completions ever**;
+4 of 8 prompts without a matching response; STATUS 2,257 / 2,500 and BACKLOG 1,178 (both guarded).
+⭐ **The run produced a rule refinement.** `p_rss` also reads "skipped, never completed" — but its
+`skip_reason` is `flag MARKET_BRIEF_PRSS is off`, which is the system working and must stay silent.
+`sidebar_contact_guard`'s reason is operational, 31 runs running — a stall wearing a skip's clothes. So
+the rule is **not** "no completions" but "skips that are NOT flag-gated, N runs running". Same
+dead-vs-silent distinction FEED2 and MB2e each paid for separately; it now has a third instance.
+⚠️ The orphan-prompt rule threw a **false positive** (`MB2bc-…` vs `MB2b desktop response.docx`) — the
+prompt↔response naming convention is unenforced, so that rule needs a real key before shipping.
+Scoped **XB1+XB2 only — no dashboard**: a surface with nothing behind it is exactly how three "looks
+live, does nothing" defects happened this week. → `prompts/XB1-XB2-build-brief-collector-and-audit-rules.md`
+
 ## 2026-09-14 — County pilot run live: Harris works, Cook is human-only, LA publishes no owner at all (Cowork)
 
 Ran OWNERGAP1's recommended pilot in the browser rather than handing Scott an hour of clicking. It took minutes,
