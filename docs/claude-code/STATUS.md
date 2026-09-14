@@ -17,6 +17,21 @@
      archive pointer — never reword or drop an entry to make room.
      ============================================================================ -->
 
+## 2026-09-14 — OC-v2 shipped: lane detection + GET-never-calls-the-model bug fixed, flag registered, cron scheduled
+
+Root-caused the two triage findings from the measurement pass below. `lane: null` was structural —
+`classifyDeterministic` never set `lane`, only `note_type`/`severity`; added `detectLane` (domain
+keyword map: dialysis/government/comps/market-brief/buyer-engagement/automation/data-coherence/canon)
+and attached it to every deterministic verdict. `triage_source: null` / "model declined" was a
+misread — a plain `GET` dry run never called Ollama at all (only `POST` or `?generate=1` did), so the
+bug note was never actually offered to the model. Removed that gate (`?skip_model=1` opts out).
+Migration `20261102140000` registers `OPERATOR_NOTE_TRIAGE` (still **off** — the row never existed,
+so nothing could flip it), schedules `lcc-operator-triage` (07:25 UTC, not flag-gated), and adds a
+distinct stale-note monitor (`v_operator_notes_stale_open` / `lcc_check_operator_notes_stale`,
+`operator_note_stale_open` alert ≥3d, cron 07:30). **Not applied live** (no DB access this session) —
+flag stays off until a live re-grade. `test/operator-notes.test.mjs` + `test/operator-triage-tick.test.mjs`
++ `test/sql-definer-privilege-stanza.test.mjs` all green.
+
 ## 2026-09-14 — OC-v2 de-risked by measuring triage before sending it (Cowork)
 
 Rather than send OC-v2 blind, forced a triage dry run against the deployed handler
