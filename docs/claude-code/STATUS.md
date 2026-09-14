@@ -17,6 +17,83 @@
      archive pointer — never reword or drop an entry to make room.
      ============================================================================ -->
 
+## 2026-09-14 — OWNERGAP1 Unit 1 shipped: reversible SQL-side quarantine on Dialysis_DB; producer is `Dialysis/src/public_record_ingest.py`, not this repo (Cowork)
+
+Followed up on the entry below (the 228 fabricated `ABC`/`XYZ` owner names + 142 `"Unknown"` placeholders in
+`tax_records.raw_payload->>'mailing_owner'`). Attached the `Dialysis` repo read-only and traced the real
+producer: **not** `sidebar-pipeline.js` as the originating prompt named — that file never writes
+`mailing_owner` (grep: zero hits). It is `Dialysis/src/public_record_ingest.py::write_tax_record`, calling
+`gpt-4o` with the property's own recorded/true owner in the prompt and no county fetch anywhere in the module
+— the same mechanism PR1/PR1a/PR1b already documented on `assessed_value`/`tax_amount`/`tax_delinquent`,
+recurring on a field (`mailing_owner`) those rounds never touched. Corrected in place above.
+
+**Contamination is wider than the prompt described** — measured across all four tables the producer touches,
+not just `tax_records`: `entity_registry_records.entity_name` carries the same `ABC`/`XYZ` pattern, and
+`recorded_owners.name` / `true_owners.name` carry it too (the curated identity tables `properties` FKs
+point at). Migration `20260914150000_dia_ownergap1_fabricated_owner_quarantine.sql` (applied live to
+Dialysis_DB `zqzrriwuavgrquhisnoa` via three sequential statements — the base migration plus two live
+corrections, both folded into the committed file):
+
+- **One detector, `dia_is_fabricated_placeholder_owner(text)`** — case-insensitive `^(XYZ|ABC)\s` plus
+  exact (trimmed, case-insensitive) `= 'unknown'`. Never a `contains` rule (P158a) — a real firm like
+  `"AZ Business Trust LLC"` or `"Unknown Holdings of Dallas LLC"` must not flag.
+- **`dia_ownergap1_fabrication_quarantine`** — append-only log, idempotent (`ON CONFLICT ... WHERE
+  restored_at IS NULL DO NOTHING`), records the pre-quarantine value for every flag.
+- **`tax_records.mailing_owner`** — the field the investigation named — is NULLED (the field is not an
+  identity column; blank is the honest state) + flagged; guard trigger stops future writes the same way.
+- **`entity_registry_records`/`recorded_owners`/`true_owners`** — **flag-only, name preserved.** These are
+  identity columns other rows FK to; nulling `name` would either FK-violate or silently rename a real party.
+  Each has its own `BEFORE INSERT OR UPDATE` guard trigger.
+- **The loophole this closes: `properties.recorded_owner_id`/`true_owner_id`.** A property could still point
+  at a fabricated-and-flagged owner row even after the row itself is flagged. `trg_dia_ownergap1_property_owner_link_guard`
+  nulls the FK on write — **scoped to `fabrication_quarantine_reason = 'fabricated_placeholder'` only, never
+  `'unstated_placeholder'`.** ⚠️ That scoping was corrected live, mid-build: the first version tested
+  `fabrication_quarantined_at IS NOT NULL` generically, and a live `recorded_owners` row literally named
+  `"Unknown"` is referenced by **23 real properties** — the generic guard would have silently severed those
+  on the next write to that row. Caught by testing both directions against production before shipping
+  (rolled back, no residue), not by reading the code.
+- **`dia_ownergap1_restore_quarantine(batch_tag)`** — full reversal, restores `mailing_owner` from the log
+  and clears every flag column for a batch.
+
+**Before/after (live, `zqzrriwuavgrquhisnoa`):** `tax_records.mailing_owner` fabricated 228 → **0** (nulled +
+logged), `"Unknown"` literal 142 → **0** (nulled + logged, `unstated_placeholder`); `entity_registry_records` /
+`recorded_owners` / `true_owners` fabricated names flagged, names preserved. **Confirmed: 0 properties'
+`recorded_owner_id`/`true_owner_id` reference a `fabricated_placeholder`-flagged row** (the link guard's
+positive control), and **no property owner FIELD was written by any of this** — only flags, nulls on the
+non-identity `mailing_owner` field, and reversible FK-nulls on the loophole.
+
+**Unit 2 (re-measurement) — all four of the prompt's own figures reproduced, live, this session**, beside
+the originating measurement: 25,331 `mailing_owner` keys / 24,365 null-or-empty (matches exactly); of the
+4,021 owner-unknown properties, 3,048 join tax records and exactly 1 has a non-blank `mailing_owner`
+(`"Unknown"`, matches exactly); `deed_records` **204** total / 0 overlap (the prompt said 203 — a genuine
++1 landed in the hours between the two measurements, not a methodology disagreement, called out rather than
+silently reconciled); 56 of 4,021 carry a `parcel_number`, 0 of those join a `parcel_records.owner_name`
+(matches exactly). **No source the prompt missed was found.** The finding stands as written: the 4,021-
+property owner gap is not recoverable from any table LCC or Dialysis_DB holds.
+
+**Unit 3 (costed decision doc):** `docs/audits/OWNERGAP1_FABRICATED_OWNER_AND_UNRECOVERABLE_GAP_2026-09-14.md`
+— county-recorder path (`handleRecorderPortal` is gov-only; `county_authorities` does not exist on
+Dialysis_DB at all — verified via `information_schema`, so the prompt's premise there needed correcting too;
+the dia-capable path is the manual `handlePublicRecordsCapture` writeback only) vs a paid bulk vendor
+(`Dialysis/src/regrid_client.py` — a complete, unused Regrid Parcels client gated on unset `REGRID_API_KEY`)
+vs doing nothing; state/county concentration (top 15 = 549/4,021, 13.7%; 640/4,021 carry no county at all;
+1,266 distinct state/county combinations — the population is NOT geographically narrow, so a county-by-county
+manual pilot does not obviously beat a national paid feed); recommendation to Scott: a small 3-county pilot
+before committing to either paid path, given the population's dispersion.
+
+**Guard:** `test/ownergap1-fabricated-owner-quarantine.test.mjs`, 40 tests — positive control on all 12
+known fabricated names + `"Unknown"` variants (case/whitespace), negative control on 10 real names
+(`"AZ Business Trust LLC"`, `"X Y Z Dialysis Consulting LLC"` as the deliberately adversarial edge cases),
+plus structural assertions against the migration's own source (detector, quarantine table, all four+one
+guard triggers, the `fabricated_placeholder`-only scoping on the property-link guard, the restore function,
+`NOTIFY pgrst`). Full suite: **6,231 passed / 0 failed / 6 skipped** (pre-existing skips, unrelated).
+
+**No Railway redeploy needed or possible for this change** — nothing in `api/`/JS shipped; the entire fix is
+a Dialysis_DB migration (live immediately, per this repo's own "Supabase migration changes are live
+immediately" rule) plus a test file and two docs. The actual Python producer fix (stop `gpt-4o` emitting
+`ABC`/`XYZ` template-shaped names) is filed as **`OWNERGAP1-producer`**, cross-repo, not shippable from this
+session's read-only `Dialysis` access.
+
 ## 2026-09-14 🚨 — The tax feed has written 228 fabricated owner names into production, and the owner gap is NOT recoverable (Cowork)
 
 Set out to size the recoverable half of **PDR2-noowner** (the 4,021 dia properties — **34% of the book** — that
@@ -28,10 +105,19 @@ than the sizing was.**
 `XYZ Healthcare Trust`, `ABC Properties LLC` and siblings — across **228 rows and 119 counties**, first seen
 **2026-05-20**, last **2026-08-24**. **Of the 824 non-placeholder `mailing_owner` values in that table, 228
 (28%) are fabricated.** ✅ None are linked to a property, so nothing displays them today — **but they are in the
-table ownership answers come from, and the writer (`sidebar-pipeline.js` ~5780–5835, the CoStar sidebar
-public-record capture) is live.** A further **142 rows hold the literal `"Unknown"`**, a placeholder written as
+table ownership answers come from.** A further **142 rows hold the literal `"Unknown"`**, a placeholder written as
 though it were a fact (**P180**). This is the *never fabricate* rule failing in the data layer rather than in
 prose, which is the harder place to notice it.
+
+⚠️ **CORRECTED 2026-09-14 (OWNERGAP1 containment) — the writer named above was wrong.** `sidebar-pipeline.js`
+in *this* repo never writes `mailing_owner` (verified by grep — zero hits). The real producer is
+**`src/public_record_ingest.py` in the sibling `Dialysis` repo**, and it is the SAME class already recorded
+twice elsewhere in this file: no county HTTP call at all, one call to `gpt-4o` seeded with the property's own
+address/owner and asked to "extract" parcel facts — a generator, not a source. See PR1/PR1a/PR1b above; this
+is the fourth instance of the identical mechanism, on a field (`mailing_owner`) those rounds did not touch.
+Unit 1 (SQL-side containment: detector, reversible quarantine, write-time guard) is now shipped on Dialysis_DB
+— see the OWNERGAP1 entry below. The Python producer fix is a separate, cross-repo follow-up
+(`OWNERGAP1-producer`, filed, not built here — this session has read-only access to `Dialysis`).
 
 ✅ **2. The owner is NOT recoverable from anything we hold — and establishing that is the point.** The tempting
 conclusion was *"the data is in the payload, we just never parsed it."* **Tested, and false:**
@@ -2283,24 +2369,7 @@ precomputed text — filed **ID2b-cm**. `dossier-generator.js`/`rent-projection.
 `sidebar-pipeline.js` and the ~85 remaining views not read this round — filed **ID2b-remaining**/**ID2b-mods**.
 Full report: `docs/audits/ID2b_OPERATOR_ID_CONSUMER_SWITCH_2026-09-12.md`. Branch `claude/dreamy-pascal-i97j44`.
 
-## 2026-09-12 — ID2b scoped: the identity fix is stored but unread — 45 views + 12 modules still group on operator text
 
-With ID2a/ID2a-cleanup live (`operator_id` on 9,449/11,804, guards on, 207 aliases, 71-row queue) Cowork measured how far
-the canonical truth actually reaches: **45 Dialysis_DB views reference an operator text column and never mention
-`operator_id`**, and at least 12 repo modules do the same (`mcp/comps-tools.js`, `api/_shared/dossier-generator.js`,
-`market-brief-facts.js`, `rent-projection.js`, `team-context.js`, `api/_handlers/sidebar-pipeline.js`). So the split Scott
-flagged is still live in every report — only storage is fixed. Drafted `prompts/ID2b-consumer-switch-to-operator-id.md`:
-inventory every consumer with its current numbers as the parity baseline, switch by category (grouping → `operator_id`,
-display → registry canonical name with the existing `short_operator` chart label, filtering → accept canonical **and**
-aliases), and state per surface how the 2,355 properties with no `operator_id` are treated so nothing silently drops out of
-a count. **One surface is deliberately not switched blind:** `comps-tools.js` scores comps with `operatorTier()` over joined
-tenant/operator text, so an id-based switch changes **which comps are selected**, not just their labels — the prompt
-measures 5 real subjects and hands the decision to Scott. Switching grouping also drops MB-b's
-`operator_identity_pending:ID2` gap and unblocks the per-operator brief bands. **Also open:** PR #2352 (ID3a-d) to merge,
-ID3a-e (the real drift run, needs both repos), ID3e (county vocabulary), OC-v (redeploy the standalone MCP so the notes
-funnel goes live).
-
-
-> **📦 ARCHIVE (2026-09-14, eleventh span):** a further run of 2026-09-11/12 entries was moved **verbatim** to
-> [`docs/history/STATUS_claude-code_2026-09-11_12_tail3.md`](../history/STATUS_claude-code_2026-09-11_12_tail3.md).
+> **📦 ARCHIVE (2026-09-14, twelfth span):** a further run of 2026-09-12 entries (ID2b scoped) was moved **verbatim** to
+> [`docs/history/STATUS_claude-code_2026-09-12_id2b-scoped_tail4.md`](../history/STATUS_claude-code_2026-09-12_id2b-scoped_tail4.md).
 > Nothing was dropped; every still-open item it named is tracked in `PLANNED-BACKLOG.md`.
