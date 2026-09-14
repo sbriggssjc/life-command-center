@@ -25,6 +25,7 @@ import { authenticate, requireRole, primaryWorkspace, handleCors, authReadiness 
 import { opsQuery, pgFilterVal, requireOps, withErrorHandler, fetchWithTimeout } from './_shared/ops-db.js';
 import { ROLES } from './_shared/lifecycle.js';
 import { domainQuery } from './_shared/domain-db.js';
+import { isTrueOwnerOperator, trueOwnerOperatorSelectFields } from './_shared/true-owner-operator-guard.js';
 import {
   FEED_PAGE_SIZE, NBA_FEED_ORDER, PROBE_CHUNK_SIZE,
   feedKeyOf, openTaskKeyOf, planAutoClose, planMintHead, mintHeadPageCount,
@@ -5591,6 +5592,7 @@ async function harvestResolveOwnersWithoutContacts(ownerEntityIds) {
   // 2. per domain: which true_owner ids ALREADY have ≥1 contact + fetch owner name.
   const hasContact = { dia: new Set(), gov: new Set() };
   const ownerName = new Map(); // domain:true_owner_id -> name
+  const isOperatorOwner = new Set(); // 'domain:true_owner_id' — P113 tenant, never a create-contact target
   for (const dom of ['dia', 'gov']) {
     const owners = [...byDomain[dom]];
     for (const c of chunk(owners, 150)) {
@@ -5601,13 +5603,22 @@ async function harvestResolveOwnersWithoutContacts(ownerEntityIds) {
       } catch (e) { errors.push({ source: 'owner_contacts_' + dom, detail: e?.message || String(e) }); }
       try {
         const inList = c.map((v) => pgFilterVal(v)).join(',');
-        const rn = await domainQuery(dom, 'GET', 'true_owners?select=true_owner_id,name&true_owner_id=in.(' + inList + ')&limit=1000');
-        if (rn.ok && Array.isArray(rn.data)) for (const row of rn.data) if (row.true_owner_id) ownerName.set(dom + ':' + row.true_owner_id, row.name || null);
+        const toSelect = 'true_owner_id,name,' + trueOwnerOperatorSelectFields(dom);
+        const rn = await domainQuery(dom, 'GET', 'true_owners?select=' + toSelect + '&true_owner_id=in.(' + inList + ')&limit=1000');
+        if (rn.ok && Array.isArray(rn.data)) for (const row of rn.data) {
+          if (!row.true_owner_id) continue;
+          // PDR2: never surface an operator-flagged true_owner as a create-contact TARGET
+          // OWNER — that would mint a contact under the tenant's true_owner_id, not the
+          // landlord's. Mark it so the harvest loop below skips it.
+          if (isTrueOwnerOperator(row)) { isOperatorOwner.add(dom + ':' + row.true_owner_id); continue; }
+          ownerName.set(dom + ':' + row.true_owner_id, row.name || null);
+        }
       } catch (_e) { /* name is best-effort */ }
     }
   }
   for (const [entityId, info] of byEntity.entries()) {
     if (hasContact[info.domain].has(info.true_owner_id)) continue; // owner already reachable
+    if (isOperatorOwner.has(info.domain + ':' + info.true_owner_id)) continue; // P113: tenant, not the landlord
     out.set(entityId, { domain: info.domain, true_owner_id: info.true_owner_id,
       owner_name: ownerName.get(info.domain + ':' + info.true_owner_id) || null });
   }
