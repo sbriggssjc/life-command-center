@@ -65,6 +65,37 @@ daily. So: per-feed `maxAgeHours` (default 72), not a blanket "policy feed" exem
 widening of the 72h window.
 All three bundled into `prompts/MB2bc-fix-the-instrumentation-then-judge-PRSS.md` — they are one theme
 (our instrumentation is wrong, not the sources) and together they decide whether PRSS can flip.
+## 2026-09-14 — `PRI6` confirmed merged both sides; the "stuck for 2+ days" run turned out to be four run cycles chained back-to-back, all hitting a separate, months-old timeout defect (`HCRIS-TIMEOUT`), not a hang
+
+Scott confirmed `Dialysis` PR `#7409` merged — `PRI6` closed to ✅ in `PLANNED-BACKLOG.md`, both sides now
+confirmed.
+
+Scott then reported a CMS ingestion run as running "more than 2 days" and asked whether to keep it going.
+**Checked live rather than trusting the log excerpt alone (again a short, healthy-looking snippet) — this
+is not one continuous run.** `ingestion_tracker` shows **four separate run cycles chained back-to-back**
+since 2026-09-12, each roughly 10–16 hours, a new cycle starting the instant the previous one ends. The
+core `cms_medicare_clinics` fetch is correctly a no-op every cycle (already-confirmed benign, near-annual
+CMS cadence) — **not the problem**.
+
+**The real, previously-unflagged defect, found by reading `run_log` payloads in full rather than just the
+uploaded excerpt**: every recent cycle's summary reads `"Failed steps: hcris_cost_reports, hcris_propagation,
+run_timeout"`. This is not new — the identical signature appears in `run_log` going back to **2026-06-25**,
+predating this entire `PRI` arc. **Confirmed live**: `facility_cost_reports` (what `hcris_propagation`
+presumably writes) hasn't been touched in **182 days**, `max(updated_at)` = 2026-03-16. Each cycle burns
+most of its 10–16 hour runtime on this one step (`elapsed_seconds` 48,921s / 53,660s on the two most recent)
+before timing out.
+
+**Net read for Scott**: not a hang, genuinely fine to keep running — the currently-active cycle (started
+06:03 UTC 9/14) is alive and writing real data elsewhere (`properties.estimated_annual_revenue` updating in
+real time, matching "now"). But it will very likely follow the same pattern and time out on the same two
+steps again, same as the last several cycles — worth fixing rather than continuing to silently eat most of
+every run's wall-clock time. Filed as a new, separate backlog item — `HCRIS-TIMEOUT` — distinct from
+`B6d-cms-restart`'s already-fixed 30-day-skip throttle bug and from `PRI6`'s self-reclaim bug; this is a
+third, still-open failure mode in the same pipeline.
+
+`PLANNED-BACKLOG.md`'s `PRI6` row closed to ✅; new `HCRIS-TIMEOUT` row filed at 🔴. Prompt drafted:
+`docs/claude-code/prompts/HCRIS-TIMEOUT-cost-report-ingestion-times-out-every-run-facility-cost-reports-stale-182-days.md`.
+
 
 ## 2026-09-12 — HP1-P2f-urgent: `contact_writeback` moved off Today's Urgent lane, not hidden (Claude Code)
 
