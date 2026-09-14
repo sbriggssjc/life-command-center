@@ -17,6 +17,23 @@
      archive pointer — never reword or drop an entry to make room.
      ============================================================================ -->
 
+## 2026-09-14 — OC-v2 de-risked by measuring triage before sending it (Cowork)
+
+Rather than send OC-v2 blind, forced a triage dry run against the deployed handler
+(`tranquil-delight` `cf04ae04ae52`, which reports `skipped: flag_off` / `registry_state: null` honestly
+and offers `?force=1`). Filed **two realistic notes** first, because the only queued note was meta
+("confirming the funnel accepts notes") and a meta note is a bad test of a classifier.
+**Result — `scanned 3, triaged 1, routed 1, unclassified 2, errors 0`:** an unambiguous **dialysis bug
+report** naming a route, a lane and a mechanism came back `unclassified`
+(`no_deterministic_rule_matched_and_model_declined`); the one success was a comps idea routed
+`deterministic`ally but with **`lane: null`**, despite "government deals" and "GSA lease".
+**So: only keyword rules fire, they lack market-brief/dialysis vocabulary, lane is never populated, and
+the model arm declines** (`triage_source: null` on both misses). ⚠️ **Flipping the flag as-is would route
+about one note in three and lose the rest silently** — the funnel would look alive while still dropping
+most of what Scott puts in it. MB-a measured Ollama reachable from Railway in the RSS path, so OC-v2 must
+check whether the TRIAGE path reaches the model at all: unreachable is a wiring bug, conservative is a
+prompt question, and they have different fixes. Both test notes left in the queue as fixtures.
+
 ## 2026-09-14 — OWN-T0d shipped: 11 tombstone-duplicate-current properties cleaned up (Cowork)
 
 Continuing the ownership-truth-pipeline work after OWN-T0c's revert, picked up OWN-T0d next (my own

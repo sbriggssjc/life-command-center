@@ -32,6 +32,36 @@ same failure class as a dead feed that reports healthy: the surface says "receiv
 nothing, and nobody finds out until someone goes looking. Treat that as the defect, not the missing
 cron.
 
+## What triage actually does today — measured live, don't re-derive (Cowork 2026-09-14)
+
+The handler **is deployed and works** (`tranquil-delight` `/version` = `cf04ae04ae52`). It reports its own
+state honestly: `GET /api/operator-triage-tick` returns `skipped: "flag_off"` with
+`registry_state: null`, and offers `?force=1`. I forced a dry run against three notes — the original
+meta note plus two realistic ones I filed on purpose, because a meta note is a bad test of a classifier:
+
+| note | verdict |
+|---|---|
+| "confirming the funnel accepts notes… safe to delete" (meta) | `unclassified` — **correct**, it isn't a real report |
+| **"Bug: the Market Briefs tab at `#/briefs/dialysis` shows the cap-rate band but the changed-since-yesterday line is blank… diff comparing against today's frozen issue instead of yesterday's"** | **`unclassified`** — `no_deterministic_rule_matched_and_model_declined`. **This is the miss.** An unambiguous bug report, naming a route, a lane and a mechanism, got nothing. |
+| "Idea: for government deals… filter comps by remaining GSA lease term" | `note_type: idea`, `severity: low`, `routed_to: comps`, `triage_source: deterministic`, reason "matched keyword set for comps" — but **`lane: null`** despite "government deals" and "GSA lease" |
+
+Totals: `scanned 3, triaged 1, routed 1, unclassified 2, errors 0`.
+
+**So the state to fix is:** only the **deterministic keyword rules** are doing any work, they cover
+`comps` but not the market-brief/dialysis vocabulary, **lane is never populated**, and the **model arm
+declines on a clear bug** (`triage_source: null` on both misses). Note that MB-a measured Ollama as
+reachable from Railway in the RSS-tick path (6 articles judged, 0 failures) — so **check whether the
+triage path reaches the model at all** before concluding the model is merely conservative. Those are
+different faults: unreachable is a wiring bug, conservative is a prompt/threshold question.
+
+⚠️ **Flipping the flag as-is would route roughly one note in three and silently leave the rest
+`unclassified` forever** — the funnel would look alive and still lose most of what Scott puts in it.
+`unclassified` is the honest verdict for an unclear note and must stay; it is NOT honest for that bug.
+
+**The two test notes are still in the queue as fixtures** (ids `9818591e…` and `64ae84e4…`, both marked
+safe to delete in their context). Use them, then resolve all three through the normal disposition path
+so the path itself gets exercised.
+
 ## What to do
 
 1. **Register the flag properly, in a migration** (`feature_flags_registry` row for
