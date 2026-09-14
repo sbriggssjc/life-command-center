@@ -18,6 +18,30 @@
      archive pointer — never reword or drop an entry to make room.
      ============================================================================ -->
 
+## 2026-09-14 — MB2b/MB2c/FEED2: fixed the instrumentation, then judged PRSS off (Claude Code)
+
+**Shipped + deployed + live-verified, all three.** MB2c: `splitGoogleNewsTitle()`'s publisher regex
+widened `[^-–—]+`→`.+` (one char) — a hyphenated outlet ("Honolulu Star-Advertiser") used to fail
+the whole match, leaving `publisher: null` and the raw suffix stuck on the headline. MB2b: Federal
+Register (ESRD) got its own `maxAgeHours` (30d, not the global 72h) plus a new additive
+`market_brief_feed_health.items_after_cutoff` column, so "parsed 3, contributed 0" is now a visible
+number instead of a green `ok=true` row. FEED2: added the missing test
+(`test/feed2-streak-checks-not-days.test.mjs`) over the streak-counting migration's four cases +
+structural guards on the SQL. Deployed `briefing-intel-snapshot` v23→v24 to LCC Opps, deployed body
+re-read and confirmed byte-identical; migration `20260914120000` applied live. Forced a POST →
+confirmed `Honolulu Star-Advertiser` now parses and Federal Register (ESRD) reads
+`item_count:1, items_after_cutoff:1` on the real feed.
+
+**Then judged `MARKET_BRIEF_PRSS`, per the task's own instruction — flag stays OFF.** Forced the RSS
+tick dry-run against `stream=dialysis` (5 articles, real on-box Ollama): 4/5 "relevant", 4 would-write
+facts, **0 of the 4 a broker could cite** — a capital-markets headline restated with no numbers, a
+market-research report title, local EMS coverage. The one genuinely on-topic item (a Federal Register
+ESRD document) was marked not relevant. Reproduces Cowork's 2026-09-12 finding even with the pipeline
+fixed: the defect is the broad Google News query, not the instrumentation. Filed as a follow-up
+(tighten to `cap rate`/`clinic`/`acquisition`/`when:7d`, re-measure) rather than guessed at blind.
+
+Full suite: 6,180 pass / 0 fail / 6 skipped.
+
 ## 2026-09-14 — HP1-P2misparse-fp prompt: the guard blocks real people, and a shape fix cannot repair it (Cowork)
 
 Sized the last 🔴 under HP1 before writing anything, and the sizing changed the shape of the fix.

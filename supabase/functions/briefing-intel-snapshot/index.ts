@@ -191,7 +191,17 @@ const COMMODITY_TICKERS = [
 // feed returning zero items for `MARKET_BRIEF_FEED_STALE_DAYS` consecutive
 // days is a named gap (`lcc_check_market_brief_feed_health`), never silence,
 // per invariant I11 ("a monitor must alert on its own blindness").
-const RSS_FEEDS: Record<string, { url: string; source: string; redirect?: boolean }[]> = {
+// MB2b (2026-09-14): `maxAgeHours` is an OPTIONAL per-feed override of the
+// 72h global cutoff. Federal Register (ESRD) is a low-VOLUME query — it
+// returns real rulemaking documents but spans WEEKS between publications, so
+// under the blanket 72h rule it returned HTTP 200 with real items and
+// contributed 0 to the brief on every run, forever, while reading "healthy"
+// on market_brief_feed_health (`item_count` was recorded at PARSE time, not
+// after the cutoff — see the `items_after_cutoff` column below). Do not
+// widen the DEFAULT 72h window globally — that is what keeps the daily brief
+// daily; give a feed its own window only when its own publication cadence
+// requires it.
+const RSS_FEEDS: Record<string, { url: string; source: string; redirect?: boolean; maxAgeHours?: number }[]> = {
   healthcare: [
     { source: "MedCity News",    url: "https://medcitynews.com/feed/" },
     { source: "KFF Health News", url: "https://kff.org/feed/" },
@@ -202,6 +212,12 @@ const RSS_FEEDS: Record<string, { url: string; source: string; redirect?: boolea
     {
       source: "Federal Register (ESRD)",
       url: "https://www.federalregister.gov/api/v1/documents.rss?conditions%5Bterm%5D=end-stage%20renal%20disease&per_page=20",
+      // 30 days: the ESRD-term query publishes intermittently (rulemaking,
+      // not daily news), so 72h returned 200+real-items and 0 contributions
+      // on essentially every check. 30d still expires a document once it is
+      // no longer "new" without the feed being structurally unable to ever
+      // contribute.
+      maxAgeHours: 24 * 30,
     },
     {
       source: "Google News (dialysis operators)",
@@ -450,8 +466,20 @@ function stripTags(s: string): string {
 // contains a dash (common in policy headlines: "CMS Proposes 2.9% ESRD PPS
 // Increase - DaVita Reacts") still keeps the true publisher suffix, and a
 // headline with no separator returns publisher=null rather than guessing.
-function splitGoogleNewsTitle(rawTitle: string): { headline: string; publisher: string | null } {
-  const m = rawTitle.match(/^(.*)[\s]+[-–—][\s]+([^-–—]+)$/);
+//
+// MB2c (2026-09-14): the publisher half of that suffix was itself restricted
+// to `[^-–—]+` — no dash allowed in the PUBLISHER name — so a hyphenated
+// outlet ("Honolulu Star-Advertiser", "ad-hoc-news.de") failed the whole
+// match, leaving `publisher: null` AND the raw " - Publisher" suffix stuck on
+// the headline. That silently returned the citation to the pre-MB2a state.
+// The greedy `(.*)` on the headline half already anchors to the LAST
+// separator (verified: it still splits correctly on headlines carrying an
+// earlier dash, e.g. "…low- and middle-income countries - nature.com"), so
+// widening only the publisher half to `.+` is sufficient — measured live
+// against 101 real titles from this feed on 2026-09-14: 98/101 parsed before,
+// 101/101 after, 0 previously-correct parses changed.
+export function splitGoogleNewsTitle(rawTitle: string): { headline: string; publisher: string | null } {
+  const m = rawTitle.match(/^(.*)\s+[-–—]\s+(.+)$/);
   if (!m) return { headline: rawTitle, publisher: null };
   return { headline: m[1].trim(), publisher: m[2].trim() || null };
 }
@@ -503,15 +531,25 @@ async function fetchSectorNews(): Promise<Record<string, NewsItem[]>> {
   const result: Record<string, NewsItem[]> = Object.fromEntries(
     Object.keys(RSS_FEEDS).map((stream) => [stream, [] as NewsItem[]]),
   );
-  // Drop articles older than 72h so the briefing stays current.
-  const cutoff = Date.now() - 72 * 3600 * 1000;
+  // Drop articles older than 72h by default so the briefing stays current;
+  // a feed may override this via `maxAgeHours` (MB2b, above).
+  const DEFAULT_MAX_AGE_HOURS = 72;
 
   // MB2a: one health row per (stream, source) every call — the instrument
   // that lets `lcc_check_market_brief_feed_health` alert on a feed silently
   // returning zero for N consecutive days instead of the failure looking
   // identical to a quiet news day (I11: a monitor must alert on its own
   // blindness).
-  const feedHealth: { stream: string; source: string; url: string; ok: boolean; item_count: number; error: string | null }[] = [];
+  //
+  // MB2b (2026-09-14): `item_count` alone records what the feed PARSED, not
+  // what it CONTRIBUTED — Federal Register (ESRD) sat at `item_count: 3,
+  // ok: true` on every check while adding 0 items to the brief, because all
+  // 3 were older than the cutoff. That is exactly the failure I11 exists to
+  // catch and it was invisible under the old single-count schema. Record
+  // both: `item_count` (parsed) and `items_after_cutoff` (survived this
+  // feed's own maxAgeHours window) — additive, so an existing consumer of
+  // `item_count` sees no change in meaning.
+  const feedHealth: { stream: string; source: string; url: string; ok: boolean; item_count: number; items_after_cutoff: number; error: string | null }[] = [];
 
   await Promise.all(
     Object.entries(RSS_FEEDS).flatMap(([stream, feeds]) =>
@@ -525,15 +563,18 @@ async function fetchSectorNews(): Promise<Record<string, NewsItem[]>> {
           error = (err as Error)?.message || String(err);
         }
         if (!xml) {
-          feedHealth.push({ stream, source: feed.source, url: feed.url, ok: false, item_count: 0, error });
+          feedHealth.push({ stream, source: feed.source, url: feed.url, ok: false, item_count: 0, items_after_cutoff: 0, error });
           return;
         }
         const items = parseRss(xml, feed.source, { redirect: feed.redirect });
-        feedHealth.push({ stream, source: feed.source, url: feed.url, ok: true, item_count: items.length, error: null });
+        const cutoff = Date.now() - (feed.maxAgeHours ?? DEFAULT_MAX_AGE_HOURS) * 3600 * 1000;
+        let afterCutoff = 0;
         for (const it of items) {
           if (it.published_at && new Date(it.published_at).getTime() < cutoff) continue;
+          afterCutoff += 1;
           result[stream].push(it);
         }
+        feedHealth.push({ stream, source: feed.source, url: feed.url, ok: true, item_count: items.length, items_after_cutoff: afterCutoff, error: null });
       }),
     ),
   );
@@ -698,7 +739,7 @@ async function generateAnalystTake(
 // ---------------------------------------------------------------------------
 
 async function recordFeedHealth(
-  rows: { stream: string; source: string; url: string; ok: boolean; item_count: number; error: string | null }[],
+  rows: { stream: string; source: string; url: string; ok: boolean; item_count: number; items_after_cutoff: number; error: string | null }[],
 ): Promise<void> {
   if (!OPS_URL || !OPS_KEY || !rows.length) return;
   const today = new Date().toISOString().slice(0, 10);
@@ -709,6 +750,9 @@ async function recordFeedHealth(
     checked_date: today,
     ok: r.ok,
     item_count: r.item_count,
+    // MB2b: parsed-but-outside-this-feed's-cutoff-window count, additive
+    // column — see the feedHealth comment above.
+    items_after_cutoff: r.items_after_cutoff,
     error: r.error,
     checked_at: new Date().toISOString(),
   }));
