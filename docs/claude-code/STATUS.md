@@ -17,6 +17,82 @@
      archive pointer — never reword or drop an entry to make room.
      ============================================================================ -->
 
+## 2026-09-14 — PDR2: closed the operator-as-owner read-path gap in `assemblePropertyPacket` (systemic, 7,937 dia properties)
+
+Re-measured the blast radius live (do not requote the 2026-09-11 figures) — **7,937 dia
+properties** resolve `true_owner_id` to a `true_owners` row with `is_operator_not_owner=true`;
+**4,022** of those also have `recorded_owner_id IS NULL`, so even a correctly-guarded reader
+falling back to `recorded_owner_name` has nothing to fall back to. Top offenders: Fresenius
+Medical Care 3,077 · DaVita Inc. 2,625 · DaVita Kidney Care 1,182 · U.S. Renal Care 343 ·
+Dialysis Clinic Inc 256 · American Renal Associates 221 — every major operator, not one bad
+placeholder row. **gov's `true_owners` has NO `is_operator_not_owner`/`owner_type` column at
+all** (confirmed live) — only `owner_role`, and 0 gov properties currently key `owner_role=
+'operator'`, so gov's contribution to this defect is 0 today but the guard must not 400 there.
+
+Fix (read-path only, no domain-DB writes): extracted one shared predicate,
+`api/_shared/true-owner-operator-guard.js::isTrueOwnerOperator` (ORs `is_operator_not_owner` /
+`owner_type='operator'` / `owner_role='operator'`, mirroring the two pre-existing correct copies
+in `entities-handler.js` §1.6 and `sf-link-reconcile.js::isOperator()`) plus
+`trueOwnerOperatorSelectFields(domain)` so the `true_owners?select=` never asks gov for a column
+it doesn't have. `api/operations.js::assemblePropertyPacket`'s ownership block now selects those
+signals alongside `name`, and when the true owner is an operator: `ownership.true_owner_name`
+stays `null` (never the tenant), `ownership.true_owner_is_operator: true`,
+`ownership.operator_name: '<tenant name>'`; `recorded_owner_name` is untouched either way; when
+both are null/operator-only the honest answer is "owner unknown" — no backfill from the operator
+name. Both `ownership = {...}` initializer sites (domain-linked and no-domain-linkage) carry the
+new fields so every packet shape is consistent.
+
+**§3 audit of the other true-owner readers, per the task list:**
+- `api/_handlers/entities-handler.js` §1.6 — already correctly guarded (re-queries
+  `is_operator_not_owner` itself). **NOT repointed at the packet's verdict** — it also falls back
+  to `prop.true_owner_name`/`prop.recorded_owner_name` (denormalized columns on `properties` that
+  `sidebar-pipeline.js` populates from `true_owners.name` **unguarded**, line ~10140), so if the
+  packet's `true_owner_name` reads null on an operator, that fallback could still surface the
+  operator name — repointing needs that write path audited/fixed first (filed, not this unit's
+  scope: the denormalized `properties.true_owner_name` column is a separate, real leak worth its
+  own prompt).
+- `api/admin.js` `harvestResolveOwnersWithoutContacts` (~line 5567, the W9.4 create-contact
+  target resolver) — **fixed**. It fetched `true_owners.name` for entities lacking a domain
+  contact and fed it to a `create_contact` proposal keyed on `true_owner_id`; an operator-flagged
+  true_owner would have let the harvest propose minting a contact under the tenant's
+  `true_owner_id`. Now selects the operator signals per-domain and skips any operator-flagged row
+  before building the target map.
+- `api/_handlers/intake-promoter.js` `resolveOwnerLinksDia` (~2027) and its gov analogue
+  (~2198) — **left as-is, different root cause.** These resolve/link `true_owner_id` from a
+  deal-extracted `seller_name` via fuzzy match; `result.true_owner.resolved_name` feeds
+  `sf_sync_flags` (an SF-match-status telemetry array), not a display of "the owner" to a
+  user/agent. The matched party is whatever the OM stated as seller, not a domain-flag lookup —
+  a different defect class if the OM itself named the operator, out of scope here.
+- `api/operations.js` ~562 (`ownerName` in a Teams "Ownership Research Complete" alert) —
+  **left as-is.** Sourced from caller-supplied `entity_fields`/`metadata`, not a `true_owners`
+  read; guarding it would need threading the operator flag through the research-closure payload,
+  a separate, smaller unit.
+- `api/operations.js` `bridgeCreateLead` (~2280–2360) — **already correct**, an input contract:
+  the caller passes `true_owner_is_operator` and the function anchors the lead on the recorded
+  owner when it's set. No change needed.
+- `sidebar-pipeline.js` true-owner lookups — several are WRITERS (create/match `true_owner_id`,
+  or denormalize `true_owner_name` onto `properties`), not READERS presenting an owner to a
+  human; the one write-path leak found (line ~10140, unguarded denormalization) is noted above,
+  filed as a follow-up rather than fixed in this read-path-only unit.
+
+**Live positive control** (Supabase MCP, Dialysis_DB, read-only): traced the new logic by hand
+against 4 real rows — `property_id=39874` (Donna, TX; `true_owner=DaVita Kidney Care`,
+`is_operator_not_owner=true`, `recorded_owner=Living Trust & Gina M Decarion Living Tr`) →
+under the fix: `true_owner_name=null`, `true_owner_is_operator=true`,
+`operator_name='DaVita Kidney Care'`, `recorded_owner_name` unchanged. `21924` (Anderson, IN;
+Fresenius operator, recorded owner present) → same shape. `21893` (Waipahu, HI; U.S. Renal Care
+operator, `recorded_owner_id IS NULL`) → `recorded_owner_name=null`, `true_owner_name=null`,
+`operator_name='U.S. Renal Care'` — honest "owner unknown", never backfilled. `21867` (Mobile,
+AL; `PMG Leasing, L.L.C.` non-operator control, `is_operator_not_owner=false`) →
+`true_owner_name='PMG Leasing, L.L.C.'` unchanged, flag false. All four match the shipped code's
+behaviour exactly (encoded as the corresponding test cases).
+
+**Files:** `api/_shared/true-owner-operator-guard.js` (new), `api/operations.js`,
+`api/admin.js`, `test/pdr2-operator-owner-guard.test.mjs` (new, 11 tests, all green).
+`npm run check:boot` green. `docs/os/PLANNED-BACKLOG.md` PDR2 row updated ✅ shipped.
+
+Not touched, per the task's exclusions: PDR12 (Rock Hill planner), PDR14/14b machinery, the 167
+`needs_human` entities, any domain-DB write, any `GENERATED`-headed or canon/surface file.
 ## 2026-09-14 — MB2b/MB2c/FEED2 landed; the new column immediately found two more silent feeds (Cowork)
 
 **Verified live after CC's PR #2426 (v23 → v24).** `items_after_cutoff` column present, PRSS correctly
