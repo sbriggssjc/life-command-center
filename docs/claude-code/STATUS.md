@@ -17,6 +17,50 @@
      archive pointer — never reword or drop an entry to make room.
      ============================================================================ -->
 
+## 2026-09-14 — Second county sweep: the question was wrong again, and the free path covers ~20% before we start (Cowork)
+
+Scott ruled out a paid provider and asked whether a local Ollama model could do this. Sampled six more
+jurisdictions. **The framing changed a second time, in his favour.**
+
+**The useful question is not *"can we search this county's portal"* but *"does this jurisdiction publish a FREE
+BULK FILE that already contains the owner"*** — and several of the largest do:
+
+| jurisdiction | props | owner published? | how |
+|---|---:|---|---|
+| **Harris, TX** | 50 | **yes** | portal + CSV/XLS/PDF export |
+| **Dallas, TX** | 25 | **yes** | owner-name search + COMMERCIAL filter, no CAPTCHA |
+| **Miami-Dade, FL** | 29 | **yes** | dedicated **OWNER NAME** search tab |
+| **Philadelphia, PA** | 25 | **yes** | address→owner, full grantee/grantor sales history, **+ free bulk dataset download** |
+| **NYC (Queens + 4)** | 56 | **yes** | **PLUTO**, free, tax-lot level, **monthly** (26v2, Aug 2026) |
+| **Cook, IL** | 73 | gated | CAPTCHA every search — human-only |
+| **Los Angeles, CA** | 54 | **no** | not published at all |
+
+Philadelphia's own property page ends *"You can download the property assessment dataset in bulk"*, and its detail
+view carries the **grantee/grantor chain** — free. **None of this is scraping.** It is open data, downloaded once
+and matched offline.
+
+**Measured coverage of the obvious free-bulk targets: TX 432 + FL 302 + Philadelphia 25 + NYC 56 = 815 of 4,020
+(20.3%)** with no portal automation, no CAPTCHAs and no vendor — before checking the other open-data states.
+
+⚠️ **That is COVERAGE, not a hit rate**, and the distinction is the whole risk. A bulk file covering a
+jurisdiction does not mean our property matches a row in it — matching is **by address**, and these rows carry
+almost no APNs (Cook 0/73, Harris 0/50, LA 1/54). **Measure the match rate on one downloaded file before building
+anything.** Philadelphia is the cheapest test: 25 properties, documented bulk download.
+
+🚨 **On Ollama, recorded as `OWNERGAP1-ollama` because Scott asked and the line is sharp.** A local model may
+**never** be used to recall an owner. Asked *"who owns 5040 Crenshaw Rd"*, any LLM returns a plausible LLC name —
+**exactly the defect we quarantined this week**, since the `ABC`/`XYZ Dialysis Centers` rows came from a `gpt-4o`
+call asked to recall a public record. Running that locally makes it free and unlimited, **which is worse, not
+better.** ✅ Where it genuinely helps: **matching and normalising text we already fetched** — our address strings
+against a downloaded file's (`5040 Crenshaw Rd` ↔ `5040 CRENSHAW RD`, suite noise, abbreviations) and entity names
+(`CRENSHAW MOB LLC` ↔ `Crenshaw MOB, L.L.C.`). Transformation of retrieved data, never recall, every output
+checkable against its source row. That is the step that turns a free download into matched owners.
+
+**Revised recommendation:** download **one** file (Philadelphia), measure the match rate, and let that number —
+not a vendor quote — decide everything downstream. Cook-shaped counties stay manual; LA-shaped are unreachable
+from the county at any price, and the vendor conversation can stay deferred indefinitely against a residual that
+will be far smaller than 4,021. Appended to the decision doc as §7.
+
 ## 2026-09-14 — XB scoped by running the audit by hand first; it found real debt (Cowork)
 
 Two of Scott's three original P18 asks are now live and self-monitoring (market briefs, operator funnel).

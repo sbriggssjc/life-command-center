@@ -407,3 +407,59 @@ would be sized against the worst case while delivering only the Harris-shaped su
 
 The cheapest informative next step is **more sampling, not a build** — the same logic that made this pilot worth
 running.
+
+
+---
+
+## 7. SECOND SWEEP — six more jurisdictions, and the question was wrong again
+
+§6 concluded the county path is not one path but many. Sampling six more jurisdictions changes the framing a
+second time, and in Scott's favour. **The useful question is not "can we search this county's portal" but "does
+this jurisdiction publish a FREE BULK FILE that already contains the owner."** Several of the largest do.
+
+| jurisdiction | props | free? | owner published? | how |
+|---|---:|---|---|---|
+| **Harris, TX** | 50 | yes | **yes** | portal + CSV/XLS/PDF export |
+| **Dallas, TX** | 25 | yes | **yes** | owner-name search + COMMERCIAL account filter, no CAPTCHA |
+| **Miami-Dade, FL** | 29 | yes | **yes** | portal has a dedicated **OWNER NAME** search tab |
+| **Philadelphia, PA** | 25 | yes | **yes** | address → owner, **plus a free bulk dataset download** (`metadata.phila.gov`) |
+| **NYC (Queens + 4 boroughs)** | 56 | yes | **yes** | **PLUTO / MapPLUTO**, free, tax-lot level, **updated monthly** (26v2, Aug 2026) |
+| **Cook, IL** | 73 | yes | gated | CAPTCHA on every search — human-only |
+| **Los Angeles, CA** | 54 | yes | **no** | owner name not published at all |
+
+### Why this matters more than the per-county verdicts
+
+Philadelphia's own property page ends with *"You can download the property assessment dataset in bulk"*, and its
+detail view carries the full **grantee/grantor sales history** — the chain of ownership, free. NYC's PLUTO is a
+monthly, citywide, tax-lot-level file. Texas CADs publish annual appraisal-roll exports. **None of this is
+scraping** — it is open data, downloaded once and matched offline.
+
+**Coverage of the obvious free-bulk targets, measured:** TX **432** · FL **302** · Philadelphia **25** ·
+NYC 5 boroughs **56** = **815 of 4,020 (20.3%)** from a small number of downloads, with no portal automation, no
+CAPTCHAs, and no vendor. That is before checking the other open-data states.
+
+⚠️ **This is a coverage estimate, not a hit rate.** A bulk file covering a property's jurisdiction does not
+guarantee that property matches a row in it — matching is by address, and these records carry almost no APNs
+(Cook 0/73, Harris 0/50, LA 1/54). **The match rate is the next thing to measure, and it should be measured on
+one downloaded file before any pipeline is built.**
+
+### Where a local model (Ollama) legitimately helps — and where it must never be used
+
+🚨 **Never for recall.** A model asked *"who owns 5040 Crenshaw Rd"* will produce a plausible LLC name. That is
+exactly the defect quarantined in §1 — `XYZ Dialysis Centers LLC` across 119 counties came from a `gpt-4o` call
+asked to recall a public record. **Running that locally makes it free and unlimited, which is worse, not better.**
+
+✅ **Legitimately, and it is real work:** matching our address strings to a downloaded file's address strings
+(`5040 Crenshaw Rd` ↔ `5040 CRENSHAW RD`, suite/unit noise, abbreviations), and normalising entity names
+(`CRENSHAW MOB LLC` ↔ `Crenshaw MOB, L.L.C.`). That is **transformation of retrieved data, never recall**, every
+output is checkable against the source row, and it is the step that turns a free download into matched owners.
+
+### Revised recommendation to 👤 Scott
+
+1. **Download one free bulk file and measure the match rate** — Philadelphia is the cheapest test (25 properties,
+   documented bulk download). That number, not a vendor quote, decides everything downstream.
+2. If it matches well, repeat for TX CAD rolls, FL counties and NYC PLUTO → **~20% coverage, free**.
+3. **Cook-shaped counties** (CAPTCHA) are manual; **LA-shaped** (owner not published) are unreachable at any
+   price from the county — a paid vendor is the only route there, and it can stay deferred indefinitely.
+4. The residual after free sources is the only population worth ever discussing a vendor for, and it will be much
+   smaller than 4,021.
