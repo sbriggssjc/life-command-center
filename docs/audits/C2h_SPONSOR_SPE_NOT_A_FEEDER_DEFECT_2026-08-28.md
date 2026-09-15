@@ -168,3 +168,39 @@ the `supersession-tie-lane-2026-08.md` buyer-vs-true_buyer precedence decision S
 yet, are the two concrete next steps, and neither is a "diagnose C2g" task anymore. `PLANNED-BACKLOG.md`'s
 C2g row still reads as if the diagnosis were open; it is not, and should be re-pointed at these two
 narrower, already-scoped decisions rather than continuing to frame this as an unsolved mystery.
+
+---
+
+## 7. Sizing the confirm-surface feed (2026-09-15, Cowork) — precision check first, and it came back too low to bulk-feed
+
+Before proposing any rows for `lcc_owner_sponsor_domain`/`lcc_ownership_sponsor_family`, checked
+whether the 58 "unrelated name" pairs from §6 actually carry a **textual** sponsor↔SPE signature —
+shared initials (`browman development co` → `bdc livermore l p`) or a shared significant word
+(`neman real estate investments` → `neman family irrevocable`) — the same kind of evidence C2h's §2
+table used for its named examples.
+
+**Only 10 of 58 (17%) show any textual link at all** (5 by initials, 5 by shared word; no overlap
+between the two sets). The other **48 of 58 (83%)** — `praveen gupta`→`cary st ssa`, `murray
+hills`→`ten`, `sletten`→`es builders`, `thomas holm`→`1521 north carpenter road`, and 44 more —
+have **no discoverable naming relationship whatsoever** between the Salesforce-linked owner and the
+resolved title-holder.
+
+**This does not overturn §1's finding that the resolution mechanism (title-SPE via `supersession`)
+is structurally correct and not a feeder bug — that still holds.** It does mean C2h's "sponsor↔SPE"
+*explanation* for why the two names differ was demonstrated on its own hand-picked examples (all of
+which do show a naming link), not on the full population. For the 48 with no textual link, at least
+three explanations stay open and undistinguished: a real sponsor-family relationship with
+non-obvious/rebranded naming; a Salesforce contact who has moved on or was never actually tied to
+this specific property; or the resolved title-holder genuinely being correct with no sponsor
+relationship to the SF-linked org at all (a stale or mistaken CRM attachment, not an LCC defect).
+
+**Recommendation: do not bulk-feed these into the confirm surfaces.** `lcc_owner_sponsor_domain`
+and `lcc_ownership_sponsor_family` are confirm-only by design precisely because A3 measured a
+lexical sponsor detector at ~25% precision — feeding 48 textually-unlinked pairs into a "candidate"
+list and hoping a human catches the bad ones is the same shape of mistake this repo has already paid
+for repeatedly (P196, P188). The right-sized next step, if this is worth doing at all, is a **short
+manual read-through of 58 rows** (not a build) — small enough for one sitting — rather than any new
+matching machinery. The 10 with a textual link are the only ones worth proposing as confirm-surface
+candidates without that read-through first.
+
+**Filed as reviewed, not built.** No rows written to either confirm table.
