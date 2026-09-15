@@ -43,6 +43,14 @@ gap. See `docs/audits/OWNERGAP1_FABRICATED_OWNER_AND_UNRECOVERABLE_GAP_2026-09-1
 
 ## 2026-09-12 ASC frozen-50 review boundary
 
+**Review update measured 2026-09-15:** one authenticated human primary scorecard has been submitted through
+the workbench and is open in `second_review`; independent second reviews remain 0. A separate read-only,
+evidence-cited provisional pass over all 50 candidates produced an aggregate analytical checkpoint, but did
+not write the other 49 proposed judgments and is not the official gate receipt. The provisional measurements
+miss four of five predeclared gates and support `enrichment_only`, subject to completion and acceptance of the
+governed review. See
+`docs/audits/HEALTHCARE_ASC_50_PROVISIONAL_REVIEW_CHECKPOINT_2026-09-15.md`.
+
 **Live and deployment-verified:** PR #2384 merged as `3f60666055892616648b2348f952d1d53fbefd42` and
 Railway `/version` reported the pinned revision `3f6066605589` on 2026-09-12; `/asc-review.html` returned HTTP
 200. The reviewer-guidance layer renders capture evidence as readable cards while retaining raw JSON in a
@@ -59,11 +67,11 @@ second-review identities, timestamps, and disagreement.
 This tooling does not pre-populate a human conclusion and cannot write canonical properties, Salesforce,
 outreach, production opportunities, or IDTF activation. PR #2355 merged as `9829cc3391dc` on 2026-09-12;
 the migration is applied, Railway reports that exact pinned revision, `/asc-review.html` returns 200, and the
-unauthenticated review API fails closed with JSON 401. Post-migration read-only verification remains **0/50
+unauthenticated review API fails closed with JSON 401. Post-migration read-only verification was **0/50
 primary** and **0/22 initially required second reviews** (50 candidates: 44 captured, 6 reviewed exceptions;
-6 existing exception rows, all requiring second review). Those counts are the last database-verified baseline,
-not a claim about work completed after the deployment. The next action is human review, not another data or
-workflow build.
+6 existing exception rows, all requiring second review). Those counts are the pre-review deployment baseline,
+superseded for current progress by the 2026-09-15 measurement above. The next action is governed adjudication,
+not another data or workflow build.
 See the capture checkpoint and `PLANNED-BACKLOG.md` ASC50-R1–R3.
 
 ## 1. Runtime truth — where the app actually runs
