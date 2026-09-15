@@ -21,6 +21,28 @@
      archive pointer — never reword or drop an entry to make room.
      ============================================================================ -->
 
+## 2026-09-15 — ⚠️ `HCRIS-TIMEOUT`'s merged fix did NOT resolve the symptom — live-verified, re-opened as `HCRIS-TIMEOUT-2`
+
+Scott confirmed the `Dialysis` PR (`claude/hcris-timeout-fix-01BWJTdN`) merged and triggered a fresh run to
+prove it live. **Checked the actual result rather than accepting "the run finished successfully" — it did
+not fix anything.**
+
+The post-merge run (`ingestion_tracker` row `84e215c3…`, started 2026-09-14 13:35:03 UTC, genuinely after
+the merge) ran for **17.98 hours** — longer than any pre-fix cycle (13.6h/14.9h) — and its `run_log`
+summary reads the **identical** `"Failed steps: hcris_cost_reports, hcris_propagation, run_timeout"`
+signature as before. `facility_cost_reports` remains frozen at 2026-03-16 (now 183 days), zero writes in
+the trailing 24 hours. Not a smaller regression — the run took longer and produced the exact same failure,
+the opposite of what a working fix should do.
+
+**Two live hypotheses, not yet determined**: either the Railway redeploy never actually picked up the
+merged commit (checking the deployed commit SHA against the merge SHA is the first thing the follow-up
+prompt asks for, before any further code diagnosis), or the fix as coded has a residual bug that didn't
+show up in the test suite. `PLANNED-BACKLOG.md`'s `HCRIS-TIMEOUT` row reopened to 🔴 with the live evidence
+recorded plainly, not closed as done. New prompt drafted:
+`docs/claude-code/prompts/HCRIS-TIMEOUT-2-fix-did-not-resolve-symptom-first-check-if-the-merged-commit-is-actually-deployed.md`
+— deliberately ordered to confirm deployment before re-diagnosing code that may not even be running.
+
+
 
 ## Open threads (updated 2026-09-12 — table moved to the TOP of this file by Cowork; new entries go BELOW the `---`)
 
