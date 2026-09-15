@@ -119,14 +119,73 @@ on its whole output, which this arc has now rejected twice. So:
   of defect here is a check that looks like it ran. Mirror the existing
   `{skipped:true, reason}` contract; do not crash the collector.
 
-### 3. Do NOT add `government/`
+### 2b. Route by TARGET DATABASE, not by directory — root is not all-LCC
 
-`government/` really is retired, owned by the `government-lease` repo, and guarded.
-Leave it out, and leave its guard alone.
+⚠️ **Discovered while amending this prompt (Cowork, 2026-09-16), and it is a live
+false-positive generator the shipped rule only avoids by luck.** "Root → LCC Opps" is
+not true. **31 root-level migrations carry a `gov_` or `dia_` prefix** and target the
+other two databases:
 
-🔍 **Report, do not decide:** that leaves the `government` project
-(`scknotsqkcheojiaewwh`) with no unapplied-migration detector at all. State that in
-your response as an open question for Scott. Do not build coverage for it here.
+```
+20260812120000_gov_credit_classifier_expand_state_federal.sql
+20260811191115_gov_dom_pct_ask_density_display_policy.sql
+20260808120000_dia_prompt78_property_documents_source.sql
+...
+```
+
+Probed live: that first file declares `public.gov_credit_buckets_from_text`, and it is
+**absent from LCC Opps** (count 0). So the moment one of these enters the window, the
+rule emits a **false UNAPPLIED at `critical`** — the loudest severity, on the most
+trusted rule, for a migration that is perfectly applied to the database it was written
+for.
+
+**Today the count is 0 of 60** — none fall inside the current filename-sorted window.
+That is luck, not design, and **this prompt destroys that luck**: switching to a
+git-add-date window reshuffles which files are in scope, and any new root-level
+`gov_`/`dia_` file lands in the window immediately.
+
+So the routing rule is:
+
+* Determine each file's **target database** from directory AND filename prefix:
+  `dialysis/` or a `_dia_` prefix → Dialysis_DB; `government/` or a `_gov_` prefix →
+  the government project; otherwise → LCC Opps.
+* ⚠️ **Fail closed on ambiguity.** If a file's target cannot be determined with
+  confidence, emit it as **UNVERIFIABLE with the reason "target database
+  undetermined"** — never default it to LCC Opps. Defaulting is what produces the
+  false critical, and a rule that guesses wrong loudly is worse than one that says it
+  does not know.
+* Add a test asserting a root-level `_gov_`-prefixed file is NOT probed against LCC
+  Opps. Name a real file from the 31.
+
+### 3. `government/` stays excluded — and Scott has now decided what happens instead
+
+`government/` is retired, owned by `government-lease`, and guarded. Leave it out and
+leave its guard alone. This is not a gap to close by scanning it — the directory's own
+README says re-applying its files *"would silently restore two known-bad mappings"*
+(`TEXAS DEPARTMENT OF AGRICULTURE` → `USDA`, and `Immigration & Customs Enforcement` →
+`CBP`). A detector that probed those stale files would report the **live, correct**
+government database as wrong.
+
+⚠️ Note the asymmetry this creates, because it is the reason the coverage map below
+exists: a root-level `_gov_`-prefixed file still targets the government project (§2b),
+so "government is out of scope" and "no file in this repo touches the government DB"
+are **different statements**, and only the first is true.
+
+**Scott's decision 2026-09-16: do not build a government detector in this repo.**
+`GOV_SUPABASE_URL` / `GOV_SUPABASE_KEY` do exist in this repo's Production environment,
+so it is *possible* — but building it here would mean `life-command-center` auditing a
+database it deliberately handed over three days ago, which is the ownership confusion
+ID3a-d was decided to end. Instead:
+
+* **Write `docs/architecture/MIGRATION-COVERAGE-MAP.md`** — one short table: each of the
+  three Supabase projects → the repo that owns it → whether an unapplied-migration
+  detector exists → where it lives. Include the root-prefix asymmetry above. The point
+  is that the uncovered database is **visible and attributed**, not quietly absent.
+  Link it from the `migration_unapplied` header in the collector.
+* **File a backlog row `GOVDEPLOY1`** (do not build it): the government project has no
+  unapplied-migration detector, the correct owner is `government-lease`, and the
+  machinery to port is `lcc_probe_schema_objects` + `parseDeclaredObjects`. Mark it
+  👤 — it is a decision for Scott about the sibling repo, not work for this one.
 
 ### 4. Fix the doctrine that caused this
 
@@ -185,6 +244,8 @@ ownership legible so the next reader does not repeat it:
 * `docs/os/PLANNED-BACKLOG.md` — close **DEPLOY2-coverage** with the measured
   before/after. Surgical row edit; two branches that both add to a shared doc merge
   cleanly and silently duplicate it.
+* `docs/architecture/MIGRATION-COVERAGE-MAP.md` — new, short, linked from the collector.
+* `docs/os/PLANNED-BACKLOG.md` — also add **GOVDEPLOY1** 👤 (filed, not built).
 * `docs/claude-code/STATUS.md` — entry **below** the `---` that follows the
   `## Open threads` table; H1 stays on line 1.
 
