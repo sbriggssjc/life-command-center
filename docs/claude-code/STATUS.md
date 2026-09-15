@@ -86,6 +86,35 @@ stayed in the range the pre-run sizing predicted.
 (owner-role promotion + cadence — needs its own design pass) are the two remaining open items from
 Scott's six. #2 (`canonical_name` unique constraint) is gated on reviewing the review-only tail from
 the OWN-T0c merge sweep earlier today.
+## 2026-09-15 — DEPLOY2-unapplied prompted; the obvious design was measured and killed first (Cowork)
+
+**The N15 migration turned out to be APPLIED** — verified live rather than assumed: mint + unmint
+functions and `lcc_n15_sf_campaign_hub_mint_log` all present, batch `n15_sf_campaign_2026-09-15`
+carrying **1,475 rows**. So the merged-but-unapplied class is **3 of 4, not 4 of 4** — and that
+counterexample is load-bearing, because an existence-only check passes N15 correctly *and* passes
+XB2-precision incorrectly. Staleness, not existence, is the discriminator.
+⚠️ **Pre-measured the obvious design before writing the prompt, and it is a dead end.** LCC Opps holds
+**885 migration files** but only **742 unique version prefixes** (98 timestamps collide);
+`supabase_migrations.schema_migrations` holds **770 rows**, newest `20260915142114` — **and no file is
+named that**. The repo names migrations with *synthetic sequence* timestamps (`...120000`) while
+Supabase stamps the *real apply clock*, so **87 file versions are dated after today**, out to
+`20261102170000`. A `file_version NOT IN schema_migrations` rule would flag nearly every recent
+migration as unapplied — wrong on its whole visible output, the **XB2-counter** failure on a second
+rule in the same brief. The prompt forbids it by name.
+🟢 **Prompt written: `prompts/DEPLOY2-unapplied-migration-detector.md`** (175 lines). Rule goes in
+`scripts/build-brief-collector.mjs`, not the XB2 SQL RPC — that migration's own header sets the split
+(filesystem state is not queryable from Postgres) and this rule needs both halves. Hard requirements:
+**UNVERIFIABLE is a finding, never folded into APPLIED** (a data-only backfill is the exact shape that
+merges and leaves no trace — P131/P180); a **positive control** (Class 11); and a
+measure-the-FP-rate-first gate on the `pg_get_functiondef` normalized compare, with explicit
+permission to ship UNAPPLIED+UNVERIFIABLE only and file STALE as a row if the noise is bad. ⛔ Report
+only — the prompt forbids applying anything it finds, since some of the 87 future-dated files may be
+staged deliberately.
+🔭 Two things surfaced and deliberately NOT fixed: canon has **no block on migration application at
+all**, and the synthetic-timestamp naming is its own 885-file / 98-collision change.
+
+---
+
 ## 2026-09-15 — XB2-precision verified; SIDEBARGUARD1 disproved by reading the source it told me to read (Cowork)
 
 **XB2-precision shipped and hit its acceptance target.** Snapshot 13: findings **32 → 24** (predicted
