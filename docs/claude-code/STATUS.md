@@ -48,6 +48,80 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-15 — Decision #6 research done: BROKER1 + C6 already cover most of it; one scope question left for Scott (Cowork)
+
+**Decision #6 of Scott's six compiled ownership-pipeline decisions -- the last one open.** Scott's
+answer, verbatim: *"If they currently own an asset in our target market, that broker assigned to
+working that market should be assigned the prospecting and cadence should match the schedule
+planned for (7 touchpoints in the first 6 months, average 4 a year thereafter, but each client
+interaction and profile dictates the exact timing and content)."*
+
+Followed the decision's own "review before building" instruction (`docs/architecture/cadence-engine.md`,
+`api/_shared/cadence-engine.js`, `docs/architecture/owner-role-classification.md`,
+`docs/architecture/bd-ranking-and-priority-queue.md` §7) -- and the review changed the shape of the
+work. An initial pass concluded no broker-to-market assignment mechanism exists anywhere; that was
+wrong, caught before writing anything to Scott. **`BROKER1`** (shipped + applied live 2026-09-11,
+`PLANNED-BACKLOG.md` `C4c`/`BROKER1`) already *is* the broker-to-market rule: vertical default
+(`gov`->Scott, `dia`->Kelly Largent, Scott catch-all, Nate never assigned), fill-blanks-only,
+already run against the live seller-prospecting queue (1,303 assigned: 870 gov->Scott, 414
+dia->Kelly, 19 catch-all->Scott). And **C6** (2026-08-29) already retired the role gate on that same
+queue -- eligibility today is *holds a current asset AND is reachable*, no role predicate -- so an
+owner sitting at `owner_role = 'unknown'` no longer blocks anything operationally for owners already
+inside the queue's bands.
+
+**Sized live (2026-09-15)**: 3,322 distinct entities hold a current target-market asset at
+`effective_owner_role = 'unknown'`; the queue's own reachability predicate
+(`owner_contact_pivot.active_contact_entity_id IS NOT NULL`) narrows that to **447 reachable** (374
+gov, 78 dia, 5 overlap) -- P112-safe by construction. Of those 447: 212 are already in
+`lcc_priority_queue_resolved`, 206 of those 212 already have a broker, only **6** are in-queue and
+unassigned; **167 of the 447 already have a `touchpoint_cadence` row** -- prospecting is already
+running for a real share of this population despite the stale `unknown` label. The label itself was
+never written by C6 or BROKER1, so all 447 still literally read `unknown` -- a pure data-integrity
+gap with no live gating effect on the 212 already in-queue.
+
+**The one real open question**: Scott's decision text ("if they currently own an asset in our target
+market") reads broader than the queue's live lease-expiry/timing bands (`P1`/`P2`/`P3`/`P8`) -- 235
+of the 447 reachable owners (159 gov, 73 dia, 3 other) sit outside those bands entirely. Whether
+"promotion" means widening the seller-prospecting population itself to all 447 reachable current
+owners (buildable today, no new machinery -- BROKER1's default and the cadence engine both already
+generalize), versus just fixing the label + the 6-owner broker gap + cadence gap for owners already
+inside today's bands, is a scope call, not something to infer -- a prior standing decision
+(`bd-ranking-and-priority-queue.md` §7, "do NOT widen the gate to `unknown` alone") was written
+specifically to avoid silently widening this population, and while reachability (the missing piece
+that refusal cited) is now satisfied, widening *what counts as a prospect* is still Scott's call, not
+a default to make quietly. Full detail: `docs/architecture/ownership-truth-pipeline-state.md`
+decision #6.
+
+**Next**: awaiting Scott's answer on scope (a) vs (b) above. Once answered, the build is small:
+extend/rerun `lcc_broker1_assign_prospect_brokers` (or the population it reads from) to the chosen
+set, promote the `owner_role`/`behavioral_override` scalar, and seed `touchpoint_cadence` for anyone
+reachable without a row yet. #2 (`canonical_name` unique constraint) remains the only other item
+still gated, on reviewing the review-only tail from the OWN-T0c merge sweep -- not started.
+
+## 2026-09-15 — the misparse guard IS blocking real brokers, and it is one rule (Cowork)
+
+Triaged the 44 unreviewed `contact_misparse_review` items (**MISPARSE-BACKLOG1**) by reason, and the
+queue splits cleanly. **`person_junk_name` (71 rejections) is ~99% correct** — "Marcus & Millichap"
+x16, "Demographics" x7, "Cushman & Wakefield" x5, "View Less" x4, plus "Vice Chairman" / "Public REIT"
+/ "CoStar Property Contact" — firms, page furniture and scraped labels, exactly what it is for. One
+miss: **"Brian Lane"**, a real person whose surname is also a street word.
+
+⚠️ **`email_fanout` (26 rejections) is the problem.** Roughly half are real, named brokers — Edward C.
+Mann (x2), Bradley Lagomarsino, Clifford L. Lamar, Conrad Buhler, Dail Longaker, Debbie Gallimore
+CCIM CIPS, Drew A. Flood, Jacob Fahner, James D. Collins, Nancy J. Bouton, Paul J. Collins, William M.
+Collins — mixed with genuine junk ("Gross Income", "Vacancy", "PO Box 61381") and firm names. So
+**HP1-P2misparse's worry is CONFIRMED and localized to one rule**, not to the guard as a whole.
+
+⭐ **The fourth instance of "one signal, two meanings"** (after XB2-counter, `flag_long_dark`, and
+DOC-TABLE2): one email on several contacts means either *a shared/generic inbox behind scraped junk*
+or *a listing that legitimately names several brokers at one firm*, and `email_fanout` cannot tell
+those apart. Prompt written: `prompts/MISPARSE1-email-fanout-is-blocking-real-brokers.md`, scoped to
+`email_fanout` only, explicitly forbidding both weakening `person_junk_name` (it works) and bulk
+auto-accepting the blocked contacts.
+
+---
+
+
 ## 2026-09-15 — XB2-counter is live but unmerged; DEPLOY2 is live and in main (Cowork)
 
 **XB2-counter verified against the live DB, not the summary.** `v_build_brief_producer_stall` returns
@@ -137,6 +211,30 @@ product-shaped of the six and needs its own design pass — reviewing the existi
 (`UX-T1a-touchcount`, the P112 never-seed-a-cadence-with-no-contact-method doctrine) and the current
 broker/market-assignment data before proposing anything. #2 (`canonical_name` unique constraint) stays
 gated on reviewing the review-only tail from the OWN-T0c merge sweep.
+## 2026-09-16 — DEPLOY2-coverage prompted: fix the blind spot before shipping into it (Cowork)
+
+🟢 **`prompts/DEPLOY2-coverage-the-detector-is-blind-to-its-own-incident.md`** (176 lines). Two window
+fixes: window by **git add-date** instead of filename sort, and **scan `dialysis/`** — which means
+routing those files to **Dialysis_DB `zqzrriwuavgrquhisnoa`** and deploying the probe RPC there too.
+`government/` stays excluded; it really is retired and guarded.
+**Sequenced ahead of OWNERGAP2 on purpose.** OWNERGAP2 is dialysis owner-matching, so its migration will
+almost certainly land in `supabase/migrations/dialysis/` — the one directory the detector does not scan,
+on the same arc that produced the incident the blind spot hides. Shipping into the blind spot first is
+the avoidable mistake.
+✅ Enabling facts confirmed before writing, not assumed: CI already sets `fetch-depth: 0`, so full git
+history is available to the collector; and the repo's established second-project secret names are
+`DIA_SUPABASE_URL` / `DIA_SUPABASE_SERVICE_KEY` (172 / 70 existing references).
+⚠️ Hard requirements in the prompt: **a file with no git add-date sorts NEWEST, never dropped** (P180 —
+an untracked migration is the freshest thing in the repo); **absent dia credentials the dia half emits a
+`skipped` finding**, never a quiet root-only scan reported as clean (B6a); and OWNERGAP1's verdict is to
+be stated even if it comes out UNVERIFIABLE, not massaged into APPLIED.
+👤 **Scott: two GitHub secrets** — `DIA_SUPABASE_URL`, `DIA_SUPABASE_SERVICE_KEY`, Settings → Environments
+→ Production. The dia half cannot run until they exist; the workflow must not hard-fail without them.
+🔭 Left open deliberately: the `government` project (`scknotsqkcheojiaewwh`) will have no unapplied-migration
+detector at all. Correct by design, but it is a real gap and the prompt asks for it to be surfaced, not solved.
+
+---
+
 ## 2026-09-16 — DEPLOY2 reconciled: the detector is real, and it is blind to OWNERGAP1 (Cowork)
 
 **The shipped work is good and I verified it rather than reading the claim.** `lcc_probe_schema_objects`
