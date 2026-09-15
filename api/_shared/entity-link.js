@@ -120,14 +120,30 @@ export function entityNameTokens(name) {
     .trim();
   if (flat === '') return [];
   const parts = flat.split(' ');
-  const out = [];
+  // Mirrors the SQL two-stage shape exactly, quirk included: `ord` is the
+  // token's position in the RAW (pre-stoplist) array; `total` is the COUNT of
+  // tokens that survive the stoplist filter (not a re-numbered position). A
+  // trailing "The" strips only when it lands exactly at that survivor count —
+  // so "Penstar Group, The" (no stoplist word ahead of "The") strips to
+  // 'penstar group', but "Edwin Mcintyre Co., Inc., The" does NOT strip,
+  // because 'Inc.' is removed by the stoplist first and shifts total below
+  // ord. Do not "fix" this without re-running the N15c backfill and the
+  // merge-candidate sweep it feeds — this is the LIVE, shipped behavior
+  // (Scott, 2026-09-15 trailing-"The" decision), not a bug in this file.
+  const filtered = [];
   for (let i = 0; i < parts.length; i++) {
     const tok = parts[i];
     if (tok === '') continue;
-    // Leading article only — 'of'/'and' are kept inline, matching the SQL
-    // `not (ord = 1 and tok = 'the')`.
-    if (i === 0 && tok === 'the') continue;
     if (CANONICAL_LEGAL_FORM_TOKENS.has(tok)) continue;
+    filtered.push({ tok, ord: i + 1 });
+  }
+  const total = filtered.length;
+  const out = [];
+  for (const { tok, ord } of filtered) {
+    // Leading OR trailing article only — 'of'/'and' are kept inline, matching
+    // the SQL `not (ord = 1 and tok = 'the') and not (ord = total and tok = 'the')`.
+    if (ord === 1 && tok === 'the') continue;
+    if (ord === total && tok === 'the') continue;
     out.push(tok);
   }
   return out;

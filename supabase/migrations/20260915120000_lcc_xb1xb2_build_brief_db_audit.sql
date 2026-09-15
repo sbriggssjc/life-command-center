@@ -200,30 +200,53 @@ BEGIN
 
   -- Rule: market-brief lane stale-or-missing (spec §5 "stale market-brief facts"). Reuses EB1's
   -- v_market_brief_staleness rather than re-deriving staleness a second way -- this view already
-  -- computes stale_after live, never cached, per the EB1 header's own doctrine. A cell reads
-  -- IS_MISSING when the (lane, section) has never emitted a live fact at all (worse than stale);
-  -- both states are named, never folded into one bucket.
+  -- computes stale_after live, never cached, per the EB1 header's own doctrine.
+  --
+  -- ⚠️ XB2-precision (2026-09-15): this used to emit ONE FINDING PER (lane, section) cell, so one
+  -- known fact -- "no producer has ever written a government or net_lease fact" (MB8/MB9) --
+  -- became 10 critical findings (5 sections x 2 empty lanes), 31% of a 32-finding snapshot, and
+  -- buried the one genuinely new find in the same run (SIDEBARGUARD1). It now emits ONE finding
+  -- PER LANE, with every affected section named in `measured` rather than restated as its own row.
+  -- A cell reads is_missing when that (lane, section) has never emitted a live fact at all
+  -- (worse than stale); both states are still named, per-section, inside the single lane finding.
   FOR v_row IN
-    SELECT * FROM public.v_market_brief_staleness
-    WHERE is_missing OR stale_count >= p_stale_min_count
-    ORDER BY is_missing DESC, stale_count DESC
+    SELECT
+      s.lane,
+      array_agg(s.section ORDER BY s.section) FILTER (WHERE s.is_missing) AS missing_sections,
+      array_agg(s.section ORDER BY s.section) FILTER (WHERE NOT s.is_missing AND s.stale_count >= p_stale_min_count) AS stale_sections,
+      sum(s.stale_count) FILTER (WHERE NOT s.is_missing) AS total_stale_count,
+      sum(s.live_count) AS total_live_count,
+      -- last_producer/_status/_skip_reason are identical across every section row for one lane
+      -- (v_market_brief_staleness joins last_run on lane alone) -- max() picks the single value.
+      max(s.last_producer) AS last_producer,
+      max(s.last_run_status) AS last_run_status,
+      max(s.last_run_skip_reason) AS last_run_skip_reason
+    FROM public.v_market_brief_staleness s
+    GROUP BY s.lane
+    HAVING count(*) FILTER (WHERE s.is_missing) > 0
+        OR count(*) FILTER (WHERE NOT s.is_missing AND s.stale_count >= p_stale_min_count) > 0
+    ORDER BY (count(*) FILTER (WHERE s.is_missing) > 0) DESC, s.lane
   LOOP
     v_findings := v_findings || jsonb_build_object(
       'rule', 'market_brief_lane_stale_or_missing',
-      'severity', CASE WHEN v_row.is_missing THEN 'critical' ELSE 'warn' END,
-      'subject', format('%s/%s', v_row.lane, v_row.section),
+      'severity', CASE WHEN v_row.missing_sections IS NOT NULL THEN 'critical' ELSE 'warn' END,
+      'subject', v_row.lane,
       'measured', jsonb_build_object(
-        'is_missing', v_row.is_missing, 'live_count', v_row.live_count, 'stale_count', v_row.stale_count,
+        'missing_sections', COALESCE(v_row.missing_sections, ARRAY[]::text[]),
+        'stale_sections', COALESCE(v_row.stale_sections, ARRAY[]::text[]),
+        'total_stale_count', COALESCE(v_row.total_stale_count, 0),
+        'total_live_count', COALESCE(v_row.total_live_count, 0),
         'last_producer', v_row.last_producer, 'last_run_status', v_row.last_run_status,
         'last_run_skip_reason', v_row.last_run_skip_reason
       ),
-      'detail', CASE WHEN v_row.is_missing
-        THEN format('%s/%s has NEVER carried a live market-brief fact (last producer %s, %s)',
-                     v_row.lane, v_row.section, COALESCE(v_row.last_producer, 'none'), COALESCE(v_row.last_run_status, 'no run'))
-        ELSE format('%s/%s carries %s stale fact(s) beside %s live (last producer %s, %s)',
-                     v_row.lane, v_row.section, v_row.stale_count, v_row.live_count,
-                     COALESCE(v_row.last_producer, 'none'), COALESCE(v_row.last_run_status, 'no run'))
-      END
+      'detail', format(
+        'lane %s: %s section(s) never carried a live fact (%s); %s section(s) carry %s stale fact(s) beside %s live (%s) -- last producer %s, %s',
+        v_row.lane,
+        COALESCE(array_length(v_row.missing_sections, 1), 0), COALESCE(array_to_string(v_row.missing_sections, ', '), 'none'),
+        COALESCE(array_length(v_row.stale_sections, 1), 0), COALESCE(v_row.total_stale_count, 0), COALESCE(v_row.total_live_count, 0),
+        COALESCE(array_to_string(v_row.stale_sections, ', '), 'none'),
+        COALESCE(v_row.last_producer, 'none'), COALESCE(v_row.last_run_status, 'no run')
+      )
     );
   END LOOP;
 
