@@ -1616,11 +1616,12 @@ T2b mints the 74. It does not touch the 79 (already minted), the 248 (own nothin
 ### The next question — 79 gov owner-orgs the feeder should have resolved
 
 Property present, asset entity present, owner anchored — and `lcc_property_owner_evidence` names
-them **zero times** (only 17 of 222 gov orgs here were ever a candidate). **Undiagnosed by design.**
-Test in order: the **400/run cap** on cron 225 (both mints had to drive it explicitly); the
-**`lcc_domain_owner_ambiguous`** lane, where a parked row would make these *correct abstentions*;
-then the **brokerage/junk/placeholder guards**. ⚠️ **In this arc every "silent producer" that looked
-like a defect turned out, at least partly, to be a guard doing its job** — read the verdicts first.
+them **zero times** (only 17 of 222 gov orgs here were ever a candidate). ✅ **Answered same day —
+see §4n below: it is not a defect, it is the sponsor↔SPE gap** (`C2h_SPONSOR_SPE_NOT_A_FEEDER_DEFECT_2026-08-28.md`).
+**Reconfirmed live 2026-09-15** (same doc, §6): 83% of the still-unresolved slice is the identical
+shape three weeks later — `lcc_property_owner` resolving to the title-holding SPE via `supersession`
+at a flat 0.75 confidence, while the Salesforce person sits at the sponsor. Not the batch cap, not
+the ambiguous lane (0 of 58 sampled), not a guard (unchanged from C2h's own 2-of-79).
 connected"* is, measured, **~652 people at 489 owner-orgs.** The rest are correctly unconnected.
 
 ### ⚠️ It also settles T2b independently: minting it would connect **74 orgs**
@@ -1635,11 +1636,13 @@ cost is settled across 4,570 minted entities), so it can be revisited if the ran
 
 **489 orgs / 652 people**: companies that **are** domain property owners, **have** Salesforce people
 attached, and whose properties are **not** resolved to them. ⚠️ **415 of the 489 are NOT reachable
-by minting** — they are anchored and unresolved for some other reason. **That is the next thing to
-size, and it is deliberately undiagnosed here.** Candidates in order: the `lcc_reconcile_property_owner`
-0.55 confidence gate (the documented 876-asset supersession class); a dia **operator** in the owner
-slot (P113); or an org anchored in one domain with properties in the other. **Do not assume — this
-arc has three instrument errors on record from assuming.**
+by minting** — they are anchored and unresolved for some other reason. ✅ **Diagnosed same day for
+the gov side, §4n**: the dominant shape (69 of 79, reconfirmed at ~83% live 2026-09-15) is the
+sponsor↔SPE gap, not a feeder or confidence-gate defect. What is still genuinely unsized: feeding
+those pairs into the existing confirm-only surfaces (`lcc_owner_sponsor_domain`, 8 rows;
+`lcc_ownership_sponsor_family`, 34 rows, both unchanged in scale as of 2026-09-15) and resolving the
+separate, still-open buyer-vs-true_buyer precedence decision in `supersession-tie-lane-2026-08.md`
+§4. **Do not assume — this arc has three instrument errors on record from assuming.**
 
 
 ---
