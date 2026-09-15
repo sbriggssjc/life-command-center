@@ -48,6 +48,30 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-15 — XB2-counter is live but unmerged; DEPLOY2 is live and in main (Cowork)
+
+**XB2-counter verified against the live DB, not the summary.** `v_build_brief_producer_stall` returns
+**0 rows**, `sidebar_contact_guard` is excluded (now 95 runs, still 0 completions — correctly silent),
+and `pg_get_viewdef` shows the live body carrying `has_cron_trigger` and the cron predicate. CC also
+repaired the duplicate-ID CI failure properly: `main` has **zero** duplicate backlog IDs.
+🚨 **New class found — the exact mirror of DEPLOY2-unapplied → DEPLOY3-unmerged.** That migration is
+**applied to production but absent from `main`**; it exists only on the still-open PR #2475 branch.
+Rebuilding the DB from `main` would silently restore the old view and re-introduce the false positive,
+and if the PR is closed or the branch pruned the only copy of that DDL goes with it — the loss BRANCH1
+spent a round preventing. ⚠️ **DEPLOY2's brand-new detector is blind to this direction by construction:**
+it enumerates `supabase/migrations/*.sql` and probes each declared object, so a change that is in the DB
+with no file in the repo presents no file to enumerate. 👤 **Fix is trivial — merge PR #2475.**
+**DEPLOY2 itself is genuinely live and in `main`:** snapshot 23 carries 5 `migration_unapplied` findings,
+all `warn`/UNVERIFIABLE, 0 UNAPPLIED — matching CC's report exactly.
+⚠️ **A flaw in my own guard, found while fixing two malformed rows.** Both had raw `|` inside code spans
+(`` `'cron' | 'manual' | 'api'` ``, `` `FUNCTION|VIEW|TABLE|…` ``). GFM requires pipes escaped **even
+inside code spans**, so those rows render broken on GitHub — but `backlog-table-shape`'s splitter is
+backtick-aware and passes them. **My guard is more permissive than the renderer.** Pipes now escaped;
+the guard should treat an unescaped pipe in a code span as a violation → **DOC-TABLE2**.
+Brief is at 30 findings (24 + 5 migration_unapplied + 2 orphan prompts − 1 stall fixed); the two orphan
+prompts were these two responses awaiting filing, now filed.
+
+
 ## 2026-09-15 — OWN-T0g closed: transfer-evidenced supersession rule shipped, live and forward-fixed (Cowork)
 
 **Decision #3 of Scott's six compiled ownership-pipeline decisions — the riskiest one, a live
@@ -113,6 +137,37 @@ product-shaped of the six and needs its own design pass — reviewing the existi
 (`UX-T1a-touchcount`, the P112 never-seed-a-cadence-with-no-contact-method doctrine) and the current
 broker/market-assignment data before proposing anything. #2 (`canonical_name` unique constraint) stays
 gated on reviewing the review-only tail from the OWN-T0c merge sweep.
+## 2026-09-16 — DEPLOY2 reconciled: the detector is real, and it is blind to OWNERGAP1 (Cowork)
+
+**The shipped work is good and I verified it rather than reading the claim.** `lcc_probe_schema_objects`
+IS live on LCC Opps. The judgement calls were right: STALE was measured (3-of-12 extractor success, plus
+a real FP from pg's `timestamptz` → `timestamp with time zone` rendering) and **correctly not shipped**;
+the XB2-precision retrospective was **declared unreconstructible rather than claimed**. Both are the
+honest answer, and both are what the prompt asked for.
+⚠️ **But the window has two defects, and one of them is severe.** **(a) `dialysis/` was excluded on a
+half-true justification.** Root-only was justified as "`dialysis/`/`government/` are historical copies."
+That is right for `government/` — README, `HISTORICAL — DO NOT RE-APPLY` marker, its own guard test,
+owned by `government-lease`. It is **wrong for `dialysis/`: 0 of 282 files carry the marker and there is
+no README.** The gov retirement was generalized without checking. So
+`dialysis/20260914150000_dia_ownergap1_fabricated_owner_quarantine.sql` — **OWNERGAP1, one of the three
+incidents DEPLOY2 exists to catch** — is outside the scan, and its own header calls itself "the
+containment that IS in scope from this repo."
+**(b) The window sorts by filename, and filenames are not a clock.** `MIGRATION_WINDOW_SIZE = 60`, floor
+`20260930121500` — but timestamps are synthetic sequence numbers, so files land out of order. Measured:
+**107 migrations added in the last 14 days, 64 outside the window, 24 of those root-level.** This is the
+same class the prompt already killed once: a synthetic timestamp is not recency. Both filed as
+**DEPLOY2-coverage** 🔴; fix is bounded (git add-date window + deploy the probe RPC to Dialysis_DB).
+🔍 **Live evidence that DEPLOY2-stale is worth building, not just a nice-to-have.** The very next
+migration after CC's run — `20261102190000_lcc_own_t0g_finalize_calls_supersession.sql` — `CREATE OR
+REPLACE`s `lcc_finalize_entity_portfolios`, which **already existed**, so existence proves nothing. One
+body probe settled it in a single query (`pg_get_functiondef` contains `t0g` → the change IS live). That
+is the XB2-precision shape reappearing four days later.
+✅ **Two older rows closed by the same reconcile.** PR #2475 merged, so **XB2-counter** and the immediate half of **DEPLOY3-unmerged** (applied-but-unmerged) are both closed — `20261102180000_lcc_xb2counter_producer_stall_scheduled_only.sql` is on `origin/main` at `988fd65c`. ⚠️ It arrived carrying a **filename collision**: `20261102180000` is now held by two migrations (xb2counter and own_t0g_transfer_supersession, PRs #2475 and #2477), created the same day by two branches that never saw each other. The 99th collision, and it lands squarely on DEPLOY2's filename-sorted window.
+✅ Also verified applied live while reconciling: PR #2477's two own_t0g migrations (`lcc_own_t0g_supersession_log`,
+`supersede_by_transfer_evidence`, `revert_supersession`) — all present.
+
+---
+
 ## 2026-09-16 — DEPLOY2-unapplied: migration-merged-but-unapplied detector shipped
 
 Third occurrence of the class (HP1-P1a-fix, OWNERGAP1, XB2-precision) got its own audit rule.
