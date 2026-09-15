@@ -308,68 +308,65 @@ state.
    designed. `v_lcc_c2e_asset_mint_plan` now reads 0 -- gov ownership resolution is exhausted at the
    $100k+/below-$100k tranche split; both tranches are fully applied. Migration/data-operation detail:
    `docs/os/PLANNED-BACKLOG.md`'s `C2e-T2b` row, `docs/claude-code/STATUS.md` 2026-09-15 entry.
-6. **🟡 RULE DECIDED, research done -- one scope question remains for Scott -- what evidence promotes
-   an owner out of `unknown` role** (`connectivity-and-open-threads.md` §4o). Scott's answer: *"If they
+6. **✅ CLOSED 2026-09-15 -- what evidence promotes an owner out of `unknown` role, and how prospecting
+   coverage should widen** (`connectivity-and-open-threads.md` §4o). Scott's original answer: *"If they
    currently own an asset in our target market, that broker assigned to working that market should be
    assigned the prospecting and cadence should match the schedule planned for (7 touchpoints in the
    first 6 months, average 4 a year thereafter, but each client interaction and profile dictates the
-   exact timing and content)."* Decision: current ownership of an asset in the target market alone
-   promotes an owner out of `unknown` (no additional signal needed); the covering broker for that
-   market gets assigned prospecting; cadence follows the 7-touch/6-month, ~4/year-thereafter template,
-   individualized by client interaction/profile.
+   exact timing and content)."* Follow-up answer, resolving the one open scope question below, verbatim:
+   *"Yes, we want to pursue, in research, until every current and prior owner of a building leased to
+   one of the operators or agencies in our target swimlanes (dialysis and government-leased) are known
+   and connected to our LCC app and code processes. The brokers can then make the election on whether
+   to pursue the account or not individually, with the guidance and coaching of the LCC on the next best
+   relatively important lead."*
 
-   **Review completed 2026-09-15** (per the decision's own "review before building" instruction) --
-   this landed on more already-shipped machinery than expected, which changed the finding:
-   - **Cadence engine**: the live mechanism is `api/_shared/cadence-engine.js`
-     (`docs/architecture/cadence-engine.md` is stale and points here). `PROSPECTING_SEQUENCE` already
-     implements exactly the 7-touch sequence Scott described; `phase` transitions `prospecting` ->
-     `maintenance` (quarterly, `COOLDOWNS.quarterly_interval_ms` = 90 days = the "~4/year thereafter");
-     `TIER_MULTIPLIERS` already individualize pacing. **No new cadence machinery is needed.**
-   - **Broker/market assignment is NOT missing -- corrected from an earlier pass at this research that
-     missed it.** `BROKER1` (`supabase/migrations/20261101160000_lcc_broker1_prospect_broker_assignment.sql`,
-     shipped + applied live 2026-09-11, `PLANNED-BACKLOG.md` row `C4c`/`BROKER1`) already is Scott's
-     broker-to-market rule: ROE self-signal first, else default by vertical (`gov`->Scott,
-     `dia`->Kelly Largent), Scott is the catch-all, Nate never assigned -- fill-blanks-only, reversible,
-     already run against `lcc_priority_queue_resolved` (1,303 assigned live: 870 gov->Scott,
-     414 dia->Kelly, 19 catch-all->Scott). **This already answers "how does the covering broker get
-     determined" -- by domain (gov vs. dia), which is the only two-value "target market" split that
-     exists in this data.** Role systems: the live ranking gate still reads the OLD scalar
-     `effective_owner_role`; a newer multi-label SET model exists (`owner-role-classification.md`) but
-     isn't wired to the gate -- "promotion" means the scalar value.
-   - **C6 (2026-08-29) already retired the role gate itself** for the live seller-prospecting queue
-     (`gov_owner_props`): eligibility today is *holds a current asset AND is reachable*
-     (`owner_contact_pivot.active_contact_entity_id IS NOT NULL`), no role predicate at all. So for any
-     owner already inside the queue's existing bands, sitting at `owner_role = 'unknown'` no longer
-     blocks anything operationally -- it is a stale label, not a live gate.
-   - **Population sizing** (live, 2026-09-15): 3,322 distinct entities hold a current target-market
-     asset and sit at `effective_owner_role = 'unknown'`; applying the same reachability predicate C6
-     already uses narrows that to **447 reachable** (374 gov, 78 dia, 5 overlap) -- P112 is satisfied by
-     this same filter. Of those 447: **212 are already in `lcc_priority_queue_resolved`** (the live
-     bands are lease-expiry/timing-driven, not "any current owner," so most gov reachable-unknowns
-     -- 159 of 447 -- and 73 dia ones sit outside today's bands); of the 212 in-queue, **206 already
-     have a broker** (BROKER1 default sweep or an SF/manual signal), only **6 are in-queue and
-     unassigned**; **167 of the 447 already have at least one `touchpoint_cadence` row** -- cadences are
-     already running for a meaningful share of this population despite the stale `unknown` label.
-   - **The scalar `owner_role`/`behavioral_override` column itself was never updated for any of
-     this** -- nothing in C6 or BROKER1 wrote to it, so all 447 (including the 212 already surfacing,
-     assigned, and cadenced) still literally read `unknown`. Promoting the column to match reality is
-     a pure data-integrity fix with no gating side effect for that subset.
+   **Review** (per the decision's own "review before building" instruction) found more already-shipped
+   machinery than expected, and one genuine category error caught before it was built:
+   - **Cadence engine** (`api/_shared/cadence-engine.js`): already implements the exact 7-touch/6-month,
+     ~4/year-thereafter template. No new machinery needed, and none was built -- per Scott's "brokers
+     can make the election," a cadence should start when a broker elects to pursue an account, not be
+     bulk-seeded for everyone who is merely known and connected.
+   - **Broker/market assignment**: `BROKER1` (shipped + live 2026-09-11) already is the broker-to-market
+     rule -- vertical default (`gov`->Scott, `dia`->Kelly Largent, Scott catch-all, Nate excluded),
+     fill-blanks-only, reversible. No new policy needed, only a wider population to run it over.
+   - **Role classification -- caught before writing anything**: the OLD scalar `entities.owner_role` /
+     `behavioral_override` (`effective_owner_role`) is a HUMAN-manual-override field by convention
+     (`owner-role-classification.md`) -- writing a system-derived "promotion" into it would have been a
+     category error, the exact "second registry" / fabrication class this repo avoids. The live
+     deterministic role-SET view (`v_lcc_entity_roles`) already correctly classifies **445 of 447**
+     reachable current owners `investor_owner` and **3,804 of 3,820** prior owners `former_owner` --
+     computed live, no backfill needed. **Promotion was never a data gap; it was already correct in the
+     system that has the right semantics.** The OLD scalar column stays stale and unused for gating
+     (C6, 2026-08-29, already dropped the role predicate from the live queue) -- fixing its display on
+     the operator card, if it still reads 'unknown' there, is a UI concern, not a data build, and is not
+     addressed here.
 
-   **The one real open question, narrower than originally scoped**: Scott's decision text says *"if
-   they currently own an asset in our target market"* -- read literally, that is broader than the live
-   queue's lease-expiry/timing bands (`P1`/`P2`/`P3`/`P8`), which is why 235 of the 447 reachable owners
-   (159 gov, 73 dia, 3 other) don't surface in the queue at all today. Does "promotion" mean: (a) widen
-   the seller-prospecting population itself so all 447 reachable current owners get a broker assignment
-   and a seeded cadence, regardless of lease timing -- a real expansion of what the queue prospects, on
-   top of the already-existing BROKER1/cadence machinery; or (b) just fix the stale `unknown` label plus
-   close the 6-owner broker gap and the cadence gap for owners already inside today's bands, leaving the
-   queue's timing-based scope untouched? (a) is buildable today with no new machinery -- BROKER1's
-   vertical default and the cadence engine both already generalize to it -- but it is a scope decision,
-   not something to infer, since a prior standing decision was written specifically to avoid silently
-   widening this population. (b) is smaller and closer to house-keeping. Once Scott picks, the build is
-   straightforward: extend/rerun `lcc_broker1_assign_prospect_brokers` (or the population it reads from)
-   to cover the chosen set, promote `owner_role`, and seed `touchpoint_cadence` for anyone reachable who
-   doesn't have a row yet.
+   **Sizing, live 2026-09-15**: current target-market owners at `effective_owner_role = 'unknown'`:
+   3,322 distinct, 447 reachable. Prior owners (held a fact that ended, holds none now): 3,820 distinct,
+   197 reachable. Reachability is the dominant bottleneck for both populations (86.5% of current, 94.8%
+   of prior owners are NOT reachable) -- this is a contact-data-sourcing gap, not a role/broker-mechanics
+   gap, and lines up with the already-filed, not-yet-decided **owner-enrichment-adapters** question
+   (`FLAGDARK1`, `PLANNED-BACKLOG.md`) -- address/deed/SOS/websearch/OpenCorporates adapters are the
+   actual lever for moving these reachability numbers, not anything in this decision's scope.
+
+   **Shipped**: `lcc_own_t0i_extend_broker_assignment(p_dry_run)` -- the identical BROKER1
+   **Shipped**: `lcc_own_t0i_extend_broker_assignment(p_dry_run, p_batch_tag)` -- the identical BROKER1
+   vertical-default policy, applied over the wider population Scott's follow-up asked for (every
+   reachable current-OR-prior target-market owner, not just the live priority-queue's lease-timing
+   bands), fill-blanks-only, reversible (`delete ... where set_by like 'own_t0i_%'`). Does not touch
+   `lcc_broker1_assign_prospect_brokers` or its population. Dry run matched live exactly: **1,044
+   reachable owners total, 487 already assigned, 557 newly defaulted** (315 gov->Scott, 238 dia->Kelly,
+   4 catch-all->Scott). Re-run afterward: 0 remaining, idempotent. Verified Nate untouched (0 rows).
+   Migration: `supabase/migrations/20261102200000_lcc_own_t0i_extend_broker_assignment.sql`.
+
+   **What "known and connected" now means concretely, for every reachable current-or-prior owner**: role
+   is already correctly classified (`v_lcc_entity_roles`), a broker is now assigned (BROKER1 +
+   OWN-T0i together), and the current-owner half already surfaces in the live seller-prospecting queue
+   wherever lease timing puts them in-band -- brokers now have what they need to make the pursue/no-
+   pursue election Scott described. **Not shipped, deliberately**: a bulk cadence seed (contradicts
+   "brokers elect individually") and any change to the priority queue's lease-timing bands themselves
+   (a separate, larger ranking-surface decision, not required by this answer once "known and connected"
+   is read as data/assignment connectivity rather than forced outreach).
 
 **✅ Resolved and shipped:** banks and CMBS trustees excluded from prospecting (`[N3c]`, Scott
 2026-09-14, see `tier0-owner-contact-system.md` §4/§6) -- revisitable if lender prospecting via

@@ -96,6 +96,37 @@ the first workflow run on `main` is the real measurement.** Baseline to compare 
 / 100 objects / 0 UNAPPLIED / 5 UNVERIFIABLE, LCC Opps only.** A rising UNAPPLIED count there is the
 rule working. Still unverified from here: whether the `DIA_SUPABASE_*` secrets resolve, and **which**
 key the resolver picks — which is what decides whether the `anon` grant is load-bearing today.
+## 2026-09-15 — the deed-wins flag was never the decision; two prompts sent instead (Cowork)
+
+Took FLAGDARK1's recommended first decision (**#4, `DECISION_OWNER_DEED_WINS`**) and measured it
+before recommending it to Scott. It does not hold. The flag would write **8 rows out of 1,363 live
+owner-source conflicts** — **zero in government**, 8 in dialysis — so it is a switch on a population
+a guard has already reduced to nothing, not a policy call about whether deeds win.
+
+**And the 8 fail a hand-check.** `Sumitomo Bank Leasing And Finance Inc` → **`SMFG`** twice: the
+rebrand guard (`dia_owner_share_significant_token`) compares shared tokens, and an initialism shares
+none with the words it abbreviates — structurally blind, not a tuning miss. Separately a
+leasing-and-finance entity takes title on rows that read as financing instruments; the grantee
+exclusion list covers `mortgage`/`savings bank`/`bancorp` but not `Leasing and Finance`.
+
+**The real blockers are measured, and neither is a decision.** 234 dialysis rows are blocked *solely*
+by the 2-year deed-recency window — and an older deed is not a less authoritative one, it is a more
+settled one. On the government side, **3,930 of 5,922** grantee-bearing properties have **no deed date
+at all** (66.4%) against dialysis's **2 of 1,774** (0.1%): same field, two pipelines, 600x miss rate,
+which makes the dialysis path a working reference implementation of what gov is failing at.
+
+Scott's calls: widen the window but prove it first, fold the guard work into the same round, and yes
+to chasing the gov date gap. Two prompts written —
+`prompts/DEED1-the-autofix-set-is-8-rows-and-half-are-wrong.md` and
+`prompts/GOVDEED1-two-thirds-of-gov-deeds-have-no-date.md`. GOVDEED1 flags the repo-ownership
+question up front (gov DB objects belong to `government-lease` per ID3a-d/I16, so the deliverable may
+be a handoff rather than a migration) and forbids inferring a date from any adjacent field.
+
+⭐ The gov NULL date is the **fifth** instance of one signal carrying two meanings — downstream,
+"we have no date" and "the deed is old" are indistinguishable. And the lesson for the triage doc
+itself, recorded there: it ranked the five decisions by **cost** without sizing their **effect**.
+
+---
 
 
 ## 2026-09-15 — Decision #6 CLOSED: OWN-T0i ships live, all six of Scott's ownership-pipeline decisions now closed (Cowork)
@@ -121,7 +152,7 @@ whether the live deterministic role-SET view (`v_lcc_entity_roles`) already had 
 3,820** prior owners already `former_owner`, computed live, no backfill needed. Role classification
 was never a real gap.
 
-**Shipped `lcc_own_t0i_extend_broker_assignment(p_dry_run, p_batch_tag)`** — reuses BROKER1's exact
+**Shipped `lcc_own_t0i_extend_broker_assignment(p_dry_run)`** — reuses BROKER1's exact
 vertical-default policy (`gov`->Scott, `dia`->Kelly Largent, Scott catch-all, Nate never assigned,
 fill-blanks-only, reversible) over the wider population Scott's follow-up asked for: every reachable
 current-OR-prior target-market owner, not just the live priority-queue's lease-timing bands. Does not
