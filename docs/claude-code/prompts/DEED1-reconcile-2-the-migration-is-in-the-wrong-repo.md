@@ -76,3 +76,27 @@ claim.
   inventory line is what is out of step.
 - ⛔ Do not delete or rewrite `supabase/migrations/dialysis/README.md` — it is the page that got this
   right.
+
+## Behaviour pin — checksums, added 2026-09-16 (Cowork)
+
+A reconciliation migration that alters behaviour is a bug, and "verified identical" is an adjective.
+Cowork captured these from the live Dialysis_DB on 2026-09-16, **before** any port:
+
+| object | `md5(...)` | length |
+|---|---|---|
+| `pg_get_viewdef('public.v_owner_source_conflict')` | `9fc5aa3f824b125853b3ac8c8a8388f1` | 4747 |
+| `pg_get_functiondef(dia_owner_share_significant_token)` | `72b48cd949db4de5502812920b2e5dd0` | 2183 |
+
+This is a file-location fix, so **nothing should be applied and both hashes must therefore be
+unchanged when you finish**. Report both, matched or not.
+
+⚠️ **If the ported file is emitted or re-emitted from live objects at any point, do not transcribe the
+view body.** It is **4,747 characters and carries `\m` / `\M` word-boundary escapes**, which are
+ambiguous through a tool boundary, and a silently wrong regex changes which rows auto-fix — the exact
+behaviour this migration exists to freeze. Emit, then assert the hash.
+
+*(Folded in from the superseded `DEED1-RELAND-the-migration-went-to-the-wrong-repo.md`, which
+duplicated this prompt. That prompt also argued ownership from `CLAUDE.md` line 375 — **that argument
+is withdrawn**: Scott has since stated neither CLAUDE.md line was written by him, so neither carries
+human authority, and the live measurement in CANON-OWNERSHIP1 shows both repos apply schema to this
+database today.)*

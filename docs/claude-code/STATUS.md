@@ -216,6 +216,33 @@ this reviewed-pending population; (c) something else. Full detail:
 `docs/architecture/ownership-truth-pipeline-state.md` decision #2. Awaiting Scott's answer before
 building anything.
 
+## 2026-09-16 — I duplicated a parallel session, and my version was the wrong one (Cowork)
+
+**Retracting my own work from earlier today.** A parallel Cowork session filed **CANON-OWNERSHIP1** and
+**DEED1-reconcile-2** for the same findings I filed as **DIA-OWNERSHIP-CONFLICT** and **DEED1-RELAND**,
+hours apart. Both merged. That is precisely the failure this repo's own doctrine names — *two branches
+that both add to a shared doc merge cleanly and silently duplicate it* — and I wrote that line.
+⚠️ **And my argument was wrong, not just redundant.** I argued from `CLAUDE.md` line 375 that ownership
+was already settled. **Scott has since said neither CLAUDE.md line was written by him** — *"Nothing in
+either would have been written by me directly. It's all written by Claude"* — so neither carries human
+authority and no amount of re-reading them could have settled it. The other session measured the live
+database instead: **both repos apply schema to Dialysis_DB today** (`dia_property_redirects` is live from
+a migration that exists only in the `Dialysis` repo; three of LCC's five newest `dialysis/` migrations are
+also live). "One repo owns each database's objects" was **never true of this database**. That dissolves
+the contradiction instead of resolving it, and it is the better finding.
+✅ **Nothing lost.** The destination is identical — port the file here, close PR #7412 — and
+**DEED1-reconcile-2** tracks it, with a check mine lacked (whether the `Dialysis` repo also carries an
+older copy of `v_owner_source_conflict`). My one unique contribution, the **md5 behaviour pin**
+(`pg_get_viewdef` = `9fc5aa3f824b125853b3ac8c8a8388f1`/4747, `pg_get_functiondef` =
+`72b48cd949db4de5502812920b2e5dd0`/2183, plus the `\m`-escape transcription hazard), was folded into that
+prompt before retiring the duplicate to `_superseded/duplicate-prompts-2026-09-16/` with a manifest.
+🔭 **The guard gap is real and worth naming:** `backlog-id-uniqueness` catches a repeated ID, not two IDs
+describing one finding — and nothing at all catches two prompts for one job. With parallel sessions now
+routine, the cheap mitigation is to read the queue and the newest backlog rows before filing, which I did
+not do this turn.
+
+---
+
 ## 2026-09-16 — DEED1's migration is correct and in the wrong repository (Cowork)
 
 **The SQL is right; only its address is wrong.** CC wrote, applied and verified the DEED1 reconciliation
