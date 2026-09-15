@@ -103,6 +103,53 @@ structurally stale in the live DB is the right owner for this. ⚠️ And the ru
 existence test: existence alone would have passed XB2-precision, because the function existed — it was just the
 old body. Hashing the file's `CREATE` block against `pg_get_functiondef` is one option to evaluate.
 
+## 2026-09-15 — N15 closed: 1,475 Salesforce-campaign orphans minted as unified_contacts hub rows (Cowork)
+
+**Decision #4 of Scott's six compiled ownership-pipeline decisions.** Scott's answer, verbatim:
+*"These are members of a specific group? Usually means that there is some vested interest in the
+space mapped by the name. Some may be brokers, some may be a new fund exploring the space, but the
+vast majority will be owners or prior owners and the membership is evidence that some prior research
+has concluded that in our team's BD history and just because the LCC doesn't yet have that connection
+mapped, does not mean that its not out there undiscovered."*
+
+**Background** (P197, `docs/audits/P197_TIER0_EMPLOYER_RESOLVER_2026-08-27.md` §4): of the live person
+entities with an email and no `unified_contacts` hub row, membership in a Salesforce campaign (via
+`lcc_sf_list_membership`) was measured as "the only gate that discriminates" among candidate criteria
+— 1,475 admitted. P197 explicitly did not mint ("an operator-surface decision with a blast radius")
+and filed it for Scott as this backlog row.
+
+**Re-measured live before building anything** (re-measure-before-acting discipline, this population
+moves): total email-orphan population grew from 5,193 to **5,672** since P197, but the SF-campaign
+gate held at exactly **1,475** — `lcc_sf_list_membership` turns out to be a frozen 2026-07-16→07-21
+snapshot, not a live-syncing producer. Worth its own follow-up (the campaign-membership signal itself
+is stale for anything captured since July), not fixed in this pass. Sampled the 1,475 before minting:
+side distribution seller 1,030 / unknown 416 / buyer 88 — consistent with Scott's "vast majority will
+be owners" read; 15 random rows spot-checked, all real BD-relevant names and campaigns (`VCA Animal
+Hospital Owners`, `DMR Urgent Care Owners`, `SAB GSA Prospects`, `GSA Buyer`). Checked mint-collision
+risk the way P197 did for its own would-be reconcile: 0 of the 1,475 already resolve to a hub row
+under `sf_contact_id`.
+
+**Shipped `lcc_n15_mint_sf_campaign_hub_rows(dry_run, batch_tag)`** — one hub row per entity, picking
+the best of that entity's campaign-membership rows (domain-confirmed company preferred, else most
+recent). **Never fabricates `company_name`** — reuses the exact `lcc_tier0_company_confirms_domain`
+gate P197 built after finding that a bare campaign company label is a human/capture field, not an
+employer register, and copying it verbatim manufactures employers (city/zip strings, the person's own
+name, a different firm, a bank). Dry run matched live exactly: 1,475 would-create → 1,475 created, 0
+failures. Only 228 (15%) got a domain-confirmed `company_name` written; the other 1,247 correctly
+render with no company rather than a guess — honest "Not on file," per standing doctrine. Fully logged
+to `lcc_n15_sf_campaign_hub_mint_log`, batch `n15_sf_campaign_2026-09-15`, reversible via
+`lcc_n15_unmint_sf_campaign_hub_rows('n15_sf_campaign_2026-09-15')`. Migration:
+`supabase/migrations/20261102170000_lcc_n15_sf_campaign_hub_mint.sql`.
+
+**Scope, stated plainly**: this does not touch the remaining ~4,197 email orphans outside the
+SF-campaign gate, and does not itself change Tier 0's `no_employer_on_file` blockage — P197 already
+fixed that separately with a read-time resolver (`lcc_tier0_employer_on_file`), and this row's own
+audit found minting hub rows would only have helped 4 of 73 blocking people. This is Scott's stated
+connectivity-coverage goal ("truth and accuracy... pushed toward 100%"), not a Tier 0 fix.
+
+**Next**: decisions #3 (OWN-T0g supersession rule), #5 (T2b), #6 (owner-role promotion + cadence) are
+still open with decided rules, not yet built. #2 (`canonical_name` unique constraint) is gated on
+reviewing the remaining canonical-name collision tail from earlier today's OWN-T0c sweep.
 ## 2026-09-15 — OWNERGAP2 prompt: the first BUILD in the owner arc, deliberately two adapters wide (Cowork)
 
 The sampling has done its job — two measured rates (Philadelphia **68%**, Harris **86%**), three named miss
