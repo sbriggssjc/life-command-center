@@ -48,6 +48,38 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-15 — XB2-precision reconciled: the code shipped, the migration never did — third time for one class (Cowork)
+
+PR #2460 merged and `main` carries both halves. The **JS half is live** — `branch_debt` fires in every snapshot
+from 12:52 onward, so the 1,722-branch number is no longer silent. **The SQL half was never applied.**
+
+Checked rather than assumed: the live `lcc_build_brief_db_audit()` still had **no `GROUP BY`** and was still
+emitting `format('%s/%s', lane, section)` — one finding per cell. Snapshots 7 through 11 all read **32 findings
+with 11 lane rows**, unchanged, including the newest at 14:16. **The prompt's stated deliverable was a
+before/after findings table after applying and redeploying — the "after" never existed**, so what looked like a
+shipped precision fix had changed nothing on the DB side.
+
+✅ **Applied it live.** DB-side findings **27 → 19**; the lane rule collapses **11 → 3** (`government`,
+`net_lease`, `dialysis`), with every affected section now named inside `measured` instead of restated as its own
+row. Flags (15) and the stall rule (1) are untouched, so the next collector run should read **≈24** total against
+the prompt's predicted ~23.
+
+🚨 **This is the THIRD time the same class has bitten, and that is the finding worth more than the fix.**
+**HP1-P1a-fix**: migration merged, unapplied — the deployed code called an RPC that did not exist and would have
+404'd all 608 deals every 30 minutes. **OWNERGAP1**: caught only because a verification step happened to run.
+**XB2-precision**: merged, unapplied — and everybody, including the session that shipped it, believed the count
+had dropped.
+
+⚠️ **Prose has failed three times.** `CLAUDE.md`'s *"merged is not running"* doctrine covers **code**, and it
+works — `/version` against `main` is a real check that this session has used repeatedly. There is **no equivalent
+for migrations**, and that is the actual hole.
+
+✅ **Filed as `DEPLOY2-unapplied`, with the fix that fits: make it an XB2 rule.** XB2 already exists to catch
+"looks live, does nothing" — having the self-audit system flag a migration on `main` whose object is absent or
+structurally stale in the live DB is the right owner for this. ⚠️ And the rule needs a **staleness** test, not an
+existence test: existence alone would have passed XB2-precision, because the function existed — it was just the
+old body. Hashing the file's `CREATE` block against `pg_get_functiondef` is one option to evaluate.
+
 ## 2026-09-15 — N15 closed: 1,475 Salesforce-campaign orphans minted as unified_contacts hub rows (Cowork)
 
 **Decision #4 of Scott's six compiled ownership-pipeline decisions.** Scott's answer, verbatim:
