@@ -48,6 +48,45 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-15 — ⚠️ `HCRIS-TIMEOUT-2` reviewed, and a prior round's own STATUS/backlog edits never made it to `main` — a real process bug found and worked around
+
+**Two things happened this round.**
+
+**(1) `HCRIS-TIMEOUT-2` reviewed** (this round's response, re-verified live before filing — details below,
+since the entry documenting this got lost, see (2)): could not confirm the deployed commit SHA (no Railway
+tool access), but independently re-verified three of the response's claims live: zero `public_data_snapshots`
+rows ever for HCRIS; the failed run's timing decomposing into 4 URLs × ~4.5h each, matching the OLD
+unbounded-timeout bug's signature; and an 8,894-error burst followed by 17h46m of silence. Filed
+`HCRIS-TRACKER-BLIND` (below) for a second, unrelated defect found along the way.
+
+**(2) Scott then confirmed Dialysis PR #7410 (the HCRIS fix) is deployed on Railway**, and uploaded a log
+snippet claiming the most recent run finished in ~90 minutes. **Checked live rather than accepting that at
+face value — the database evidence contradicts it.** The most recent `ingestion_tracker` row (`bc5d3867…`,
+started 2026-09-15 07:33:40 UTC) is still `run_status='started'`, `finished_at=NULL` at DB time 13:07:43 UTC
+— **5.5+ hours later, not 90 minutes** — and `run_log` has zero entries of any kind after the initial
+startup batch at 07:33:37–07:41. `facility_cost_reports` is still frozen at 2026-03-16 (0 rows touched
+today), and `public_data_snapshots` still has zero HCRIS rows, ever. **The uploaded log file itself only
+covers a 20-second slice at the run's startup (07:34:06–07:34:26 UTC) — it cannot show the run finishing**,
+same limitation as the previous log upload in this arc. **With the deploy now confirmed, this squarely
+answers `HCRIS-TIMEOUT-2`'s catalog item (a) — the merged fix IS what's running — which means the symptom
+persisting is now item (b): a residual bug in the fix's own code, not a stale deploy.** Asked Scott where
+the "~90 minutes" observation came from (Railway dashboard/process view), since it doesn't match what
+Supabase shows. New follow-up prompt drafted:
+`docs/claude-code/prompts/HCRIS-TIMEOUT-3-deploy-confirmed-still-hung-re-diagnose-the-actual-deployed-code.md`.
+
+**A separate, purely mechanical finding, also from this round: this file and `PLANNED-BACKLOG.md`'s prior
+`HCRIS-TIMEOUT-2` entries were silently dropped and never reached `main`.** The merged PR
+(`docs/hcris-timeout-2-reviewed`, #2462) contains only the new response `.md` file — `git show --stat`
+confirms it. Root cause: the recovery pattern this arc has used for the recurring `checkout -b` failure
+(`git branch <name> HEAD` → `git reset --hard origin/main` → `git checkout <name>`) captures only committed
+history in the `git branch` step; STATUS.md/PLANNED-BACKLOG.md had been written to Scott's working tree via
+the file bridge but were still **uncommitted**, so the very next step, `git reset --hard origin/main`,
+silently discarded those two files' edits before `git add` ever ran. The new response file survived only
+because it was untracked, and `reset --hard` doesn't touch untracked files. **This pattern is retired as of
+this round.** New default: `git checkout -b <branch>` with no explicit start-point (branches from current
+HEAD in place, carrying uncommitted changes forward, never touches origin/main), used in this round's git
+block instead.
+
 ## 2026-09-15 — XB2-precision shipped: `branch_debt` rule + per-lane market-brief aggregation (Cowork)
 
 Both gaps from the XB2-precision reconcile below are fixed. (a) New rule `branch_debt`
