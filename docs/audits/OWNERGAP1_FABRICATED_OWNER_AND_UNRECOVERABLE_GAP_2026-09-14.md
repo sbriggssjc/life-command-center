@@ -527,3 +527,65 @@ read "owner unknown".
 
 **Recommended next: repeat this exact test on Harris TX (50 properties) and Miami-Dade FL (29).** Two more
 measurements, no build, and then the coverage question is answered with three real rates instead of one.
+
+
+---
+
+## 9. SECOND MATCH-RATE TEST — Harris County, TX. **6 of 7 (86%), and the one miss is a street alias.**
+
+§8 measured Philadelphia at ~68% and said one jurisdiction is not a rate. Harris was sampled the same way a
+person would do it — through HCAD's public search, address by address, seven properties from the owner-unknown
+set.
+
+| LCC address (tenant) | result |
+|---|---|
+| 5040 Crenshaw Rd (*FKC Pasadena-Crenshaw*) | ✅ **CRENSHAW MOB LLC** |
+| 10923 Scarsdale Blvd (*DaVita Sagemeadow*) | ✅ **BEAMER SCARSDALE LP** |
+| 2001 W 34th St (*DaVita Garden Oaks*) | ✅ **ROY AND VEVA MORRISON RANCH CORPORATION** |
+| 6626 Antoine Dr (*DaVita Inwood*) | ✅ **US INVESTMENTS** |
+| 5208 Atascocita Rd (*FKC Atascocita*) | ✅ **AALS PROPERTIES LLC** |
+| 2920 Fulton St (*FMC Moody Park*) | ✅ **FULTON SHOPPING CENTER INC** |
+| 4427 Cypress Creek Pkwy (*DaVita Champions*) | ❌ miss |
+
+**6 of 7 = 86%.**
+
+### 🔑 Harris separates operator from owner on every single hit
+
+Every result returned **two or three accounts** at the same address, typed by the county itself:
+
+| address | *Personal* (the tenant's equipment) | **Commercial** (the real property owner) |
+|---|---|---|
+| 5040 Crenshaw | FRESENIUS MEDICAL CARE GREATER SOUTHEAST HOUSTON LLC · FUSA MARKETING | **CRENSHAW MOB LLC** |
+| 10923 Scarsdale | PIKE DIALYSIS LLC | **BEAMER SCARSDALE LP** |
+| 2001 W 34th | HOLDREGE DIALYSIS LLC | **ROY AND VEVA MORRISON RANCH CORPORATION** |
+| 6626 Antoine | RENAL TREATMENT CENTER-SOUTHEAST LP | **US INVESTMENTS** |
+| 5208 Atascocita | FRESENIUS MEDICAL ATASCOCITA LLC · FUSA MARKETING | **AALS PROPERTIES LLC** |
+| 2920 Fulton | BIO-MEDICAL APPLICATIONS OF TEXAS INC | **FULTON SHOPPING CENTER INC** |
+
+**This is PDR2's distinction, drawn for us by the county, for free.** The `Personal` / `Commercial` account type is
+a ready-made discriminator — the operator is never the Commercial account. Any future matcher should key on it
+rather than re-deriving operator-vs-owner from name text.
+
+### The one miss is a third failure mode, distinct from Philadelphia's
+
+`4427 Cypress Creek Pkwy` returned Cypress Grove Ln, Cypress Pond Ct and W Cypress Villas Dr — **wrong street
+entirely**. Cypress Creek Parkway is Houston's renamed **FM 1960**, and HCAD indexes it under the name it holds.
+That is a **street-alias** problem, not a formatting one, and it is the failure mode a normaliser cannot fix from
+our string alone — it needs a local alias table or a geocode.
+
+**Three distinct miss causes now identified, all cheap to address and none requiring paid data:**
+1. **Address ranges** (Philadelphia) — `4126 Walnut St` vs `4126-38 WALNUT ST`. Fixed by prefix matching.
+2. **Street aliases** (Harris) — Cypress Creek Pkwy / FM 1960. Needs an alias list or a geocode.
+3. **Multi-parcel sites** (Philadelphia's 3300 Henry Ave, six owning LPs) — needs a unit/parcel discriminator.
+
+### Where this leaves the decision
+
+**Two jurisdictions measured: 68% and 86%.** Both far above the threshold that would have made this not worth
+doing, and both **free**. ⚠️ **Miami-Dade was NOT sampled** — two rates in this range make the third unlikely to
+change the decision, and it is named here as not-done rather than implied.
+
+👤 **Recommendation to Scott, unchanged in direction and now much better evidenced:** build nothing yet; the
+sampling has done its job. The next unit of real work is a **matcher against free sources**, scoped by the three
+miss causes above, starting with the jurisdictions that publish bulk files or open APIs. A paid provider remains
+relevant only for **LA-shaped** counties that publish no owner at all — a residual that is now demonstrably a
+small fraction of 4,021, not the whole of it.
