@@ -135,6 +135,24 @@ point-in-time DB snapshot that does not exist — stated, not claimed. Full deta
 pushed, not merged.
 
 ---
+
+## 2026-09-15 — XB2-counter: the build brief's only producer finding was a false positive (Cowork)
+
+`producer_stall_not_flag_gated` fired on `sidebar_contact_guard` — an event counter written on
+every sidebar capture (`trigger_source='sidebar_capture'`), not a scheduled producer; its `0
+completions` is the correct steady state once dedupe has already notified a key (already
+established under SIDEBARGUARD1/XB2-precision). Fixed structurally: `v_build_brief_producer_stall`
+now requires `bool_or(trigger_source = 'cron')` per producer, so any FUTURE event counter is
+excluded too, not just this one. Migration
+`20261102180000_lcc_xb2counter_producer_stall_scheduled_only.sql`, applied live to LCC Opps.
+Verified: `sidebar_contact_guard` excluded (negative control); a synthetic `trigger_source='cron'`
+stalled producer, inserted+rolled back in one transaction, still caught (positive control, 0
+residue). RPC findings 19 → 18 (`producer_stall_not_flag_gated` 1 → 0); next collector snapshot
+should read 24 → 23. See backlog **XB2-counter** for the full writeup and **XB2-counter-eventguard**
+(filed, not built — a replacement alert for the guard's own failure mode).
+
+---
+
 ## 2026-09-15 — The 15 dark flags are ~5 decisions, and none of them is dead code (Cowork)
 
 `flag_long_dark` is **15 of 24 findings (62%)** of the build brief, so triaged it into something Scott
