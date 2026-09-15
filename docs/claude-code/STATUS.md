@@ -70,6 +70,48 @@ people, and `person_junk_name` is the dominant rejection reason.
 🔭 New shape of the brief: `flag_long_dark` is **15 of 24 findings (62%)**. Not a monitor defect — a real
 backlog awaiting Scott's decision (11 dark >60 days, oldest since 2026-05-30).
 
+## 2026-09-15 — `HCRIS-TIMEOUT-3` reviewed: the HCRIS fix itself is genuinely correct — the real culprit was the diagnostic instrument (`ingestion_tracker`) being blind, plus a second, previously-unnamed bug hiding behind it
+
+`HCRIS-TIMEOUT-3`'s response (`"HCRIS TIMEOUT 3 surface response.docx"`, saved by Scott) read in full and
+independently re-checked against Dialysis_DB. **Genuinely different shape of finding than the first two
+rounds — not "the fix didn't work," but "the fix worked, and the instrument measuring it was broken."**
+
+**(a) Re-read against the actual deployed code, confirmed clean.** `_download_and_extract`'s bounded
+(connect, read) timeout and wall-clock deadline, `HCRIS_DOWNLOAD_TOTAL_TIMEOUT_SEC`/`CMS_HCRIS_INGEST_STEP_TIMEOUT_SEC`,
+and `hcris_propagation`'s real call to `save_estimates_batch()` (no leftover dead call site to the old
+per-row path) — all genuinely wired as designed. `HCRIS-TIMEOUT`'s original fix (PR #7410) is not the
+defect.
+
+**(b) The actual reason the symptom persisted: two previously-undiagnosed bugs in the tracker/heartbeat
+mechanism itself**, not in HCRIS-specific code at all. `_write_step_heartbeat()` used one unretried
+`.execute()` call on a long-lived Supabase client this repo's own code already documents as degrading late
+in a run, failures logged at DEBUG — silently blind on nearly every run (this session's own spot-check:
+126–129 of the last 140 `ingestion_tracker` rows carry blank `notes`, close to but not exactly matching the
+response's own "139 of 140" figure — noted as a minor precision gap, not a substantive one). `finish_run()`
+only retried twice versus `start_run()`'s already-hardened 6-attempt budget for the identical
+connection-degradation symptom (`PRI3(e)`) — so a run that actually finishes still reads `started`/`NULL`
+forever. **This is exactly `HCRIS-TRACKER-BLIND`, filed last round** — folded in and fixed here rather than
+treated as separate, since the fix is the same mechanism.
+
+**A genuinely new, materially important finding: `hcris_cost_reports` and `hcris_propagation` are failing
+for their own, still-unidentified reason, separate from `run_timeout`.** The `"Failed steps: hcris_cost_reports,
+hcris_propagation, run_timeout"` summary this arc has been reading for three rounds was never one failure —
+it names two steps that fail on their own plus a budget cutoff that (per this round's live trace) hits a
+**different, later, unnamed step**. The real per-step exception text was never captured anywhere before this
+fix — `_log_ingestion_row()` now persists a `step_errors` map with the actual exception per failed step, so
+the next run will finally say why `hcris_cost_reports` fails, instead of every round re-guessing. **Flagged,
+not fixed, out of scope this round**: `qip_scores_ingestor.py` and `cms_deficiency_ingestor.py` — later,
+optional steps in the same pipeline — still carry the exact bare `requests.get(timeout=300, stream=True)`
+pattern `HCRIS-TIMEOUT`'s first round already root-caused and fixed for HCRIS, a plausible source of the
+multi-hour `run_timeout` tail. New candidate backlog item, not yet a prompt.
+
+**(d) Live proof still not obtained — correctly disclosed, not claimed.** No CMS/Railway egress from the
+Claude Code sandbox, and the currently-stuck run (`bc5d3867…`, started 07:33:40 UTC, still `run_status='started'`
+at DB time 14:21 UTC — 6.8+ hours in, independently re-confirmed) predates this fix and won't demonstrate it
+either way. Scott confirmed `Dialysis` PR #7411 (commit `651c630`, branch `claude/lucid-wozniak-z996iw`)
+merged. **The real test is the next full run cycle** — this time with `step_errors` actually populated, so
+the next review reads the real cause directly instead of cross-referencing four Supabase tables by hand.
+`HCRIS-TIMEOUT` stays 🔴 — not closed — pending that. Prompt moved to `docs/claude-code/prompts/done/`.
 
 ## 2026-09-15 — XB2-precision reconciled: the code shipped, the migration never did — third time for one class (Cowork)
 
