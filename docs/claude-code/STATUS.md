@@ -48,6 +48,188 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-15 — T2b shipped: gov ownership resolution's second tranche fully applied (Cowork)
+
+**Decision #5 of Scott's six compiled ownership-pipeline decisions.** Scott's answer, verbatim:
+*"Yes, again, the objective is accurate coverage of all properties in our target submarket. We want
+to get there as fast and efficiently as possible."*
+
+**Background** (`docs/audits/C2e_T2a_TRANCHE_TWO_STEP_ONE_MINT_2026-08-28.md` §6,
+`connectivity-and-open-threads.md` §4k.1): T2a (gov owners with ≥$100k aggregate rent) shipped
+2026-08-28. T2b — the remaining below-$100k + rent-unknown tail, 2,241 properties / 2,054 owners —
+was sized safe and cheap (predicted duplicate-group growth actually *lower* than T2a's measured
+actual) but left unrun: "the decision is purely whether 'resolve all ownership, rank later' should
+be applied to a population ~96% un-contactable today... **Not run. No default taken.**"
+
+**Re-measured live before running** (population moves): `v_lcc_c2e_asset_mint_plan` — which
+self-excludes anything already minted, so T2b's population is simply whatever remains after T2a —
+held at 2,255 properties / 2,068 owners (805 under $50k / 712 at $50–100k / 537 rent-unknown),
+essentially unchanged composition from the original 2,241/2,054 sizing three weeks ago.
+
+**Ran the same mechanism T2a used**, no new code needed (per "review existing machinery before
+building"): `lcc_mint_gov_asset_entities(p_rows, p_batch, p_dry_run)`. Dry run matched the live run
+exactly — **2,255 would-mint → 2,255 minted, 0 skipped**, batch `t2b_gov_2026-09-15`. Drove the
+evidence ingest explicitly in the same pass, as the mechanism requires (cron 225 caps at 400/run):
+`lcc_ingest_domain_owner_evidence(false, 3000, 't2b_evidence_2026-09-15')` → **evidence_written
+2,262, assets_resolved 2,255, ambiguous_logged 1**. The 7-row gap between written and resolved is the
+identical guard T2a hit — all 7 residual `eligible` rows are brokerages (`Stan Johnson Co` ×4, `NAI
+Pfefferle`, `Bradford Allen Realty Services`, `SVN®`), correctly filtered out by
+`lcc_reconcile_property_owner`'s scoring CTE. Working as designed, not a defect.
+
+**Result**: `v_lcc_c2e_asset_mint_plan` now reads **0** — gov asset-anchor resolution across both
+tranches is fully applied. gov asset anchors now 10,255 (external_identities, `source_system='gov'`,
+`source_type='asset'`); `lcc_property_owner` now 10,906 rows. Checked for a blowup on the two axes
+T2a's own audit flagged (duplicate-candidate growth, Tier 0 card growth) — neither spiked; both
+stayed in the range the pre-run sizing predicted.
+
+**Next**: decisions #3 (OWN-T0g supersession rule — needs care, live cron ingestion path) and #6
+(owner-role promotion + cadence — needs its own design pass) are the two remaining open items from
+Scott's six. #2 (`canonical_name` unique constraint) is gated on reviewing the review-only tail from
+the OWN-T0c merge sweep earlier today.
+## 2026-09-15 — XB2-precision verified; SIDEBARGUARD1 disproved by reading the source it told me to read (Cowork)
+
+**XB2-precision shipped and hit its acceptance target.** Snapshot 13: findings **32 → 24** (predicted
+~23), lane findings aggregated **11 → 3**, `branch_debt` present. The collector produced **13 snapshots
+in one day**, each tied to a merge commit — it is genuinely self-running now.
+⚠️ **SIDEBARGUARD1 was a false positive, and my framing of it was wrong.** I had called it "either dead
+code on a schedule or something unguarded for days". Neither. `sidebar_contact_guard` is an **event
+counter**, not a scheduled producer — written on every sidebar capture, where `status='ok'` means
+*"raised a NEW misparse review item"*. So **0 completions is the correct steady state** once dedupe has
+notified a key. Evidence: 73 runs blocked 166 contacts, and **149 review items exist** (2026-08-10 →
+09-14) of which a human **dismissed 105**. The surfacing path works; the guard works. I had written
+"read the skip_reason's source before assuming either" into the row itself — doing that is what
+disproved it, which is the only reason this did not become a wasted CC round.
+**The real defect is in XB2's rule** → **XB2-counter**, now the brief's only wrong finding and therefore
+load-bearing: a rule whose single visible output is known-wrong is the "monitor nobody trusts" failure
+we have paid for three times already.
+👤 **One genuine item survived:** **44 misparse reviews still `new`**, oldest 2026-08-10 (~36 days) →
+**MISPARSE-BACKLOG1**. Matters because HP1-P2misparse is the thread about this guard rejecting REAL
+people, and `person_junk_name` is the dominant rejection reason.
+🔭 New shape of the brief: `flag_long_dark` is **15 of 24 findings (62%)**. Not a monitor defect — a real
+backlog awaiting Scott's decision (11 dark >60 days, oldest since 2026-05-30).
+
+## 2026-09-15 — `HCRIS-TIMEOUT-3` reviewed: the HCRIS fix itself is genuinely correct — the real culprit was the diagnostic instrument (`ingestion_tracker`) being blind, plus a second, previously-unnamed bug hiding behind it
+
+`HCRIS-TIMEOUT-3`'s response (`"HCRIS TIMEOUT 3 surface response.docx"`, saved by Scott) read in full and
+independently re-checked against Dialysis_DB. **Genuinely different shape of finding than the first two
+rounds — not "the fix didn't work," but "the fix worked, and the instrument measuring it was broken."**
+
+**(a) Re-read against the actual deployed code, confirmed clean.** `_download_and_extract`'s bounded
+(connect, read) timeout and wall-clock deadline, `HCRIS_DOWNLOAD_TOTAL_TIMEOUT_SEC`/`CMS_HCRIS_INGEST_STEP_TIMEOUT_SEC`,
+and `hcris_propagation`'s real call to `save_estimates_batch()` (no leftover dead call site to the old
+per-row path) — all genuinely wired as designed. `HCRIS-TIMEOUT`'s original fix (PR #7410) is not the
+defect.
+
+**(b) The actual reason the symptom persisted: two previously-undiagnosed bugs in the tracker/heartbeat
+mechanism itself**, not in HCRIS-specific code at all. `_write_step_heartbeat()` used one unretried
+`.execute()` call on a long-lived Supabase client this repo's own code already documents as degrading late
+in a run, failures logged at DEBUG — silently blind on nearly every run (this session's own spot-check:
+126–129 of the last 140 `ingestion_tracker` rows carry blank `notes`, close to but not exactly matching the
+response's own "139 of 140" figure — noted as a minor precision gap, not a substantive one). `finish_run()`
+only retried twice versus `start_run()`'s already-hardened 6-attempt budget for the identical
+connection-degradation symptom (`PRI3(e)`) — so a run that actually finishes still reads `started`/`NULL`
+forever. **This is exactly `HCRIS-TRACKER-BLIND`, filed last round** — folded in and fixed here rather than
+treated as separate, since the fix is the same mechanism.
+
+**A genuinely new, materially important finding: `hcris_cost_reports` and `hcris_propagation` are failing
+for their own, still-unidentified reason, separate from `run_timeout`.** The `"Failed steps: hcris_cost_reports,
+hcris_propagation, run_timeout"` summary this arc has been reading for three rounds was never one failure —
+it names two steps that fail on their own plus a budget cutoff that (per this round's live trace) hits a
+**different, later, unnamed step**. The real per-step exception text was never captured anywhere before this
+fix — `_log_ingestion_row()` now persists a `step_errors` map with the actual exception per failed step, so
+the next run will finally say why `hcris_cost_reports` fails, instead of every round re-guessing. **Flagged,
+not fixed, out of scope this round**: `qip_scores_ingestor.py` and `cms_deficiency_ingestor.py` — later,
+optional steps in the same pipeline — still carry the exact bare `requests.get(timeout=300, stream=True)`
+pattern `HCRIS-TIMEOUT`'s first round already root-caused and fixed for HCRIS, a plausible source of the
+multi-hour `run_timeout` tail. New candidate backlog item, not yet a prompt.
+
+**(d) Live proof still not obtained — correctly disclosed, not claimed.** No CMS/Railway egress from the
+Claude Code sandbox, and the currently-stuck run (`bc5d3867…`, started 07:33:40 UTC, still `run_status='started'`
+at DB time 14:21 UTC — 6.8+ hours in, independently re-confirmed) predates this fix and won't demonstrate it
+either way. Scott confirmed `Dialysis` PR #7411 (commit `651c630`, branch `claude/lucid-wozniak-z996iw`)
+merged. **The real test is the next full run cycle** — this time with `step_errors` actually populated, so
+the next review reads the real cause directly instead of cross-referencing four Supabase tables by hand.
+`HCRIS-TIMEOUT` stays 🔴 — not closed — pending that. Prompt moved to `docs/claude-code/prompts/done/`.
+
+## 2026-09-15 — XB2-precision reconciled: the code shipped, the migration never did — third time for one class (Cowork)
+
+PR #2460 merged and `main` carries both halves. The **JS half is live** — `branch_debt` fires in every snapshot
+from 12:52 onward, so the 1,722-branch number is no longer silent. **The SQL half was never applied.**
+
+Checked rather than assumed: the live `lcc_build_brief_db_audit()` still had **no `GROUP BY`** and was still
+emitting `format('%s/%s', lane, section)` — one finding per cell. Snapshots 7 through 11 all read **32 findings
+with 11 lane rows**, unchanged, including the newest at 14:16. **The prompt's stated deliverable was a
+before/after findings table after applying and redeploying — the "after" never existed**, so what looked like a
+shipped precision fix had changed nothing on the DB side.
+
+✅ **Applied it live.** DB-side findings **27 → 19**; the lane rule collapses **11 → 3** (`government`,
+`net_lease`, `dialysis`), with every affected section now named inside `measured` instead of restated as its own
+row. Flags (15) and the stall rule (1) are untouched, so the next collector run should read **≈24** total against
+the prompt's predicted ~23.
+
+🚨 **This is the THIRD time the same class has bitten, and that is the finding worth more than the fix.**
+**HP1-P1a-fix**: migration merged, unapplied — the deployed code called an RPC that did not exist and would have
+404'd all 608 deals every 30 minutes. **OWNERGAP1**: caught only because a verification step happened to run.
+**XB2-precision**: merged, unapplied — and everybody, including the session that shipped it, believed the count
+had dropped.
+
+⚠️ **Prose has failed three times.** `CLAUDE.md`'s *"merged is not running"* doctrine covers **code**, and it
+works — `/version` against `main` is a real check that this session has used repeatedly. There is **no equivalent
+for migrations**, and that is the actual hole.
+
+✅ **Filed as `DEPLOY2-unapplied`, with the fix that fits: make it an XB2 rule.** XB2 already exists to catch
+"looks live, does nothing" — having the self-audit system flag a migration on `main` whose object is absent or
+structurally stale in the live DB is the right owner for this. ⚠️ And the rule needs a **staleness** test, not an
+existence test: existence alone would have passed XB2-precision, because the function existed — it was just the
+old body. Hashing the file's `CREATE` block against `pg_get_functiondef` is one option to evaluate.
+
+## 2026-09-15 — N15 closed: 1,475 Salesforce-campaign orphans minted as unified_contacts hub rows (Cowork)
+
+**Decision #4 of Scott's six compiled ownership-pipeline decisions.** Scott's answer, verbatim:
+*"These are members of a specific group? Usually means that there is some vested interest in the
+space mapped by the name. Some may be brokers, some may be a new fund exploring the space, but the
+vast majority will be owners or prior owners and the membership is evidence that some prior research
+has concluded that in our team's BD history and just because the LCC doesn't yet have that connection
+mapped, does not mean that its not out there undiscovered."*
+
+**Background** (P197, `docs/audits/P197_TIER0_EMPLOYER_RESOLVER_2026-08-27.md` §4): of the live person
+entities with an email and no `unified_contacts` hub row, membership in a Salesforce campaign (via
+`lcc_sf_list_membership`) was measured as "the only gate that discriminates" among candidate criteria
+— 1,475 admitted. P197 explicitly did not mint ("an operator-surface decision with a blast radius")
+and filed it for Scott as this backlog row.
+
+**Re-measured live before building anything** (re-measure-before-acting discipline, this population
+moves): total email-orphan population grew from 5,193 to **5,672** since P197, but the SF-campaign
+gate held at exactly **1,475** — `lcc_sf_list_membership` turns out to be a frozen 2026-07-16→07-21
+snapshot, not a live-syncing producer. Worth its own follow-up (the campaign-membership signal itself
+is stale for anything captured since July), not fixed in this pass. Sampled the 1,475 before minting:
+side distribution seller 1,030 / unknown 416 / buyer 88 — consistent with Scott's "vast majority will
+be owners" read; 15 random rows spot-checked, all real BD-relevant names and campaigns (`VCA Animal
+Hospital Owners`, `DMR Urgent Care Owners`, `SAB GSA Prospects`, `GSA Buyer`). Checked mint-collision
+risk the way P197 did for its own would-be reconcile: 0 of the 1,475 already resolve to a hub row
+under `sf_contact_id`.
+
+**Shipped `lcc_n15_mint_sf_campaign_hub_rows(dry_run, batch_tag)`** — one hub row per entity, picking
+the best of that entity's campaign-membership rows (domain-confirmed company preferred, else most
+recent). **Never fabricates `company_name`** — reuses the exact `lcc_tier0_company_confirms_domain`
+gate P197 built after finding that a bare campaign company label is a human/capture field, not an
+employer register, and copying it verbatim manufactures employers (city/zip strings, the person's own
+name, a different firm, a bank). Dry run matched live exactly: 1,475 would-create → 1,475 created, 0
+failures. Only 228 (15%) got a domain-confirmed `company_name` written; the other 1,247 correctly
+render with no company rather than a guess — honest "Not on file," per standing doctrine. Fully logged
+to `lcc_n15_sf_campaign_hub_mint_log`, batch `n15_sf_campaign_2026-09-15`, reversible via
+`lcc_n15_unmint_sf_campaign_hub_rows('n15_sf_campaign_2026-09-15')`. Migration:
+`supabase/migrations/20261102170000_lcc_n15_sf_campaign_hub_mint.sql`.
+
+**Scope, stated plainly**: this does not touch the remaining ~4,197 email orphans outside the
+SF-campaign gate, and does not itself change Tier 0's `no_employer_on_file` blockage — P197 already
+fixed that separately with a read-time resolver (`lcc_tier0_employer_on_file`), and this row's own
+audit found minting hub rows would only have helped 4 of 73 blocking people. This is Scott's stated
+connectivity-coverage goal ("truth and accuracy... pushed toward 100%"), not a Tier 0 fix.
+
+**Next**: decisions #3 (OWN-T0g supersession rule), #5 (T2b), #6 (owner-role promotion + cadence) are
+still open with decided rules, not yet built. #2 (`canonical_name` unique constraint) is gated on
+reviewing the remaining canonical-name collision tail from earlier today's OWN-T0c sweep.
 ## 2026-09-15 — OWNERGAP2 prompt: the first BUILD in the owner arc, deliberately two adapters wide (Cowork)
 
 The sampling has done its job — two measured rates (Philadelphia **68%**, Harris **86%**), three named miss
