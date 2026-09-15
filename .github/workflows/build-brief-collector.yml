@@ -12,6 +12,21 @@ name: Build Brief Collector
 #
 # Required secrets (Settings → Environments → Production), same convention as daily-db-checks.yml:
 #   LCC_SUPABASE_URL / LCC_SERVICE_ROLE_KEY
+#
+# DEPLOY2-coverage (2026-09-16) added a SECOND project to the `migration_unapplied` rule:
+# `supabase/migrations/dialysis/` targets Dialysis_DB, so its declared objects are probed there.
+#   DIA_SUPABASE_URL            — already present on Production
+#   DIA_SUPABASE_SERVICE_KEY    — NOT set today; passed anyway so the rule upgrades itself the day
+#                                 it is (the resolver prefers it)
+#   DIA_SUPABASE_KEY            — present; the anon JWT today, per GitHub issue #720
+# BOTH dia key names are passed because `api/_shared/supabase-keys.js::diaSupabaseKey()` picks
+# between them. Passing both is what makes the #720 Phase 4 upgrade automatic with no second
+# workflow change.
+#
+# ⚠️ The dia pair is deliberately NOT a hard-fail precondition. The LCC half must still run when
+# the dia credentials are absent — and when they are, the dia files emit a `skipped` finding with
+# the reason on them rather than quietly reducing to "root only, all clean" (B6a: a skipped step
+# must EMIT, not vanish).
 
 on:
   push:
@@ -42,10 +57,18 @@ jobs:
         env:
           LCC_SUPABASE_URL: ${{ secrets.LCC_SUPABASE_URL }}
           LCC_SERVICE_ROLE_KEY: ${{ secrets.LCC_SERVICE_ROLE_KEY }}
+          DIA_SUPABASE_URL: ${{ secrets.DIA_SUPABASE_URL }}
+          DIA_SUPABASE_SERVICE_KEY: ${{ secrets.DIA_SUPABASE_SERVICE_KEY }}
+          DIA_SUPABASE_KEY: ${{ secrets.DIA_SUPABASE_KEY }}
         run: |
           set -euo pipefail
           if [[ -z "${LCC_SUPABASE_URL:-}" || -z "${LCC_SERVICE_ROLE_KEY:-}" ]]; then
             echo "::error::LCC_SUPABASE_URL / LCC_SERVICE_ROLE_KEY not set (Settings -> Environments -> Production)"
             exit 1
+          fi
+          # Warn, never fail: the dia half is additive. Its absence is reported ON the snapshot as a
+          # per-file `skipped` finding, so the brief can never read clean over an unprobed project.
+          if [[ -z "${DIA_SUPABASE_URL:-}" || ( -z "${DIA_SUPABASE_SERVICE_KEY:-}" && -z "${DIA_SUPABASE_KEY:-}" ) ]]; then
+            echo "::warning::DIA_SUPABASE_URL / DIA_SUPABASE_*_KEY not set — dialysis/ migrations will be reported UNVERIFIABLE (skipped), not clean"
           fi
           node scripts/build-brief-collector.mjs --write
