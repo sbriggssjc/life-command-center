@@ -13,6 +13,11 @@
  *
  * NO dashboard, no Ollama narrative — those are XB3/XB4. This script reports; it never fixes.
  *
+ * DEPLOY2-unapplied — merged-but-never-applied MIGRATION detector (added 2026-09-16). Parses the
+ * most recent `supabase/migrations/*.sql` window for declared CREATE objects and probes them
+ * against the live DB via `lcc_probe_schema_objects` (migration 20260916120100). See the rule's
+ * own header comment further down for the full design + the rejected version-number design.
+ *
  * ⚠️ BRANCH DEBT IS SCOPED TO WHAT A GITHUB ACTIONS CHECKOUT CAN SEE. Scott's "618 local
  * branches" (docs/os/PLANNED-BACKLOG.md XB2) describes HIS machine's clutter, which a fresh
  * CI clone cannot observe at all — it only has `origin/*` refs. `remote_branch_debt` below
@@ -192,6 +197,175 @@ export function orphanPromptFindings(promptFilenames, responseFilenames) {
 }
 
 // ---------------------------------------------------------------------------
+// DEPLOY2-unapplied — migration-merged-but-not-applied detector.
+//
+// WHY THIS EXISTS: three migrations (HP1-P1a-fix, OWNERGAP1, XB2-precision) merged to `main` and
+// were never actually applied to the live database, and nothing said so -- the "merged is not
+// running" class this repo has been bitten by repeatedly for CODE (checked via `/version` +
+// `git merge-base`), with no equivalent check for MIGRATIONS. This rule is that check's migration
+// half. It needs BOTH the migration FILES (filesystem/git state) and the LIVE DATABASE (via the
+// `lcc_probe_schema_objects` RPC, migration 20260916120100) -- the exact split this repo's own
+// 20260915120000 migration documents ("filesystem state is not queryable from Postgres"), which is
+// why this rule lives here and not in the `lcc_build_brief_db_audit()` SQL RPC.
+//
+// ⚠️ REJECTED DESIGN, DO NOT REVIVE: comparing migration-FILENAME version numbers against
+// `supabase_migrations.schema_migrations.version` (the live-applied-migrations table). This
+// repo's migration timestamps are SYNTHETIC SEQUENCE NUMBERS, not real clock times -- 885 files,
+// only 742 unique version prefixes (98 collisions), and 87 file versions are dated in the FUTURE
+// relative to any calendar date they were written on. `schema_migrations` stamps its own
+// real-apply-time version, unrelated to the file's number. A version-string-membership check would
+// therefore flag nearly every recently-merged migration as "unapplied" -- wrong on its entire
+// visible output, exactly the "a detector aimed at the wrong population returns a comfortable
+// answer" failure this repo's Class 11 doctrine warns about. The check MUST be content-anchored
+// (does the migration's own declared object exist?), never version-anchored.
+//
+// THE RULE: for each migration file in a bounded recent WINDOW, parse every
+// `CREATE [OR REPLACE] FUNCTION|VIEW|TABLE|TRIGGER|INDEX|TYPE|POLICY` statement to find its
+// declared "creatable objects" (kind + name), probe each against the live DB, and classify:
+//   - APPLIED     -- every declared object is present.
+//   - UNAPPLIED   -- at least one declared object is absent. This IS a finding (higher severity).
+//   - UNVERIFIABLE -- the migration declares NO creatable object at all (a pure UPDATE/INSERT/
+//     ALTER/DROP migration -- exactly OWNERGAP1's and B1's shape). This is ALSO a finding, at
+//     LOWER severity, and must NEVER be silently folded into APPLIED -- a data-only backfill that
+//     never ran leaves no trace for an existence check to find, which is precisely the failure
+//     class this rule exists to catch. Collapsing it into "clean" would defeat the whole point.
+//
+// ⚠️ KNOWN, DOCUMENTED WEAKNESS -- STATED HERE, NOT HIDDEN: existence is a WEAKER verdict than
+// absence. A `CREATE OR REPLACE FUNCTION` of an object that ALREADY EXISTED (from an earlier
+// migration) probes as "present" even if THIS migration's redefinition never ran -- this is
+// exactly the XB2-precision failure (the function existed, just with the pre-fix body missing a
+// GROUP BY). APPLIED here means "this migration's declared objects are not absent", not "this
+// migration's current body is live". A stronger body-diff check (normalized
+// `pg_get_functiondef()` comparison) was evaluated and NOT shipped -- see STALE_CHECK_NOT_SHIPPED
+// below for the measured false-positive rate that disqualified it.
+//
+// WINDOW: the most recent MIGRATION_WINDOW_SIZE files in `supabase/migrations/` (root only --
+// the `dialysis/` and `government/` subdirectories are HISTORICAL copies per this repo's own
+// "ONE REPO OWNS EACH DATABASE'S OBJECTS" doctrine and are not applied by this repo at all), by
+// filename sort. Root-only because this repo's `CLAUDE.md` states LCC Opps is the one database
+// this repo actually authors and applies migrations against; the sub-directories are read-only
+// historical record of a database owned elsewhere. A window (not all files) because a migration
+// merged a year ago and never separately verified is a different, colder problem than a migration
+// merged last week and silently unapplied -- the actionable, fast-moving population this rule
+// targets is recent merges, mirroring the size of the recent HP1/OWNERGAP1/XB2/N15 cluster this
+// backlog item cites as its motivating examples.
+const MIGRATION_WINDOW_SIZE = 60;
+
+// Handles: OR REPLACE (function/view only, harmless elsewhere) · UNIQUE INDEX · CONCURRENTLY ·
+// IF NOT EXISTS · an optional schema qualifier (public.foo) that must NOT be captured as the name.
+const OBJECT_KIND_RE =
+  /create\s+(?:or\s+replace\s+)?(?:unique\s+)?(function|view|table|trigger|index|type|policy)\s+(?:concurrently\s+)?(?:if\s+not\s+exists\s+)?(?:[a-zA-Z_][a-zA-Z0-9_]*\.)?([a-zA-Z_][a-zA-Z0-9_]*)/gi;
+
+/**
+ * Strip SQL comments (line `--` and block `/* ... *​/`) before scanning, per this repo's standing
+ * "strip comments before grepping source" doctrine (A5c/N18/B1) -- a migration's own header prose
+ * routinely narrates `CREATE FUNCTION ...` while explaining a DIFFERENT migration's history, which
+ * would otherwise be misread as a declared object of THIS file.
+ */
+export function stripSqlComments(sql) {
+  return sql
+    .replace(/--[^\n]*/g, '')
+    .replace(/\/\*[\s\S]*?\*\//g, '');
+}
+
+/**
+ * Parse a migration file's SQL text for declared "creatable objects" -- {kind, name} pairs for
+ * every `CREATE [OR REPLACE] FUNCTION|VIEW|TABLE|TRIGGER|INDEX|TYPE|POLICY` statement. `TRIGGER`
+ * and `INDEX` never take `OR REPLACE` in Postgres, `CREATE INDEX ... ON <table>` names the index
+ * (first identifier after the kind keyword, which the shared regex already captures), and
+ * `CREATE TRIGGER <name> ... ON <table>` likewise names the trigger first. Comments are stripped
+ * first (see stripSqlComments). Deliberately regex-based, not a full SQL parser -- this repo's own
+ * migrations are hand-written and consistent enough that a full parser would be overkill for a
+ * detector whose job is "did this file declare an object", not "is this file valid SQL".
+ */
+export function parseDeclaredObjects(sqlText) {
+  const clean = stripSqlComments(sqlText);
+  const out = [];
+  const seen = new Set();
+  let m;
+  OBJECT_KIND_RE.lastIndex = 0;
+  while ((m = OBJECT_KIND_RE.exec(clean))) {
+    const kind = m[1].toLowerCase();
+    const name = m[2];
+    const key = `${kind}:${name.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ kind, name });
+  }
+  return out;
+}
+
+/**
+ * Classify one migration's application state from its declared objects + a map of
+ * `"kind:name"` -> boolean|null (probe result; null = unknown kind, never treated as absent).
+ *
+ * Returns { verdict: 'applied'|'unapplied'|'unverifiable', missing: [{kind,name}] }.
+ *
+ * UNVERIFIABLE (no declared objects at all) is a DISTINCT verdict from APPLIED -- see the file
+ * header. It must never be produced by folding an empty `declared` array into "nothing missing,
+ * therefore applied"; that is exactly the silent-success shape this rule exists to prevent.
+ */
+export function classifyMigrationApplication(declared, existsByKey) {
+  if (!declared || declared.length === 0) {
+    return { verdict: 'unverifiable', missing: [] };
+  }
+  const missing = declared.filter((o) => existsByKey[`${o.kind}:${o.name.toLowerCase()}`] === false);
+  return { verdict: missing.length > 0 ? 'unapplied' : 'applied', missing };
+}
+
+/**
+ * Build the {rule, severity, subject, measured, detail} finding for one migration, or null when
+ * the migration is APPLIED (no finding -- a clean migration is silent, per this repo's
+ * noise-discipline doctrine). UNAPPLIED is 'critical' (a declared object the migration exists to
+ * create/redefine is provably absent from the live DB -- HP1-P1a-fix's shape, where deployed code
+ * called a non-existent RPC). UNVERIFIABLE is 'warn', explicitly lower, because it is a KNOWN GAP
+ * in what this detector can see, not a proven defect -- conflating the two severities would make
+ * every ordinary data-only migration in the window read as urgent.
+ */
+export function migrationApplicationFinding(fileName, declared, existsByKey) {
+  const { verdict, missing } = classifyMigrationApplication(declared, existsByKey);
+  if (verdict === 'applied') return null;
+  if (verdict === 'unverifiable') {
+    return {
+      rule: 'migration_unapplied',
+      severity: 'warn',
+      subject: fileName,
+      measured: { verdict, declared_object_count: 0 },
+      detail:
+        `${fileName} declares no probeable object (CREATE FUNCTION/VIEW/TABLE/TRIGGER/INDEX/TYPE/POLICY) -- ` +
+        `it is a data-only UPDATE/INSERT/ALTER/DROP migration whose application state is UNKNOWN from this ` +
+        `check. This is a known instrument gap, not a clean bill of health -- a backfill migration that never ` +
+        `ran leaves no trace an existence probe can find (OWNERGAP1's shape).`,
+    };
+  }
+  return {
+    rule: 'migration_unapplied',
+    severity: 'critical',
+    subject: fileName,
+    measured: {
+      verdict,
+      declared_object_count: declared.length,
+      missing: missing.map((o) => `${o.kind}:${o.name}`),
+    },
+    detail:
+      `${fileName} declares ${missing.length} of ${declared.length} object(s) that are ABSENT from the live ` +
+      `database (${missing.map((o) => `${o.kind} ${o.name}`).join(', ')}) -- this migration is merged to ` +
+      `main but was never applied (or was rolled back). Note the mirror-image weakness: an "applied" ` +
+      `verdict here means the objects are not absent, never that this migration's CURRENT body is live -- a ` +
+      `CREATE OR REPLACE of an already-existing object cannot be distinguished from a stale pre-fix body by ` +
+      `existence alone (the XB2-precision shape).`,
+  };
+}
+
+// STALE_CHECK_NOT_SHIPPED (2026-09-16): a stronger check -- for CREATE OR REPLACE FUNCTION
+// migrations, normalize (lowercase + whitespace-collapse) both the file's CREATE FUNCTION body and
+// live `pg_get_functiondef()`, and flag a mismatch as a candidate STALE verdict -- was evaluated
+// against every CREATE OR REPLACE FUNCTION in the live MIGRATION_WINDOW_SIZE window before
+// deciding whether to ship it. It was NOT shipped. Reasoning + the measured false-positive rate
+// are recorded in docs/os/PLANNED-BACKLOG.md under DEPLOY2-unapplied and are not restated here to
+// avoid the two copies drifting (this file's job is to say WHAT ships, not re-derive WHY not).
+
+// ---------------------------------------------------------------------------
 // Repo-side collection (fs + git). Only called from main(), never imported by tests.
 // ---------------------------------------------------------------------------
 
@@ -299,6 +473,24 @@ function collectRepoFindings() {
   return { commitSha, findings, raw };
 }
 
+/**
+ * The most recent MIGRATION_WINDOW_SIZE root-level migration files, by filename sort (see the
+ * DEPLOY2-unapplied header above for why root-only and why a window). Root `supabase/migrations/`
+ * only -- `dialysis/` and `government/` are historical copies of a database owned by another repo
+ * per this repo's own "ONE REPO OWNS EACH DATABASE'S OBJECTS" doctrine, so this repo neither
+ * authors nor applies them.
+ */
+function listRecentMigrationFiles() {
+  const dir = path.join(REPO_ROOT, 'supabase', 'migrations');
+  if (!fs.existsSync(dir)) return [];
+  const files = fs
+    .readdirSync(dir, { withFileTypes: true })
+    .filter((d) => d.isFile() && d.name.toLowerCase().endsWith('.sql'))
+    .map((d) => d.name)
+    .sort();
+  return files.slice(-MIGRATION_WINDOW_SIZE);
+}
+
 // ---------------------------------------------------------------------------
 // DB-side collection.
 // ---------------------------------------------------------------------------
@@ -319,6 +511,77 @@ async function collectDbFindings() {
   }
   const findings = await res.json();
   return { findings: Array.isArray(findings) ? findings : [], skipped: false };
+}
+
+/**
+ * DEPLOY2-unapplied. Parses the recent migration WINDOW's declared objects, probes them in ONE
+ * batch against `lcc_probe_schema_objects` (migration 20260916120100), and returns
+ * {findings, migrations_checked, unapplied_count, unverifiable_count}. Fails soft on any DB error
+ * (no creds, RPC unreachable) -- returns skipped:true with a reason, same contract as
+ * collectDbFindings, because this collector must never crash the whole build brief over one rule.
+ */
+async function collectMigrationApplicationFindings(url, key) {
+  if (!url || !key) {
+    return { findings: [], skipped: true, reason: 'no_lcc_credentials', migrations_checked: 0 };
+  }
+  const files = listRecentMigrationFiles();
+  const perFileDeclared = new Map();
+  const allObjects = [];
+  const seenGlobal = new Set();
+  for (const file of files) {
+    let sql;
+    try {
+      sql = fs.readFileSync(path.join(REPO_ROOT, 'supabase', 'migrations', file), 'utf8');
+    } catch (_e) {
+      continue; // unreadable file -- skip rather than crash the whole rule
+    }
+    const declared = parseDeclaredObjects(sql);
+    perFileDeclared.set(file, declared);
+    for (const o of declared) {
+      const key2 = `${o.kind}:${o.name.toLowerCase()}`;
+      if (seenGlobal.has(key2)) continue;
+      seenGlobal.add(key2);
+      allObjects.push(o);
+    }
+  }
+
+  let existsByKey = {};
+  if (allObjects.length > 0) {
+    try {
+      const res = await fetch(`${url}/rest/v1/rpc/lcc_probe_schema_objects`, {
+        method: 'POST',
+        headers: { apikey: key, Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ p_objects: allObjects }),
+      });
+      if (!res.ok) {
+        return { findings: [], skipped: true, reason: `probe_rpc_http_${res.status}`, migrations_checked: 0 };
+      }
+      const rows = await res.json();
+      for (const r of rows) {
+        existsByKey[`${r.kind}:${String(r.name).toLowerCase()}`] = r.exists;
+      }
+    } catch (e) {
+      return { findings: [], skipped: true, reason: `probe_rpc_error:${String(e.message || e)}`, migrations_checked: 0 };
+    }
+  }
+
+  const findings = [];
+  let unappliedCount = 0;
+  let unverifiableCount = 0;
+  for (const [file, declared] of perFileDeclared) {
+    const f = migrationApplicationFinding(file, declared, existsByKey);
+    if (!f) continue;
+    findings.push(f);
+    if (f.measured.verdict === 'unapplied') unappliedCount += 1;
+    else if (f.measured.verdict === 'unverifiable') unverifiableCount += 1;
+  }
+  return {
+    findings,
+    skipped: false,
+    migrations_checked: perFileDeclared.size,
+    unapplied_count: unappliedCount,
+    unverifiable_count: unverifiableCount,
+  };
 }
 
 /**
@@ -379,7 +642,17 @@ async function main() {
 
   const repo = collectRepoFindings();
   const db = await collectDbFindings();
-  const findings = [...repo.findings, ...db.findings];
+  const urlForMigrations = process.env.LCC_SUPABASE_URL || process.env.SUPABASE_URL;
+  const keyForMigrations = process.env.LCC_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const migrationAudit = await collectMigrationApplicationFindings(urlForMigrations, keyForMigrations);
+  const findings = [...repo.findings, ...db.findings, ...migrationAudit.findings];
+  repo.raw.migration_audit = migrationAudit.skipped
+    ? { skipped: true, reason: migrationAudit.reason }
+    : {
+        migrations_checked: migrationAudit.migrations_checked,
+        unapplied_count: migrationAudit.unapplied_count,
+        unverifiable_count: migrationAudit.unverifiable_count,
+      };
 
   // branch_debt (XB2-precision) reads the raw total collectRepoFindings already gathered; the
   // trend needs a DB round trip repo collection cannot make, so it is added here with the same
@@ -397,6 +670,14 @@ async function main() {
 
   if (db.skipped) {
     console.log(`\n(DB-side rules skipped: ${db.reason})`);
+  }
+  if (migrationAudit.skipped) {
+    console.log(`(migration_unapplied rule skipped: ${migrationAudit.reason})`);
+  } else {
+    console.log(
+      `(migration_unapplied: checked ${migrationAudit.migrations_checked} migrations -- ` +
+        `${migrationAudit.unapplied_count} unapplied, ${migrationAudit.unverifiable_count} unverifiable)`,
+    );
   }
 
   if (write) {
