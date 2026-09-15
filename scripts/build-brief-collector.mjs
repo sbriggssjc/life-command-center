@@ -122,6 +122,38 @@ export function remoteBranchDebtFinding(remoteBranches, unmergedBranches) {
 }
 
 /**
+ * XB2-precision -- `remoteBranchDebtFinding` only fires on UNMERGED count, and that count is
+ * frequently 0 or unavailable from a shallow/limited CI checkout (see the file header on
+ * `unmergedBranches`) even while the raw branch total is large and growing. The largest single
+ * piece of debt this collector can see -- `total_remote` -- was therefore recorded in the raw
+ * payload and never surfaced as a finding. This rule reads the total alone, with a growth-rate
+ * trend line when a PRIOR snapshot's total is supplied (the trend matters more than the level --
+ * see docs/os/PLANNED-BACKLOG.md XB2-precision). `priorTotal`/`priorAt` are optional; when either
+ * is absent only the level is reported. Threshold is a documented, not arbitrary, choice: it is
+ * scoped to warn-only (never critical) because a branch count alone cannot indicate urgency the
+ * way an unmerged count can -- it is a debt LEVEL, not a blocker.
+ */
+export function branchDebtFinding(totalRemote, { priorTotal = null, priorAt = null, warnAt = 200 } = {}) {
+  if (totalRemote < warnAt) return null;
+  const measured = { total_remote_branches: totalRemote, warn_at: warnAt };
+  let trendDetail = '';
+  if (typeof priorTotal === 'number' && Number.isFinite(priorTotal)) {
+    const delta = totalRemote - priorTotal;
+    measured.prior_total_remote_branches = priorTotal;
+    measured.delta_since_prior = delta;
+    if (priorAt) measured.prior_at = priorAt;
+    trendDetail = ` (${delta >= 0 ? '+' : ''}${delta} since the prior snapshot${priorAt ? ` on ${priorAt}` : ''})`;
+  }
+  return {
+    rule: 'branch_debt',
+    severity: 'warn',
+    subject: 'origin',
+    measured,
+    detail: `${totalRemote} remote branches exist on origin${trendDetail} -- see docs/os/PLANNED-BACKLOG.md BRANCH2 for cleanup scope`,
+  };
+}
+
+/**
  * A GENERATED-header file that changed in this collector's diff window. Informational only --
  * it does not prove a hand-edit, only that the file changed; see the file header for why a
  * stronger claim (re-running the generator and diffing) was deliberately not attempted here.
@@ -289,6 +321,28 @@ async function collectDbFindings() {
   return { findings: Array.isArray(findings) ? findings : [], skipped: false };
 }
 
+/**
+ * Best-effort lookup of the prior snapshot's `payload.branches.total_remote`, for the
+ * branch_debt trend line. Returns { total, at } or null -- silently, on any failure (no creds,
+ * network, missing prior row, malformed payload) -- because the LEVEL finding must still fire
+ * without a trend; this is a nice-to-have, never a blocker.
+ */
+async function fetchPriorBranchTotal(url, key) {
+  try {
+    const res = await fetch(
+      `${url}/rest/v1/build_brief_snapshots?select=payload,created_at&order=created_at.desc&limit=1`,
+      { headers: { apikey: key, Authorization: `Bearer ${key}` } },
+    );
+    if (!res.ok) return null;
+    const rows = await res.json();
+    const total = rows?.[0]?.payload?.branches?.total_remote;
+    if (typeof total !== 'number' || !Number.isFinite(total)) return null;
+    return { total, at: rows[0].created_at };
+  } catch (_e) {
+    return null;
+  }
+}
+
 async function writeSnapshot(url, key, payload) {
   const res = await fetch(`${url}/rest/v1/build_brief_snapshots`, {
     method: 'POST',
@@ -326,6 +380,18 @@ async function main() {
   const repo = collectRepoFindings();
   const db = await collectDbFindings();
   const findings = [...repo.findings, ...db.findings];
+
+  // branch_debt (XB2-precision) reads the raw total collectRepoFindings already gathered; the
+  // trend needs a DB round trip repo collection cannot make, so it is added here with the same
+  // best-effort creds collectDbFindings already resolved.
+  const url = process.env.LCC_SUPABASE_URL || process.env.SUPABASE_URL;
+  const key = process.env.LCC_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const totalRemote = repo.raw?.branches?.total_remote;
+  if (typeof totalRemote === 'number') {
+    const prior = url && key ? await fetchPriorBranchTotal(url, key) : null;
+    const f = branchDebtFinding(totalRemote, { priorTotal: prior?.total ?? null, priorAt: prior?.at ?? null });
+    if (f) findings.push(f);
+  }
 
   printFindingsTable(findings);
 
