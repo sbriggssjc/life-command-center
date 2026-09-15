@@ -95,6 +95,42 @@ connectivity-coverage goal ("truth and accuracy... pushed toward 100%"), not a T
 **Next**: decisions #3 (OWN-T0g supersession rule), #5 (T2b), #6 (owner-role promotion + cadence) are
 still open with decided rules, not yet built. #2 (`canonical_name` unique constraint) is gated on
 reviewing the remaining canonical-name collision tail from earlier today's OWN-T0c sweep.
+## 2026-09-15 — OWNERGAP2 prompt: the first BUILD in the owner arc, deliberately two adapters wide (Cowork)
+
+The sampling has done its job — two measured rates (Philadelphia **68%**, Harris **86%**), three named miss
+causes, and a demonstrated free path. Written the build prompt:
+`prompts/OWNERGAP2-match-owners-from-free-sources.md`.
+
+✅ **Checked the existing machinery first, and it changes the shape of the build.** `recorded_owners` **already
+exists with 7,487 rows** — `name`, `normalized_name`, `normalized_address`, `source`, `entity_type`,
+`registered_agent_*`, `filing_*` — and **5,467 of 11,815 properties already carry a `recorded_owner_id`**. The
+destination is built and working for 46% of the book; the 4,021 are the hole in it. **So the prompt forbids a new
+table** and scopes the work to *adapters plus a provenance contract*.
+
+🚨 **The provenance contract is the whole prompt, and it is written that way because of what this arc already
+found.** Every owner written must cite the source row — jurisdiction, that source's own record id, the query.
+**No model may produce an owner name**: a name is copied from a fetched record or it does not exist. A local model
+may only normalise and match strings already fetched, and even then the value written is the **source's** string,
+not the model's rendering of it. A miss stays `recorded_owner_id IS NULL` and gets reported — **never** filled
+from the operator, which would be PDR2 undone.
+
+🔑 **One free gift from the measurement, written into the design:** Harris types every account `Personal` or
+`Commercial`, so the assessor draws the operator-vs-owner line for us. The matcher keys on that account type
+rather than re-deriving it from name text — which is precisely the mistake PDR2 fixed.
+
+**The two cheap miss causes are handled; the third is refused.** Ranges (`4126 Walnut` ↔ `4126-38 WALNUT ST`) and
+aliases (Cypress Creek Pkwy = FM 1960, from an explicit evidence-grown list, **never** by loosening the match
+until something returns). Multi-parcel sites — `3300 Henry Ave` returns six owning LPs — are left unresolved and
+flagged `needs_parcel_discriminator`. **Guessing which LP would be exactly the failure this arc exists to stop.**
+
+⚠️ **Explicit ambiguity rules**, because this is where a wrong owner gets minted: more than one candidate, a
+non-exact house-number-and-street match, or a matched name that is itself an operator → **write nothing, flag,
+report**. And the gate requires **hand-checking 5 written owners against the live source** — a match rate is not
+proof the right name landed on the right property.
+
+Scope is held deliberately small: **two adapters**, no national pipeline, no scheduler, no `county_authorities`,
+and no attempt on a CAPTCHA-gated portal. The closing ask is one number: **how many of the 4,021 now have an
+owner.**
 
 ## 2026-09-15 — ⚠️ `HCRIS-TIMEOUT-2` reviewed, and a prior round's own STATUS/backlog edits never made it to `main` — a real process bug found and worked around
 
