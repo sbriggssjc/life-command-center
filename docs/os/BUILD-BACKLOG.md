@@ -96,8 +96,11 @@ Frame: `LCC-SYSTEM-MAP.md`
 
 ## F. Property identity resolver  (ASC proving ground)
 - 🟡 **F1. Finish the frozen 50-property ASC sample review.** ✅ Source collection completed 2026-09-11:
-  44 captured + 6 reviewed source exceptions + 0 pending. ⏳ Complete 22 mandatory second reviews, populate
-  exactly 50 scorecards, and run the privacy-safe aggregate gate receipt; preserve missingness and disagreement.
+  44 captured + 6 reviewed source exceptions + 0 pending. **Measured 2026-09-15:** 1/50 primary scorecards and
+  0 independent second reviews complete; the submitted row remains open in `second_review`. A read-only
+  provisional 50-row analysis misses four of five gates and supports `enrichment_only`, but it is not the
+  official receipt. Adjudicate the 6 provisional qualifying and 24 `unknown` rows, then decide whether to
+  complete the formal gate. Preserve missingness and disagreement.
 - ⏳ **F2. After F1's aggregate gate is accepted, extract the approved ASC rules into a lane-neutral pure
   matcher and de-identified golden corpus.** Include building designators, candidate-scoped legal/operating-name
   aliases, same-parcel service-location/mailing-address conflicts, and three-token multi-address parcels pinned
@@ -107,7 +110,8 @@ Frame: `LCC-SYSTEM-MAP.md`
 - ⚪ **F4. Run read-only shadow replay across approved lanes.** Measure collisions, changed decisions, and second-review burden before any additional activation.
 
 ## Suggested pickup order (when we resume the build)
-1. **F1 governed ASC review:** 22 second reviews → 50 exact-once scorecards → aggregate receipt and lane decision.
+1. **F1 governed ASC review:** adjudicate provisional qualifying/unknown rows → authorized exact-once
+   scorecards and different-person second reviews → aggregate receipt and lane decision.
 2. **A2 cadence-scan** (engine, testable now) → **A1 SF Opportunity sync** → **A3 weekly email** = the pipeline monitor Phase 1.
 3. **A4 mail-intake** (completes the dossier's self-update loop).
 4. Finish the **execution/reasoning rollout** (C1/C2) in parallel — independent of the monitor.
