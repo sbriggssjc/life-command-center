@@ -48,6 +48,51 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-16 — C1C-SPLIT: `lcc_c1c_retire_sf_lanes` gains lane scoping; dia retire is ready, gov stays out (Claude Code)
+
+C1c (`20260908130300`) can only retire BOTH `owner_needs_salesforce` (gov) and
+`true_owner_needs_salesforce` (dia) at once — its plan CTE hardcodes
+`_lcc_c1c_lane_types()`. That is now wrong: **C1B-GOV-GATE** found the gov gate
+guards `owner_needs_sos`, not `owner_needs_salesforce`, so the gov lane is still
+being fed (175 rows minted 2026-09-08..15) while the dia lane genuinely holds
+(1 row minted in the same window, gate confirmed live).
+
+Shipped `supabase/migrations/20260916120000_lcc_c1csplit_scope_retire_by_lane.sql`:
+`lcc_c1c_retire_sf_lanes` gains a 4th, trailing `p_research_types text[] default
+null` parameter. `NULL` still means the full lane set (both lanes) — the
+reversal runbook and any future gov retirement depend on that default not
+narrowing. A non-null array is validated against `_lcc_c1c_lane_types()` and
+**raises** on an empty array or an unrecognised lane name; there is no
+zero-row silent success. The pre-split 3-arg signature is `drop function if
+exists`-ed before the new `create or replace` (the N15d/N15g 42725 overload
+trap), and the migration asserts live — via `pg_proc`, in a `do $$ ... raise
+exception` block — that exactly one signature survives, rather than trusting
+the DROP. `_lcc_c1c_lane_types()`, `lcc_c1c_unretire`,
+`lcc_c1c_reopen_tasks` and `lcc_c1c_reopen_relinked` are untouched.
+
+Guard: `test/c1c-split-scope-retire-by-lane.test.mjs` — 12 structural
+assertions over both migration files (comment-stripped), all passing,
+including a positive control that the unknown-lane RAISE interpolates the
+real bad values rather than a static string.
+
+⚠️ **The live apply and run are PENDING.** This sandbox has no Supabase egress
+(the same constraint DEPLOY2 already documented), so nothing here executed
+against LCC Opps. Cowork applies in order: (1) `20260908130300` — DDL only,
+defines functions, runs nothing inline; (2) this scoping migration; (3)
+`select lcc_c1c_retire_sf_lanes(true, 'c1c-dia-<date>', null,
+array['true_owner_needs_salesforce'])` — **expect `tasks_to_retire = 838`,
+`research_types = ["true_owner_needs_salesforce"]`, 0 gov rows touched; any
+other number is a STOP, re-measure rather than proceed**; (4) the same call
+with `p_dry_run => false`; (5) re-read `v_lcc_research_lane_summary`: dia lane
+→ 0 open, gov `owner_needs_salesforce` unchanged at ~1,851.
+
+C2 stays open until the dia retirement is confirmed live. C1B-GOV-GATE stays
+open and is explicitly out of scope for this change — do not retire the gov
+lane, do not touch the gov gate, do not re-apply the retired `government/`
+copy of C1b. Backlog: **C1C-SPLIT** row updated to shipped/live-run-pending.
+
+---
+
 ## 2026-09-15 — GOVDEED2 shipped; the round refused one of my instructions and was right (Cowork)
 
 **The manufacturing has stopped.** Verified from the live `pg_get_functiondef`: step 1's `bridged` CTE
