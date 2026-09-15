@@ -48,6 +48,38 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-15 — GOVDEED1: one missing predicate is manufacturing half the gov conflict set (Cowork)
+
+CC found the root cause and localized it correctly. Verified live, with two corrections that both
+make it **stronger**, and one connection CC did not draw.
+
+**The producer is running now:** `cron.job` 20, `35,5 * * * *` — twice an hour, not hourly — active,
+calling `propagate_deed_to_property(5000)`.
+
+⚠️ **Correction 1.** CC reported "no `recording_date IS NOT NULL` guard." The function contains that
+exact predicate, **fifteen lines below the block that needs it**. There are two CTEs both named
+`bridged`: step 1 writes `properties.latest_deed_*` with no date guard and no `LIMIT`; step 2 writes
+`ownership_history` with both. **The author already knew** — they wrote the guard for one block and
+not the other. That makes the fix an internal-consistency repair with the correct predicate already in
+the file, not a design decision.
+
+🚨 **The connection CC did not make.** **478 of the 941 government owner-source conflicts (50.8%)
+trace to a dateless, document-number-less deed row — 478 of 478, a perfect match.** The missing date
+does not merely block the autofix: **more than half the gov owner-conflict population is manufactured**
+by this producer. And **4,143 of 4,928** linked dateless deeds have a grantee byte-identical to the
+property's own `recorded_owners.name` — 84.1%, meaning the "deed" is an echo of the prompt's own
+context, not evidence. Those rows assert that real properties changed hands on no evidence at all.
+
+⛔ **Correction 2 — retracting my own prompt.** GOVDEED1 (which I wrote) claimed the dialysis pipeline
+is "a working reference implementation of what the government one is failing at." **Wrong.** dia's
+function is a different implementation entirely — and carries the identical unguarded write. Its
+2-of-1,774 is a smaller upstream population, not a safer downstream. So the fix must be authored per
+database, and dia cannot copy a guard from its own step 2 because dia has no step 2. →
+**DEED-DIA-LATENT**.
+
+👤 The fix belongs to **`government-lease`** → **GOVDEED2** handoff written, with no-backfill stated
+plainly. ⚠️ The function is **in no repository at all** — running twice hourly, source-controlled
+nowhere.
 ## 2026-09-15 — C2g's sponsor↔SPE explanation checked for precision before proposing anything to write (Cowork)
 
 Follow-on to the same-day C2g reconfirmation (previous entry): before proposing candidate rows for
@@ -240,6 +272,33 @@ or the team to work through in normal course; (b) a scoped/partial unique constr
 this reviewed-pending population; (c) something else. Full detail:
 `docs/architecture/ownership-truth-pipeline-state.md` decision #2. Awaiting Scott's answer before
 building anything.
+
+## 2026-09-16 — I duplicated a parallel session, and my version was the wrong one (Cowork)
+
+**Retracting my own work from earlier today.** A parallel Cowork session filed **CANON-OWNERSHIP1** and
+**DEED1-reconcile-2** for the same findings I filed as **DIA-OWNERSHIP-CONFLICT** and **DEED1-RELAND**,
+hours apart. Both merged. That is precisely the failure this repo's own doctrine names — *two branches
+that both add to a shared doc merge cleanly and silently duplicate it* — and I wrote that line.
+⚠️ **And my argument was wrong, not just redundant.** I argued from `CLAUDE.md` line 375 that ownership
+was already settled. **Scott has since said neither CLAUDE.md line was written by him** — *"Nothing in
+either would have been written by me directly. It's all written by Claude"* — so neither carries human
+authority and no amount of re-reading them could have settled it. The other session measured the live
+database instead: **both repos apply schema to Dialysis_DB today** (`dia_property_redirects` is live from
+a migration that exists only in the `Dialysis` repo; three of LCC's five newest `dialysis/` migrations are
+also live). "One repo owns each database's objects" was **never true of this database**. That dissolves
+the contradiction instead of resolving it, and it is the better finding.
+✅ **Nothing lost.** The destination is identical — port the file here, close PR #7412 — and
+**DEED1-reconcile-2** tracks it, with a check mine lacked (whether the `Dialysis` repo also carries an
+older copy of `v_owner_source_conflict`). My one unique contribution, the **md5 behaviour pin**
+(`pg_get_viewdef` = `9fc5aa3f824b125853b3ac8c8a8388f1`/4747, `pg_get_functiondef` =
+`72b48cd949db4de5502812920b2e5dd0`/2183, plus the `\m`-escape transcription hazard), was folded into that
+prompt before retiring the duplicate to `_superseded/duplicate-prompts-2026-09-16/` with a manifest.
+🔭 **The guard gap is real and worth naming:** `backlog-id-uniqueness` catches a repeated ID, not two IDs
+describing one finding — and nothing at all catches two prompts for one job. With parallel sessions now
+routine, the cheap mitigation is to read the queue and the newest backlog rows before filing, which I did
+not do this turn.
+
+---
 
 ## 2026-09-16 — DEED1's migration is correct and in the wrong repository (Cowork)
 
