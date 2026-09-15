@@ -48,6 +48,29 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-15 — the dia ownership contradiction, measured: both repos write schema (Cowork)
+
+Scott's answer to the 👤 ownership question was the right one to give: *"Nothing in either would have
+been written by me directly. It's all written by Claude."* Neither CLAUDE.md line carries human
+authority, so re-reading them could never settle it. Measured the live database instead.
+
+**Both repos apply schema to Dialysis_DB today** — proven in both directions. `dia_property_redirects`
+(table + view + 3 indexes) is live and its migration exists **only in the `Dialysis` repo**, absent
+from LCC's 283-file `dialysis/`. And three of LCC's five newest `dialysis/` migrations are **also
+live**. So "ONE REPO OWNS EACH DATABASE'S OBJECTS" was never true of this database.
+
+⭐ **That dissolves the contradiction rather than resolving it.** Neither line is wrong: the doctrine
+is aspirational, the inventory line is observational, and they were written in the same register. A CC
+round could follow either and look correct — which is exactly what happened.
+
+**Proposal now on the row, awaiting Scott: own by OBJECT FAMILY, boundary drawn at "who queries it."**
+A migration lives where its consumer lives, so an endpoint change and the schema it depends on land in
+one reviewable commit. The DEED1 objects settle cleanly: `v_owner_source_conflict` is queried from
+five LCC files, and the other two exist only to serve it. LCC keeps the BD/analysis layer; the
+`Dialysis` repo keeps CMS/NPI ingestion and its own pipeline schema.
+
+Next: **DEED1-reconcile-2** (port the file, close PR #7412) and **GOVDEED1**, still unsent and still
+the largest single blocker in the deed set at 3,930 dateless gov deeds.
 ## 2026-09-15 — C2g re-diagnosed as already-answered: it's the sponsor↔SPE gap, not a new mystery (Cowork)
 
 Was about to write up a fresh diagnosis of the "78 gov owner-orgs, property+asset present, still
