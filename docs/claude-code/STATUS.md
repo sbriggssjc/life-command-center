@@ -228,8 +228,18 @@ history is available to the collector; and the repo's established second-project
 an untracked migration is the freshest thing in the repo); **absent dia credentials the dia half emits a
 `skipped` finding**, never a quiet root-only scan reported as clean (B6a); and OWNERGAP1's verdict is to
 be stated even if it comes out UNVERIFIABLE, not massaged into APPLIED.
-👤 **Scott: two GitHub secrets** — `DIA_SUPABASE_URL`, `DIA_SUPABASE_SERVICE_KEY`, Settings → Environments
-→ Production. The dia half cannot run until they exist; the workflow must not hard-fail without them.
+✅ **AMENDED same day — no secrets need adding, and my first draft was wrong about this.** Scott showed the
+live Production secret list: `DIA_SUPABASE_URL` and `DIA_SUPABASE_KEY` are already set;
+`DIA_SUPABASE_SERVICE_KEY` is not. ⚠️ Naming either one directly is a trap the repo already documented —
+`api/_shared/supabase-keys.js` (issue #720) records that `DIA_SUPABASE_KEY` has *"historically held the anon
+JWT ... despite the names suggesting otherwise"*, with a **Phase 4 mass-revoke of anon grants** planned. So the
+anon name is scheduled for demolition and the service name does not exist yet. Prompt now requires the existing
+resolver **`diaSupabaseKey()`** (prefers service, falls back to anon): works today, upgrades itself when the
+service key lands, no second change. Dia probe grants `service_role` AND `anon` (`SECURITY INVOKER` kept —
+pg_catalog is world-readable, nothing to escalate) with #720 Phase 4 named in-comment as when the anon grant
+comes out. 🔍 Stated, not buried: until that revoke this grants object-name enumeration on Dialysis_DB to
+anon-key holders. This is the third time this arc that **reading the existing module beat inventing a new
+name** — same lesson as `hasFirmSuffix()` and `localPartMatchRule()`.
 🔭 Left open deliberately: the `government` project (`scknotsqkcheojiaewwh`) will have no unapplied-migration
 detector at all. Correct by design, but it is a real gap and the prompt asks for it to be surfaced, not solved.
 

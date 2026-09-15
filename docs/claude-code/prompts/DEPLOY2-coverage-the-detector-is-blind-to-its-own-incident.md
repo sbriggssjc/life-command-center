@@ -89,12 +89,31 @@ on its whole output, which this arc has now rejected twice. So:
   `has_function_privilege()`.
 * Route each migration file to the right project by directory: root → LCC Opps,
   `dialysis/` → Dialysis_DB.
-* Credentials: the collector reads `LCC_SUPABASE_URL` / `LCC_SERVICE_ROLE_KEY`. The
-  repo's established names for the second project are **`DIA_SUPABASE_URL`** and
-  **`DIA_SUPABASE_SERVICE_KEY`** (already used widely; do not invent new ones).
-  👤 **Scott must add them to the workflow's Production environment secrets** — say so
-  plainly in your response, with the exact secret names, because the rule cannot work
-  until he does.
+* **Credentials — do NOT read `process.env` directly, and do NOT ask for a new secret.**
+  Verified against the live Production environment 2026-09-16: **`DIA_SUPABASE_URL` and
+  `DIA_SUPABASE_KEY` already exist**; `DIA_SUPABASE_SERVICE_KEY` does **not**. Nothing needs
+  adding for this to run.
+  ⚠️ **There is existing machinery for exactly this, and it exists because of a trap.**
+  `api/_shared/supabase-keys.js` documents GitHub issue #720: `DIA_SUPABASE_KEY` has
+  *"historically held the **anon** JWT ... despite the names suggesting otherwise"*, and there is a
+  **Phase 4 mass-revoke of anon grants** planned. So hardcoding either name is wrong — the anon
+  one is scheduled for demolition, the service one does not exist yet. Use the resolver
+  **`diaSupabaseKey()`** from that module, which prefers `DIA_SUPABASE_SERVICE_KEY` and falls back
+  to `DIA_SUPABASE_KEY`. The rule then works today and upgrades itself the day Scott sets the
+  service key, with no second change. Wire `DIA_SUPABASE_URL` and the resolved key through the
+  workflow the same way the LCC pair is wired.
+* **Grants on the dia probe RPC, and why they differ from the LCC one.** The LCC probe is
+  service_role-only because `LCC_SERVICE_ROLE_KEY` is a service key. The dia key in CI is, today,
+  anon — so a service_role-only grant would fail on every run. Grant **both `service_role` and
+  `anon`**, assert both with `has_function_privilege()`, and add a comment naming issue #720 Phase 4
+  as the moment the `anon` grant should be **removed**. Keep `SECURITY INVOKER`: the function reads
+  only `pg_catalog`, which every role can already read, so there is no privilege to escalate and no
+  reason to reach for `SECURITY DEFINER`.
+  🔍 State in your response that this grants object-name enumeration on Dialysis_DB to anon-key
+  holders, and that it is bounded by the #720 revoke. That is a real consequence, not a footnote.
+* ⚠️ **Do not assume the resolved key's privilege level.** The names lie (that is the whole point of
+  #720). If the probe RPC returns a 401/403 or any error, emit `skipped` with the HTTP status in the
+  reason — never treat an authorization failure as "no objects missing."
 * ⚠️ **Absent dia credentials, the dia half must emit a `skipped` finding with a
   reason** — never quietly scan root only and report a clean brief. The whole class
   of defect here is a check that looks like it ran. Mirror the existing
@@ -158,9 +177,10 @@ ownership legible so the next reader does not repeat it:
 * `scripts/build-brief-collector.mjs` — git-add-date window, per-project routing,
   corrected header comment.
 * `supabase/migrations/dialysis/` — the probe RPC migration + `README.md`.
-* `.github/workflows/build-brief-collector.yml` — wire `DIA_SUPABASE_URL` /
-  `DIA_SUPABASE_SERVICE_KEY`, and do NOT make the job hard-fail when they are absent
-  (the LCC half must still run).
+* `.github/workflows/build-brief-collector.yml` — wire `DIA_SUPABASE_URL` plus BOTH
+  `DIA_SUPABASE_SERVICE_KEY` and `DIA_SUPABASE_KEY` (the resolver picks; passing both is what makes
+  the #720 upgrade automatic), and do NOT make the job hard-fail when they are absent — the LCC
+  half must still run.
 * `test/xb1-xb2-build-brief-collector.test.mjs` — the three controls above.
 * `docs/os/PLANNED-BACKLOG.md` — close **DEPLOY2-coverage** with the measured
   before/after. Surgical row edit; two branches that both add to a shared doc merge
@@ -171,6 +191,7 @@ ownership legible so the next reader does not repeat it:
 ## Reporting
 
 State plainly: the new live counts split by project; which verdict OWNERGAP1 landed
-on; whether dia credentials were available or the half was skipped; and the exact
-secret names Scott needs to add. If any step was skipped, emit that it was skipped —
+on; whether the dia half ran or was skipped and on which reason; and which key the
+resolver actually picked up in CI (service or anon), since that determines whether the
+`anon` grant is load-bearing today. If any step was skipped, emit that it was skipped —
 a silent skip is the defect this whole arc is about.
