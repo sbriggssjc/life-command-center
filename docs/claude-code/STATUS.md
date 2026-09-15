@@ -48,6 +48,54 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-16 — DEPLOY2-coverage: the `migration_unapplied` window was blind to one of its own three incidents (Claude Code)
+
+`migration_unapplied` shipped 2026-09-16 and its core design is sound (version-anchoring correctly
+ruled out, UNVERIFIABLE a first-class verdict, positive control firing, STALE measured and correctly
+not shipped). **Its WINDOW had three defects, all measured, and together they meant the rule could
+not see OWNERGAP1 — one of the three incidents it was built to catch.** All three closed.
+
+| defect | before | after |
+|---|---|---|
+| `dialysis/` excluded as "a historical copy" | 889 root files only | **1,171 candidates** (root 889 + dialysis 282); **OWNERGAP1 in scope**, routed to Dialysis_DB |
+| window sorted by filename (a synthetic sequence number, not a clock) | floor `20260930121500`; 107 migrations added in 14 days, **64 outside the window, 24 of them root-level** | ordered by **git add-date**, one `git log --diff-filter=A` pass; `MIGRATION_WINDOW_SIZE` held at **60** on purpose |
+| "root → LCC Opps" | **31 root files carry a `gov_`/`dia_` prefix** and target another project; 0 in window **by luck** | routed by **target database**, undetermined **fails closed** as UNVERIFIABLE |
+
+- **`dialysis/` is live and owned by THIS repo; only `government/` is retired.** The old header
+  generalised the gov retirement to dia without checking: `government/` has a README, the
+  `HISTORICAL — DO NOT RE-APPLY` marker on every file and a guard; `dialysis/` had **0 of 282
+  markers and no README**. It has one now, written as the deliberate mirror so the two directories
+  stop looking alike — `supabase/migrations/dialysis/README.md`.
+- **A file with no git add-date sorts NEWEST, never dropped** (P180 — an untracked migration is the
+  freshest thing in the repo), and an **unavailable git history EMITS** `window_degraded` with a
+  reason on the snapshot rather than silently reverting to filename sort (B6a: a degraded window
+  that looks identical to a healthy one is how this defect survived its own review).
+- **The dia half is a second PROJECT, not a second directory.** Probe RPC ported to Dialysis_DB
+  (`20260916130000_dia_deploy2_migration_probe_rpc.sql`). ⚠️ Its grants **deliberately differ** from
+  the LCC copy's — `service_role` **and** `anon`, both asserted — because the credential CI resolves
+  is `diaSupabaseKey()`, which falls back to `DIA_SUPABASE_KEY`, **the anon JWT** (#720). A
+  service_role-only grant would fail on every run. 🔍 **Consequence, stated not buried: this grants
+  schema object-NAME enumeration on Dialysis_DB to anon-key holders**, bounded by #720 Phase 4,
+  which is named in the migration as the removal trigger. Credentials go through the resolver, never
+  a hardcoded env name, so the rule upgrades itself the day the service key is set.
+- **A 401/403 from any probe emits `skipped` WITH the HTTP status**, never "no objects missing"; a
+  project with no credentials skips **its own files with a named reason** rather than quietly
+  reducing to "root only, all clean".
+- **`government/` stays out, and the gap is now attributed rather than absent** —
+  `docs/architecture/MIGRATION-COVERAGE-MAP.md` (three projects → owning repo → does a detector
+  exist → where). Backlog **GOVDEPLOY1** 👤 owns building one, in `government-lease`.
+- Guard: `test/xb1-xb2-build-brief-collector.test.mjs` — **51 tests, 8/8 mutations RED**. Full suite
+  **6,298 pass / 0 fail / 6 skipped**.
+
+⚠️ **THE LIVE RE-RUN DID NOT HAPPEN AND NO NUMBERS ARE QUOTED FOR IT.** The sandbox has no Supabase
+egress, **and its checkout is shallow** — so `git log --diff-filter=A` reports the graft boundary as
+the add date for ~880 files (exactly the trap `CLAUDE.md` documents), which is why a sandbox dry run
+skews the window dia 49 / lcc 11. The collector reports that honestly as
+`window_degraded: shallow_clone_add_dates_are_graft_boundary`. **CI checks out `fetch-depth: 0`, so
+the first workflow run on `main` is the real measurement.** Baseline to compare against: **60 checked
+/ 100 objects / 0 UNAPPLIED / 5 UNVERIFIABLE, LCC Opps only.** A rising UNAPPLIED count there is the
+rule working. Still unverified from here: whether the `DIA_SUPABASE_*` secrets resolve, and **which**
+key the resolver picks — which is what decides whether the `anon` grant is load-bearing today.
 ## 2026-09-15 — the deed-wins flag was never the decision; two prompts sent instead (Cowork)
 
 Took FLAGDARK1's recommended first decision (**#4, `DECISION_OWNER_DEED_WINS`**) and measured it
