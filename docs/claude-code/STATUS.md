@@ -49,6 +49,22 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-14 — XB1+XB2 shipped: the build-brief collector, live-verified against the hand run (Cowork)
+
+`scripts/build-brief-collector.mjs` (branch debt, orphaned prompts, doc sizes, GENERATED-file
+changes) + `public.lcc_build_brief_db_audit()` (flag-long-dark, producer-stall-not-flag-gated,
+market-brief lane staleness) write one `build_brief_snapshots` row via
+`.github/workflows/build-brief-collector.yml` (push to `main` + nightly), read via
+`GET /api/admin?_route=build-brief-latest`. **No dashboard** — `#/exec` is XB3, unbuilt. First live
+snapshot **id=1, 32 findings**, reproducing the hand-run's numbers (15 flags off >3wk, 1 producer
+stall — `sidebar_contact_guard`, `p_rss` correctly silent). Orphan-prompt false positive fixed
+(substring match on leading ID token, recursive across `responses/`). Doc contradictions / dated
+re-measure age / flags-no-consumer deliberately deferred (`XB2-followup`) — too fuzzy for v1
+without false positives. Guard `test/xb1-xb2-build-brief-collector.test.mjs` (19/19 green), full
+suite 6266/0. Detail: `docs/os/PLANNED-BACKLOG.md` XB1/XB2.
+
+---
+
 ## 2026-09-14 — CONSOLIDATE3 was never actually shipped, and STATUS had buried its own index (Cowork)
 
 Extracting the test file from the rescued branch `docs/consolidate3-headroom-and-table-fix-2026-09-12`

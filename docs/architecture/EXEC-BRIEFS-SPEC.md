@@ -83,6 +83,17 @@ Audience: the briefing's existing recipients (team). Market briefs are team-wide
 
 ## 5. CTO/CDO build brief (XB) — Scott-only
 
+✅ **XB1+XB2 SHIPPED 2026-09-14** (`docs/os/PLANNED-BACKLOG.md` XB1/XB2) — the deterministic
+collector + rule set below. `scripts/build-brief-collector.mjs` (repo-side: branch debt,
+orphaned prompts, doc sizes, GENERATED-file changes) merges with `public.lcc_build_brief_db_audit()`
+(DB-side: flag-long-dark, producer-stall-not-flag-gated, market-brief lane staleness) into one
+`build_brief_snapshots` row, written by `.github/workflows/build-brief-collector.yml` (push to
+`main` + nightly 11:30 UTC) and read via `GET /api/admin?_route=build-brief-latest`. **No
+dashboard ships in this unit** — `#/exec` (XB3) and the Ollama narrative (XB4) remain unbuilt.
+Doc contradictions, dated-blocker re-measure age, and "flags ON with no consumer" are deliberately
+NOT built (too fuzzy for a first cut without generating false positives) — filed as
+`XB2-followup`.
+
 - **Collector (deterministic):** on every push to `main` + nightly, a GitHub Action (repo is the source) parses
   STATUS.md, PLANNED-BACKLOG.md, CURRENT-STATE.md, prompts/ & responses/ folders, git log, CI results, and
   reads pipeline/queue health + Railway deploy state → writes **`build_brief_snapshots`**.
