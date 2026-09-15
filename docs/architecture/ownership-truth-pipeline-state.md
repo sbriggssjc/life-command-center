@@ -267,13 +267,28 @@ state.
    **What this means for the UNIQUE constraint**: adding it today would either fail outright (thousands
    of existing canonical_name duplicates) or force blind-merging 4,738 entities with no corroborating
    signal on most of them -- directly against Scott's "accuracy first" instruction from decision #1.
-   **Next step, needs Scott's call**: 2,201 individual judgment calls is a real review workload, not a
-   sweep Cowork can push further alone. Options, not yet decided: (a) build a review lane in the
-   existing Decision Center machinery (the federated-lane pattern item 2 of this same "Open decisions"
-   section already flags as under-used elsewhere) so Scott or the team can work through the 2,201 in
-   normal course; (b) accept a SCOPED constraint now -- e.g. a partial unique index that only enforces
-   on canonical_names not present in this review population, leaving the 4,738 entities explicitly
-   exempted/flagged until reviewed; (c) something else. Not built pending that answer.
+   **Scott's call: build a Decision Center review lane** for the 2,201 groups so he/the team can work
+   through them in normal course, rather than a scoped constraint or holding off.
+
+   **Reviewed the existing Decision Center machinery before building anything (per this repo's own
+   standing discipline) -- and the lane already exists, fully wired, no code change needed.** The
+   `merge_duplicate_entities` federated lane (`api/admin.js` ~line 8886) already reads THREE sources:
+   `v_lcc_merge_candidates` filtered to `auto_mergeable OR sf_inheritance` (213 of the 2,201 groups),
+   `v_lcc_person_email_merge_candidates`, and -- critically -- `v_lcc_canonical_twin_candidates`, a
+   "surface-only, never auto-merged, human-verdict-only" view over ALL same-canonical-name org twins,
+   explicitly documented in its own code comment as existing to add "the previously-invisible groups."
+   Sampled 200 of the 1,988 groups NOT covered by the `auto_mergeable/sf_inheritance` filter against
+   `v_lcc_canonical_twin_candidates`: **200 of 200 already present.** The lane already shows this exact
+   population today, deduped by winner_id, paginated (no hard cap truncating it), with a working
+   verdict path (`merge` -> `lcc_merge_entity` directly, reversible; `research` -> a research task).
+
+   **The actual gap is not machinery, it's throughput.** `lcc_decisions` shows only **13 `merge` + 1
+   `research` verdict ever recorded** against this lane, against a live population in the thousands --
+   the same "built but unworked" shape `[UX-T1c]`'s census already found across other federated lanes
+   (12 of 28 with zero verdicts ever). **Nothing to build here.** The lane is live in the app's Decision
+   Center today; it needs Scott or the team to work through it, not more code. Decision #2 (the UNIQUE
+   constraint) stays open until that review lands -- re-measure `v_lcc_merge_candidates`'s remaining
+   count periodically to see progress, and revisit the constraint once the tail is materially smaller.
 3. **✅ CLOSED 2026-09-15 — `lcc_finalize_entity_portfolios`'s supersession rule** (`[OWN-T0g]`).
    Scott's answer: *"If there was a deed or a transfer of ownership in some clear capacity, then the
    prior ownership has ended. Accuracy first."* Classified `ownership_source` producers by data, not
