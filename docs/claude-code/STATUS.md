@@ -48,6 +48,29 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-16 — DEPLOY2-unapplied: migration-merged-but-unapplied detector shipped
+
+Third occurrence of the class (HP1-P1a-fix, OWNERGAP1, XB2-precision) got its own audit rule.
+`scripts/build-brief-collector.mjs` gained `migration_unapplied`: parses the most recent 60 ROOT
+`supabase/migrations/*.sql` files for declared `CREATE [OR REPLACE] FUNCTION|VIEW|TABLE|TRIGGER|
+INDEX|TYPE|POLICY` objects and probes each against LCC Opps via a new narrow RPC
+(`lcc_probe_schema_objects`, `20260916120100`, SECURITY INVOKER over pg_catalog, revoked from
+anon/authenticated). Killed the obvious version-number design first (the prompt's own
+pre-measurement showed it flags nearly every recent migration as unapplied, due to synthetic
+timestamps). **Live measured: 100 unique objects, 0 UNAPPLIED, 5 UNVERIFIABLE** (genuine
+ALTER/COMMENT/INSERT-only migrations, hand-confirmed). N15 stays a false-positive-free negative
+control; a fabricated function name fires the positive control at `critical`. **STALE (normalized
+`pg_get_functiondef` body diff) evaluated and NOT shipped** — a 12-function extraction sample found
+the regex extractor unreliable (3/12 first pass) and, worse, a genuine false positive purely from
+Postgres's canonical type rendering (`timestamptz` → `timestamp with time zone`) on an unambiguously
+current function. Filed as **DEPLOY2-stale**, needs an AST-based extractor + type-alias-aware
+comparator before it is safe. XB2-precision's own history is **not** reconstructible from a
+point-in-time DB snapshot that does not exist — stated, not claimed. Full detail:
+`docs/os/PLANNED-BACKLOG.md` DEPLOY2-unapplied row. Branch `claude/deploy2-unapplied-migration-audit`,
+pushed, not merged.
+
+---
+
 ## 2026-09-15 — T2b shipped: gov ownership resolution's second tranche fully applied (Cowork)
 
 **Decision #5 of Scott's six compiled ownership-pipeline decisions.** Scott's answer, verbatim:
