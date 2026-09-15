@@ -350,6 +350,7 @@ state.
    actual lever for moving these reachability numbers, not anything in this decision's scope.
 
    **Shipped**: `lcc_own_t0i_extend_broker_assignment(p_dry_run)` -- the identical BROKER1
+   **Shipped**: `lcc_own_t0i_extend_broker_assignment(p_dry_run, p_batch_tag)` -- the identical BROKER1
    vertical-default policy, applied over the wider population Scott's follow-up asked for (every
    reachable current-OR-prior target-market owner, not just the live priority-queue's lease-timing
    bands), fill-blanks-only, reversible (`delete ... where set_by like 'own_t0i_%'`). Does not touch
