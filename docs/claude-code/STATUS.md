@@ -49,6 +49,29 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-15 — XB1/XB2 live, and the build brief is already running itself (Cowork)
+
+**The third of Scott's three original P18 asks is now live.** PR #2456 merged;
+`build_brief_snapshots` holds 2 rows — and snapshot 2 carries `commit_sha 3f391fb1`, generated
+**11:42 UTC by the GitHub Action on the merge itself**, not by a human. The collector looks without
+being asked, which was the whole point.
+✅ **The rule refinement holds structurally, not just in prose.** `producer_stall_not_flag_gated` fires
+on exactly one subject and stays silent on `p_rss`, because the SQL excludes `^flag \S+ is off$` rather
+than trusting a future reader to remember the distinction. The orphan-prompt false positive is fixed too.
+⭐ **First genuinely new find: `sidebar_contact_guard` has run 69 times and completed zero times, ever**
+(31 runs on 09-14, so still accruing). Every run skips for an *operational* reason. Either it is dead code
+on a schedule, or whatever it guards has been unguarded for days. Nobody was watching producer completion
+before this. → **SIDEBARGUARD1**
+🔴 **Two precision gaps, both the failure XB2 was scoped to avoid → XB2-precision.** (a) The biggest
+number is **measured and silent**: `branches.total_remote = 1,722` sits in the payload with no rule
+firing on it — the same "recorded but not surfaced" shape as `item_count` before MB2b. And
+`branches.unmerged` reads 0 because a CI clone has no local branches, so **local branch debt is
+unmeasurable from CI by construction**; only the remote count works there. (b) `market_brief_lane_stale`
+emits per lane×section, turning one known gap into **10 of 32 findings (31%)** — and it still reports on
+`net_lease`, a lane **MB9 collapsed**. A brief where a third of the findings restate one known fact is on
+its way to being a brief nobody reads.
+
+
 ## 2026-09-14 — XB1+XB2 shipped: the build-brief collector, live-verified against the hand run (Cowork)
 
 `scripts/build-brief-collector.mjs` (branch debt, orphaned prompts, doc sizes, GENERATED-file
