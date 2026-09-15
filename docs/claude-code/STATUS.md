@@ -48,6 +48,37 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-16 — DEPLOY2-coverage verified live: the rule caught a real one, and a stale ✅ fell with it (Cowork)
+
+**CC shipped it and honestly refused to quote a live number** — its sandbox had no Supabase egress and a
+shallow clone, which makes `git log --diff-filter=A` report the graft boundary as every file's add date.
+Correct call. **The CI run has happened since, so I took the measurement.** Snapshot 33 (`c841e1a6`),
+`window_degraded: false` — real add-dates, skew gone. **60 checked of 1,173 available; findings 24 → 43.**
+
+| target | checked | applied | UNAPPLIED | unverifiable |
+|---|---|---|---|---|
+| LCC Opps | 47 | 42 | **1** | 4 |
+| Dialysis_DB | 13 | — | — | **13** (`probe_rpc_http_404`) |
+
+🚨 **First real catch, and it invalidated a backlog row that had read ✅ for eight days.**
+`20260908130300_lcc_c1c_retire_sf_lanes.sql` merged 2026-09-08 and **was never applied** — 9 of 9 declared
+objects absent. I verified that independently of the rule that raised it, because a new monitor does not get
+to be its own witness: `lcc_c1c_retire_log` and `v_lcc_c1c_retired_watch` both null, **0** rows in `pg_proc`
+matching `lcc_c1c%`. **C2** claimed *"`true_owner_needs_salesforce` (dia, 837) is now RESOLVED — C1c retired
+it"*. Live today: **838 open tasks.** It grew by one. The lane was never retired; the row recorded the merge
+as the outcome. C2 **retracted**, → **C1C-UNAPPLIED** 🚨👤.
+🚨 **Fourth occurrence of the class, and it is the detector's own migration.** The dia probe RPC merged and
+never applied — hence 13 × `probe_rpc_http_404`. ✅ **The fail-closed design is the only reason that is
+visible**: it emitted 13 named warns instead of quietly reporting root-only-and-clean. I applied the dia RPC
+live (read-only `pg_catalog`, `service_role` + `anon` asserted) and confirmed it round-trips.
+✅ **Acceptance #1 answered: OWNERGAP1 is APPLIED** — all 7 probed objects present in Dialysis_DB. The
+incident the detector was blind to is now in scope *and* verified clean.
+👤 **C1c needs your decision before anything is applied.** It is a retirement with data effects (closes
+tasks, writes a retire log), not a read-only probe, so I left it alone: apply it, re-diagnose first, or drop
+it. The lane is 8 days older than the diagnosis that justified retiring it.
+
+---
+
 ## 2026-09-16 — DEPLOY2-coverage: the `migration_unapplied` window was blind to one of its own three incidents (Claude Code)
 
 `migration_unapplied` shipped 2026-09-16 and its core design is sound (version-anchoring correctly
