@@ -48,6 +48,42 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-15 — GOVDEED1: one missing predicate is manufacturing half the gov conflict set (Cowork)
+
+CC found the root cause and localized it correctly. Verified live, with two corrections that both
+make it **stronger**, and one connection CC did not draw.
+
+**The producer is running now:** `cron.job` 20, `35,5 * * * *` — twice an hour, not hourly — active,
+calling `propagate_deed_to_property(5000)`.
+
+⚠️ **Correction 1.** CC reported "no `recording_date IS NOT NULL` guard." The function contains that
+exact predicate, **fifteen lines below the block that needs it**. There are two CTEs both named
+`bridged`: step 1 writes `properties.latest_deed_*` with no date guard and no `LIMIT`; step 2 writes
+`ownership_history` with both. **The author already knew** — they wrote the guard for one block and
+not the other. That makes the fix an internal-consistency repair with the correct predicate already in
+the file, not a design decision.
+
+🚨 **The connection CC did not make.** **478 of the 941 government owner-source conflicts (50.8%)
+trace to a dateless, document-number-less deed row — 478 of 478, a perfect match.** The missing date
+does not merely block the autofix: **more than half the gov owner-conflict population is manufactured**
+by this producer. And **4,143 of 4,928** linked dateless deeds have a grantee byte-identical to the
+property's own `recorded_owners.name` — 84.1%, meaning the "deed" is an echo of the prompt's own
+context, not evidence. Those rows assert that real properties changed hands on no evidence at all.
+
+⛔ **Correction 2 — retracting my own prompt.** GOVDEED1 (which I wrote) claimed the dialysis pipeline
+is "a working reference implementation of what the government one is failing at." **Wrong.** dia's
+function is a different implementation entirely — and carries the identical unguarded write. Its
+2-of-1,774 is a smaller upstream population, not a safer downstream. So the fix must be authored per
+database, and dia cannot copy a guard from its own step 2 because dia has no step 2. →
+**DEED-DIA-LATENT**.
+
+👤 The fix belongs to **`government-lease`** → **GOVDEED2** handoff written, with no-backfill stated
+plainly. ⚠️ The function is **in no repository at all** — running twice hourly, source-controlled
+nowhere.
+
+---
+
+
 ## 2026-09-15 — the dia ownership contradiction, measured: both repos write schema (Cowork)
 
 Scott's answer to the 👤 ownership question was the right one to give: *"Nothing in either would have
