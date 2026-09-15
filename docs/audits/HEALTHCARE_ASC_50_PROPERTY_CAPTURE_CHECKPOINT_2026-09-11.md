@@ -139,3 +139,10 @@ Both required checks passed before merge. Railway `/version` subsequently return
 `3f6066605589`, and `/asc-review.html` returned HTTP 200. This verification covers publication and deployment
 only. It performed no database mutation and did not re-measure the 0/50 primary or 0/22 initially required
 second-review baseline recorded above.
+
+## Subsequent review checkpoint
+
+Reviewer work began on 2026-09-15. The current identifier-free measurement, provisional aggregate analysis,
+and governed next decision are recorded in
+`HEALTHCARE_ASC_50_PROVISIONAL_REVIEW_CHECKPOINT_2026-09-15.md`. That later checkpoint supersedes the 0/50
+progress baseline for current reporting; it does not alter this source-collection closeout.
