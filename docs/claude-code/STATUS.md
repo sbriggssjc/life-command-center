@@ -48,6 +48,33 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-15 — DEED1-reconcile: right work, wrong repository (Cowork)
+
+**The round was done correctly and I verified it live.** The migration was emitted from
+`pg_get_functiondef`/`pg_get_viewdef` rather than retyped — which is exactly why I handed it to CC
+instead of transcribing it myself — made idempotent, and applied. All **seven checks reproduce
+identically**: `auto_fixable` 4 (1 + 3), bad rows 0/4, good rows 4/4, SMFG `true`, unrelated `false`,
+alias table 1 row intact. A reconciliation that changed behavior would have been the bug; it did not.
+
+🚨 **But the file was committed to `sbriggssjc/Dialysis` (PR #7412), not here, and does not exist
+anywhere in `life-command-center`.** So the drift is not closed — it moved. Rebuilding Dialysis_DB
+from this repo still restores the old comparator and drops the alias table.
+
+⭐ **And the cause is ours, not CC's.** This repo's `CLAUDE.md` gives two answers. The ownership
+doctrine says Dialysis_DB schema belongs to `life-command-center` and names *aliases* among its
+examples; the migration-inventory table lower down says the `Dialysis` repo owns it, tagged 👤 "not
+formally confirmed by Scott." `supabase/migrations/dialysis/README.md` sides with the doctrine and is
+unambiguous. The two lines are answering **different questions** — where the files sit, versus who
+owns the objects — and were written as if they were the same one. → **CANON-OWNERSHIP1**.
+
+⚠️ Leaving PR #7412 open is the dangerous outcome: a dia migration living in a repo that does not own
+those objects can be re-applied from there and overwrite a running object — the exact hazard the
+`government/` retirement (I16) was created to prevent. → **DEED1-reconcile-2** prompts the port, the
+PR closure, and the canon fix, and explicitly leaves the 👤 ownership confirmation to Scott.
+
+---
+
+
 ## 2026-09-15 — Decision #2's review lane already exists — no build needed, it just needs to be worked (Cowork)
 
 Scott's answer on how to review the 2,201 canonical_name duplicate groups: build a Decision Center
@@ -132,6 +159,36 @@ or the team to work through in normal course; (b) a scoped/partial unique constr
 this reviewed-pending population; (c) something else. Full detail:
 `docs/architecture/ownership-truth-pipeline-state.md` decision #2. Awaiting Scott's answer before
 building anything.
+
+## 2026-09-16 — DEED1's migration is correct and in the wrong repository (Cowork)
+
+**The SQL is right; only its address is wrong.** CC wrote, applied and verified the DEED1 reconciliation
+migration, then committed it to the **`Dialysis`** repo (PR **#7412**) on the strength of *that* repo's
+`CLAUDE.md` saying "Dialysis owns `supabase/migrations/*.sql`". Re-verified live, independently of the
+response: `dia_owner_name_alias` present with 1 row, the comparator function present, the
+financing-instrument regex live, `auto_fixable` = 4. Nothing needs redoing.
+⚠️ **But LCC's own `CLAUDE.md` line 375 — Scott's 2026-09-12 ONE REPO OWNS EACH DATABASE'S OBJECTS
+decision — assigns Dialysis_DB schema to `life-command-center`**, leaving the Dialysis repo its CMS/NPI
+*ingestion* (rows, not schema), and names "aliases" explicitly. An alias table is schema.
+💥 **So the drift moved rather than closed.** Rebuilding Dialysis_DB from this repo still restores the old
+comparator and regex and still drops the alias table — the exact thing the reconcile existed to prevent.
+And **no detector covers it**: `migration_unapplied` enumerates files and probes the DB, so with no file
+here there is nothing to enumerate. CC spotted that itself. DEPLOY3-unmerged shape, **fifth occurrence**,
+first involving a table.
+🟢 **Prompted: `DEED1-RELAND-the-migration-went-to-the-wrong-repo.md`** — re-land under
+`supabase/migrations/dialysis/`, **emitted from live objects, never transcribed**: the view body is 4,747
+chars carrying `\m`/`\M` word-boundary escapes, and a silently wrong regex changes which rows auto-fix.
+✅ **Behaviour is pinned by checksum, not by adjective.** Captured live before any re-land:
+`md5(pg_get_viewdef)` = `9fc5aa3f824b125853b3ac8c8a8388f1` (4747), `md5(pg_get_functiondef)` =
+`72b48cd949db4de5502812920b2e5dd0` (2183). Both must be unchanged after applying; a differing hash is a
+STOP, not a cosmetic difference.
+👤 **Root cause is a doctrine conflict, not a mistake** → **DIA-OWNERSHIP-CONFLICT**. The two repos'
+`CLAUDE.md` files contradict each other and CC followed one of them correctly. Same class ID3a-d resolved
+for government — where `government/` got a README, a marker on every file and a guard test, while
+`dialysis/` here has 0 of 282 markers and no README. Both cannot be true. ⛔ Nobody should close PR #7412
+or edit the Dialysis repo's CLAUDE.md until Scott decides; Cowork's read is that #7412 closes unmerged.
+
+---
 
 ## 2026-09-16 — C1C-SPLIT prompted; and `docs/capital-markets/` is mostly not capital markets (Cowork)
 
