@@ -48,6 +48,31 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-15 — C2g's sponsor↔SPE explanation checked for precision before proposing anything to write (Cowork)
+
+Follow-on to the same-day C2g reconfirmation (previous entry): before proposing candidate rows for
+the `lcc_owner_sponsor_domain`/`lcc_ownership_sponsor_family` confirm surfaces, checked whether the
+58 "unrelated name" pairs actually carry a textual sponsor↔SPE signature (shared initials or a
+shared significant word) the way C2h's own named examples did. **Only 10 of 58 (17%) do.** The
+other 48 — `praveen gupta`→`cary st ssa`, `murray hills`→`ten`, and 46 more — have no discoverable
+naming link at all between the Salesforce-linked owner and the resolved title-holder.
+
+**This sharpens, not overturns, the same-day finding**: the resolution mechanism
+(`lcc_property_owner` picking the title-holding SPE via `supersession` at a flat 0.75 confidence) is
+still structurally correct, not a feeder bug. But calling the *reason* for the name mismatch
+"sponsor↔SPE" for the whole 58 was overstated — that held up on C2h's hand-picked examples, not on
+the full population. Corrected the same-day doc changes (`C2h_...md` gets a new §7,
+`connectivity-and-open-threads.md` and `PLANNED-BACKLOG.md`'s C2g row both re-worded) rather than
+letting an overclaim stand.
+
+**Recommendation, not built:** don't bulk-feed the 48 into the confirm surfaces — that repeats the
+~25%-precision lexical-detector mistake this repo already paid for (A3/P196). The right-sized next
+step is a manual read of 58 rows (one sitting), not new matching machinery. No rows written to
+either confirm table.
+
+---
+
+
 ## 2026-09-15 — the dia ownership contradiction, measured: both repos write schema (Cowork)
 
 Scott's answer to the 👤 ownership question was the right one to give: *"Nothing in either would have

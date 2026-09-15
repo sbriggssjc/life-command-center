@@ -1637,12 +1637,17 @@ cost is settled across 4,570 minted entities), so it can be revisited if the ran
 **489 orgs / 652 people**: companies that **are** domain property owners, **have** Salesforce people
 attached, and whose properties are **not** resolved to them. ⚠️ **415 of the 489 are NOT reachable
 by minting** — they are anchored and unresolved for some other reason. ✅ **Diagnosed same day for
-the gov side, §4n**: the dominant shape (69 of 79, reconfirmed at ~83% live 2026-09-15) is the
-sponsor↔SPE gap, not a feeder or confidence-gate defect. What is still genuinely unsized: feeding
-those pairs into the existing confirm-only surfaces (`lcc_owner_sponsor_domain`, 8 rows;
-`lcc_ownership_sponsor_family`, 34 rows, both unchanged in scale as of 2026-09-15) and resolving the
-separate, still-open buyer-vs-true_buyer precedence decision in `supersession-tie-lane-2026-08.md`
-§4. **Do not assume — this arc has three instrument errors on record from assuming.**
+the gov side, §4n / mechanism reconfirmed live 2026-09-15**: `lcc_property_owner` is resolving to
+the title-holding SPE via `supersession` at a flat 0.75 confidence, not silently failing — that part
+is structural and not a feeder bug. ⚠️ **But the "it's a sponsor↔SPE naming pattern" explanation
+only checks out textually for 10 of 58 (17%) of the reconfirmed pairs** (`C2h_...md` §7,
+2026-09-15) — the other 48 have no discoverable naming link at all between the SF-linked org and
+the resolved owner, so they need individual reading, not a bulk confirm-surface feed (would repeat
+the ~25%-precision lexical-detector mistake this repo already paid for once, per A3/P196). What is
+still genuinely unsized: that manual read-through (58 rows, one sitting), and the separate,
+still-open buyer-vs-true_buyer precedence decision in `supersession-tie-lane-2026-08.md` §4, which
+Scott has not yet made. **Do not assume — this arc has three instrument errors on record from
+assuming, and "textually similar name" almost became a fourth.**
 
 
 ---
