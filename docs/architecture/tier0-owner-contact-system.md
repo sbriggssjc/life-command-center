@@ -196,7 +196,7 @@ last measured 08-27/08-28). Whatever candidates generated them were resolved, me
 since. Not re-raising a decision that no longer has a live population behind it; if the underlying
 owners resurface, re-measure before asking again.
 
-**👤 Still needs Scott:** **N15** whether the 1,475 Salesforce-campaign orphans get hub rows.
+✅ **N15 decided and shipped 2026-09-15 (Scott + Cowork):** the 1,475 Salesforce-campaign orphans got `unified_contacts` hub rows -- Scott's call, campaign membership is evidence of a real vetted relationship even where LCC hasn't mapped the connection yet. Minted via `lcc_n15_mint_sf_campaign_hub_rows`, reusing this section's own `lcc_tier0_company_confirms_domain` anti-fabrication gate (§P197) so `company_name` is written only when domain-corroborated (228 of 1,475, 15%) -- the rest correctly render with no company rather than a guessed one. Reversible, logged to `lcc_n15_sf_campaign_hub_mint_log`. Full detail: `docs/os/PLANNED-BACKLOG.md`'s N15 row.
 
 **✅ Done 2026-08-27 16:28 UTC (P198 §5):** Scott approved and all three merges landed — Easterly,
 Cambridge, Gardner. Six cards became three; **Easterly is now ONE card at $114,864,150 / 89 assets /
