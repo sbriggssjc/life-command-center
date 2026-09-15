@@ -48,6 +48,29 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-15 — XB2-precision verified; SIDEBARGUARD1 disproved by reading the source it told me to read (Cowork)
+
+**XB2-precision shipped and hit its acceptance target.** Snapshot 13: findings **32 → 24** (predicted
+~23), lane findings aggregated **11 → 3**, `branch_debt` present. The collector produced **13 snapshots
+in one day**, each tied to a merge commit — it is genuinely self-running now.
+⚠️ **SIDEBARGUARD1 was a false positive, and my framing of it was wrong.** I had called it "either dead
+code on a schedule or something unguarded for days". Neither. `sidebar_contact_guard` is an **event
+counter**, not a scheduled producer — written on every sidebar capture, where `status='ok'` means
+*"raised a NEW misparse review item"*. So **0 completions is the correct steady state** once dedupe has
+notified a key. Evidence: 73 runs blocked 166 contacts, and **149 review items exist** (2026-08-10 →
+09-14) of which a human **dismissed 105**. The surfacing path works; the guard works. I had written
+"read the skip_reason's source before assuming either" into the row itself — doing that is what
+disproved it, which is the only reason this did not become a wasted CC round.
+**The real defect is in XB2's rule** → **XB2-counter**, now the brief's only wrong finding and therefore
+load-bearing: a rule whose single visible output is known-wrong is the "monitor nobody trusts" failure
+we have paid for three times already.
+👤 **One genuine item survived:** **44 misparse reviews still `new`**, oldest 2026-08-10 (~36 days) →
+**MISPARSE-BACKLOG1**. Matters because HP1-P2misparse is the thread about this guard rejecting REAL
+people, and `person_junk_name` is the dominant rejection reason.
+🔭 New shape of the brief: `flag_long_dark` is **15 of 24 findings (62%)**. Not a monitor defect — a real
+backlog awaiting Scott's decision (11 dark >60 days, oldest since 2026-05-30).
+
+
 ## 2026-09-15 — XB2-precision reconciled: the code shipped, the migration never did — third time for one class (Cowork)
 
 PR #2460 merged and `main` carries both halves. The **JS half is live** — `branch_debt` fires in every snapshot
