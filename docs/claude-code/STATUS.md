@@ -48,6 +48,23 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-15 — Decision #2's review lane already exists — no build needed, it just needs to be worked (Cowork)
+
+Scott's answer on how to review the 2,201 canonical_name duplicate groups: build a Decision Center
+review lane. Reviewed the existing machinery first, per this repo's standing discipline, before
+writing any code — **and there is nothing to build.** The `merge_duplicate_entities` federated lane
+(`api/admin.js` ~line 8886) already reads `v_lcc_canonical_twin_candidates`, a surface-only,
+human-verdict-only view over every same-canonical-name org twin, explicitly built to add "the
+previously-invisible groups" beyond the `auto_mergeable`/`sf_inheritance` filter. Sampled 200 of the
+1,988 groups outside that filter against the twin view: **200 of 200 already present.** The lane
+already shows this population today, paginated, with a working verdict path straight to
+`lcc_merge_entity` (reversible).
+
+**The real gap is throughput, not machinery** — `lcc_decisions` shows only 13 `merge` + 1 `research`
+verdict ever recorded against this lane, the same "built but unworked" shape `[UX-T1c]`'s census
+already found on 12 of 28 other federated lanes. Decision #2 stays open until the lane gets worked
+down; nothing further to build. Full detail:
+`docs/architecture/ownership-truth-pipeline-state.md` decision #2.
 ## 2026-09-15 — DEED1 shipped and verified; the migration for it was never written (Cowork)
 
 **Verified against the live database rather than the response summary, and every number holds.**

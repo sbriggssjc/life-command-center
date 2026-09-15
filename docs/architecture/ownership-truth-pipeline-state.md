@@ -239,14 +239,56 @@ state.
    unknown-role, multiple Salesforce accounts, low name similarity) -- not swept, needs its own review
    pass. Full detail: `docs/claude-code/STATUS.md` 2026-09-15 entry,
    `supabase/migrations/20261102160000_lcc_own_t0c_trailing_the_and_fuzzy_merge_sweep.sql`.
-2. **🟡 RULE DECIDED, not yet built — `entities.canonical_name` as an enforced UNIQUE key**
-   (`[N15c] (2)`, `tier0-owner-contact-system.md` §6). Scott's answer: *"Yes, probably good to
-   establish the name standard for each group that is most accurate and use it everywhere, merging
-   those naming variants that do not comply."* Was blocked by #1; #1's merge sweep is done, so this is
-   now much closer to safe, but NOT yet measured -- the 3,772/8,005 remaining canonical_name
-   collisions (the review-gated tail) would still violate a hard unique constraint today. Next step:
-   measure how close to unique-clean the population is after a review pass on that tail, then add the
-   constraint.
+2. **🟡 RULE DECIDED, MEASURED 2026-09-15, not yet safe to build -- `entities.canonical_name` as an
+   enforced UNIQUE key** (`[N15c] (2)`, `tier0-owner-contact-system.md` §6). Scott's answer: *"Yes,
+   probably good to establish the name standard for each group that is most accurate and use it
+   everywhere, merging those naming variants that do not comply."* Was blocked by #1; #1's merge sweep
+   is done, so this decision moved from "blocked" to "measure the remaining tail," which is what this
+   pass did -- **result: the constraint is still not safe to add.**
+
+   **Live measurement of `v_lcc_merge_candidates`** (the same view #1's sweep already used): **2,201
+   groups / 4,738 entities remain, and 0 are `auto_mergeable` today** -- every previously-safe tier was
+   already swept by #1; everything left genuinely needs a human call. Breakdown by `review_reason`:
+   `bridged_unknown_pinned` 1,644g/3,539e, `no_role_or_sf_signal` 340g/688e, `multiple_sf_accounts`
+   89g/193e, `low_name_similarity` 64g/143e, `normalizer_blind_review_only` 64g/175e.
+
+   **The dominant class, read further**: of the 1,644 `bridged_unknown_pinned` groups, **1,484
+   groups / 3,087 entities (68% of the whole tail) are name-compatible but carry ZERO Salesforce
+   corroboration** -- no signal either confirming or ruling out that two same-named entities are truly
+   the same company (vs. two different "ABC Properties LLC" in different states). Checked for a cheap
+   second corroboration signal before concluding review is unavoidable: `entities.normalized_address`.
+   **Dead end** -- all 1,484 groups have at least one member with a NULL address; this bridged-owner
+   population simply never carried address data to begin with, so address cannot break the tie for any
+   of them. No other cheap, already-captured signal was found. The remaining ~91 `bridged_unknown_pinned`
+   groups with 2+ real SF accounts, and the `low_name_similarity`/`normalizer_blind_review_only`
+   classes, are correctly held for the reason already on file (genuinely different firms sharing a
+   name, or a normalizer collision) -- these should stay held, not reviewed for merge.
+
+   **What this means for the UNIQUE constraint**: adding it today would either fail outright (thousands
+   of existing canonical_name duplicates) or force blind-merging 4,738 entities with no corroborating
+   signal on most of them -- directly against Scott's "accuracy first" instruction from decision #1.
+   **Scott's call: build a Decision Center review lane** for the 2,201 groups so he/the team can work
+   through them in normal course, rather than a scoped constraint or holding off.
+
+   **Reviewed the existing Decision Center machinery before building anything (per this repo's own
+   standing discipline) -- and the lane already exists, fully wired, no code change needed.** The
+   `merge_duplicate_entities` federated lane (`api/admin.js` ~line 8886) already reads THREE sources:
+   `v_lcc_merge_candidates` filtered to `auto_mergeable OR sf_inheritance` (213 of the 2,201 groups),
+   `v_lcc_person_email_merge_candidates`, and -- critically -- `v_lcc_canonical_twin_candidates`, a
+   "surface-only, never auto-merged, human-verdict-only" view over ALL same-canonical-name org twins,
+   explicitly documented in its own code comment as existing to add "the previously-invisible groups."
+   Sampled 200 of the 1,988 groups NOT covered by the `auto_mergeable/sf_inheritance` filter against
+   `v_lcc_canonical_twin_candidates`: **200 of 200 already present.** The lane already shows this exact
+   population today, deduped by winner_id, paginated (no hard cap truncating it), with a working
+   verdict path (`merge` -> `lcc_merge_entity` directly, reversible; `research` -> a research task).
+
+   **The actual gap is not machinery, it's throughput.** `lcc_decisions` shows only **13 `merge` + 1
+   `research` verdict ever recorded** against this lane, against a live population in the thousands --
+   the same "built but unworked" shape `[UX-T1c]`'s census already found across other federated lanes
+   (12 of 28 with zero verdicts ever). **Nothing to build here.** The lane is live in the app's Decision
+   Center today; it needs Scott or the team to work through it, not more code. Decision #2 (the UNIQUE
+   constraint) stays open until that review lands -- re-measure `v_lcc_merge_candidates`'s remaining
+   count periodically to see progress, and revisit the constraint once the tail is materially smaller.
 3. **✅ CLOSED 2026-09-15 — `lcc_finalize_entity_portfolios`'s supersession rule** (`[OWN-T0g]`).
    Scott's answer: *"If there was a deed or a transfer of ownership in some clear capacity, then the
    prior ownership has ended. Accuracy first."* Classified `ownership_source` producers by data, not
