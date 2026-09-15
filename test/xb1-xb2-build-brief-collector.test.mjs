@@ -13,6 +13,10 @@ import {
   remoteBranchDebtFinding,
   branchDebtFinding,
   generatedFileChangeFindings,
+  stripSqlComments,
+  parseDeclaredObjects,
+  classifyMigrationApplication,
+  migrationApplicationFinding,
 } from '../scripts/build-brief-collector.mjs';
 
 // ---------------------------------------------------------------------------
@@ -164,6 +168,153 @@ test('generatedFileChangeFindings: a deleted file (unreadable) is skipped, not a
     throw new Error('ENOENT');
   });
   assert.deepEqual(findings, []);
+});
+
+// ---------------------------------------------------------------------------
+// DEPLOY2-unapplied — migration-merged-but-not-applied detector
+// ---------------------------------------------------------------------------
+
+test('stripSqlComments removes line and block comments without touching real SQL', () => {
+  const sql = `-- header narrating a DIFFERENT migration's CREATE FUNCTION history\ncreate table real_thing (id int); /* block\ncomment */ create view real_view as select 1;`;
+  const clean = stripSqlComments(sql);
+  assert.doesNotMatch(clean, /header narrating/);
+  assert.doesNotMatch(clean, /block\ncomment/);
+  assert.match(clean, /create table real_thing/);
+  assert.match(clean, /create view real_view/);
+});
+
+test('parseDeclaredObjects: plain CREATE OR REPLACE FUNCTION with a schema-qualified name', () => {
+  const sql = `create or replace function public.lcc_do_thing(p_x int) returns int as $$ begin return p_x; end; $$ language plpgsql;`;
+  assert.deepEqual(parseDeclaredObjects(sql), [{ kind: 'function', name: 'lcc_do_thing' }]);
+});
+
+test('parseDeclaredObjects: CREATE TABLE IF NOT EXISTS, schema-qualified, does not capture the schema name', () => {
+  const sql = `create table if not exists public.lcc_thing_log (id bigserial primary key);`;
+  assert.deepEqual(parseDeclaredObjects(sql), [{ kind: 'table', name: 'lcc_thing_log' }]);
+});
+
+test('parseDeclaredObjects: CREATE UNIQUE INDEX CONCURRENTLY names the index, not the table', () => {
+  const sql = `create unique index concurrently if not exists idx_thing_key on public.lcc_thing (key);`;
+  assert.deepEqual(parseDeclaredObjects(sql), [{ kind: 'index', name: 'idx_thing_key' }]);
+});
+
+test('parseDeclaredObjects: CREATE TRIGGER names the trigger, not the table it fires on', () => {
+  const sql = `create trigger trg_lcc_thing_guard before insert on public.lcc_thing for each row execute function lcc_thing_guard();`;
+  const objs = parseDeclaredObjects(sql);
+  assert.deepEqual(objs.find((o) => o.kind === 'trigger'), { kind: 'trigger', name: 'trg_lcc_thing_guard' });
+});
+
+test('parseDeclaredObjects: a header comment narrating a CREATE FUNCTION is not picked up (comments stripped first)', () => {
+  const sql = `-- This migration follows the pattern of an earlier CREATE FUNCTION public.some_other_fn\nalter table public.lcc_thing add column x int;`;
+  assert.deepEqual(parseDeclaredObjects(sql), []);
+});
+
+test('parseDeclaredObjects: a pure ALTER/UPDATE/INSERT migration declares nothing (real repo example, P138 onprem migration)', () => {
+  const sql = `alter table public.briefing_intel_snapshot add column analyst_take_meta jsonb;\ninsert into public.feature_flags_registry (flag) values ('x');`;
+  assert.deepEqual(parseDeclaredObjects(sql), []);
+});
+
+test('parseDeclaredObjects: dedupes a CREATE ... then CREATE OR REPLACE of the same object within one file', () => {
+  const sql = `create table if not exists public.lcc_thing (id int);\ncreate or replace function public.lcc_thing_fn() returns void as $$ begin end; $$ language plpgsql;\ncreate or replace function public.lcc_thing_fn() returns void as $$ begin end; $$ language plpgsql;`;
+  const objs = parseDeclaredObjects(sql);
+  assert.equal(objs.filter((o) => o.name === 'lcc_thing_fn').length, 1);
+});
+
+// classifyMigrationApplication
+
+test('classifyMigrationApplication: no declared objects is UNVERIFIABLE, never silently APPLIED', () => {
+  const r = classifyMigrationApplication([], {});
+  assert.equal(r.verdict, 'unverifiable');
+  assert.deepEqual(r.missing, []);
+});
+
+test('classifyMigrationApplication: every declared object present is APPLIED', () => {
+  const declared = [{ kind: 'function', name: 'lcc_x' }, { kind: 'table', name: 'lcc_y' }];
+  const existsByKey = { 'function:lcc_x': true, 'table:lcc_y': true };
+  const r = classifyMigrationApplication(declared, existsByKey);
+  assert.equal(r.verdict, 'applied');
+  assert.deepEqual(r.missing, []);
+});
+
+test('classifyMigrationApplication: any declared object absent is UNAPPLIED (positive control, Class 11 doctrine)', () => {
+  const declared = [{ kind: 'function', name: 'lcc_x' }, { kind: 'table', name: 'lcc_y' }];
+  const existsByKey = { 'function:lcc_x': true, 'table:lcc_y': false };
+  const r = classifyMigrationApplication(declared, existsByKey);
+  assert.equal(r.verdict, 'unapplied');
+  assert.deepEqual(r.missing, [{ kind: 'table', name: 'lcc_y' }]);
+});
+
+test('classifyMigrationApplication: an unknown-kind probe result (null) is never treated as absent', () => {
+  const declared = [{ kind: 'policy', name: 'lcc_pol' }];
+  const existsByKey = { 'policy:lcc_pol': null };
+  const r = classifyMigrationApplication(declared, existsByKey);
+  assert.equal(r.verdict, 'applied');
+});
+
+// migrationApplicationFinding
+
+test('migrationApplicationFinding: APPLIED produces no finding at all (silent, per noise doctrine)', () => {
+  const declared = [{ kind: 'function', name: 'lcc_x' }];
+  const f = migrationApplicationFinding('20260101_x.sql', declared, { 'function:lcc_x': true });
+  assert.equal(f, null);
+});
+
+test('migrationApplicationFinding: UNAPPLIED fires critical with the missing object named (POSITIVE CONTROL — a fabricated nonexistent function, the HP1-P1a-fix shape)', () => {
+  const declared = [{ kind: 'function', name: 'lcc_totally_made_up_fn_deploy2_test' }];
+  const f = migrationApplicationFinding('20260101_fake.sql', declared, {
+    'function:lcc_totally_made_up_fn_deploy2_test': false,
+  });
+  assert.ok(f, 'expected a finding for a declared-but-absent object');
+  assert.equal(f.rule, 'migration_unapplied');
+  assert.equal(f.severity, 'critical');
+  assert.equal(f.subject, '20260101_fake.sql');
+  assert.equal(f.measured.verdict, 'unapplied');
+  assert.match(f.detail, /lcc_totally_made_up_fn_deploy2_test/);
+  assert.match(f.detail, /never applied/);
+});
+
+test('migrationApplicationFinding: UNVERIFIABLE fires warn (lower severity than unapplied) and never says "applied"', () => {
+  const f = migrationApplicationFinding('20260101_alter_only.sql', [], {});
+  assert.ok(f);
+  assert.equal(f.rule, 'migration_unapplied');
+  assert.equal(f.severity, 'warn');
+  assert.equal(f.measured.verdict, 'unverifiable');
+  assert.match(f.detail, /UNKNOWN/);
+  assert.doesNotMatch(f.detail, /is applied/i);
+});
+
+test('migrationApplicationFinding: NEGATIVE CONTROL — the real, live N15 migration objects (verified present on LCC Opps 2026-09-16) produce no finding', () => {
+  // N15 (supabase/migrations/20261102170000_lcc_n15_sf_campaign_hub_mint.sql) is documented in
+  // docs/os/PLANNED-BACKLOG.md as the ONE recent migration confirmed to have actually applied,
+  // unlike HP1-P1a-fix/OWNERGAP1/XB2-precision. Its declared objects, probed live via
+  // lcc_probe_schema_objects on 2026-09-16, all read exists:true -- reproduced here as a fixed
+  // existsByKey map so the negative control does not depend on live DB access to run in CI.
+  const declared = [
+    { kind: 'table', name: 'lcc_n15_sf_campaign_hub_mint_log' },
+    { kind: 'function', name: 'lcc_n15_mint_sf_campaign_hub_rows' },
+    { kind: 'function', name: 'lcc_n15_unmint_sf_campaign_hub_rows' },
+  ];
+  const existsByKey = {
+    'table:lcc_n15_sf_campaign_hub_mint_log': true,
+    'function:lcc_n15_mint_sf_campaign_hub_rows': true,
+    'function:lcc_n15_unmint_sf_campaign_hub_rows': true,
+  };
+  const f = migrationApplicationFinding(
+    '20261102170000_lcc_n15_sf_campaign_hub_mint.sql',
+    declared,
+    existsByKey,
+  );
+  assert.equal(f, null, 'N15 is applied and must produce no finding (false-positive-free)');
+});
+
+test('the DEPLOY2 probe RPC migration exists and grants only service_role', () => {
+  const migrationPath = fileURLToPath(
+    new URL('../supabase/migrations/20260916120100_lcc_deploy2_migration_probe_rpc.sql', import.meta.url),
+  );
+  const sql = readFileSync(migrationPath, 'utf8');
+  assert.match(sql, /create or replace function public\.lcc_probe_schema_objects/i);
+  assert.match(sql, /revoke all on function public\.lcc_probe_schema_objects\(jsonb\) from public, anon, authenticated/i);
+  assert.match(sql, /grant execute on function public\.lcc_probe_schema_objects\(jsonb\) to service_role/i);
 });
 
 // ---------------------------------------------------------------------------
