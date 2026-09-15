@@ -35,6 +35,36 @@ earlier Cowork note which framed these as "either work to finish or code to dele
 | **5** | **CM treasury pre-refresh webhook** | 1 — `CM_TREASURY_REFRESH_URL` | 2026-08-07 | Optional; the export works without it. Lowest stakes here. |
 | — | `ENABLE_OWNERSHIP_RESEARCH_QUEUE` | 1 | 2026-07-30 | **Not this repo's call.** Zero references in `life-command-center`; its surface is the `government-lease` pipeline. Per the repo-ownership doctrine it should be decided there. |
 
+## ⚠️ CORRECTION 2026-09-15 (Cowork) — decision #4 is not the cheap first move
+
+The "Recommended order" below says **#4 first**, on the reasoning that it needs no purchase, no
+endpoint and no IT conversation. That reasoning was right about its *cost* and wrong about its
+*effect*, and the difference was one query away.
+
+Measured live, `v_owner_source_conflict`:
+
+| domain | auto_fixable = true | auto_fixable = false |
+|---|---|---|
+| government | **0** | 941 |
+| dialysis | **8** | 415 |
+
+`DECISION_OWNER_DEED_WINS=on` would write **8 rows out of 1,363 conflicts**, none of them in
+government. And the 8 do not survive a hand-check: `Sumitomo Bank Leasing And Finance Inc` → **SMFG**
+appears twice as a genuine owner change (the rebrand guard compares shared tokens, and an initialism
+shares none with the words it abbreviates), and a leasing-and-finance entity takes title on rows that
+read as financing instruments rather than sales.
+
+**The decision the flag was standing in front of is the 2-year deed-recency window** — 234 dialysis
+rows are blocked by nothing else — and on the government side it is not a decision at all but a data
+gap: 389 conflicting rows have a NULL `latest_deed_date`.
+
+Split into **DEED1** (dia window + the two guard holes) and **GOVDEED1** (gov date gap), both
+prompted 2026-09-15. Decisions **#1, #2, #3 and #5 below are unaffected** — re-read them as written.
+
+⭐ The lesson for this file: "costs nothing to say yes" is not the same as "worth saying yes to," and
+this triage ranked on cost without sizing the effect. Size the population before recommending an
+order.
+
 ## Recommended order
 
 **#4 first.** It is the only one that needs no purchase, no endpoint and no IT conversation — just a
