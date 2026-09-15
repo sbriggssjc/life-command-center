@@ -54,11 +54,18 @@ const SQL_VERIFIED = [
   ['The CHY Co', 'chy co'],                       // `co` is NOT a stripped form
   ['The Dunham Co', 'dunham co'],
 
-  // --- leading article only; a trailing "The" is part of the name -----------
+  // --- leading article stripped; a trailing "The" strips too (Scott,
+  //     2026-09-15: "if they are the same entities, merge... I don't have a
+  //     preference about the naming structure") -- UNLESS a legal-form word
+  //     (Inc./Co./LLC/...) sits between the name and the trailing "The": the
+  //     SQL strips 'The' only when it lands exactly at the post-stoplist
+  //     survivor count, so a stoplist word earlier in the name shifts that
+  //     count and the trailing "The" survives. Both rows below are
+  //     live-verified, not hand-computed -- see entityNameTokens' comment.
   ['The Baker Companies', 'baker companies'],
   ['THE BARBER COMPANIES, INC.', 'barber companies'],
   ['The Molasky Group of Companies', 'molasky group of companies'],
-  ['Penstar Group, The', 'penstar group the'],
+  ['Penstar Group, The', 'penstar group'],
   ['Edwin Mcintyre Co., Inc., The', 'edwin mcintyre co the'],
   ['The Wanlass Trust', 'wanlass'],
 

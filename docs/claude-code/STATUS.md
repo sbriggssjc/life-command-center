@@ -48,6 +48,83 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-15 — XB2-precision shipped: `branch_debt` rule + per-lane market-brief aggregation (Cowork)
+
+Both gaps from the XB2-precision reconcile below are fixed. (a) New rule `branch_debt`
+(`branchDebtFinding`, `scripts/build-brief-collector.mjs`) fires on `total_remote` alone (warn,
+threshold 200, growth trend from a prior snapshot when fetchable) — the count was already recorded
+in the payload and never surfaced as a finding. (b) `lcc_build_brief_db_audit()`'s
+`market_brief_lane_stale_or_missing` rule now emits ONE finding per LANE, not per lane×section,
+with `missing_sections`/`stale_sections` named in `measured`. Lane list left untouched (the
+retraction below stands — `net_lease` is the MB9 survivor, not a retired lane). 22/22 tests pass.
+Not yet re-measured live post-deploy — next step is a fresh collector run against the redeployed
+migration and the before/after findings-count table (32 → ~23 predicted).
+
+---
+
+## 2026-09-15 — OWN-T0c trailing-"The" adopted + the general fuzzy-merge sweep it unblocked; N3c/bank-trustee exclusion also merged (Cowork)
+
+**Scott answered all six compiled open decisions at once (2026-09-14 → 2026-09-15).** This entry
+closes decision #1 (trailing "The"); items #2–#6 are filed as their own open threads below and in
+`docs/architecture/ownership-truth-pipeline-state.md`'s "Open decisions" section, which is being
+updated in the same pass.
+
+**Decision #1 — "if they are the same entities, merge... I don't have a preference about the naming
+structure."** `lcc_entity_name_tokens` now strips a trailing "The" token, not just a leading one (this
+re-applies, with explicit authorization, the exact change built-then-reverted on 2026-09-14 as
+`own_t0c_trailing_the_2026-09-14`). 12 confirmed collision groups (16 entities) merged live via
+`lcc_merge_entity`. Effect on the property-conflict-scoped `duplicate_entity` class: 1,183 → 1,177
+(only -6) — confirmed most of that population is a **separate** collision class, not explained by
+trailing-"The" alone.
+
+**Reviewed existing machinery before building anything new (standing doctrine)** and found the real
+scope of Scott's decision was already served by `v_lcc_merge_candidates` + the dormant
+`lcc_apply_fuzzy_merges(dry_run, [limit])` — a mature, already-built auto-mergeable detector with
+role-priority survivor selection, Salesforce-account-aware guards, name-similarity gating, and a
+"pinned" protection for bridged unknown-role entities, applying through the same guarded
+`lcc_merge_entity` primitive `lcc_repair_tombstone_portfolio_facts` (OWN-T0d) also uses. Full
+canonical_name collision population measured first: **6,636 groups / 14,007 entities** (not scoped to
+property conflicts — this is the true size of "if they are the same entities, merge"). Dry run showed
+3,021 groups / 3,305 entities `auto_mergeable = true`; sampled for false positives (short-code LLC
+names, DBA/legal variants — `cbre`→`CBRE Group, Inc.`, 4-letter LLC codes, etc.) — sane. **Ran live**:
+`lcc_apply_fuzzy_merges(false)` — 3,021 groups applied, 3,305 entities merged, 0 failures, fully logged
+to `lcc_entity_merge_log` (reversible per-row, same snapshot mechanism as every other merge this
+session).
+
+**Result**: canonical_name collision population 6,636/14,007 → **3,772/8,005** groups/entities.
+`duplicate_entity` class: 1,177 → **930**. Remaining population is the harder, review-gated tail
+`v_lcc_merge_candidates` already routes away from auto-merge: `bridged_unknown_pinned` (1,644g/3,538e),
+`no_role_or_sf_signal` (337g/682e), `multiple_sf_accounts` (89g/193e), `low_name_similarity`
+(64g/143e), `normalizer_blind_review_only` (64g/175e) — **not** swept here; needs its own review pass
+since the view's gates exist precisely because same-canonical-name alone isn't proof of same-entity in
+these cases.
+
+**JS/SQL parity kept intact.** `test/entity-canonical-key.test.mjs`'s corpus contradicted the newly
+adopted rule (`'Penstar Group, The' → 'penstar group the'`) — updated to the live-verified value
+(`'penstar group'`), and `api/_shared/entity-link.js`'s `entityNameTokens()` rewritten to mirror the
+SQL's exact `ord`/`total` window semantics, **including a real quirk**: a trailing "The" strips only
+when it lands exactly at the post-stoplist survivor count, so a legal-form word (Inc./Co./LLC/...)
+anywhere before the "The" prevents the strip (`'Edwin Mcintyre Co., Inc., The'` stays
+`'edwin mcintyre co the'`, unstripped — confirmed this is the live SQL's actual behavior, not a JS bug,
+and documented in both files so a future session doesn't "fix" it without re-running the backfill and
+merge sweep). All 8 subtests in `test/entity-canonical-key.test.mjs` pass. Migration:
+`supabase/migrations/20261102160000_lcc_own_t0c_trailing_the_and_fuzzy_merge_sweep.sql`.
+
+**Also merged this window** (built and shipped just before the six-decision answer, PR #2456 already
+on `main`): OWN-T0/N3c bank-and-CMBS-trustee prospecting exclusion
+(`lcc_owner_name_is_bank_or_trustee`, OR'd into the single `lcc_owner_name_is_not_prospected` choke
+point) — 11 owner names excluded live, 0 false positives against individual/family trustees or credit
+unions. Closes N3c (`tier0-owner-contact-system.md` §6).
+
+**Open-threads table restored to the top of this file** — a concurrent session's 09-15 entry had been
+prepended above it (line 47, past the guard's 40-line limit), reproducing the exact failure mode the
+table's own header comment warns about. Reordered, no content dropped; `status-header-integrity` and
+`status-line-budget` both pass again.
+
+**Next**: decisions #2 (canonical_name unique constraint — gated on this sweep's result, now much
+closer), #3 (OWN-T0g supersession rule), #4 (Salesforce-campaign orphans, N15), #5 (T2b), #6
+(owner-role promotion + cadence) are still open, each filed as its own thread in
+`ownership-truth-pipeline-state.md`.
 ## 2026-09-15 — XB2-precision scoped, and I retracted a claim I had already merged (Cowork)
 
 ⚠️ **Correction first.** The XB reconcile (PR #2458, merged) asserted that `v_market_brief_staleness`
@@ -123,6 +200,8 @@ show up in the test suite. `PLANNED-BACKLOG.md`'s `HCRIS-TIMEOUT` row reopened t
 recorded plainly, not closed as done. New prompt drafted:
 `docs/claude-code/prompts/HCRIS-TIMEOUT-2-fix-did-not-resolve-symptom-first-check-if-the-merged-commit-is-actually-deployed.md`
 — deliberately ordered to confirm deployment before re-diagnosing code that may not even be running.
+
+
 
 
 ## 2026-09-15 — XB1/XB2 live, and the build brief is already running itself (Cowork)
