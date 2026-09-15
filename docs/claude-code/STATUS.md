@@ -48,6 +48,72 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-15 — OWN-T0g closed: transfer-evidenced supersession rule shipped, live and forward-fixed (Cowork)
+
+**Decision #3 of Scott's six compiled ownership-pipeline decisions — the riskiest one, a live
+cron-critical ingestion path.** Scott's answer, verbatim: *"If there was a deed or a transfer of
+ownership in some clear capacity, then the prior ownership has ended. Accuracy first."*
+
+**Background** (`docs/audits/OWN_T0_PROPERTY_OWNERSHIP_RECONCILED_2026-09-02.md`, STATUS.md 09-14
+OWN-T0g sizing): `lcc_finalize_entity_portfolios`'s gov branch computes its supersession window only
+across the rows in the current inflight sync payload — a property whose ownership history is split
+across two sync calls (pagination) never gets compared across that split, so an old current fact and
+a new current fact for the same property can both sit at `ownership_end_date = null` forever. dia has
+no supersession logic at all.
+
+**Classified `ownership_source` producers by data, not assumption** (live query against
+`lcc_entity_portfolio_facts`): `county_deed`, `gov_ownership_chain`, `sales_transaction`,
+`sales_transactions_seller_exit` are genuine recorded transfer instruments. `gsa_lease_diff`,
+`gsa_lease_lessor`, `lcc_property_owner`, `county_records`, `costar`/`costar_sidebar`, and null are
+lease-record restatements, internal snapshots, or market data — not proof an ownership change
+happened. Matched the sizing note's own prediction exactly.
+
+**Sized the live blast radius before writing anything** (per the OWN-T0g note's own recommendation):
+against `v_lcc_property_multi_current`'s 735 `multi_current_distinct_parties` population, 72
+properties had a transfer-evidenced current fact competing with a stale current fact for a different
+party. Of those, 57 were safe to auto-resolve (the stale fact's own last-known start date was on or
+before the transfer's date, or unknown) — 15 were a genuine unresolved conflict (the "stale" fact was
+itself dated *later* than the transfer, i.e. something claims to be even more current than the
+recorded deed) and were deliberately left alone for `v_lcc_portfolio_ownership_conflict` / human
+review, never guessed. The known genuine co-ownership case (gov/1708, The Greystone Group vs.
+Silverstone Company, both real current owners per OWN-T0d's investigation) was checked explicitly and
+correctly excluded — neither of its current facts carries transfer evidence.
+
+**Shipped `lcc_own_t0g_supersede_by_transfer_evidence(p_dry_run, p_batch_tag)`** — for every property
+with a transfer-evidenced current fact, ends the losing party's fact at the transfer's start date,
+unless that losing fact's own start date is later (left as a genuine conflict). Reversible via
+`lcc_own_t0g_revert_supersession(batch_tag)`, fully logged to `lcc_own_t0g_supersession_log`. Dry run
+matched live exactly: **65 facts / 61 properties superseded**, 0 failures, batch `own_t0g_2026-09-15`.
+Re-running the dry run afterward found **0** remaining — idempotent, self-terminating.
+`v_lcc_property_multi_current`'s `multi_current_distinct_parties` count dropped **735 → 678**.
+Re-verified gov/1708 unchanged after the live run — both current owners still current, correctly
+untouched.
+
+**Wired the forward fix**: `lcc_finalize_entity_portfolios` (live, `SECURITY DEFINER`, cron-driven,
+both dia and gov domains) now calls the same supersession function, live, at the very end of every
+run — after both domains' upserts, scanning the WHOLE table (cheap, ~14k rows), not just that run's
+payload. This is what actually closes the cross-sync-batch gap: a property whose ownership history
+arrives split across two separate sync calls now gets compared correctly regardless of which call each
+fact came in on. Everything else in the function is byte-for-byte unchanged from the live definition
+(verified via `pg_get_functiondef` before editing, diffed line-for-line). Ran the modified live
+function (`select * from lcc_finalize_entity_portfolios()`) — no error, no unintended side effect:
+`multi_current_distinct_parties` stayed at 678, 0 new log rows (correctly a no-op since nothing was
+left to supersede).
+
+**Migrations**: `supabase/migrations/20261102180000_lcc_own_t0g_transfer_supersession.sql` (log table +
+`lcc_own_t0g_supersede_by_transfer_evidence` + `lcc_own_t0g_revert_supersession`),
+`supabase/migrations/20261102190000_lcc_own_t0g_finalize_calls_supersession.sql` (the forward-fix
+wiring into `lcc_finalize_entity_portfolios`, full function body preserved verbatim plus one new
+`PERFORM` call). Both applied and run live on `xengecqvemvfknjvbvrq`.
+
+**Next**: one decision remains open from Scott's six — **#6, owner-role promotion + cadence**
+(current ownership in the target market promotes out of `unknown`, covering broker assigned, 7
+touchpoints in the first 6 months then ~4/year, individualized by client). It's the most
+product-shaped of the six and needs its own design pass — reviewing the existing cadence engine
+(`UX-T1a-touchcount`, the P112 never-seed-a-cadence-with-no-contact-method doctrine) and the current
+broker/market-assignment data before proposing anything. #2 (`canonical_name` unique constraint) stays
+gated on reviewing the review-only tail from the OWN-T0c merge sweep.
+
 ## 2026-09-15 — T2b shipped: gov ownership resolution's second tranche fully applied (Cowork)
 
 **Decision #5 of Scott's six compiled ownership-pipeline decisions.** Scott's answer, verbatim:
