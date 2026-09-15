@@ -93,6 +93,40 @@ copy of C1b. Backlog: **C1C-SPLIT** row updated to shipped/live-run-pending.
 
 ---
 
+## 2026-09-15 — GOVDEED2 shipped; the round refused one of my instructions and was right (Cowork)
+
+**The manufacturing has stopped.** Verified from the live `pg_get_functiondef`: step 1's `bridged` CTE
+now carries `AND d.recording_date IS NOT NULL` and `LIMIT p_limit`, matching step 2. Committed to
+`government-lease` (PR #400) — **the first time that function has existed in any repository**, having
+run twice hourly against production while source-controlled nowhere.
+
+⛔ **The round refused my recommendation #3, and I retract it.** I told it to guard `consideration`
+with `_positive_or_none`. It declined, citing `government-lease`'s CLAUDE.md §13d: a **$0 deed price
+is a real recorded fact** (quitclaims, intra-sponsor transfers), deliberately unguarded, with a test
+that fails if someone "fixes" it. Declining a handoff instruction because it contradicts documented
+doctrine in the owning repo is exactly the behavior these prompts should produce. (Stated plainly:
+`government-lease` is not connected here, so I could not read §13d directly and am taking the round's
+report of it at face value.)
+
+⭐ **But the defect is real — I aimed at the wrong target.** Of the 4,908 dateless rows, **4,854 have
+`consideration = 0` and ZERO have `consideration > 0`**; **4,881** have a placeholder grantor. So the
+$0 quitclaim §13d protects **does not occur in this population at all** — doctrine and defect were
+never in conflict. `consideration = 0` is the **seventh** instance of one signal carrying two meanings:
+*a genuine $0 transfer* and *the model had nothing*. → **GOVDEED3** retargets the fix at the accept
+gate: reject a payload that is placeholder **as a whole** (no date, no document number, placeholder
+grantor), never the value.
+
+⚠️ **Two consequences I want on the record before they are forgotten.** (a) **"No backfill" did not
+leave the 3,930 as NULL — it froze them as the manufactured value.** The guard removes those
+properties from `bridged` entirely, so the producer can never revisit them: they are not awaiting
+correction, nothing will correct them. Still exactly 3,930; the 478 conflicts remain; gov
+`auto_fixable` is still 0. → **GOVDEED-478**, which is now the real remaining work. (b) `LIMIT
+p_limit` in step 1 truncates *after* an unordered window function and could drop `rn=1` rows — latent
+only (729 rows / 178 properties, far under 5,000) and consistent with step 2, but worth a comment.
+
+---
+
+
 ## 2026-09-15 — GOVDEED1: one missing predicate is manufacturing half the gov conflict set (Cowork)
 
 CC found the root cause and localized it correctly. Verified live, with two corrections that both
