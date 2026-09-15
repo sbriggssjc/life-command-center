@@ -48,6 +48,134 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-15 — `HCRIS-TIMEOUT-3` reviewed: the HCRIS fix itself is genuinely correct — the real culprit was the diagnostic instrument (`ingestion_tracker`) being blind, plus a second, previously-unnamed bug hiding behind it
+
+`HCRIS-TIMEOUT-3`'s response (`"HCRIS TIMEOUT 3 surface response.docx"`, saved by Scott) read in full and
+independently re-checked against Dialysis_DB. **Genuinely different shape of finding than the first two
+rounds — not "the fix didn't work," but "the fix worked, and the instrument measuring it was broken."**
+
+**(a) Re-read against the actual deployed code, confirmed clean.** `_download_and_extract`'s bounded
+(connect, read) timeout and wall-clock deadline, `HCRIS_DOWNLOAD_TOTAL_TIMEOUT_SEC`/`CMS_HCRIS_INGEST_STEP_TIMEOUT_SEC`,
+and `hcris_propagation`'s real call to `save_estimates_batch()` (no leftover dead call site to the old
+per-row path) — all genuinely wired as designed. `HCRIS-TIMEOUT`'s original fix (PR #7410) is not the
+defect.
+
+**(b) The actual reason the symptom persisted: two previously-undiagnosed bugs in the tracker/heartbeat
+mechanism itself**, not in HCRIS-specific code at all. `_write_step_heartbeat()` used one unretried
+`.execute()` call on a long-lived Supabase client this repo's own code already documents as degrading late
+in a run, failures logged at DEBUG — silently blind on nearly every run (this session's own spot-check:
+126–129 of the last 140 `ingestion_tracker` rows carry blank `notes`, close to but not exactly matching the
+response's own "139 of 140" figure — noted as a minor precision gap, not a substantive one). `finish_run()`
+only retried twice versus `start_run()`'s already-hardened 6-attempt budget for the identical
+connection-degradation symptom (`PRI3(e)`) — so a run that actually finishes still reads `started`/`NULL`
+forever. **This is exactly `HCRIS-TRACKER-BLIND`, filed last round** — folded in and fixed here rather than
+treated as separate, since the fix is the same mechanism.
+
+**A genuinely new, materially important finding: `hcris_cost_reports` and `hcris_propagation` are failing
+for their own, still-unidentified reason, separate from `run_timeout`.** The `"Failed steps: hcris_cost_reports,
+hcris_propagation, run_timeout"` summary this arc has been reading for three rounds was never one failure —
+it names two steps that fail on their own plus a budget cutoff that (per this round's live trace) hits a
+**different, later, unnamed step**. The real per-step exception text was never captured anywhere before this
+fix — `_log_ingestion_row()` now persists a `step_errors` map with the actual exception per failed step, so
+the next run will finally say why `hcris_cost_reports` fails, instead of every round re-guessing. **Flagged,
+not fixed, out of scope this round**: `qip_scores_ingestor.py` and `cms_deficiency_ingestor.py` — later,
+optional steps in the same pipeline — still carry the exact bare `requests.get(timeout=300, stream=True)`
+pattern `HCRIS-TIMEOUT`'s first round already root-caused and fixed for HCRIS, a plausible source of the
+multi-hour `run_timeout` tail. New candidate backlog item, not yet a prompt.
+
+**(d) Live proof still not obtained — correctly disclosed, not claimed.** No CMS/Railway egress from the
+Claude Code sandbox, and the currently-stuck run (`bc5d3867…`, started 07:33:40 UTC, still `run_status='started'`
+at DB time 14:21 UTC — 6.8+ hours in, independently re-confirmed) predates this fix and won't demonstrate it
+either way. Scott confirmed `Dialysis` PR #7411 (commit `651c630`, branch `claude/lucid-wozniak-z996iw`)
+merged. **The real test is the next full run cycle** — this time with `step_errors` actually populated, so
+the next review reads the real cause directly instead of cross-referencing four Supabase tables by hand.
+`HCRIS-TIMEOUT` stays 🔴 — not closed — pending that. Prompt moved to `docs/claude-code/prompts/done/`.
+
+
+## 2026-09-15 — N15 closed: 1,475 Salesforce-campaign orphans minted as unified_contacts hub rows (Cowork)
+
+**Decision #4 of Scott's six compiled ownership-pipeline decisions.** Scott's answer, verbatim:
+*"These are members of a specific group? Usually means that there is some vested interest in the
+space mapped by the name. Some may be brokers, some may be a new fund exploring the space, but the
+vast majority will be owners or prior owners and the membership is evidence that some prior research
+has concluded that in our team's BD history and just because the LCC doesn't yet have that connection
+mapped, does not mean that its not out there undiscovered."*
+
+**Background** (P197, `docs/audits/P197_TIER0_EMPLOYER_RESOLVER_2026-08-27.md` §4): of the live person
+entities with an email and no `unified_contacts` hub row, membership in a Salesforce campaign (via
+`lcc_sf_list_membership`) was measured as "the only gate that discriminates" among candidate criteria
+— 1,475 admitted. P197 explicitly did not mint ("an operator-surface decision with a blast radius")
+and filed it for Scott as this backlog row.
+
+**Re-measured live before building anything** (re-measure-before-acting discipline, this population
+moves): total email-orphan population grew from 5,193 to **5,672** since P197, but the SF-campaign
+gate held at exactly **1,475** — `lcc_sf_list_membership` turns out to be a frozen 2026-07-16→07-21
+snapshot, not a live-syncing producer. Worth its own follow-up (the campaign-membership signal itself
+is stale for anything captured since July), not fixed in this pass. Sampled the 1,475 before minting:
+side distribution seller 1,030 / unknown 416 / buyer 88 — consistent with Scott's "vast majority will
+be owners" read; 15 random rows spot-checked, all real BD-relevant names and campaigns (`VCA Animal
+Hospital Owners`, `DMR Urgent Care Owners`, `SAB GSA Prospects`, `GSA Buyer`). Checked mint-collision
+risk the way P197 did for its own would-be reconcile: 0 of the 1,475 already resolve to a hub row
+under `sf_contact_id`.
+
+**Shipped `lcc_n15_mint_sf_campaign_hub_rows(dry_run, batch_tag)`** — one hub row per entity, picking
+the best of that entity's campaign-membership rows (domain-confirmed company preferred, else most
+recent). **Never fabricates `company_name`** — reuses the exact `lcc_tier0_company_confirms_domain`
+gate P197 built after finding that a bare campaign company label is a human/capture field, not an
+employer register, and copying it verbatim manufactures employers (city/zip strings, the person's own
+name, a different firm, a bank). Dry run matched live exactly: 1,475 would-create → 1,475 created, 0
+failures. Only 228 (15%) got a domain-confirmed `company_name` written; the other 1,247 correctly
+render with no company rather than a guess — honest "Not on file," per standing doctrine. Fully logged
+to `lcc_n15_sf_campaign_hub_mint_log`, batch `n15_sf_campaign_2026-09-15`, reversible via
+`lcc_n15_unmint_sf_campaign_hub_rows('n15_sf_campaign_2026-09-15')`. Migration:
+`supabase/migrations/20261102170000_lcc_n15_sf_campaign_hub_mint.sql`.
+
+**Scope, stated plainly**: this does not touch the remaining ~4,197 email orphans outside the
+SF-campaign gate, and does not itself change Tier 0's `no_employer_on_file` blockage — P197 already
+fixed that separately with a read-time resolver (`lcc_tier0_employer_on_file`), and this row's own
+audit found minting hub rows would only have helped 4 of 73 blocking people. This is Scott's stated
+connectivity-coverage goal ("truth and accuracy... pushed toward 100%"), not a Tier 0 fix.
+
+**Next**: decisions #3 (OWN-T0g supersession rule), #5 (T2b), #6 (owner-role promotion + cadence) are
+still open with decided rules, not yet built. #2 (`canonical_name` unique constraint) is gated on
+reviewing the remaining canonical-name collision tail from earlier today's OWN-T0c sweep.
+## 2026-09-15 — OWNERGAP2 prompt: the first BUILD in the owner arc, deliberately two adapters wide (Cowork)
+
+The sampling has done its job — two measured rates (Philadelphia **68%**, Harris **86%**), three named miss
+causes, and a demonstrated free path. Written the build prompt:
+`prompts/OWNERGAP2-match-owners-from-free-sources.md`.
+
+✅ **Checked the existing machinery first, and it changes the shape of the build.** `recorded_owners` **already
+exists with 7,487 rows** — `name`, `normalized_name`, `normalized_address`, `source`, `entity_type`,
+`registered_agent_*`, `filing_*` — and **5,467 of 11,815 properties already carry a `recorded_owner_id`**. The
+destination is built and working for 46% of the book; the 4,021 are the hole in it. **So the prompt forbids a new
+table** and scopes the work to *adapters plus a provenance contract*.
+
+🚨 **The provenance contract is the whole prompt, and it is written that way because of what this arc already
+found.** Every owner written must cite the source row — jurisdiction, that source's own record id, the query.
+**No model may produce an owner name**: a name is copied from a fetched record or it does not exist. A local model
+may only normalise and match strings already fetched, and even then the value written is the **source's** string,
+not the model's rendering of it. A miss stays `recorded_owner_id IS NULL` and gets reported — **never** filled
+from the operator, which would be PDR2 undone.
+
+🔑 **One free gift from the measurement, written into the design:** Harris types every account `Personal` or
+`Commercial`, so the assessor draws the operator-vs-owner line for us. The matcher keys on that account type
+rather than re-deriving it from name text — which is precisely the mistake PDR2 fixed.
+
+**The two cheap miss causes are handled; the third is refused.** Ranges (`4126 Walnut` ↔ `4126-38 WALNUT ST`) and
+aliases (Cypress Creek Pkwy = FM 1960, from an explicit evidence-grown list, **never** by loosening the match
+until something returns). Multi-parcel sites — `3300 Henry Ave` returns six owning LPs — are left unresolved and
+flagged `needs_parcel_discriminator`. **Guessing which LP would be exactly the failure this arc exists to stop.**
+
+⚠️ **Explicit ambiguity rules**, because this is where a wrong owner gets minted: more than one candidate, a
+non-exact house-number-and-street match, or a matched name that is itself an operator → **write nothing, flag,
+report**. And the gate requires **hand-checking 5 written owners against the live source** — a match rate is not
+proof the right name landed on the right property.
+
+Scope is held deliberately small: **two adapters**, no national pipeline, no scheduler, no `county_authorities`,
+and no attempt on a CAPTCHA-gated portal. The closing ask is one number: **how many of the 4,021 now have an
+owner.**
+
 ## 2026-09-15 — ⚠️ `HCRIS-TIMEOUT-2` reviewed, and a prior round's own STATUS/backlog edits never made it to `main` — a real process bug found and worked around
 
 **Two things happened this round.**
