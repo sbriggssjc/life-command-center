@@ -239,14 +239,41 @@ state.
    unknown-role, multiple Salesforce accounts, low name similarity) -- not swept, needs its own review
    pass. Full detail: `docs/claude-code/STATUS.md` 2026-09-15 entry,
    `supabase/migrations/20261102160000_lcc_own_t0c_trailing_the_and_fuzzy_merge_sweep.sql`.
-2. **🟡 RULE DECIDED, not yet built — `entities.canonical_name` as an enforced UNIQUE key**
-   (`[N15c] (2)`, `tier0-owner-contact-system.md` §6). Scott's answer: *"Yes, probably good to
-   establish the name standard for each group that is most accurate and use it everywhere, merging
-   those naming variants that do not comply."* Was blocked by #1; #1's merge sweep is done, so this is
-   now much closer to safe, but NOT yet measured -- the 3,772/8,005 remaining canonical_name
-   collisions (the review-gated tail) would still violate a hard unique constraint today. Next step:
-   measure how close to unique-clean the population is after a review pass on that tail, then add the
-   constraint.
+2. **🟡 RULE DECIDED, MEASURED 2026-09-15, not yet safe to build -- `entities.canonical_name` as an
+   enforced UNIQUE key** (`[N15c] (2)`, `tier0-owner-contact-system.md` §6). Scott's answer: *"Yes,
+   probably good to establish the name standard for each group that is most accurate and use it
+   everywhere, merging those naming variants that do not comply."* Was blocked by #1; #1's merge sweep
+   is done, so this decision moved from "blocked" to "measure the remaining tail," which is what this
+   pass did -- **result: the constraint is still not safe to add.**
+
+   **Live measurement of `v_lcc_merge_candidates`** (the same view #1's sweep already used): **2,201
+   groups / 4,738 entities remain, and 0 are `auto_mergeable` today** -- every previously-safe tier was
+   already swept by #1; everything left genuinely needs a human call. Breakdown by `review_reason`:
+   `bridged_unknown_pinned` 1,644g/3,539e, `no_role_or_sf_signal` 340g/688e, `multiple_sf_accounts`
+   89g/193e, `low_name_similarity` 64g/143e, `normalizer_blind_review_only` 64g/175e.
+
+   **The dominant class, read further**: of the 1,644 `bridged_unknown_pinned` groups, **1,484
+   groups / 3,087 entities (68% of the whole tail) are name-compatible but carry ZERO Salesforce
+   corroboration** -- no signal either confirming or ruling out that two same-named entities are truly
+   the same company (vs. two different "ABC Properties LLC" in different states). Checked for a cheap
+   second corroboration signal before concluding review is unavoidable: `entities.normalized_address`.
+   **Dead end** -- all 1,484 groups have at least one member with a NULL address; this bridged-owner
+   population simply never carried address data to begin with, so address cannot break the tie for any
+   of them. No other cheap, already-captured signal was found. The remaining ~91 `bridged_unknown_pinned`
+   groups with 2+ real SF accounts, and the `low_name_similarity`/`normalizer_blind_review_only`
+   classes, are correctly held for the reason already on file (genuinely different firms sharing a
+   name, or a normalizer collision) -- these should stay held, not reviewed for merge.
+
+   **What this means for the UNIQUE constraint**: adding it today would either fail outright (thousands
+   of existing canonical_name duplicates) or force blind-merging 4,738 entities with no corroborating
+   signal on most of them -- directly against Scott's "accuracy first" instruction from decision #1.
+   **Next step, needs Scott's call**: 2,201 individual judgment calls is a real review workload, not a
+   sweep Cowork can push further alone. Options, not yet decided: (a) build a review lane in the
+   existing Decision Center machinery (the federated-lane pattern item 2 of this same "Open decisions"
+   section already flags as under-used elsewhere) so Scott or the team can work through the 2,201 in
+   normal course; (b) accept a SCOPED constraint now -- e.g. a partial unique index that only enforces
+   on canonical_names not present in this review population, leaving the 4,738 entities explicitly
+   exempted/flagged until reviewed; (c) something else. Not built pending that answer.
 3. **✅ CLOSED 2026-09-15 — `lcc_finalize_entity_portfolios`'s supersession rule** (`[OWN-T0g]`).
    Scott's answer: *"If there was a deed or a transfer of ownership in some clear capacity, then the
    prior ownership has ended. Accuracy first."* Classified `ownership_source` producers by data, not
