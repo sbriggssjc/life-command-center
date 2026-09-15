@@ -247,16 +247,37 @@ state.
    collisions (the review-gated tail) would still violate a hard unique constraint today. Next step:
    measure how close to unique-clean the population is after a review pass on that tail, then add the
    constraint.
-3. **🟡 RULE DECIDED, not yet built — `lcc_finalize_entity_portfolios`'s supersession rule**
-   (`[OWN-T0g]`, sized 2026-09-14, not shipped). Scott's answer: *"If there was a deed or a transfer
-   of ownership in some clear capacity, then the prior ownership has ended. Accuracy first."* Next
-   step: classify which `ownership_source` producers represent genuine transfer evidence (likely
-   `gov_ownership_chain`, `county_deed`, sales-transaction sources) vs. which do not (likely
-   `gsa_lease_diff`, `lcc_property_owner`, generic restatements), then change
-   `lcc_finalize_entity_portfolios` (a live, cron-critical `SECURITY DEFINER` function, both dia and
-   gov domains) to compare a new transfer-evidenced fact against ALL existing current facts for that
-   property, not just the current sync payload, and end-date the prior one only then. Higher risk than
-   #1 -- a live ingestion path -- needs a dry-run sizing pass before shipping.
+3. **✅ CLOSED 2026-09-15 — `lcc_finalize_entity_portfolios`'s supersession rule** (`[OWN-T0g]`).
+   Scott's answer: *"If there was a deed or a transfer of ownership in some clear capacity, then the
+   prior ownership has ended. Accuracy first."* Classified `ownership_source` producers by data, not
+   assumption (live query against `lcc_entity_portfolio_facts`): `county_deed`, `gov_ownership_chain`,
+   `sales_transaction`, `sales_transactions_seller_exit` are genuine recorded transfer instruments;
+   `gsa_lease_diff`, `gsa_lease_lessor`, `lcc_property_owner`, `county_records`, `costar`/
+   `costar_sidebar`, and null are lease-record restatements, internal snapshots, or market data -- not
+   proof an ownership change happened. Sized the live blast radius against `v_lcc_property_multi_current`'s
+   735 `multi_current_distinct_parties` population before writing anything: 72 properties had a
+   transfer-evidenced current fact competing with a stale current fact for a different party; of
+   those, 57 were safe to auto-resolve (the stale fact's own last-known date was on or before the
+   transfer's date, or unknown) and 15 were a genuine unresolved conflict (the "stale" fact was itself
+   dated *later* than the transfer) -- deliberately left alone for `v_lcc_portfolio_ownership_conflict`
+   / human review, never guessed. Shipped `lcc_own_t0g_supersede_by_transfer_evidence(p_dry_run,
+   p_batch_tag)`, reversible via `lcc_own_t0g_revert_supersession(batch_tag)`, fully logged to
+   `lcc_own_t0g_supersession_log`. Ran it live (batch `own_t0g_2026-09-15`): dry run matched live
+   exactly, **65 facts / 61 properties superseded**, 0 failures; re-running the dry run afterward found
+   **0** remaining (idempotent, self-terminating). `v_lcc_property_multi_current`'s
+   `multi_current_distinct_parties` count dropped **735 → 678**. Verified the known genuine co-ownership
+   case (gov/1708, The Greystone Group vs. Silverstone Company) was correctly left untouched -- neither
+   of its current facts carries transfer evidence, so the rule correctly declines to guess. **Also wired
+   the forward fix**: `lcc_finalize_entity_portfolios` (live, cron-critical, `SECURITY DEFINER`, both
+   dia and gov domains) now calls the same supersession function, live, at the end of every run --
+   scanning the WHOLE table (cheap, ~14k rows), not just that run's payload, which is what actually
+   closes the cross-sync-batch gap the audit found. Verified the modified live function still runs
+   clean (`select * from lcc_finalize_entity_portfolios()`, no error, no unintended side effect --
+   `multi_current_distinct_parties` stayed at 678, 0 new log rows since nothing was left to supersede).
+   Migrations: `supabase/migrations/20261102180000_lcc_own_t0g_transfer_supersession.sql` (log table +
+   both functions), `supabase/migrations/20261102190000_lcc_own_t0g_finalize_calls_supersession.sql`
+   (the forward-fix wiring into `lcc_finalize_entity_portfolios`). Full detail:
+   `docs/claude-code/STATUS.md` 2026-09-15 entry.
 4. **✅ CLOSED 2026-09-15 — 1,475 Salesforce-campaign orphans** (`[N15]`,
    `tier0-owner-contact-system.md` §6). Scott's answer: *"These are members of a specific group?
    Usually means that there is some vested interest in the space mapped by the name. Some may be
@@ -321,7 +342,7 @@ quote, and each will have moved by the time this is read again:
 | Stage 3 | canonical_name collisions, full population (not property-scoped) | **3,772 groups / 8,005 entities** | was 6,636/14,007 before 09-15's sweep; remainder is the review-gated tail (`bridged_unknown_pinned`, `multiple_sf_accounts`, etc.) -- feeds decision #2 |
 | Stage 3 | tombstone-duplicate-current defect | **0** | ✅ shipped 09-14 (OWN-T0d), was 11 |
 | Stage 3 | `ownership_source` producer noise (`[OWN-T0f]`) | **0 action needed** | ✅ reviewed 09-14, already handled |
-| Stage 3 | portfolio-facts supersession gap (`[OWN-T0g]`) | open | rule decided 09-15 (decision #3); not yet built |
+| Stage 3 | portfolio-facts supersession gap (`[OWN-T0g]`) | **✅ closed** | shipped 09-15 -- 65 facts/61 properties superseded live (batch `own_t0g_2026-09-15`), `multi_current_distinct_parties` 735→678; forward fix wired into `lcc_finalize_entity_portfolios` so every future sync self-heals |
 | Stage 4 | owner-to-person linkage | 13.5% | 1,377 of 10,187 as of 09-14 -- not yet re-measured post-merge-sweep; entity-dedup can shift this denominator, recheck next pass |
 | Stage 4 | Tier 0 auto-attach mechanism | ✅ verified working | 9 writes 09-13, confirmed live 09-14 |
 | Stage 4 | banks/CMBS trustees in prospecting pool | excluded | ✅ shipped 09-14 |
