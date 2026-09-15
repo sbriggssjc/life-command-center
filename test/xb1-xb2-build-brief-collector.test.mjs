@@ -11,6 +11,7 @@ import {
   orphanPromptFindings,
   docSizeFinding,
   remoteBranchDebtFinding,
+  branchDebtFinding,
   generatedFileChangeFindings,
 } from '../scripts/build-brief-collector.mjs';
 
@@ -113,6 +114,31 @@ test('remoteBranchDebtFinding: unmerged branches fire, severity scales with coun
   assert.equal(big.severity, 'warn');
   assert.equal(big.measured.unmerged_count, 14);
   assert.equal(big.measured.total_remote_branches, 20);
+});
+
+// ---------------------------------------------------------------------------
+// branchDebtFinding (XB2-precision)
+// ---------------------------------------------------------------------------
+
+test('branchDebtFinding: below the warn threshold is silent (negative control)', () => {
+  assert.equal(branchDebtFinding(50, { warnAt: 200 }), null);
+});
+
+test('branchDebtFinding: at/above the threshold fires warn, with no trend when no prior given', () => {
+  const f = branchDebtFinding(1722, { warnAt: 200 });
+  assert.ok(f);
+  assert.equal(f.rule, 'branch_debt');
+  assert.equal(f.severity, 'warn');
+  assert.equal(f.measured.total_remote_branches, 1722);
+  assert.equal(f.measured.delta_since_prior, undefined);
+});
+
+test('branchDebtFinding: carries a trend when a prior total is supplied', () => {
+  const f = branchDebtFinding(1722, { warnAt: 200, priorTotal: 1718, priorAt: '2026-09-14' });
+  assert.ok(f);
+  assert.equal(f.measured.prior_total_remote_branches, 1718);
+  assert.equal(f.measured.delta_since_prior, 4);
+  assert.match(f.detail, /\+4 since the prior snapshot on 2026-09-14/);
 });
 
 // ---------------------------------------------------------------------------

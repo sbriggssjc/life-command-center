@@ -48,6 +48,20 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-15 — XB2-precision shipped: `branch_debt` rule + per-lane market-brief aggregation (Cowork)
+
+Both gaps from the XB2-precision reconcile below are fixed. (a) New rule `branch_debt`
+(`branchDebtFinding`, `scripts/build-brief-collector.mjs`) fires on `total_remote` alone (warn,
+threshold 200, growth trend from a prior snapshot when fetchable) — the count was already recorded
+in the payload and never surfaced as a finding. (b) `lcc_build_brief_db_audit()`'s
+`market_brief_lane_stale_or_missing` rule now emits ONE finding per LANE, not per lane×section,
+with `missing_sections`/`stale_sections` named in `measured`. Lane list left untouched (the
+retraction below stands — `net_lease` is the MB9 survivor, not a retired lane). 22/22 tests pass.
+Not yet re-measured live post-deploy — next step is a fresh collector run against the redeployed
+migration and the before/after findings-count table (32 → ~23 predicted).
+
+---
+
 ## 2026-09-15 — XB2-precision scoped, and I retracted a claim I had already merged (Cowork)
 
 ⚠️ **Correction first.** The XB reconcile (PR #2458, merged) asserted that `v_market_brief_staleness`
