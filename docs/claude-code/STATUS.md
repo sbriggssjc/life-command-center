@@ -48,6 +48,44 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-15 — T2b shipped: gov ownership resolution's second tranche fully applied (Cowork)
+
+**Decision #5 of Scott's six compiled ownership-pipeline decisions.** Scott's answer, verbatim:
+*"Yes, again, the objective is accurate coverage of all properties in our target submarket. We want
+to get there as fast and efficiently as possible."*
+
+**Background** (`docs/audits/C2e_T2a_TRANCHE_TWO_STEP_ONE_MINT_2026-08-28.md` §6,
+`connectivity-and-open-threads.md` §4k.1): T2a (gov owners with ≥$100k aggregate rent) shipped
+2026-08-28. T2b — the remaining below-$100k + rent-unknown tail, 2,241 properties / 2,054 owners —
+was sized safe and cheap (predicted duplicate-group growth actually *lower* than T2a's measured
+actual) but left unrun: "the decision is purely whether 'resolve all ownership, rank later' should
+be applied to a population ~96% un-contactable today... **Not run. No default taken.**"
+
+**Re-measured live before running** (population moves): `v_lcc_c2e_asset_mint_plan` — which
+self-excludes anything already minted, so T2b's population is simply whatever remains after T2a —
+held at 2,255 properties / 2,068 owners (805 under $50k / 712 at $50–100k / 537 rent-unknown),
+essentially unchanged composition from the original 2,241/2,054 sizing three weeks ago.
+
+**Ran the same mechanism T2a used**, no new code needed (per "review existing machinery before
+building"): `lcc_mint_gov_asset_entities(p_rows, p_batch, p_dry_run)`. Dry run matched the live run
+exactly — **2,255 would-mint → 2,255 minted, 0 skipped**, batch `t2b_gov_2026-09-15`. Drove the
+evidence ingest explicitly in the same pass, as the mechanism requires (cron 225 caps at 400/run):
+`lcc_ingest_domain_owner_evidence(false, 3000, 't2b_evidence_2026-09-15')` → **evidence_written
+2,262, assets_resolved 2,255, ambiguous_logged 1**. The 7-row gap between written and resolved is the
+identical guard T2a hit — all 7 residual `eligible` rows are brokerages (`Stan Johnson Co` ×4, `NAI
+Pfefferle`, `Bradford Allen Realty Services`, `SVN®`), correctly filtered out by
+`lcc_reconcile_property_owner`'s scoring CTE. Working as designed, not a defect.
+
+**Result**: `v_lcc_c2e_asset_mint_plan` now reads **0** — gov asset-anchor resolution across both
+tranches is fully applied. gov asset anchors now 10,255 (external_identities, `source_system='gov'`,
+`source_type='asset'`); `lcc_property_owner` now 10,906 rows. Checked for a blowup on the two axes
+T2a's own audit flagged (duplicate-candidate growth, Tier 0 card growth) — neither spiked; both
+stayed in the range the pre-run sizing predicted.
+
+**Next**: decisions #3 (OWN-T0g supersession rule — needs care, live cron ingestion path) and #6
+(owner-role promotion + cadence — needs its own design pass) are the two remaining open items from
+Scott's six. #2 (`canonical_name` unique constraint) is gated on reviewing the review-only tail from
+the OWN-T0c merge sweep earlier today.
 ## 2026-09-15 — XB2-precision verified; SIDEBARGUARD1 disproved by reading the source it told me to read (Cowork)
 
 **XB2-precision shipped and hit its acceptance target.** Snapshot 13: findings **32 → 24** (predicted
