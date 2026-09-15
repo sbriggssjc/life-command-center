@@ -48,6 +48,29 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-15 — The 15 dark flags are ~5 decisions, and none of them is dead code (Cowork)
+
+`flag_long_dark` is **15 of 24 findings (62%)** of the build brief, so triaged it into something Scott
+can act on: `docs/audits/FLAG_LONG_DARK_TRIAGE_2026-09-15.md`.
+⚠️ **Corrects my own earlier note.** I wrote that each dark flag is "either work to finish or code to
+delete." **Checked all 15: every surface file exists and every flag is still referenced in live code** —
+deletion is not on the table for any of them. And for most, "off" means **the env var was never set**:
+`return !!process.env.OWNER_ENRICH_ADDRESS_URL`, with `sos-lookup.js` returning `reason: 'unconfigured'`.
+These are **unconfigured adapters degrading honestly**, not disabled features.
+**15 rows collapse to ~5 decisions:** nine flags are ONE question (stand up owner-enrichment adapters at
+all?); two are the Salesforce list import (dark **108 days** — the oldest, and nobody has missed it,
+which is itself an answer); one is save-not-send Outlook drafting (touches Northmarq IT constraints);
+one is the CM treasury webhook (optional). `ENABLE_OWNERSHIP_RESEARCH_QUEUE` is the `government-lease`
+repo's call, not this one's.
+⭐ **Recommended first: `DECISION_OWNER_DEED_WINS`** — the only true feature toggle in the set. No
+endpoint, no purchase, no IT conversation; just a policy call on whether a recorded deed overrides other
+owner sources, and it sits squarely on the OWNERGAP true-owner thread. → **FLAGDARK1**
+⭐ **Third instance of one rule-design flaw**, so it is worth naming as a class: after
+`producer_stall_not_flag_gated` (event counter vs scheduled producer) and `market_brief_lane_stale`
+(one gap vs five), `flag_long_dark` conflates *unconfigured* with *disabled*. The pattern is **a rule
+reading one signal that carries two different meanings** — folded into **XB2-counter**.
+
+
 ## 2026-09-15 — T2b shipped: gov ownership resolution's second tranche fully applied (Cowork)
 
 **Decision #5 of Scott's six compiled ownership-pipeline decisions.** Scott's answer, verbatim:
