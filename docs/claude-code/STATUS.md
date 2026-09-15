@@ -48,6 +48,83 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-15 — Decision #2 measured: canonical_name UNIQUE constraint still not safe, 2,201 groups need Scott's call on review approach (Cowork)
+
+Next step after decision #6 closed: decision #2 (`entities.canonical_name` as an enforced UNIQUE
+key), the last of Scott's six ownership-pipeline decisions still gated. Its own "next step" said to
+measure how close to unique-clean the population is after #1's merge sweep, then add the constraint.
+Measured live — **result: still not safe.**
+
+`v_lcc_merge_candidates` (the same view #1's sweep used): **2,201 groups / 4,738 entities remain, 0
+auto_mergeable** — every previously-safe tier was already swept 2026-09-15 by decision #1. Breakdown:
+`bridged_unknown_pinned` 1,644g/3,539e, `no_role_or_sf_signal` 340g/688e, `multiple_sf_accounts`
+89g/193e, `low_name_similarity` 64g/143e, `normalizer_blind_review_only` 64g/175e.
+
+Read the dominant class further: **1,484 of the 1,644 `bridged_unknown_pinned` groups (3,087
+entities) are name-compatible but carry zero Salesforce corroboration** — no signal either way on
+whether two same-named entities are really the same company. Checked whether
+`entities.normalized_address` could break the tie before concluding review is unavoidable — dead
+end, all 1,484 groups have at least one member with a NULL address; this bridged-owner population
+never carried address data at all. No other cheap signal exists. The remaining sub-classes
+(multi-SF-account groups, low-name-similarity, normalizer-blind) are correctly held for the reasons
+already on file — genuinely different firms, not reviewable-for-merge.
+
+Adding the UNIQUE constraint today would either fail outright or force blind-merging 4,738 entities
+with no corroborating signal on most of them — against Scott's own "accuracy first" instruction from
+decision #1. **2,201 individual judgment calls is a real review workload**, not something to sweep
+through alone. Surfaced three options rather than picking one: (a) a Decision Center review lane
+(the federated-lane pattern this same doc's item 2 already flags as under-used elsewhere) for Scott
+or the team to work through in normal course; (b) a scoped/partial unique constraint that exempts
+this reviewed-pending population; (c) something else. Full detail:
+`docs/architecture/ownership-truth-pipeline-state.md` decision #2. Awaiting Scott's answer before
+building anything.
+
+## 2026-09-16 — `docs/architecture/` has an index for the first time (Cowork)
+
+**188 design documents, no entry point.** Every session arrived at that directory and guessed, which is a
+standing tax on exactly the "pick up seamlessly" goal. `docs/architecture/README.md` now groups all 188 into
+14 topics — ownership/identity (25), copilot & intelligence layer (29), Salesforce/Microsoft/PA (22), deal
+spine & dossiers (20), healthcare verticals (19), app surfaces (17), and so on.
+✅ **Generated from each file's own H1, never from an assumed summary** — a hand-written index of 188 files
+is a fabrication surface, and the point of the directory is to be trustworthy. Section counts are asserted
+against the rows beneath them; all 188 files are accounted for, none dropped, none invented.
+⚠️ The index carries the warning the directory needs: **a design document is a design document.** Several
+describe behaviour that was never built or has since drifted, so the live system is still the check —
+`PLANNED-BACKLOG.md` is the open-work list and STATUS is the narrative. Non-markdown assets (dossier HTML
+examples, `copilot_action_registry.json`, `signal_table_schema.sql`, the four subdirectories) are named as
+out of scope rather than silently omitted.
+🔭 Remaining directories without an entry point: `docs/history/` (111 files, though the STATUS archive
+pointers already chain through it) and `docs/capital-markets/` (163) — the next two worth doing.
+
+---
+
+## 2026-09-16 — C1c re-diagnosed before applying, and the check found a guard that never guarded (Cowork)
+
+**Recommendation was re-diagnose rather than apply. Doing so changed the answer.** C1c's header says the
+retirement is safe *because* C1b makes `gate_pass` permanently false so *"nothing will mint into these two
+lanes ever again."* Measured live, that is **true for dia and false for gov**:
+
+| lane | queued | minted since C1b (8 days) | premise |
+|---|---|---|---|
+| dia `true_owner_needs_salesforce` | 838 | **1** | holds |
+| gov `owner_needs_salesforce` | 1,851 | **175** (156 on 09-13 alone) | **fails** |
+
+🚨 **C1b's gov gate is live and gates the WRONG LANE** → **C1B-GOV-GATE**. The government project's
+`v_ownership_gaps` carries exactly one `lane_no_consumer` marker and it sits on the **`owner_needs_sos`**
+arm; the `owner_needs_salesforce` arm still has the ordinary value/placeholder predicate. The view exists,
+the marker string exists, a grep finds it — **only reading which arm carries it shows the gate missing.**
+That is XB2-precision's shape again (object present, wrong body) and it is the standing argument for
+**DEPLOY2-stale**. The mint path is not at fault: `fetchNbaFeed` applies `gate_pass=is.true` server-side.
+✅ **The "no consumer" half was checked separately rather than inherited.** The dia lane shows 298
+`completed` rows — but **every one carries a fully NULL `outcome`** (no action, no outcome, no terminal;
+last touched 2026-09-02). A bulk status flip, not a human working the lane. "Retire, no consumer" is still
+the right verdict for dia.
+👤 **Recommendation: apply C1c's dia arm only.** The gov arm waits on a real gate, and that fix belongs to
+`government-lease` (ID3a-d) — ⛔ not to re-applying this repo's retired `government/` copy, which is exactly
+what that directory's README warns restores known-bad state.
+
+---
+
 ## 2026-09-16 — DEPLOY2-coverage verified live: the rule caught a real one, and a stale ✅ fell with it (Cowork)
 
 **CC shipped it and honestly refused to quote a live number** — its sandbox had no Supabase egress and a
