@@ -104,7 +104,7 @@ whether the live deterministic role-SET view (`v_lcc_entity_roles`) already had 
 3,820** prior owners already `former_owner`, computed live, no backfill needed. Role classification
 was never a real gap.
 
-**Shipped `lcc_own_t0i_extend_broker_assignment(p_dry_run, p_batch_tag)`** — reuses BROKER1's exact
+**Shipped `lcc_own_t0i_extend_broker_assignment(p_dry_run)`** — reuses BROKER1's exact
 vertical-default policy (`gov`->Scott, `dia`->Kelly Largent, Scott catch-all, Nate never assigned,
 fill-blanks-only, reversible) over the wider population Scott's follow-up asked for: every reachable
 current-OR-prior target-market owner, not just the live priority-queue's lease-timing bands. Does not
