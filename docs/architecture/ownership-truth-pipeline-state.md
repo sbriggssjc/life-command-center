@@ -274,12 +274,19 @@ state.
    (P197 already fixed that separately with a read-time resolver) -- this is Scott's stated
    connectivity-coverage goal, not a Tier 0 fix. Migration:
    `supabase/migrations/20261102170000_lcc_n15_sf_campaign_hub_mint.sql`.
-5. **🟡 RULE DECIDED, not yet run — T2b: widen ownership resolution to the remaining 2,241
-   properties / 2,054 owners** (`connectivity-and-open-threads.md` §4k.1). Scott's answer: *"Yes,
-   again, the objective is accurate coverage of all properties in our target submarket. We want to get
-   there as fast and efficiently as possible."* Sized safe and cheap already (duplicate-group growth
-   lower than T2a's actual). Next step: locate the T2b execution mechanism (analogous to T2a's) and
-   run it.
+5. **✅ CLOSED 2026-09-15 — T2b: widened ownership resolution to the remaining properties**
+   (`connectivity-and-open-threads.md` §4k.1). Scott's answer: *"Yes, again, the objective is accurate
+   coverage of all properties in our target submarket. We want to get there as fast and efficiently as
+   possible."* Re-measured live before running: 2,255 properties / 2,068 owners (essentially unchanged
+   composition from the 2,241/2,054 sizing -- 805 under $50k, 712 at $50-100k, 537 rent-unknown). Ran
+   the same mechanism T2a used, `lcc_mint_gov_asset_entities` + `lcc_ingest_domain_owner_evidence`
+   (self-excluding view, so T2b's population was simply whatever remained in
+   `v_lcc_c2e_asset_mint_plan` after T2a): dry run matched live exactly, 2,255 minted / 0 skipped,
+   2,255 assets resolved, 0 orphans. The 7-row evidence gap is the identical brokerage guard T2a hit
+   (`Stan Johnson Co`, `NAI Pfefferle`, `Bradford Allen Realty Services`, `SVN®`) -- working as
+   designed. `v_lcc_c2e_asset_mint_plan` now reads 0 -- gov ownership resolution is exhausted at the
+   $100k+/below-$100k tranche split; both tranches are fully applied. Migration/data-operation detail:
+   `docs/os/PLANNED-BACKLOG.md`'s `C2e-T2b` row, `docs/claude-code/STATUS.md` 2026-09-15 entry.
 6. **🟡 RULE DECIDED, not yet built — what evidence promotes an owner out of `unknown` role**
    (`connectivity-and-open-threads.md` §4o). Scott's answer: *"If they currently own an asset in our
    target market, that broker assigned to working that market should be assigned the prospecting and
@@ -319,7 +326,7 @@ quote, and each will have moved by the time this is read again:
 | Stage 4 | Tier 0 auto-attach mechanism | ✅ verified working | 9 writes 09-13, confirmed live 09-14 |
 | Stage 4 | banks/CMBS trustees in prospecting pool | excluded | ✅ shipped 09-14 |
 | Stage 4 | Salesforce-campaign orphans (`[N15]`) | **0 remaining in the gated population** | ✅ shipped 09-15 -- 1,475 `unified_contacts` hub rows minted live, 228 with a domain-confirmed company |
-| Stage 4 | remaining unresolved ownership (T2b) | 2,241 properties / 2,054 owners | rule decided 09-15 (decision #5: run it); not yet run |
+| Stage 4 | remaining unresolved ownership (T2b) | **0 remaining in the mint plan** | ✅ shipped 09-15 -- 2,255 gov properties minted and resolved, both tranches of gov asset-anchor resolution now fully applied |
 | Stage 4 | owner-role promotion doctrine | none live | rule decided 09-15 (decision #6); not yet built |
 | Stage 4/5 | "reached" (person-link definition, C4/C5) | 618 of 6,480 (9.5%) | 08-28 measurement, not re-measured this session |
 | Stage 5 | Salesforce deal-book linkage (`[UX12a]`) | 0 of 4,785 | producer does not exist |

@@ -1186,7 +1186,17 @@ extrapolated. What *did* arrive exactly where C2a said is the **owner cliff**: 2
 
 **T2b is safe to run and low-value to run.** Nothing measured argues against it on graph grounds; it
 is cheaper than the tranche just completed. The decision is purely whether *"resolve all ownership,
-rank later"* should be applied to a population ~96% un-contactable today. **Not run.**
+rank later"* should be applied to a population ~96% un-contactable today.
+
+✅ **SHIPPED 2026-09-15 (Scott + Cowork).** Scott: *"Yes, again, the objective is accurate coverage of
+all properties in our target submarket. We want to get there as fast and efficiently as possible."*
+Re-measured live before running (2,255/2,068, essentially unchanged from this section's sizing). Ran
+`lcc_mint_gov_asset_entities` (dry-run matched live exactly): 2,255 minted, 0 skipped, batch
+`t2b_gov_2026-09-15`. Drove `lcc_ingest_domain_owner_evidence(false, 3000, 't2b_evidence_2026-09-15')`
+in the same pass as this section requires: 2,255 assets resolved, the same 7-brokerage residual as
+T2a (`Stan Johnson Co` x4, `NAI Pfefferle`, `Bradford Allen Realty Services`, `SVN®`) — the guard
+working as designed, not a defect. `v_lcc_c2e_asset_mint_plan` now reads 0 — both tranches fully
+applied. Full detail: `docs/os/PLANNED-BACKLOG.md`'s `C2e-T2b` row.
 
 ⚠️ Public-body figures stay **lower bounds** — `lcc_looks_like_person` returns true for `CITY OF
 SALEM` / `BROOME COUNTY` (A3/P196). A pattern floor over T2a's owners is 182 of 2,300 (7.9%); the
