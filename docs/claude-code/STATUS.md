@@ -113,6 +113,50 @@ product-shaped of the six and needs its own design pass — reviewing the existi
 (`UX-T1a-touchcount`, the P112 never-seed-a-cadence-with-no-contact-method doctrine) and the current
 broker/market-assignment data before proposing anything. #2 (`canonical_name` unique constraint) stays
 gated on reviewing the review-only tail from the OWN-T0c merge sweep.
+## 2026-09-16 — DEPLOY2-unapplied: migration-merged-but-unapplied detector shipped
+
+Third occurrence of the class (HP1-P1a-fix, OWNERGAP1, XB2-precision) got its own audit rule.
+`scripts/build-brief-collector.mjs` gained `migration_unapplied`: parses the most recent 60 ROOT
+`supabase/migrations/*.sql` files for declared `CREATE [OR REPLACE] FUNCTION|VIEW|TABLE|TRIGGER|
+INDEX|TYPE|POLICY` objects and probes each against LCC Opps via a new narrow RPC
+(`lcc_probe_schema_objects`, `20260916120100`, SECURITY INVOKER over pg_catalog, revoked from
+anon/authenticated). Killed the obvious version-number design first (the prompt's own
+pre-measurement showed it flags nearly every recent migration as unapplied, due to synthetic
+timestamps). **Live measured: 100 unique objects, 0 UNAPPLIED, 5 UNVERIFIABLE** (genuine
+ALTER/COMMENT/INSERT-only migrations, hand-confirmed). N15 stays a false-positive-free negative
+control; a fabricated function name fires the positive control at `critical`. **STALE (normalized
+`pg_get_functiondef` body diff) evaluated and NOT shipped** — a 12-function extraction sample found
+the regex extractor unreliable (3/12 first pass) and, worse, a genuine false positive purely from
+Postgres's canonical type rendering (`timestamptz` → `timestamp with time zone`) on an unambiguously
+current function. Filed as **DEPLOY2-stale**, needs an AST-based extractor + type-alias-aware
+comparator before it is safe. XB2-precision's own history is **not** reconstructible from a
+point-in-time DB snapshot that does not exist — stated, not claimed. Full detail:
+`docs/os/PLANNED-BACKLOG.md` DEPLOY2-unapplied row. Branch `claude/deploy2-unapplied-migration-audit`,
+pushed, not merged.
+
+---
+## 2026-09-15 — The 15 dark flags are ~5 decisions, and none of them is dead code (Cowork)
+
+`flag_long_dark` is **15 of 24 findings (62%)** of the build brief, so triaged it into something Scott
+can act on: `docs/audits/FLAG_LONG_DARK_TRIAGE_2026-09-15.md`.
+⚠️ **Corrects my own earlier note.** I wrote that each dark flag is "either work to finish or code to
+delete." **Checked all 15: every surface file exists and every flag is still referenced in live code** —
+deletion is not on the table for any of them. And for most, "off" means **the env var was never set**:
+`return !!process.env.OWNER_ENRICH_ADDRESS_URL`, with `sos-lookup.js` returning `reason: 'unconfigured'`.
+These are **unconfigured adapters degrading honestly**, not disabled features.
+**15 rows collapse to ~5 decisions:** nine flags are ONE question (stand up owner-enrichment adapters at
+all?); two are the Salesforce list import (dark **108 days** — the oldest, and nobody has missed it,
+which is itself an answer); one is save-not-send Outlook drafting (touches Northmarq IT constraints);
+one is the CM treasury webhook (optional). `ENABLE_OWNERSHIP_RESEARCH_QUEUE` is the `government-lease`
+repo's call, not this one's.
+⭐ **Recommended first: `DECISION_OWNER_DEED_WINS`** — the only true feature toggle in the set. No
+endpoint, no purchase, no IT conversation; just a policy call on whether a recorded deed overrides other
+owner sources, and it sits squarely on the OWNERGAP true-owner thread. → **FLAGDARK1**
+⭐ **Third instance of one rule-design flaw**, so it is worth naming as a class: after
+`producer_stall_not_flag_gated` (event counter vs scheduled producer) and `market_brief_lane_stale`
+(one gap vs five), `flag_long_dark` conflates *unconfigured* with *disabled*. The pattern is **a rule
+reading one signal that carries two different meanings** — folded into **XB2-counter**.
+
 
 ## 2026-09-15 — T2b shipped: gov ownership resolution's second tranche fully applied (Cowork)
 
