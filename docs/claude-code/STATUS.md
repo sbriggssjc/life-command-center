@@ -48,6 +48,56 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-15 — Decision #6 CLOSED: OWN-T0i ships live, all six of Scott's ownership-pipeline decisions now closed (Cowork)
+
+**The last of Scott's six compiled ownership-pipeline decisions is closed.** Follow-up answer,
+verbatim: *"Yes, we want to pursue, in research, until every current and prior owner of a building
+leased to one of the operators or agencies in our target swimlanes (dialysis and government-leased)
+are known and connected to our LCC app and code processes. The brokers can then make the election on
+whether to pursue the account or not individually, with the guidance and coaching of the LCC on the
+next best relatively important lead."*
+
+This resolved the one open scope question from the prior research pass (whether "promotion" meant
+widening the seller-prospecting population beyond the live queue's lease-timing bands): yes, but as
+**connectivity** (role known, broker assigned), not as a forced bulk cadence — brokers still elect
+individually, which is why no cadence was seeded.
+
+**One category error caught before building anything**: the OLD scalar `entities.owner_role` /
+`behavioral_override` field is a human-manual-override convention, not a system-write target — an
+earlier pass in this same research nearly wrote a system-derived "promotion" into it, which would
+have been exactly the kind of fabrication this repo's doctrine exists to catch. Checked instead
+whether the live deterministic role-SET view (`v_lcc_entity_roles`) already had this right: it does
+— **445 of 447** reachable current owners already correctly tagged `investor_owner`, **3,804 of
+3,820** prior owners already `former_owner`, computed live, no backfill needed. Role classification
+was never a real gap.
+
+**Shipped `lcc_own_t0i_extend_broker_assignment(p_dry_run, p_batch_tag)`** — reuses BROKER1's exact
+vertical-default policy (`gov`->Scott, `dia`->Kelly Largent, Scott catch-all, Nate never assigned,
+fill-blanks-only, reversible) over the wider population Scott's follow-up asked for: every reachable
+current-OR-prior target-market owner, not just the live priority-queue's lease-timing bands. Does not
+touch `lcc_broker1_assign_prospect_brokers` itself. Dry run matched live exactly: **1,044 reachable
+owners total** (447 current + 197 prior, minus 5 domain-overlap in the current set already counted —
+sized live 2026-09-15), **487 already assigned, 557 newly defaulted** (315 gov->Scott, 238 dia->Kelly,
+4 catch-all->Scott). Re-ran the dry run afterward: **0 remaining**, idempotent. Verified Nate
+untouched (0 rows). Migration:
+`supabase/migrations/20261102200000_lcc_own_t0i_extend_broker_assignment.sql`.
+
+**The real remaining bottleneck, sized but not addressed here**: reachability, not role or broker
+mechanics. 86.5% of current owners (2,875 of 3,322) and 94.8% of prior owners (3,623 of 3,820) in the
+target market have no usable contact method at all, so they cannot yet be "known and connected" in
+any way that matters to a broker. This is a contact-data-sourcing problem, and it already has an open
+thread: `FLAGDARK1`'s owner-enrichment-adapters question (address/deed/SOS/websearch/OpenCorporates)
+is the actual lever for moving these numbers, not anything in decision #6's scope. Full detail:
+`docs/architecture/ownership-truth-pipeline-state.md` decision #6.
+
+**All six of Scott's ownership-pipeline decisions now have a decided rule, and five of the six are
+shipped and live** (#1 trailing-"The", #3 OWN-T0g transfer supersession, #4 N15 SF-campaign orphans,
+#5 T2b widening, #6 this entry). **#2** (`canonical_name` unique constraint) is the only one still
+un-built — its rule was decided same as the others, but it stays gated on reviewing the review-only
+merge-sweep tail from #1, which has not been started. That review, or `FLAGDARK1`'s enrichment-adapter
+decision (the real lever on the reachability numbers this entry sized), are the two live next steps in
+this arc.
+
 ## 2026-09-15 — Decision #6 research done: BROKER1 + C6 already cover most of it; one scope question left for Scott (Cowork)
 
 **Decision #6 of Scott's six compiled ownership-pipeline decisions -- the last one open.** Scott's
