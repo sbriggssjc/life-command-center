@@ -48,6 +48,39 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-15 — C2g re-diagnosed as already-answered: it's the sponsor↔SPE gap, not a new mystery (Cowork)
+
+Was about to write up a fresh diagnosis of the "78 gov owner-orgs, property+asset present, still
+unresolved" residue (`PLANNED-BACKLOG.md`'s C2g row, marked ⭐ NEXT) — live-measured a 26%
+duplicate-entity / 74% unrelated-name split, then found `C2h_SPONSOR_SPE_NOT_A_FEEDER_DEFECT_2026-08-28.md`
+had already answered this exact question three weeks ago at nearly the same proportions (69/8/2),
+and `connectivity-and-open-threads.md` §4n already carries it as canonical. C2g's own backlog row
+and §4's "next question" paragraph never got updated to point at it — a real staleness gap, not a
+new finding.
+
+**What I added, not rebuilt:** a live reconfirmation (`C2h_...md` §6) that the diagnosis still holds
+2026-09-15 — `lcc_property_owner` resolving to the title-holding SPE via `supersession` at a flat
+0.75 confidence while the Salesforce contact sits at the sponsor, for ~83% of the residue (52 of 70
+sampled, `source='supersession'`); ruled out the batch cap (evidence exists on 91 of 95 pairs), the
+`lcc_domain_owner_ambiguous` lane (0 of 58), and guards (unchanged from C2h). Cross-checked the
+remaining high-name-similarity pairs against decision #2's dedup views: 5 of 8 exact-name pairs
+already sit in `v_lcc_merge_candidates`/`v_lcc_canonical_twin_candidates`, no new machinery needed;
+1 (`sarita mutscher`) is an exact-name pair neither view flags — a possible dedup-view gap, not
+chased further here.
+
+**Updated, not built:** `PLANNED-BACKLOG.md`'s C2g row (demoted from ⭐ NEXT/🔴 "diagnose before
+building" to 🟡 "diagnosed, two narrower unsized steps remain") and `connectivity-and-open-threads.md`
+§4's two paragraphs that still framed this as open. The two real next steps, neither sized nor
+built: (1) feed the sponsor↔SPE pairs into the existing confirm-only surfaces
+`lcc_owner_sponsor_domain`/`lcc_ownership_sponsor_family` (8/34 rows, unchanged in scale since
+C2h — sizing this is not done); (2) Scott's still-open buyer-vs-true_buyer precedence call in
+`supersession-tie-lane-2026-08.md` §4, the same mechanism from the tie-breaking angle. **No ⭐ NEXT
+re-crowned** — that's a call for Scott, not mine to make unilaterally; the backlog currently has no
+single headline item and should get one from him.
+
+---
+
+
 ## 2026-09-15 — DEED1-reconcile: right work, wrong repository (Cowork)
 
 **The round was done correctly and I verified it live.** The migration was emitted from
