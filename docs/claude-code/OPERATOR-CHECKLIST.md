@@ -5,18 +5,18 @@ systems the repo cannot reach (Power Automate, Salesforce), payloads only a huma
 adds a row when a round ends on one of these; Scott ticks it; Cowork verifies and removes it in the
 next turn. If a row sits here for more than a week, it goes to the backlog as a blocker.
 
-Updated 2026-09-16.
+Updated 2026-09-16 (evening): D1 and D2 done and verified; P1 replaced by a prompt; F1–F7 have a step-by-step guide.
 
 ## Deploys
 
 | # | step | why | how | verify |
 |---|---|---|---|---|
-| D1 | **Deploy the `daily-briefing` edge function** to LCC Opps | HOME1 §C fixed the DaVita-under-Government routing in `supabase/functions/daily-briefing/`; live is **v25 (2026-05-12)**, so every briefing still has the bug | from the repo root: `supabase functions deploy daily-briefing --project-ref xengecqvemvfknjvbvrq` (also deploy `_shared/domain-routing.ts` — it ships with the function) | `supabase functions list --project-ref xengecqvemvfknjvbvrq` shows a version > 25 and today's date; tomorrow's briefing lists The Villages under **Dialysis** |
-| D2 | Open the PR for INVENTORY1's branch | passes 1–2 are on `claude/inventory1-audit`, unmerged; INVENTORY1b needs them on `main` | `gh pr create --base main --head claude/inventory1-audit --fill` (in `C:\Users\scott\life-command-center`), merge when CI is green | the two audit files + CSV appear under `docs/audits/` on `main` |
+| ~~D1~~ | ✅ **Done 2026-09-16** — `daily-briefing` deployed, live **v26** (verified via `functions list`); tomorrow's briefing is the behavioural check | | | |
+| ~~D2~~ | ✅ **Done 2026-09-16** — INVENTORY1 branch merged | | | |
 
 ## Power Automate (the FLOWS1 seven)
 
-Open each flow at `make.powerautomate.com` → environment *NorthMarq Capital, LLC* → the flow → **Edit**.
+Open each flow at `make.powerautomate.com` → environment *NorthMarq Capital, LLC* → the flow → **Edit**. **Step-by-step with exact clicks: `docs/setup/POWER-AUTOMATE-FLOW-FIXES-2026-09-16.md`.** Suggested order: F1 → F2 → F5 → F4 → F3 → F6 → F7.
 
 | # | flow | edit | why |
 |---|---|---|---|
@@ -34,7 +34,7 @@ After F1–F7: wait one week, forward the next "flows have failed" digest into `
 
 | # | item | for |
 |---|---|---|
-| P1 | **Harris County (HCAD) owner payload** — for each of the 50 Harris dia properties, the HCAD record (account type Commercial vs Personal, owner name, account no.) exported by hand from the portal; drop as a CSV/JSON into `SB notes/` | OWNERGAP2 Harris adapter (payload-only by design; the portal is bot-walled) |
+| ~~P1~~ | **Withdrawn 2026-09-16** — HCAD publishes its full roll as free bulk PDATA files (`hcad.org/pdata`), so Harris is a Claude Code prompt (`OWNERGAP2-harris`), not a hand-fetch. Nothing for Scott to gather. | |
 
 ## Housekeeping
 
