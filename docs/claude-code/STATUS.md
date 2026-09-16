@@ -40,7 +40,7 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k LIVE** (LCC PR #2506): 218 attested supersessions, 40/43 pairs to sponsor, 16/16 controls untouched, reversible; sponsor-as-edge = future work |
 | **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT | 2026-09-16 | **Arc complete through GOVDEED5b** (gov PRs #400–#405, all live; `latest_deed_*` deed-only, one writer); open: GOVDEED3 (accept gate, prompted), sale-party conflicts 1,290 are a review queue; dia clean |
 | **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, OWNERGAP2-harris-b, MCP1 | 2026-09-16 | 20 Philadelphia owners live; MCP1 live; **Harris stage seeded (37 rows), matcher queries the wrong street shape → harris-b**; 1,346 `owner_needs_sos` still the feed |
-| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact/-order/-path, HOME1, HOME2, PRI1, PRI2, DIA1, DIA1b, DIA1b-operators, ID3a-drift | 2026-09-16 | HOME1/PRI1/DIA1/DIA1b done; **PRI2 built, flag OFF → Scott's side-by-side**; Scott's 7 flow edits verified from exports — F1 option B broke the byte contract → **FLOWS1-artifact** + F1c; FLOWS1-order prompted |
+| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS1-order, FLOWS1-path, FLOWS-consolidate, HOME1, HOME2, PRI1, PRI2, DIA1, DIA1b, DIA1b-operators, ID3a-drift | 2026-09-16 | **FLOWS1-artifact live**, F1c verified; **FLOWS1-order refuted** (the race is two flows on one trigger → `FLOWS-consolidate`, Scott's call); PRI2 flag OFF → side-by-side; FLOWS1-path open |
 | **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–4, INVENTORY1, INVENTORY1b, INVENTORY-process, REMEDIATION-2026-05, FLAGS-geocode, REGISTRY-contacts-hub, REPO1 | 2026-09-16 | **INVENTORY1b done (3 rounds, DB-verified)**: 9 flags → 7 deliberate + 2 for Scott; Phase 2.3–2.6 was a stale doc (fixed); May TODOs now a backlog row; "132 untraced prompts" was an under-scoped search; loop changes applied |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
 | **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
@@ -53,6 +53,36 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 > cuts) were moved **verbatim** to
 > [`docs/history/STATUS_claude-code_2026-08-31_to_2026-09-01.md`](../history/STATUS_claude-code_2026-08-31_to_2026-09-01.md).
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
+
+---
+
+## 2026-09-16 — FLOWS1-artifact live; FLOWS1-order refuted by the round — the race is two flows on one trigger, not LCC; F1c verified from the export (Cowork)
+
+**FLOWS1-artifact ✅ live** (PR #2528, Railway `c6fda4e7`): `fetchSharepointBytes()` reads both Get
+Artifact shapes and returns a named `too_large`; the CRE longdoc lane rides its 30-day ceiling; the
+plain doc-text lane gets `artifact_too_large` and leaves the eligible queue;
+`GET /api/document-text-tick?mode=dead-letter` lists both. Not done, filed: size-aware skip at
+discovery and real backoff for non-terminal failures. **F1c verified from Scott's second export:**
+metadata first from the trigger path, `Size < 20000000`, content fetch inside the True branch, the
+bytes `Response` exactly as specified; the False branch is the plain metadata JSON without
+`ok/reason`, which LCC already treats as `too_large`. Test passed on Scott's side.
+
+**FLOWS1-order ❌ refuted, and I was wrong.** I wrote the prompt "from the code" after seeing
+`await emitPC(...)` on six paths and assuming the emit relayed the move. The round read
+`emitProcessingComplete()` to the end: it writes a `processing_log` row (`move_status='pending'`)
+and returns — it never imports or calls `pa-move-message.js`. The move happens two ways, both
+after the card: the flow's own `HTTP_ProcessingComplete` step, and the 15-minute Move Queue
+Executor (P120/P121, live since 2026-08-20; 113 moves in 14 days, 2 benign `already_out`
+races, worklist empty). No code changed. So what *does* move the message before
+`GetEmailWebLink` runs? The exports answer it: **two flows fire on the same `When an email is
+flagged (V3)` trigger** — *LCC Flagged Email Intake* ends with `Flag → Mark → Move email`, and
+*Outlook Intake to Teams (Hardened)* reads the message a few seconds later. Flow vs flow, not LCC.
+Scott's F2 (web link first) and F3 (retry + run-after) are the mitigation; the durable fix is one
+flow per trigger, which is Scott's design call (`FLOWS-consolidate`, decision). Correction applied
+in place to the 2026-09-16 entries that said otherwise, per ⑥.
+
+**Lesson, filed:** a partial code read produced a confident wrong mechanism; the round's full read
+plus live counts refuted it. "Confirmed from code" means the *whole* call chain, to the side effect.
 
 ---
 
@@ -122,6 +152,8 @@ fails softly instead of loudly. → **FLOWS1-artifact** (both shapes, size cap, 
 FLOWS1-crons) with a one-condition flow addendum F1c. And the export settles FLOWS1-order: the flow
 *also* emits processing-complete at its end, so LCC's early await-and-relay inside the intake
 response is the only reason the move ever runs first → **FLOWS1-order** prompt written from the code.
+⚠️ **Correction (2026-09-16, later that day):** wrong — `emitProcessingComplete` only writes `processing_log`; the move is
+flow-driven or the Move Queue Executor. The race is two flows on one trigger. See the later entry.
 
 ---
 
@@ -184,6 +216,7 @@ The seven Power Automate fixes are now a step-by-step guide with exact clicks an
 order (`docs/setup/POWER-AUTOMATE-FLOW-FIXES-2026-09-16.md`; F1 has a quick option and a durable one
 that hands LCC a link instead of the bytes). While writing F2 I confirmed the LCC-side half from the
 code: `api/intake.js` **awaits `emitProcessingComplete` before it responds**, and that emit POSTs the
+*(⚠️ corrected later the same day: it does not POST — it writes `processing_log` only; the FLOWS1-order round refuted this)*
 move instruction to the Move flow immediately — so the message is moved while the intake flow is still
 waiting on our response. `FLOWS1-order` is real, not inferred.
 
