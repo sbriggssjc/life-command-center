@@ -39,8 +39,8 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **CoStar sidebar / public records (PR5/PRI)** | PR5d, PR-scanner-3, PRI2–PRI6, HCRIS-TIMEOUT, HCRIS-TRACKER-BLIND, HCRIS-QIP-DEFICIENCY-TIMEOUT-PATTERN | 2026-09-15 | PR-scanner-3 shipped (`county_records_needed` action); `PRI6` (the connection-retry/ingestion-lock reliability sweep that started with `PRI1`'s dropped-connection crash) closed ✅ 2026-09-14, both sides confirmed merged — checking on it live is what surfaced `HCRIS-TIMEOUT` (a separate, months-old defect, not a `PRI6` regression). `HCRIS-TIMEOUT` is now three rounds deep: the original fix was correct, the real blocker was the tracker/heartbeat mechanism itself being blind (`HCRIS-TRACKER-BLIND`, fixed same round) — **awaiting live proof from a run Scott triggered 2026-09-15 (post-PR-#7411)**. One flagged, unbuilt follow-up already identified for whenever this closes: `qip_scores_ingestor.py`/`cms_deficiency_ingestor.py` share HCRIS's old bare-timeout bug. |
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k LIVE** (LCC PR #2506): 218 attested supersessions, 40/43 pairs to sponsor, 16/16 controls untouched, reversible; sponsor-as-edge = future work |
 | **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT | 2026-09-16 | **Arc complete through GOVDEED5b** (gov PRs #400–#405, all live; `latest_deed_*` deed-only, one writer); open: GOVDEED3 (accept gate, prompted), sale-party conflicts 1,290 are a review queue; dia clean |
-| **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, MCP1 | 2026-09-16 | **OWNERGAP2 applied — 20 Philadelphia owners live from public record** (5,494 with owner), ledgered; Harris needs an HCAD payload; MCP1 blocks the context gate; 1,346 `owner_needs_sos` still the feed |
-| **App feedback intake (SBN)** | FLOWS1, FLOWS1-crons/-order/-path, HOME1, HOME1-deploy, HOME2, PRI1, PRI2, DIA1, DIA1b, ID3a-drift | 2026-09-16 | SBN-1…9 triaged; FLOWS1 diagnosed (7 flow edits for Scott, 3 LCC rows); HOME1/PRI1/DIA1 done; **`daily-briefing` edge fn still v25 (HOME1-deploy)**; PRI2 + DIA1b prompted |
+| **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, MCP1 | 2026-09-16 | OWNERGAP2 applied (20 Philadelphia owners); **Harris via HCAD bulk PDATA prompted** (no hand-fetch); MCP1 blocks the context gate; 1,346 `owner_needs_sos` still the feed |
+| **App feedback intake (SBN)** | FLOWS1, FLOWS1-crons/-order/-path, HOME1, HOME1-deploy, HOME2, PRI1, PRI2, DIA1, DIA1b, ID3a-drift | 2026-09-16 | HOME1/PRI1/DIA1 done, **`daily-briefing` v26 deployed**; FLOWS1 diagnosed — Scott's 7 flow edits have a click-path guide (`docs/setup/POWER-AUTOMATE-FLOW-FIXES-2026-09-16.md`); PRI2 + DIA1b prompted |
 | **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–4, INVENTORY1, INVENTORY1b, REPO1 | 2026-09-16 | CLAUDE.md pass 1 done; **INVENTORY1 passes 1–2 on `claude/inventory1-audit` (unmerged)** — 1,779 rows, 9 unexplained-OFF flags, 12 open TODOs, ~124 untraced prompts; **INVENTORY1b** re-tests with DB access; root `.docx` reports converted to `docs/history/root-reports/` |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
 | **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
@@ -53,6 +53,24 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 > cuts) were moved **verbatim** to
 > [`docs/history/STATUS_claude-code_2026-08-31_to_2026-09-01.md`](../history/STATUS_claude-code_2026-08-31_to_2026-09-01.md).
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
+
+---
+
+## 2026-09-16 — `daily-briefing` deployed (v26), INVENTORY1 merged, the flow fixes written as click-paths, and Harris turns out not to need Scott (Cowork)
+
+Scott deployed `daily-briefing` — live **v26**, verified — so HOME1 §C's routing fix is running; the
+behavioural check is tomorrow's briefing. INVENTORY1's branch is merged; INVENTORY1b can run.
+
+The seven Power Automate fixes are now a step-by-step guide with exact clicks and a suggested
+order (`docs/setup/POWER-AUTOMATE-FLOW-FIXES-2026-09-16.md`; F1 has a quick option and a durable one
+that hands LCC a link instead of the bytes). While writing F2 I confirmed the LCC-side half from the
+code: `api/intake.js` **awaits `emitProcessingComplete` before it responds**, and that emit POSTs the
+move instruction to the Move flow immediately — so the message is moved while the intake flow is still
+waiting on our response. `FLOWS1-order` is real, not inferred.
+
+Harris: OWNERGAP2 built it payload-only because the HCAD *portal* is bot-walled, but HCAD publishes
+the entire roll as free bulk PDATA files. That makes Harris a prompt (**OWNERGAP2-harris**), not a
+hand-fetch; P1 is withdrawn from the operator checklist. Nothing for Scott to gather.
 
 ---
 
