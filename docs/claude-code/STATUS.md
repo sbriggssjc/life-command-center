@@ -39,8 +39,9 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **CoStar sidebar / public records (PR5/PRI)** | PR5d, PR-scanner-3, PRI2–PRI6, HCRIS-TIMEOUT, HCRIS-TRACKER-BLIND, HCRIS-QIP-DEFICIENCY-TIMEOUT-PATTERN | 2026-09-15 | PR-scanner-3 shipped (`county_records_needed` action); `PRI6` (the connection-retry/ingestion-lock reliability sweep that started with `PRI1`'s dropped-connection crash) closed ✅ 2026-09-14, both sides confirmed merged — checking on it live is what surfaced `HCRIS-TIMEOUT` (a separate, months-old defect, not a `PRI6` regression). `HCRIS-TIMEOUT` is now three rounds deep: the original fix was correct, the real blocker was the tracker/heartbeat mechanism itself being blind (`HCRIS-TRACKER-BLIND`, fixed same round) — **awaiting live proof from a run Scott triggered 2026-09-15 (post-PR-#7411)**. One flagged, unbuilt follow-up already identified for whenever this closes: `qip_scores_ingestor.py`/`cms_deficiency_ingestor.py` share HCRIS's old bare-timeout bug. |
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k LIVE** (LCC PR #2506): 218 attested supersessions, 40/43 pairs to sponsor, 16/16 controls untouched, reversible; sponsor-as-edge = future work |
 | **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT | 2026-09-16 | **Arc complete through GOVDEED5b** (gov PRs #400–#405, all live; `latest_deed_*` deed-only, one writer); open: GOVDEED3 (accept gate, prompted), sale-party conflicts 1,290 are a review queue; dia clean |
-| **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2 | 2026-09-16 | C1C closed both arms; **OWNERGAP2 merged (PR #2508), NOT run** — next: redeploy Railway ×2 → dry-run tick → apply; 1,346 `owner_needs_sos` waiting on it |
+| **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, MCP1 | 2026-09-16 | **OWNERGAP2 applied — 20 Philadelphia owners live from public record** (5,494 with owner), ledgered; Harris needs an HCAD payload; MCP1 blocks the context gate; 1,346 `owner_needs_sos` still the feed |
 | **App feedback intake (SBN)** | FLOWS1, HOME1, PRI1, DIA1 | 2026-09-16 | Intake protocol live (`SB notes/README.md` + `TRIAGE.md`); first pass: 8 rows → 4 prompts; FLOWS1 also needs one failed-run screenshot per flow from Scott |
+| **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–4, INVENTORY1, REPO1 | 2026-09-16 | CLAUDE.md pass 1 done (3,268 lines); **INVENTORY1** prompted — the full plan-vs-built gap map; pass 2 of CLAUDE.md waits on Scott |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
 | **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
 | **Broker identity (BR) / BROKER1** | BR1, BR2, BROKER1, BROKER1-sf | 2026-09-11 | BROKER1 prospect-assignment applied live (1,303 assigned) with a real bug found+fixed in production; BROKER1-sf (Salesforce write-back) correctly left unbuilt — no write path exists |
@@ -52,6 +53,32 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 > cuts) were moved **verbatim** to
 > [`docs/history/STATUS_claude-code_2026-08-31_to_2026-09-01.md`](../history/STATUS_claude-code_2026-08-31_to_2026-09-01.md).
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
+
+---
+
+## 2026-09-16 — OWNERGAP2 applied: the first 20 owners in the arc; CLAUDE.md pass-1 cut; INVENTORY1 and MCP1 drafted (Cowork)
+
+**OWNERGAP2 ✅ applied (Philadelphia).** After Scott's Railway redeploy (`/version` = `0235c31a` = main)
+I ran the dry run against the deployed route — through pg_net with the vault key, so the key never
+entered this chat — and got the build's exact numbers: 26 → 20 resolved / 6 refused. Scott chose apply.
+Batch `ownergap2_philadelphia_pa_20260916` wrote 20: properties with an owner **5,474 → 5,494**,
+`recorded_owners` +17 (three owners span two addresses), ledger 26 rows, every new row's `source`
+citing its OPA record id, PA `true_owner_id` fingerprint unchanged. **Twenty of the 4,021 now have an
+owner from a public record**, and the method is proven; Harris needs an operator-supplied HCAD payload.
+Gate #6 failed for a reason that is its own finding → **MCP1**: `get_property_context` cannot see a dia
+property that is not among the 1,784 minted LCC assets, and its address path throws
+`(rows \|\| []).filter is not a function`.
+
+**CLAUDE.md pass 1 (CONSOLIDATE4).** 5,503 → **3,268** lines. The 34 dated round narratives (Aug 14 –
+Sep 2) went verbatim to `docs/history/CLAUDE_rounds_2026-08-14_to_2026-09-02.md`; an index of their
+titles (each title is its lesson) stands where they were, and the header says so. Every rule,
+doctrine, footgun and invariant stayed. Pass 2 — condensing the doctrines and footguns themselves —
+waits for Scott, section by section.
+
+**INVENTORY1 drafted.** Scott's ask: every plan, design and discussion ever, against what is actually
+built and running, to find what is slipping through the cracks and aim the next rounds. The prompt is
+read-only, extracts intent from every source including the loose `.docx` reports, measures state
+rather than reading it, and ends with the process change per leak class.
 
 ---
 
