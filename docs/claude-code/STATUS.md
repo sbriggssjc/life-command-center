@@ -34,6 +34,7 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **Operator funnel (OC / HP1)** | HP1, HP1-P1a, HP1-P1a-fix, HP1-P1a-dup | 2026-09-12 | HP1-P1a-fix CLOSED live (608 rows UPDATED, first-ever Salesforce UPDATE to `bd_opportunities`); HP1 P0 (Today 500 badge) fixed+deployed+verified |
 | **Ownership (OWN/RO)** | OWN-T0a–T0j, RO3, B1b, AC2/AC3/AC6–AC11 | 2026-09-12 | OWN-T0j verified end-to-end live; RO3 field-mapping design drafted; OWN-T0a/B1b/AC-series propagation work still open |
 | **CoStar sidebar / public records (PR5/PRI)** | PR5d, PR-scanner-3, PRI2–PRI6, HCRIS-TIMEOUT, HCRIS-TRACKER-BLIND, HCRIS-QIP-DEFICIENCY-TIMEOUT-PATTERN | 2026-09-15 | PR-scanner-3 shipped (`county_records_needed` action); `PRI6` (the connection-retry/ingestion-lock reliability sweep that started with `PRI1`'s dropped-connection crash) closed ✅ 2026-09-14, both sides confirmed merged — checking on it live is what surfaced `HCRIS-TIMEOUT` (a separate, months-old defect, not a `PRI6` regression). `HCRIS-TIMEOUT` is now three rounds deep: the original fix was correct, the real blocker was the tracker/heartbeat mechanism itself being blind (`HCRIS-TRACKER-BLIND`, fixed same round) — **awaiting live proof from a run Scott triggered 2026-09-15 (post-PR-#7411)**. One flagged, unbuilt follow-up already identified for whenever this closes: `qip_scores_ingestor.py`/`cms_deficiency_ingestor.py` share HCRIS's old bare-timeout bug. |
+| **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-15 | 111-pair read done: 43 SOS-attested, 16 no evidence; blocker is the `v_lcc_domain_owner_candidates` unresolved-only gate — 👤 C2k (936 gov + 100 dia), same decision as tie-lane §4 |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
 | **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
 | **Broker identity (BR) / BROKER1** | BR1, BR2, BROKER1, BROKER1-sf | 2026-09-11 | BROKER1 prospect-assignment applied live (1,303 assigned) with a real bug found+fixed in production; BROKER1-sf (Salesforce write-back) correctly left unbuilt — no write path exists |
@@ -90,6 +91,34 @@ C2 stays open until the dia retirement is confirmed live. C1B-GOV-GATE stays
 open and is explicitly out of scope for this change — do not retire the gov
 lane, do not touch the gov gate, do not re-apply the retired `government/`
 copy of C1b. Backlog: **C1C-SPLIT** row updated to shipped/live-run-pending.
+
+---
+
+## 2026-09-15 — C2g read-through: 43 of 111 pairs are SOS-attested, and the blocker is a gate, not a feeder (Cowork)
+
+Scott took my recommendation (the 58-pair read before the beneficial-owner decision). Read all
+**111 pairs / 92 orgs** — reconstructed from scratch, 78 stays the tracked number — against gov's
+registry fields instead of names: `docs/audits/C2g_58_PAIR_READ_2026-09-15.md`.
+
+⚠️ **Corrects this morning's C2h §7.** "Only 10 of 58 show any sponsor↔SPE link" was a *name* check
+presented as the available evidence. It wasn't. **43 of 111: the SPE's SOS-registered manager IS
+the Salesforce-linked org or its contact** (`llc_research_source='sos_registry'`, 40 `exact`).
+23 wording-variant duplicates (decision #2's lane), 9 gov-internal conflicts, 6 LCC-contradicts-gov,
+**2 LCC-resolved-to-the-seller** (`supersession` picked the deed grantor), 1 real sale where the CRM
+contact is stale and LCC is right, 8 name-only, **16 "Not on file"**. Nothing written anywhere.
+
+⭐ **The real finding:** `v_lcc_domain_owner_candidates` proposes the domain `true_owner` (weight
+5.0, the feeder's highest) **only for assets with no resolved owner**. Once `supersession` placed the
+SPE at 0.75, domain truth never entered as evidence — 0 `domain_true_owner` rows on the 92 assets.
+R6's "domain truth OUTRANKS name patterns" is implemented as a gap-filler. **Lifting the gate
+touches 936 gov + 100 dia resolved assets** — the `supersession-tie-lane-2026-08.md` §4 decision,
+re-sized from 63 to 1,036. → **C2k**, 👤 Scott. ⛔ The token-keyed `lcc_ownership_sponsor_family`
+cannot hold these (`300 Fifth Avenue LLC` ← Martin Selig has no token) — bulk-writing it would be the
+third detector in a confirm table's clothes.
+
+Side-findings, sized not chased: `latest_deed_date='2023-10-01'` on **130** gov properties (a
+sentinel read as a date); 2 seller-resolutions worth one query. C2h §8, `connectivity` §4n-b,
+tie-lane §6 updated. Archived the sixteenth 2026-09-12 span first (headroom was under 200).
 
 ---
 
@@ -2658,187 +2687,15 @@ documentation + one new test file).
 
 Closed `BACKLOG-ids` in `docs/os/PLANNED-BACKLOG.md` §P0d (added as a done row, since the item
 existed only as the standalone prompt file, not a backlog row).
-## 2026-09-12 — FEED1 scoped: five replacement feeds fetched live for the three dead ones (Cowork)
+> **📦 ARCHIVE (2026-09-15, seventeenth span):** the FEED1-scoped → MB2a → MB9 run of 2026-09-12 entries
+> was moved **verbatim** to
+> [`docs/history/STATUS_claude-code_2026-09-12_tail9.md`](../history/STATUS_claude-code_2026-09-12_tail9.md).
+> Nothing was dropped; every still-open item it named is tracked in `PLANNED-BACKLOG.md`.
 
-Verified via pg_net, with newest-pubDate recorded per feed because MB2a proved 200-with-items is not the
-same as contributing: `government` → Federal Register GSA-agency feed (**200, 14**, newest 09-11);
-`healthcare` → STAT News (**200, 20**, 09-12) + Healthcare Dive (**200, 10**, 09-11); `net_lease` →
-Connect CRE (**200, 10**) + REBusinessOnline (**200, 20**), both 09-11. Measured and rejected: Modern
-Healthcare **403**, The Real Deal **403**. Government Executive re-verified (**200, 23**) — the only
-reason that lane is not at zero. **All five publish daily, so all five clear the 72h cutoff as-is**,
-which keeps FEED1 a clean URL swap and leaves MB2b out of it. Sharper read on the ESRD feed while here:
-its problem is a narrow query returning 3 items spanning weeks, **not** Federal Register — the GSA
-agency feed on the same service is high-volume and behaves normally. Prompt carries the deploy step
-explicitly (`--project-ref` required; merged is not running).
-
-## 2026-09-12 — MB2a deployed: the dialysis stream is live, and its first run found 3 OTHER dead feeds (Cowork)
-
-Scott deployed `briefing-intel-snapshot` (CLI, `--project-ref xengecqvemvfknjvbvrq`). Verified live via
-pg_net dry-run: **`sector_news.dialysis` = 6 items**, where the key did not exist at all before.
-🚨 **The monitor's first run found three long-silent dead feeds in OTHER streams**, each confirmed
-independently: **GSA News 404**, **Health Affairs 410 Gone**, **GlobeSt 403**. The government lane is
-running on ONE feed, net_lease on two of three, healthcare on two of three — and the daily email's
-Sector Watch has been quietly built on that. → **FEED1**.
-**PRSS stays OFF, now on evidence:** of the 6 dialysis items, **0 are market signal** — local EMS
-coverage, a Canadian wildfire item, a $4,100 clinic refund, a PFAS suit, a supplier award, and a DaVita
-one-day stock move we already read straight off the DVA ticker. → **MB2b**.
-**Federal Register is healthy and contributes nothing:** 3 items parsed, 0 survive the shared **72h
-cutoff** — its documents are weeks old by design, which is exactly what the policy section wants. So
-`item_count` measures PARSING, not CONTRIBUTION, and a feed can look green while adding zero.
-**Publisher parser bug:** the suffix regex forbids hyphens in the outlet name, so
-"… - Honolulu Star-Advertiser" yields `publisher=null` AND leaves the suffix in the headline.
-
-## 2026-09-12 — MB2a reconciled live: feeds confirmed, migration applied, and the code is NOT DEPLOYED (Cowork)
-
-**Both replacement feeds re-verified independently** via pg_net (the check CC's sandbox could not run —
-zero egress): Federal Register ESRD **200, 3 items**; Google News operator query **200, 100 items**.
-**Migration applied live to LCC Opps** — `market_brief_feed_health`, `v_market_brief_feed_health_stale`,
-`lcc_check_market_brief_feed_health` (runs clean, 0 opened / 0 resolved), both `market_brief_facts`
-citation columns, cron `lcc-market-brief-feed-health` at 11:15 UTC.
-🚨 **The blocker is a deploy, not the feeds.** Deployed `briefing-intel-snapshot` is **v21 and has NO
-`dialysis` stream at all** — MB-b's three dead URLs were never deployed either, so nothing MB-b or MB2a
-wrote to `RSS_FEEDS` has ever run. **This repo has no workflow that deploys edge functions** (checked
-`.github/workflows/`), so merging one changes nothing by itself. New **I16** instance; DRIFT1's census
-called this function "committed, not in scope" on 2026-09-07 — true then, stale now. → **MB2a-deploy**.
-`MARKET_BRIEF_PRSS` stays OFF, correctly: relevance survival cannot be measured until the deploy lands.
-Verified separately that CC handled the bucket hazard — `fetchSectorNews()` derives its result keys from
-`RSS_FEEDS` in both the initializer and the catch fallback, so a new stream cannot throw.
-
-## 2026-09-12 — MB2a: dead dialysis RSS feeds replaced, feed-health monitor added, PRSS stays off
-
-`RSS_FEEDS.dialysis` now points at Federal Register (ESRD) + Google News (operator query) in place of
-the three dead URLs (403/404/404). No third feed added — this sandbox has zero verified egress and a
-spoofed UA was refused, per the task. Handled Google News's redirect-URL + broad-noise caveats
-(`source_publisher`/`source_url_is_redirect` columns; a title-suffix parser). Shipped
-`scripts/verify-rss-feeds.mjs` (opt-in, parses feeds from source so it can't drift) and
-`market_brief_feed_health` + `lcc_check_market_brief_feed_health` (I11: alerts on 3+ zero-item days,
-auto-resolves on a real item). `MARKET_BRIEF_PRSS` left OFF — no live egress this session to confirm
-facts actually flow; Cowork's prior fetch predates this code. Suite 6,130/0/6-skipped. Backlog
-`docs/os/PLANNED-BACKLOG.md` §P18 MB2a; spec addendum in `EXEC-BRIEFS-SPEC.md`.
-
-## 2026-09-12 — MB9: collapsed the redundant net-lease lane, redesigned the homepage Market Briefs widget (Cowork)
-
-Scott, after seeing the live Market Briefs tab for the first time (3 screenshots): the homepage widget
-looked wrong ("two dialysis briefs" with no government brief), asked for a short-snapshot-then-detail
-redesign, and called `net_lease`/`broad_net_lease` redundant — one lane is enough.
-
-**Verified before touching anything:** `select lane, count(*) from market_brief_facts group by lane` and
-the same for `market_brief_issues` — both returned only `dialysis` (31 facts, 1 issue). Zero rows existed
-under `net_lease` or `broad_net_lease`, so the collapse is a pure schema/UI narrowing, no data migration.
-
-**What "two dialysis briefs, no government brief" actually was:** not a bug — `renderMarketBriefsWidget()`
-only ever fetched the `dialysis` lane and printed its top-2 raw fact bullets with no lane label, which reads
-like two unrelated blurbs. Government/net-lease show nothing because **no producer has ever written a fact
-for them** — MB1/MB2's P-SQL/P-RSS producers are dialysis-only by original scope (spec §3: "no new gov/NL
-lanes here"). That gap is real and unscoped — filed as part of MB9 in `PLANNED-BACKLOG.md`, not silently
-built here.
-
-**Changed:**
-- `api/_shared/market-brief-render.js` — `KNOWN_LANES`/`LANE_LABELS` narrowed to `dialysis`/`government`/`net_lease`.
-- `app.js` — new shared `MARKET_BRIEF_LANES`/`MARKET_BRIEF_LANE_LABELS` consts (replacing the old inline
-  `laneTabs`/`laneLabels` literals in `renderMarketBriefsPage`, so frontend/backend can't drift again).
-  `renderMarketBriefsWidget()` rewritten: one snapshot line per lane with the flag on (`<Lane> — N live
-  facts`, the single freshest claim, "Open full brief →"), plus a muted "no live facts yet (producer not
-  built)" line for an enabled-but-empty lane instead of silent omission.
-- `index.html` — dropped the widget's static "Open Dialysis brief →" header link (now redundant with each
-  lane's own link inside the widget body).
-- `docs/architecture/EXEC-BRIEFS-SPEC.md` — §0 swimlane row + weekly-email lane count updated to 3.
-- New migration `supabase/migrations/20261101200000_lcc_mbb2_lane_collapse_net_lease.sql` — narrows
-  `chk_mbf_lane`/`chk_mbi_lane`/`v_market_brief_staleness`'s lane set to 3. **Applied live** to project
-  `xengecqvemvfknjvbvrq`, verified via `pg_get_constraintdef`.
-- `docs/os/PLANNED-BACKLOG.md` — MB8 marked superseded, new MB9 row, EB0 corrected in place.
-
-**Guards:** new `test/mbb2-lane-collapse.test.mjs` (4 tests, comment-stripped-SQL structural guard
-mirroring `eb1-market-brief-foundation.test.mjs`'s own pattern), `test/market-brief-render.test.mjs` +
-`test/market-brief-tick-handlers.test.mjs` updated to assert 3 lanes. Targeted suite: 53/53 pass, 0 fail.
-**Full 423-file suite not run to completion this session** — the device shell's per-call timeout can't
-cover it and a backgrounded run didn't survive between calls; every `KNOWN_LANES`/`broad_net_lease` call
-site was grepped repo-wide first and confirmed covered by the targeted tests instead. Stated plainly
-rather than claiming a full-suite number I didn't actually observe.
-
-**Not done, deliberately:** no government or net-lease producer built (a real, separate, unscoped decision
-— GSA lease-event source for gov, the general-NL on-market store gap shared with BUY0/UX-T4 for net-lease);
-`docs/claude-code/prompts/done/EB1-exec-briefs-foundation.md`'s historical 4-lane note left untouched (it
-accurately describes what that original migration did, not current state).
-
-## 2026-09-12 🚨 — 26 backlog IDs are used twice, and `SEC2` is two different issues. One of them bit me today. (Cowork)
-
-Two prompts are already queued for CC (**HP1-P2misparse**, **HP1-badge**), so rather than deepen the queue I took
-stock of the HP1 block — and found the misdirection Scott has been asking me to remove, partly of my own making.
-
-**`PLANNED-BACKLOG.md` has 26 IDs appearing on more than one row**, and they split into two classes needing
-**opposite** fixes:
-
-**Class A — COLLISION, one ID on two unrelated issues.** **`SEC2` is `wave0-config-values.txt` is tracked in git**
-(§P0s, line 263) **and** **rotate the Supabase `service_role` key** (§P9, line 624). Same shape on `SEC1`/`SEC3`/
-`SEC4`, `A5d`/`A5e`, `D1`. 🚨 **This already misfired: I folded `HP1-P1a-sec` into "the pre-existing SEC2" without
-knowing there were two.** The reference is now pinned to §P0s by hand, but it was ambiguous when written, and
-anything else citing SEC2 — `OPERATOR-ACTIONS.md` does — still is.
-
-**Class B — RESTATEMENT, the same issue written repeatedly:** `MB3`×4, `MB4`×4, `MB2a`×3, `B6d-cms-restart`×3 and
-others, accumulated exactly the way `PR5c-enforce`'s four copies did before today's consolidation — sessions
-restating a row instead of editing it.
-
-**Fixed in place now, because all three were provably mine:** three **byte-identical** `HP1-P1a-sec` rows → one;
-two `HP1-P1a-fix` rows → the richer (the shorter predated the parallel-session note); and `| HP1-P1b |✅`'s missing
-pipe space, which had been hiding the row from ID greps entirely. 28 → 26.
-
-**The remaining 26 are NOT a bulk edit and I did not treat them as one.** A collision that gets "collapsed"
-destroys one of two real issues; a restatement that gets "renamed" mints a second ID for one problem. Classifying
-each pair is judgment against citation counts. Written up as **`prompts/BACKLOG-ids-collisions-and-restatements.md`**,
-which requires: rename collisions (keeping the ID on whichever row more citations already point at, counted not
-guessed) with a pointer left on the renamed row so old references still resolve — the never-delete rule applied to
-an identifier; collapse restatements keeping **every** distinct fact, and **report rather than silently pick**
-where two copies disagree on a number.
-
-✅ **And the durable fix: a CI guard.** A duplicate ID should fail the build, the way
-`test/status-header-integrity.test.mjs` now catches a STATUS H1 burial — written today after a prose convention
-note failed five times to stop the same mistake. The prompt specifies the two things that guard must get right or
-it will be disabled by the first person it annoys: deliberate cross-references are not duplicates, and an
-unresolvable duplicate is allowlisted **by ID with a reason and a re-measure date**, with a stale entry itself a
-failure.
-
-⚠️ Flagged explicitly in the prompt: §P0s `SEC2` carries Scott's ⏸️ deferral decision and its trigger condition —
-**carry it across intact, do not restate it.**
-
-## 2026-09-12 — HP1-badge prompt: the count lies, and fixing it honestly exposes that Urgent is 96% hygiene (Cowork)
-
-REPO1 sweep confirmed in `main` (`docs/flows/README.md` present, root `err.txt` gone). Drafted the next prompt and
-re-measured all three Today lanes live first.
-
-**The defect:** `total_open: all.length` (`today-sections.js` 79/103/182) is the **capped page length**, not the
-population — while the module header promises *"the full population"* and cites **P159a**. The honest-counts rule
-failing inside the module written to enforce it.
-
-| lane | badge | true | |
-|---|---|---|---|
-| Significant | **200** | **516** | −61% |
-| Important | 46 | **46** | ✅ correct — only because it sits under the cap |
-| Urgent | **≤200** | **1,664** | −88% |
-
-Ranking is unaffected — `order by` precedes the cap, so the rendered eight really are the top eight. Only the
-count lies.
-
-⚠️ **Two dead ends measured, so CC does not walk into either.** Re-enabling `count=exact` is precisely what
-**HP1-P0** removed — ~750 ms on the seller view alone, on the endpoint that was 500ing all three lanes; fixing a
-badge by reintroducing the outage is not a trade worth making. And `countMode:'estimated'` **cannot work here at
-all**: `reltuples` on `v_lcc_seller_prospect_queue` is **-1** — a view, never analyzed — so PostgREST has no
-estimate to hand back. The current setting is not a slightly-wrong number; for these lanes it is **no number**.
-✅ The answer is likely the pattern HP1-P2a already shipped: `inboxHygienePointer()` — exact probe, `limit=1`,
-read off the base table never the capped view, `null` on failure. **P180** made explicit: a failed count renders
-*unknown*, never `0`.
-
-🚨 **The part that matters more than the badge.** Fixing the count honestly makes Urgent read **1,664** — and
-**1,598 of those (96%) are `contact_writeback`**, CRM plumbing, against just **66** `action_items` of real deal
-correspondence. **That is the same class HP1-P2a removed from the Inbox, sitting in the Urgent lane of Today.** The
-prompt fixes the count and **files** the population as **HP1-P2f-urgent** rather than folding them together —
-leaving the cap in place to keep the number comfortable would be choosing a pretty lie, which is the exact failure
-the row exists to correct. And it carries P2a's expensively-learned caution forward: **establish where
-`contact_writeback` is actually worked before routing it anywhere** — `contact_misparse_review` had zero readers,
-and routing it off would have deleted the only place it was visible.
-
-Prompt also warns about the line-budget trap that cost two PRs today: **archive before you push, 200+ lines of
-headroom**, because STATUS.md grows on `main` while a branch is open.
+> **📦 ARCHIVE (2026-09-15, sixteenth span):** the last two 2026-09-12 entries (the BACKLOG-ids duplicate-ID
+> finding and the HP1-badge prompt) were moved **verbatim** to
+> [`docs/history/STATUS_claude-code_2026-09-12_tail8.md`](../history/STATUS_claude-code_2026-09-12_tail8.md).
+> Nothing was dropped; every still-open item it named is tracked in `PLANNED-BACKLOG.md`.
 
 > **📦 ARCHIVE (2026-09-16, fifteenth span):** the next-oldest run of 2026-09-12 entries (the REPO1 repo
 > sweep through the CONSOLIDATE2 contradiction) was moved **verbatim** to

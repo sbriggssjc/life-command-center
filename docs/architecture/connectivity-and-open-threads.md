@@ -1772,6 +1772,30 @@ DECLARED irregular feed. Backlog **B6c-feed**.
 
 ---
 
+### 4n-b. Read-through done (2026-09-15, Cowork): 43 of 111 are SOS-attested, and the blocker is a gate
+
+Evidence: [`C2g_58_PAIR_READ_2026-09-15.md`](../audits/C2g_58_PAIR_READ_2026-09-15.md). Read-through
+only — nothing written, no rows proposed to either confirm surface.
+
+The "58 pairs with no naming link" were read one at a time against gov's registry fields. **43 of
+111 pairs: the SPE's Secretary-of-State-registered manager is the Salesforce-linked owner-org or its
+contact** (`sos_registry`, 40 `exact` + 2 `norm_core`, 1 `sam_entity`). 23 are wording-variant
+duplicates (decision #2's lane; `US Fed Properties Trust Inc`/`…Trust` alone is 12). 9 are conflicts
+*inside* gov (recorded vs. deed vs. assessed), 6 are LCC contradicting gov's own recorded owner with
+nothing behind it, **2 are LCC resolving to the deed grantor — the seller**, 1 is a genuine sale
+(`Consilium` → Easterly; the CRM contact is stale, LCC is right), 8 are name-only, 16 have nothing.
+
+**Why LCC never shows the sponsor:** `v_lcc_domain_owner_candidates`'s `unresolved` CTE proposes the
+domain `true_owner` **only for assets with no resolved owner**. Once `supersession` has placed the
+SPE at 0.75, domain truth (weight 5.0, the highest in the feeder) is never entered as evidence. On
+the 92 assets read, `domain_true_owner` evidence rows: **0**. The R6 "domain truth outranks name
+patterns" doctrine is implemented as a gap-filler. **Blast radius of lifting the gate: 936 gov +
+100 dia resolved assets** whose domain `true_owner` disagrees with LCC's pick and would be eligible.
+That is the `supersession-tie-lane-2026-08.md` §4 decision (beneficial owner vs. title SPE), sized
+at **1,036 assets, not 63**. 👤 Scott. ⛔ Not the token-keyed `lcc_ownership_sponsor_family` — most
+A-class SPEs carry no sponsor token (`300 Fifth Avenue LLC` ← Martin Selig); it cannot hold a
+per-entity manager link. Backlog **C2k**.
+
 ## 4o. C4 — the ranking layer: the whole BD queue is gated on one unset column
 
 > 📍 **CONSOLIDATED — this topic now has its own canonical page:
