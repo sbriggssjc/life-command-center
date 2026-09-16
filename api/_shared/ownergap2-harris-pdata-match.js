@@ -20,7 +20,7 @@
 
 import { normalizeAddress, streetKeysFor, parseSourceLocation, ownerIdentityKey } from './ownergap2-address-match.js';
 import { isHarrisRealPropertyAccount, isHarrisPersonalPropertyAccount, HARRIS } from './ownergap2-sources.js';
-import { harrisStateClassToAccountType } from './hcad-pdata-parse.js';
+import { harrisStateClassToAccountType, normalizeStateClass } from './hcad-pdata-parse.js';
 import { domainQuery } from './domain-db.js';
 
 // ============================================================================
@@ -215,6 +215,29 @@ export function harrisLocationMatches(norm, parsed, jurisdiction = HARRIS) {
   return { matched: false, arm: null, reason: 'house_number_outside_range' };
 }
 
+// ============================================================================
+// OWNERGAP2-harris-c — HCAD writes a literal PLACEHOLDER string into `name`
+// when ownership on an account has never been resolved, instead of leaving
+// the field blank -- verified live 2026-09-16 on the real staged file, acct
+// `0010020000001` reads `owner_name='CURRENT OWNER'`. That is HCAD's own way
+// of saying "we don't know", not a real party, and it must be treated as
+// `source_states_no_owner` (never written, never counted as a resolvable
+// distinct owner) exactly like a blank name -- a blind `byOwner` grouping
+// would otherwise mint "Current Owner" as a real, single, resolvable owner
+// name and write it straight into `recorded_owners`.
+// ============================================================================
+const HCAD_PLACEHOLDER_OWNER_NAMES = new Set([
+  'CURRENT OWNER', 'OWNER UNKNOWN', 'UNKNOWN OWNER', 'UNKNOWN',
+]);
+
+/** true for an HCAD `name`/`owner_name` value that is a documented
+ * unresolved-ownership placeholder, never a real party. */
+export function isHcadPlaceholderOwnerName(name) {
+  if (name == null) return false;
+  const t = String(name).trim().toUpperCase().replace(/\s+/g, ' ');
+  return HCAD_PLACEHOLDER_OWNER_NAMES.has(t);
+}
+
 /**
  * Harris-PDATA-specific replacement for the shared `resolveOwnerFromCandidates()`
  * — identical ambiguity/grouping logic (copied, not re-derived; see this
@@ -244,14 +267,21 @@ export function resolveHarrisPdataMatch(norm, candidates, opts = {}) {
   const named = matched.filter((m) => m.row.owner != null && String(m.row.owner).trim() !== '');
   if (!named.length) { out.reason = 'source_states_no_owner'; return out; }
 
+  // OWNERGAP2-harris-c: HCAD's own placeholder ("CURRENT OWNER" et al) is not
+  // a name -- drop it BEFORE grouping-by-owner so it can never be minted as a
+  // real, single, resolvable owner. If every named row was a placeholder this
+  // resolves the same way as no owner at all having been stated.
+  const realNamed = named.filter((m) => !isHcadPlaceholderOwnerName(m.row.owner));
+  if (!realNamed.length) { out.reason = 'placeholder_owner'; return out; }
+
   const byOwner = new Map();
-  for (const m of named) {
+  for (const m of realNamed) {
     const key = ownerIdentityKey(m.row.owner);
     if (!byOwner.has(key)) byOwner.set(key, []);
     byOwner.get(key).push(m);
   }
   out.distinctOwners = byOwner.size;
-  out.matchedRows = named.map((m) => ({
+  out.matchedRows = realNamed.map((m) => ({
     location: m.row.location, owner: m.row.owner,
     sourceRecordId: m.row.sourceRecordId ?? null, arm: m.arm,
   }));
@@ -309,10 +339,19 @@ export function stageRowToLocation(row) {
  *
  * @param {string} address - the LCC property's free-text address.
  * @param {object[]} stagedRows - rows from `hcad_real_acct_stage`.
+ * @param {object} [opts]
+ * @param {string[]} [opts.includeClasses] - OWNERGAP2-harris-c: HCAD
+ *   `state_class` codes to admit as real-property commercial IN ADDITION to
+ *   the default F1/F2 (e.g. `['C2']` — the Texas PTAD "vacant commercial
+ *   lot" class HCAD files these dialysis clinics under on 2 of the 31 open
+ *   population misses). Default `[]` -- F1/F2 only, unchanged behaviour.
+ *   This is a per-call PARAMETER, never a global default flip: whether C2
+ *   should ever be admitted is Scott's call (S5,
+ *   `docs/os/OPERATOR-CHECKLIST.md`), not something this module decides.
  * @returns {{ok:boolean, jurisdiction:string, norm:object, candidates:object[],
  *   excludedPersonalAccounts:object[], untypedAccounts:object[], errors:string[]}}
  */
-export function buildHarrisPdataCandidates(address, stagedRows) {
+export function buildHarrisPdataCandidates(address, stagedRows, opts = {}) {
   const norm = normalizeAddress(address, HARRIS);
   const out = {
     ok: false, jurisdiction: HARRIS, norm, candidates: [],
@@ -322,8 +361,20 @@ export function buildHarrisPdataCandidates(address, stagedRows) {
   const rows = Array.isArray(stagedRows) ? stagedRows : [];
   if (!rows.length) { out.errors.push('no_staged_rows'); return out; }
 
+  const includeClasses = new Set(
+    (Array.isArray(opts.includeClasses) ? opts.includeClasses : [])
+      .map((c) => String(c).trim().toUpperCase()).filter(Boolean),
+  );
+
   for (const row of rows) {
-    const accountType = harrisStateClassToAccountType(row?.state_class);
+    let accountType = harrisStateClassToAccountType(row?.state_class);
+    // Only widens ADMISSION -- never re-derives 'personal', so a Personal/BPP
+    // account named in includeClasses would still be caught by the guard
+    // below (it stays excluded, PDR2's discipline intact).
+    if (!accountType) {
+      const stateClass = normalizeStateClass(row?.state_class);
+      if (stateClass && includeClasses.has(stateClass)) accountType = 'commercial';
+    }
     const location = stageRowToLocation(row);
     if (!location) { out.untypedAccounts.push({ accountNumber: row?.acct, owner: row?.owner_name }); continue; }
 
@@ -365,8 +416,8 @@ export function buildHarrisPdataCandidates(address, stagedRows) {
  * `ownergap2-sources.js` so callers get the same verdict shape as Philadelphia
  * and the operator-payload path.
  */
-export function resolveHarrisFromPdata(address, stagedRows) {
-  const bundle = buildHarrisPdataCandidates(address, stagedRows);
+export function resolveHarrisFromPdata(address, stagedRows, opts = {}) {
+  const bundle = buildHarrisPdataCandidates(address, stagedRows, opts);
   // Harris-PDATA-specific matcher (suffix/directional-tolerant, see this
   // file's header) — NOT the shared strict `resolveOwnerFromCandidates`,
   // which also serves Philadelphia and stays strict for it.
@@ -479,5 +530,5 @@ export async function fetchHarrisPdataForProperty(address, deps = {}) {
       fetchErrors: errors,
     };
   }
-  return resolveHarrisFromPdata(address, allRows);
+  return resolveHarrisFromPdata(address, allRows, { includeClasses: deps.includeClasses });
 }

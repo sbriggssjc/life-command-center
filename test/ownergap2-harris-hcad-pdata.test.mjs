@@ -14,6 +14,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { Readable } from 'node:stream';
 
 import {
   parseRealAcctText, parseOwnersText, mapHeader,
@@ -21,10 +22,12 @@ import {
   harrisStateClassToAccountType,
 } from '../api/_shared/hcad-pdata-parse.js';
 import {
-  buildHarrisPdataCandidates, resolveHarrisFromPdata, stageRowToLocation,
-  harrisPdataStreetKeys, harrisBareStreetKeys, harrisStreetsMatch,
+  buildHarrisPdataCandidates, resolveHarrisFromPdata, resolveHarrisPdataMatch,
+  stageRowToLocation, harrisPdataStreetKeys, harrisBareStreetKeys,
+  harrisStreetsMatch, isHcadPlaceholderOwnerName,
 } from '../api/_shared/ownergap2-harris-pdata-match.js';
 import { assertCitation, planOwnerWrite } from '../api/_shared/ownergap2-owner-writeback.js';
+import { upsertRows, streamLoadRealAcct } from '../scripts/hcad-pdata-load.mjs';
 
 const TAB_HEADER = 'acct\towner_name\tstr_num\tstr\tstr_sfx\tsite_addr_1\tstate_class';
 
@@ -345,4 +348,194 @@ test('planOwnerWrite WRITES a genuine PDATA-sourced, fully-cited resolved verdic
   assert.equal(plan.action, 'write');
   assert.equal(plan.ownerName, 'CRENSHAW MOB LLC');
   assert.ok(plan.citation.source_record_ids.includes('9002'));
+});
+
+// ── OWNERGAP2-harris-c ───────────────────────────────────────────────────────
+
+test('HCAD placeholder owner names ("CURRENT OWNER" etc.) are never treated as a real owner', () => {
+  assert.equal(isHcadPlaceholderOwnerName('CURRENT OWNER'), true);
+  assert.equal(isHcadPlaceholderOwnerName('current owner'), true);
+  assert.equal(isHcadPlaceholderOwnerName('  Current   Owner  '), true);
+  assert.equal(isHcadPlaceholderOwnerName('OWNER UNKNOWN'), true);
+  assert.equal(isHcadPlaceholderOwnerName('UNKNOWN OWNER'), true);
+  assert.equal(isHcadPlaceholderOwnerName('CRENSHAW MOB LLC'), false);
+  assert.equal(isHcadPlaceholderOwnerName(null), false);
+});
+
+test('a placeholder-only match resolves to placeholder_owner, never writes the placeholder as the owner', () => {
+  const norm = { ok: true, house: '100', street: 'MAIN' };
+  const candidates = [{
+    owner: 'CURRENT OWNER', location: '100 MAIN ST', sourceRecordId: '0010020000001',
+  }];
+  const r = resolveHarrisPdataMatch(norm, candidates);
+  assert.equal(r.status, 'unresolved');
+  assert.equal(r.reason, 'placeholder_owner');
+  assert.equal(r.owner, null);
+});
+
+test('one real owner + one placeholder for the same address resolves to the real owner only', () => {
+  const rows = [
+    { acct: '1', owner_name: 'CURRENT OWNER', site_addr_1: '100 MAIN ST', state_class: 'F1' },
+    { acct: '2', owner_name: 'REAL PARTY LLC', site_addr_1: '100 MAIN ST', state_class: 'F1' },
+  ];
+  const r = resolveHarrisFromPdata('100 Main St', rows);
+  assert.equal(r.status, 'resolved');
+  assert.equal(r.owner, 'REAL PARTY LLC');
+  assert.equal(r.sourceRecordIds.length, 1);
+  assert.deepEqual(r.sourceRecordIds, ['2']);
+});
+
+test('buildHarrisPdataCandidates: a C2 account is excluded by default and admitted only via includeClasses', () => {
+  const rows = [
+    { acct: '1', owner_name: '380 LITTLE YORK LLC', site_addr_1: '380 E LITTLE YORK RD', state_class: 'C2' },
+  ];
+  const dflt = buildHarrisPdataCandidates('380 E Little York Rd', rows);
+  assert.equal(dflt.candidates.length, 0);
+  assert.equal(dflt.untypedAccounts.length, 1);
+
+  const widened = buildHarrisPdataCandidates('380 E Little York Rd', rows, { includeClasses: ['c2'] });
+  assert.equal(widened.candidates.length, 1);
+  assert.equal(widened.candidates[0].accountType, 'commercial');
+  assert.equal(widened.untypedAccounts.length, 0);
+
+  // A Personal/BPP account is never admitted through includeClasses -- the
+  // widening only reaches an account with NO type at all.
+  const personal = buildHarrisPdataCandidates('380 E Little York Rd',
+    [{ acct: '2', owner_name: 'X', site_addr_1: '380 E LITTLE YORK RD', state_class: 'L1' }],
+    { includeClasses: ['l1'] });
+  assert.equal(personal.candidates.length, 0);
+  assert.equal(personal.excludedPersonalAccounts.length, 1);
+});
+
+test('resolveHarrisFromPdata threads includeClasses through to the candidate builder', () => {
+  const rows = [
+    { acct: '1', owner_name: 'LUEL PARTNERSHIP LTD', site_addr_1: '10311 S POST OAK RD', state_class: 'C2' },
+  ];
+  const withoutC2 = resolveHarrisFromPdata('10311 S Post Oak Rd', rows);
+  assert.equal(withoutC2.reason, 'no_records_returned');
+
+  const withC2 = resolveHarrisFromPdata('10311 S Post Oak Rd', rows, { includeClasses: ['C2'] });
+  assert.equal(withC2.status, 'resolved');
+  assert.equal(withC2.owner, 'LUEL PARTNERSHIP LTD');
+});
+
+// ── loader: on_conflict= is passed explicitly (Problem 1) ───────────────────
+
+test('upsertRows POSTs with on_conflict=acct,file_year -- never relies on PK inference', async () => {
+  const calls = [];
+  const stubQuery = async (domain, method, path, body) => {
+    calls.push({ domain, method, path, body });
+    return { ok: true, status: 201, data: null };
+  };
+  const rows = [{ acct: 'A', file_year: 2026 }, { acct: 'B', file_year: 2026 }];
+  const r = await upsertRows(rows, { domainQuery: stubQuery });
+  assert.equal(r.written, 2);
+  assert.deepEqual(r.errors, []);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].path, 'hcad_real_acct_stage?on_conflict=acct,file_year');
+});
+
+test('upsertRows reports the real chunk shape (never chunk_at_N_failed:undefined) and surfaces the DB code/message', async () => {
+  const stubQuery = async () => ({
+    ok: false, status: 409,
+    data: { code: '23505', message: 'duplicate key value violates unique constraint "uq_hcad_stage_acct_year"' },
+  });
+  const rows = [{ acct: 'A', file_year: 2026 }];
+  const r = await upsertRows(rows, { domainQuery: stubQuery });
+  assert.equal(r.written, 0);
+  assert.equal(r.errors.length, 1);
+  assert.match(r.errors[0], /status=409/);
+  assert.match(r.errors[0], /code=23505/);
+  assert.match(r.errors[0], /uq_hcad_stage_acct_year/);
+  assert.doesNotMatch(r.errors[0], /undefined/);
+});
+
+// ── loader: owner_name / owners.txt refusal (Problem 3) ─────────────────────
+
+const TAB_HEADER_NO_NAME = 'acct\tyr\tmailto\tmail_addr_1\tstr_num\tstr\tstr_sfx\tsite_addr_1\tstate_class';
+
+function tsvNoName(rows) {
+  return [TAB_HEADER_NO_NAME, ...rows].join('\n');
+}
+
+test('streamLoadRealAcct fills owner_name from owners.txt ln_num=1 when real_acct.txt has no name column', async () => {
+  const text = tsvNoName([
+    'A\t2026\t\t\t100\tMAIN\tST\t100 MAIN ST\tF1',
+  ]);
+  const ownersByAcct = new Map([['A', [{ name: 'REAL OWNER LLC', pct: null }]]]);
+  const result = await streamLoadRealAcct(Readable.from([text]), {
+    fileYear: 2026, sourceFile: 'real_acct.txt', apply: false, limit: null,
+    includeAll: false, ownersByAcct, upsert: async () => ({ written: 0, errors: [] }),
+  });
+  assert.equal(result.ownerNameHeaderMissing, true);
+  assert.equal(result.missingOwnerName, 0);
+  assert.equal(result.sampleRow.owner_name, 'REAL OWNER LLC');
+});
+
+test('streamLoadRealAcct --apply REFUSES to write when any staged row has no owner_name', async () => {
+  const text = tsvNoName([
+    'A\t2026\t\t\t100\tMAIN\tST\t100 MAIN ST\tF1',
+    'B\t2026\t\t\t200\tMAIN\tST\t200 MAIN ST\tF1',
+  ]);
+  // Only acct A is covered by owners.txt -- B has no name anywhere.
+  const ownersByAcct = new Map([['A', [{ name: 'REAL OWNER LLC', pct: null }]]]);
+  let upsertCalled = false;
+  const result = await streamLoadRealAcct(Readable.from([text]), {
+    fileYear: 2026, sourceFile: 'real_acct.txt', apply: true, limit: null,
+    includeAll: false, ownersByAcct,
+    upsert: async (rows) => { upsertCalled = true; return { written: rows.length, errors: [] }; },
+  });
+  assert.equal(result.staged, 2);
+  assert.equal(result.missingOwnerName, 1);
+  assert.equal(result.written, 0);
+  assert.equal(upsertCalled, false);
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0], /refused_missing_owner_name/);
+  assert.match(result.errors[0], /1_of_2/);
+});
+
+test('streamLoadRealAcct --include-classes stages an additional class alongside F1/F2, never a Personal one', async () => {
+  const text = tsvNoName([
+    'A\t2026\t\t\t100\tMAIN\tST\t100 MAIN ST\tC2',
+    'B\t2026\t\t\t200\tMAIN\tST\t200 MAIN ST\tL1',
+    'C\t2026\t\t\t300\tMAIN\tST\t300 MAIN ST\tR1',
+  ]);
+  const ownersByAcct = new Map([
+    ['A', [{ name: 'C2 OWNER LLC', pct: null }]],
+    ['B', [{ name: 'L1 OWNER LLC', pct: null }]],
+  ]);
+  const withoutSwitch = await streamLoadRealAcct(Readable.from([text]), {
+    fileYear: 2026, sourceFile: 'real_acct.txt', apply: false, limit: null,
+    includeAll: false, ownersByAcct, upsert: async () => ({ written: 0, errors: [] }),
+  });
+  assert.equal(withoutSwitch.staged, 0); // C2/L1/R1 all fall outside the default F1/F2 filter
+
+  const withSwitch = await streamLoadRealAcct(Readable.from([text]), {
+    fileYear: 2026, sourceFile: 'real_acct.txt', apply: false, limit: null,
+    includeAll: false, includeClasses: ['C2'], ownersByAcct,
+    upsert: async () => ({ written: 0, errors: [] }),
+  });
+  // Only C2 (via the switch) is staged -- L1 (Personal/BPP) and R1
+  // (residential) stay excluded, the switch never widens beyond the names
+  // it was passed.
+  assert.equal(withSwitch.staged, 1);
+  assert.equal(withSwitch.sampleRow.acct, 'A');
+});
+
+test('streamLoadRealAcct --apply WRITES when every staged row resolves an owner_name', async () => {
+  const text = tsvNoName([
+    'A\t2026\t\t\t100\tMAIN\tST\t100 MAIN ST\tF1',
+  ]);
+  const ownersByAcct = new Map([['A', [{ name: 'REAL OWNER LLC', pct: null }]]]);
+  let received = null;
+  const result = await streamLoadRealAcct(Readable.from([text]), {
+    fileYear: 2026, sourceFile: 'real_acct.txt', apply: true, limit: null,
+    includeAll: false, ownersByAcct,
+    upsert: async (rows) => { received = rows; return { written: rows.length, errors: [] }; },
+  });
+  assert.equal(result.missingOwnerName, 0);
+  assert.equal(result.written, 1);
+  assert.equal(result.errors.length, 0);
+  assert.equal(received.length, 1);
+  assert.equal(received[0].owner_name, 'REAL OWNER LLC');
 });

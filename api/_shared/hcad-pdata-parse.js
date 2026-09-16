@@ -47,11 +47,20 @@
 // this list had 'mailto' as an owner_name fallback candidate, which would
 // have written care-of text — "% TERRELL MATTOX & ASSOC" — into the owner-
 // of-record field on any header that lacked a plain 'name'/'owner_name'
-// column). owners.txt's ln_num=1 row is the SAME primary owner by
-// definition, so real_acct.txt's own `name` column remains the source for
-// owner_name; owners.txt is used only as a fill-blanks SECOND-owner
-// supplement (see the loader), never to override a name real_acct.txt
-// already states.
+// column).
+//
+// ⚠️ OWNERGAP2-harris-c: the ABOVE describes the 37-row hand-seeded sample's
+// header, which DOES carry a plain `name` column. The REAL full 2026 export
+// (`real_acct.txt`, loaded live by scripts/hcad-pdata-load.mjs) does NOT --
+// its header is `acct, yr, mailto, mail_addr_1, ...`, with no name-shaped
+// column at all, so FIELD_CANDIDATES.owner_name matches nothing and every
+// row parses with `owner_name: null`. On that header, owners.txt's ln_num=1
+// row (its FIRST row per acct, in file order) IS the primary owner and fills
+// `owner_name` itself -- see `streamLoadRealAcct` in the loader, which
+// refuses to `--apply` if any staged row still has no owner_name after that
+// fallback. owners.txt remains a fill-blanks SECOND-owner supplement for
+// `owner_name_2` in both cases, never overriding a name real_acct.txt itself
+// states.
 /** Candidate header names for each logical field, most-likely first. Extend
  * this list (never guess a POSITION) if a real export uses a different name. */
 const FIELD_CANDIDATES = {
