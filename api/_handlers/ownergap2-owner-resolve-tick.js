@@ -66,6 +66,24 @@ export const JURISDICTIONS = {
 const PROPERTY_COLS = 'property_id,address,city,state,county,parcel_number,operator,recorded_owner_id,true_owner_id';
 
 /**
+ * OWNERGAP2-ledger-order: does `batchTag` already own an OPEN (non-reverted)
+ * ledger attempt for any of `propertyIds`? Pure and deps-injectable so the
+ * refusal path is testable without a live database — see
+ * `test/ownergap2-owner-resolution.test.mjs`.
+ *
+ * @returns {{ok:true, collidingIds:number[]} | {ok:false, reason:string, detail?:*}}
+ */
+export async function checkBatchTagCollision(batchTag, propertyIds, deps = {}) {
+  const q = deps.domainQuery || domainQuery;
+  if (!propertyIds.length) return { ok: true, collidingIds: [] };
+  const r = await q('dialysis', 'GET',
+    `dia_ownergap2_resolution_log?batch_tag=eq.${encodeURIComponent(batchTag)}`
+    + `&reverted_at=is.null&property_id=in.(${propertyIds.join(',')})&select=property_id&limit=1000`);
+  if (!r.ok) return { ok: false, reason: `batch_tag_collision_check_failed:${r.status}`, detail: r.data };
+  return { ok: true, collidingIds: (r.data || []).map((row) => row.property_id) };
+}
+
+/**
  * The owner-unknown population, exactly as OWNERGAP1 defines it: an
  * operator-flagged `true_owner` AND no `recorded_owner_id`.
  *
@@ -105,7 +123,17 @@ export async function handleOwnerGap2ResolveTick(req, res) {
   const cfg = JURISDICTIONS[jurisdiction];
   const dryRun = req.method === 'GET';
   const limit = Math.min(parseInt(req.query.limit, 10) || 60, 200);
-  const batchTag = String(req.query.batch_tag || `ownergap2_${jurisdiction}_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}`);
+  // OWNERGAP2-ledger-order: a DAY-granularity default let a second run inside
+  // the same day silently collide with the FIRST run's own ledger rows
+  // (`uq_dia_ownergap2_open_attempt` on (batch_tag, property_id) WHERE
+  // reverted_at IS NULL). Minute granularity makes an unattended re-run
+  // derive a fresh tag by default; an operator-SUPPLIED tag is still honored
+  // verbatim (and checked for collision below), because a deliberate re-run
+  // under a named tag is a real, supported case (see the ledger's REVERSAL
+  // RUNBOOK, which is keyed on batch_tag).
+  const explicitBatchTag = typeof req.query.batch_tag === 'string' && req.query.batch_tag.trim() !== '';
+  const batchTag = String(req.query.batch_tag
+    || `ownergap2_${jurisdiction}_${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '')}`);
 
   // Harris arrives as an operator-supplied payload keyed by address.
   const harrisPayloads = new Map();
@@ -118,6 +146,34 @@ export async function handleOwnerGap2ResolveTick(req, res) {
 
   const pop = await loadPopulation(jurisdiction, limit, {});
   if (!pop.ok) return res.status(500).json({ error: pop.reason, detail: pop.detail });
+
+  // ⚠️ OWNERGAP2-ledger-order: refuse a batch_tag that already has an OPEN
+  // (non-reverted) ledger attempt for any property in this run's population,
+  // rather than silently reusing it. Reuse is exactly how a property got
+  // written with no ledger row: `uq_dia_ownergap2_open_attempt` refuses the
+  // second insert, `ledgerWrite` used to be fire-and-forget, and the owner
+  // write went ahead anyway. That ordering bug is fixed (see
+  // ownergap2-owner-writeback.js), but a caller who reuses a tag on purpose
+  // still deserves to be told loudly, not to have every one of their rows
+  // quietly fall back to the `ledger_write_failed` refusal path.
+  if (!dryRun && explicitBatchTag && pop.rows.length) {
+    const collision = await checkBatchTagCollision(batchTag, pop.rows.map((p) => p.property_id), {});
+    if (!collision.ok) {
+      return res.status(500).json({ error: collision.reason, detail: collision.detail });
+    }
+    if (collision.collidingIds.length) {
+      return res.status(409).json({
+        error: 'batch_tag_collision',
+        batch_tag: batchTag,
+        note: 'This batch_tag already has an open (non-reverted) ledger attempt for one or more '
+          + 'properties in this population. Reusing it here would collide with that attempt on '
+          + '(batch_tag, property_id) and refuse to ledger a NEW attempt for those rows -- omit '
+          + 'batch_tag to let the tick derive a fresh one, or pass a different tag.',
+        colliding_property_ids: collision.collidingIds.slice(0, 50),
+        colliding_count: collision.collidingIds.length,
+      });
+    }
+  }
 
   const opKeys = await loadOperatorKeys({});
   // ⚠️ FAIL CLOSED. If the recorded operator list could not be loaded we cannot
