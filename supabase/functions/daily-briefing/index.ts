@@ -11,6 +11,7 @@ import { authenticateUser, primaryWorkspaceId, requireRole } from "../_shared/au
 import { opsQuery, rawQuery, pgFilterVal } from "../_shared/supabase-client.ts";
 import { writeSignal } from "../_shared/signals.ts";
 import { queryParams, parseBody, deriveItemTitle as utilDeriveItemTitle, toArray } from "../_shared/utils.ts";
+import { inferDomain } from "../_shared/domain-routing.ts";
 
 // ============================================================================
 // Environment & Configuration
@@ -996,19 +997,11 @@ function buildActions(roleView: string): any[] {
   return base;
 }
 
-const GOV_DOMAIN_RE = /\b(gsa|federal|government|gov\b|lease|tenant|agency|sba|hud|va\b|dod|usda|fema|census|opm)\b/i;
-const DIA_DOMAIN_RE =
-  /\b(dialysis|davita|fresenius|clinic|renal|kidney|nephrology|npi|cms\b|esrd|rcm)\b/i;
+// HOME1/§C: domain routing (canonicalizeDomainTag / inferDomain) now lives in
+// ../_shared/domain-routing.ts — see that file for the full writeup of the
+// dia/gov short-form aliasing bug this closes. Imported above.
 
-function inferDomain(item: any): string | null {
-  if (item.domain === "government" || item.domain === "dialysis") return item.domain;
-  const text = `${item.title || ""} ${item.body || ""} ${item.metadata?.sender_name || ""} ${item.metadata?.sender_email || ""}`;
-  if (GOV_DOMAIN_RE.test(text)) return "government";
-  if (DIA_DOMAIN_RE.test(text)) return "dialysis";
-  return null;
-}
-
-function buildDomainSignals(myWork: any[], inboxSummary: any, unassignedWork: any[], hotContacts: any[], diaPipeline: any): any {
+export function buildDomainSignals(myWork: any[], inboxSummary: any, unassignedWork: any[], hotContacts: any[], diaPipeline: any): any {
   const govHighlights: string[] = [];
   const diaHighlights: string[] = [];
   const seenGov = new Set();
