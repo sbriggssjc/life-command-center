@@ -591,3 +591,57 @@ FROM in_tier i
 JOIN latest l ON l.entity_id = i.entity_id AND i.observed_at = l.win_date
 LEFT JOIN runner r ON r.entity_id = i.entity_id
 LEFT JOIN entities oe ON oe.id = i.candidate_owner_entity;
+
+-- =====================================================================
+-- SEC1-definer-default: lock down the four SECURITY DEFINER functions this
+-- migration (re)creates. lcc_c2k_unsupersede is a freshly CREATEd function
+-- and inherits Postgres's default PUBLIC grant plus Supabase's default
+-- explicit anon/authenticated grant at CREATE time -- two independent
+-- grants, so revoking only one is a documented no-op (B6d / OCR2 in
+-- CLAUDE.md). The other three are being (re)created in this same file, so
+-- they are locked down here too rather than left to a separate migration.
+-- None of the four should ever be PostgREST-RPC reachable by anon or
+-- authenticated -- they are Cowork/cron-only mutation paths (evidence
+-- writes, owner reconciliation, mirror sync, batch reversal).
+-- =====================================================================
+
+REVOKE ALL ON FUNCTION public.lcc_apply_property_owner_facts_page(text, jsonb) FROM public, anon, authenticated;
+REVOKE ALL ON FUNCTION public.lcc_mirror_tick(text, text, integer, integer, integer, integer) FROM public, anon, authenticated;
+REVOKE ALL ON FUNCTION public.lcc_ingest_domain_owner_evidence(boolean, integer, text) FROM public, anon, authenticated;
+REVOKE ALL ON FUNCTION public.lcc_c2k_unsupersede(text) FROM public, anon, authenticated;
+
+GRANT EXECUTE ON FUNCTION public.lcc_apply_property_owner_facts_page(text, jsonb) TO service_role;
+GRANT EXECUTE ON FUNCTION public.lcc_mirror_tick(text, text, integer, integer, integer, integer) TO service_role;
+GRANT EXECUTE ON FUNCTION public.lcc_ingest_domain_owner_evidence(boolean, integer, text) TO service_role;
+GRANT EXECUTE ON FUNCTION public.lcc_c2k_unsupersede(text) TO service_role;
+
+-- Never trust the REVOKE statement itself as proof (both traps documented
+-- in CLAUDE.md's B6d/OCR2 sections shipped, measured live, and were found
+-- to be no-ops after the fact) -- ASSERT with has_function_privilege().
+DO $$
+DECLARE v_bad text[] := ARRAY[]::text[];
+BEGIN
+  IF has_function_privilege('anon', 'public.lcc_apply_property_owner_facts_page(text, jsonb)', 'execute')
+     OR has_function_privilege('authenticated', 'public.lcc_apply_property_owner_facts_page(text, jsonb)', 'execute')
+     OR has_function_privilege('public', 'public.lcc_apply_property_owner_facts_page(text, jsonb)', 'execute')
+  THEN v_bad := v_bad || 'lcc_apply_property_owner_facts_page'; END IF;
+
+  IF has_function_privilege('anon', 'public.lcc_mirror_tick(text, text, integer, integer, integer, integer)', 'execute')
+     OR has_function_privilege('authenticated', 'public.lcc_mirror_tick(text, text, integer, integer, integer, integer)', 'execute')
+     OR has_function_privilege('public', 'public.lcc_mirror_tick(text, text, integer, integer, integer, integer)', 'execute')
+  THEN v_bad := v_bad || 'lcc_mirror_tick'; END IF;
+
+  IF has_function_privilege('anon', 'public.lcc_ingest_domain_owner_evidence(boolean, integer, text)', 'execute')
+     OR has_function_privilege('authenticated', 'public.lcc_ingest_domain_owner_evidence(boolean, integer, text)', 'execute')
+     OR has_function_privilege('public', 'public.lcc_ingest_domain_owner_evidence(boolean, integer, text)', 'execute')
+  THEN v_bad := v_bad || 'lcc_ingest_domain_owner_evidence'; END IF;
+
+  IF has_function_privilege('anon', 'public.lcc_c2k_unsupersede(text)', 'execute')
+     OR has_function_privilege('authenticated', 'public.lcc_c2k_unsupersede(text)', 'execute')
+     OR has_function_privilege('public', 'public.lcc_c2k_unsupersede(text)', 'execute')
+  THEN v_bad := v_bad || 'lcc_c2k_unsupersede'; END IF;
+
+  IF array_length(v_bad,1) > 0 THEN
+    RAISE EXCEPTION 'still anon/authenticated/public executable: %', v_bad;
+  END IF;
+END $$;
