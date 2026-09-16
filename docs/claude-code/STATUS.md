@@ -35,6 +35,7 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **Ownership (OWN/RO)** | OWN-T0a–T0j, RO3, B1b, AC2/AC3/AC6–AC11 | 2026-09-12 | OWN-T0j verified end-to-end live; RO3 field-mapping design drafted; OWN-T0a/B1b/AC-series propagation work still open |
 | **CoStar sidebar / public records (PR5/PRI)** | PR5d, PR-scanner-3, PRI2–PRI6, HCRIS-TIMEOUT, HCRIS-TRACKER-BLIND, HCRIS-QIP-DEFICIENCY-TIMEOUT-PATTERN | 2026-09-15 | PR-scanner-3 shipped (`county_records_needed` action); `PRI6` (the connection-retry/ingestion-lock reliability sweep that started with `PRI1`'s dropped-connection crash) closed ✅ 2026-09-14, both sides confirmed merged — checking on it live is what surfaced `HCRIS-TIMEOUT` (a separate, months-old defect, not a `PRI6` regression). `HCRIS-TIMEOUT` is now three rounds deep: the original fix was correct, the real blocker was the tracker/heartbeat mechanism itself being blind (`HCRIS-TRACKER-BLIND`, fixed same round) — **awaiting live proof from a run Scott triggered 2026-09-15 (post-PR-#7411)**. One flagged, unbuilt follow-up already identified for whenever this closes: `qip_scores_ingestor.py`/`cms_deficiency_ingestor.py` share HCRIS's old bare-timeout bug. |
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-15 | 111-pair read done: 43 SOS-attested, 16 no evidence; blocker is the `v_lcc_domain_owner_candidates` unresolved-only gate — 👤 C2k (936 gov + 100 dia), same decision as tie-lane §4 |
+| **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-emptycompare, DEED2, GOVDEED1–4, GOVDEED-478, DEED-DIA-LATENT | 2026-09-16 | GOVDEED2 live in gov (PR #400); **GOVDEED4** handoff: 676 of 844 dated gov deeds are `date_confidence=low` day-01 guesses, now winning the property row — 👤 gov; GOVDEED3 + GOVDEED-478 disposition open; dia clean |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
 | **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
 | **Broker identity (BR) / BROKER1** | BR1, BR2, BROKER1, BROKER1-sf | 2026-09-11 | BROKER1 prospect-assignment applied live (1,303 assigned) with a real bug found+fixed in production; BROKER1-sf (Salesforce write-back) correctly left unbuilt — no write path exists |
@@ -46,6 +47,52 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 > cuts) were moved **verbatim** to
 > [`docs/history/STATUS_claude-code_2026-08-31_to_2026-09-01.md`](../history/STATUS_claude-code_2026-08-31_to_2026-09-01.md).
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
+
+---
+
+## 2026-09-16 — GOVDEED4: the dated gov deeds are 80% invented dates, and GOVDEED2 just promoted them to winner (Cowork)
+
+Ran down the two C2g side-findings. The "seller" resolutions are **not a class** — `Scannell` and
+`Park De Ville Trio` each have real, older evidence (a 2017 `rel_purchase`, a 2021 lease-diff
+transition); the later deeds never became LCC evidence because **there is no deed-grantee feeder** —
+deeds reach LCC only via gov's `true_owner`, behind C2k's gate. Folded into C2k, with one more
+structural note: `v_lcc_owner_supersession_candidates` has the same `unresolved`-only gate, so
+**whichever feeder touches an asset first wins forever**.
+
+The `2023-10-01` sentinel is real, and bigger than 130 properties. `deed_records` has **844** dated
+rows; **676 (80%) carry `raw_payload.date_confidence='low'`**, every one day-01, 667 with no document
+number, 451 with a placeholder grantor. The extraction prompt's rule 5 *tells* the model to emit
+`YYYY-MM-01` with `date_confidence='low'` when the day is unknown; the recall path does it when
+nothing is known (`2023-10-01` ×486). `save_deed_record` writes the date as recorded, keeps the flag
+only inside `raw_payload`, and lets it satisfy the accept gate. ⚠️ **GOVDEED2's NULL guard made these
+the winning deed** — 493 properties now source `latest_deed_date` from a `low` row. Only **2** dated
+rows are `high` with a document number. dia: 230 dated, 0 low, clean. 👤 `government-lease` →
+**GOVDEED4** handoff written; the 676 join GOVDEED-478's disposition question. Nothing applied.
+
+---
+
+## 2026-09-16 — C1C-SPLIT applied and run live: 839 dia tasks retired, gov untouched — and the dry run was counting lanes (Cowork)
+
+Ran the sequence the round asked for, on LCC Opps: applied `20260908130300` (the nine
+objects DEPLOY2 caught absent; **C1C-UNAPPLIED closed**), applied `20260916120000`, positive-controlled
+both guards live (empty array and `owner_needs_sos` each RAISE with the documented message), one
+signature in `pg_proc`.
+
+⚠️ **Then the dry run said `tasks_to_retire = 1`** next to `by_type = {dia: 839}`. The `count(*)`
+in the dry-run `jsonb_build_object` runs over the per-lane `GROUP BY` subquery, so it counts lanes
+— 1 for dia alone, 2 for both. The defect is in `20260908130300` as well and was never seen because
+that file never ran. The write path counts the ledger's `RETURNING` and is right; but the dry run is
+the function's safety property, and the prompt's own stop rule reads exactly that field. Fixed as
+**`20260916130000_lcc_c1csplit_b_dry_run_counts_tasks.sql`** (`sum(n)`), applied live before any
+write, guard test added with a positive control that the original still carries the defect.
+
+Corrected dry run: **839 dia / 0 gov** — 838 plus one row minted 2026-09-15 after the round measured.
+Explained, so not a stop; noted that the dia trickle is 2 in 9 days, not 0. Real run, batch
+`c1c-dia-20260916`: **839 retired**, 839 ledger rows, 839 stamped `terminal=true`, watch view 839
+with 0 gov, and `v_lcc_research_lane_summary` no longer lists the dia lane while gov
+`owner_needs_salesforce` reads **1,851, unchanged**. Reversal handle:
+`lcc_c1c_unretire('c1c-dia-20260916')`. C1B-GOV-GATE untouched, as instructed. Prompt-queue
+hygiene in the same PR: DEED1 (autofix), GOVDEED1, GOVDEED2, ID3b filed to `done/`.
 
 ---
 
