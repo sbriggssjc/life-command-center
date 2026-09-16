@@ -88,6 +88,13 @@ fix it in the same change. A plan doc's TODO table is either mirrored as backlog
 "superseded, see row X" pointer the moment the work ships (class 3); nothing important lands only in a
 history file (class 4).
 
+**When the round is a Claude Code session editing these pages directly (rule ⑤-CC, 2026-09-16):**
+APPEND one dated entry to `STATUS.md` below the `---`; UPDATE the one backlog row you own (its Item
+and State cells — never add a cell, never a fifth column); never restate, re-add or "record" a row
+that already exists — the ID-uniqueness and table-shape guards will fail the merge, and on
+2026-09-16 they did, three times in five rounds. The Open-threads table is Cowork's; leave it. Cowork
+reconciles the round in the next turn and moves the prompt/response to `done/`.
+
 ### ⑥ CORRECT what is now false — in place, never silently
 
 Supersede with a banner that names the old claim, the new truth, and the measurement. **Retain the

@@ -5,7 +5,7 @@ systems the repo cannot reach (Power Automate, Salesforce), payloads only a huma
 decisions that are Scott's. Cowork adds a row when a round ends on one of these; Scott ticks it; Cowork
 verifies and removes it in the next turn. Done rows are struck through and dropped after one turn.
 
-Updated 2026-09-16 (late): H6 done by Cowork (full HCAD roll staged, 71,282 rows); **H7 = say "apply" for the one resolvable owner**; decisions S1–S5 are Scott's. Railway auto-deploys `main` (web app at `ac96fd45`); the standalone MCP
+Updated 2026-09-16 (late): H7 applied; **V1 (where the gov ingest runs) is the one open verify step**; three prompts to send (harris-c, ledger-order, ID3d-reconcile); decisions S1–S5 are Scott's. Railway auto-deploys `main` (web app at `ac96fd45`); the standalone MCP
 service has no `/version` route — Cowork verifies it by calling a tool.
 
 ## Deploys
@@ -14,6 +14,7 @@ service has no `/version` route — Cowork verifies it by calling a tool.
 |---|---|---|---|---|
 | ~~D1~~ | ✅ `daily-briefing` v26 (2026-09-16) | | | behavioural check: next briefing lists The Villages under Dialysis |
 | ~~D2~~ | ✅ INVENTORY1 branch merged | | | |
+| **V1** | 👤 **Where does `public_record_ingest.py` run?** GOVDEED3 (gov PR #406) changed `save_deed_record`'s accept gate; it is merged, but the gov ingestion is a Python process — if it runs on your machine or a scheduled task from a checked-out copy, pull `government-lease` main there; if it runs on a Railway/other service, redeploy it. | tell Cowork where it runs, or pull/redeploy | Cowork checks the next ingest's rejected-row log for `placeholder` reasons and that `deed_records` dateless count stops growing (5,671 on 2026-09-16) |
 
 ## Power Automate
 
@@ -33,7 +34,7 @@ from the exported definitions** (`SB notes/done/*.zip`, 2026-09-16). One addendu
 | ~~H1–H4~~ | ✅ **Done by Cowork 2026-09-16** from `Downloads\Real_acct_owner.zip` + `pdataCodebook.pdf`: file is tab-delimited with the expected headers; F1 = 68,811 / F2 = 2,465; the stage table migration was applied (it had never run) and a **37-row targeted subset** (the accounts on the 50 target streets) loaded. The loader itself cannot read the 889 MB file (`RangeError: Invalid string length`) and `.env.local` has no Dialysis credentials — both in `OWNERGAP2-harris-b`. | | |
 | ~~H5~~ | ✅ **Done 2026-09-16 (Cowork, Scott's go).** Second dry run on deployed `ac96fd45` (PR #2531): 19 resolved / 31 refused; applied under batch `ownergap2_harris_tx_20260916` → **wrote 19**; properties with an owner 5,494 → 5,517; TX `true_owner_id` fingerprint unchanged. Spot-check for you: `9001 Kirby` → GILCHRIST WILLIAM E (three HCAD accounts on that address; the matcher saw one F1/F2 owner). | | |
 | ~~H6~~ | ✅ **Done 2026-09-16 — by Cowork from the VM after your two runs.** Run 1 had no DIA creds (every chunk 503'd, reported as `undefined`). Run 2 with creds reported `wrote 0` but had landed 53,000 rows; the other 19 chunks died on a duplicate-key error the loader never printed (no `on_conflict` on the POST), and **every row had `owner_name` NULL** (the file has no `name` column). Cowork patched a copy of the loader and re-ran: **71,282 rows staged, all with an owner**. Third dry run: 1 resolvable, 2 need S5, 27 are house numbers HCAD does not carry. Loader fixes → `OWNERGAP2-harris-c` (send it). Your `.env.local` creds are correct — keep them; the 2027 load will work once harris-c is merged. | | |
-| **H7** | 👤 **Apply the 1** — `2626 South Loop West` → `AMALGAMATED HOUSTON HOLDINGS LLC` (HCAD acct 1145390000003, class F1, exact match; the other `2626 W LOOP S` account is a different street and was correctly not taken). Say "apply" and Cowork POSTs it under batch `ownergap2_harris_tx_20260916`. | reply in chat | ledger +1 resolved; properties with an owner 5,517 → 5,518 |
+| ~~H7~~ | ✅ **Applied 2026-09-16** — AMALGAMATED HOUSTON HOLDINGS LLC written for `2626 South Loop West`; the ledger row had to be hand-repaired (id 125) → `OWNERGAP2-ledger-order`. | | |
 
 ## Decisions (Scott's)
 
