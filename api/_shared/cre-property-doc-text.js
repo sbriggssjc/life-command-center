@@ -195,7 +195,12 @@ const CRE_RETRY_AFTER_MS = CRE_RETRY_AFTER_HOURS * 3600 * 1000;
 // different expiry — so the lane self-clears if the cap is raised again or an
 // async/batch tier is added, rather than becoming a permanent tombstone nobody
 // revisits. Re-admission costs a byte fetch and a pdf-parse: ZERO OCR spend.
-export const CRE_CEILING_REASONS = Object.freeze(['over_docai_page_cap', 'window_failed']);
+// FLOWS1-artifact — `too_large` (the SharePoint Get-Artifact flow refusing to
+// inline a file above its chunking limit) is a CEILING, not a transient: the
+// file's size does not change between ticks, so a 24h transient marker would
+// still re-ask ~48 times before the F1c size-aware discovery gate (backlog
+// item 3) stops requesting it at all. Long expiry, same self-clearing shape.
+export const CRE_CEILING_REASONS = Object.freeze(['over_docai_page_cap', 'window_failed', 'too_large']);
 export const CRE_CEILING_RETRY_AFTER_HOURS = Math.max(1, Number(process.env.CRE_DOC_TEXT_CEILING_RETRY_AFTER_HOURS || 720));
 const CRE_CEILING_RETRY_AFTER_MS = CRE_CEILING_RETRY_AFTER_HOURS * 3600 * 1000;
 
@@ -521,14 +526,19 @@ export async function runPropertyDocText(documentId, deps = {}) {
   if (built.outcome === 'fetch_failed') {
     // Byte fetch failed — the ONLY ok:false extractDocumentText returns. Persist a
     // DATED, EXPIRING negative marker (see writeDeferredMarker) so the scan can
-    // page past it, and re-admit it after CRE_RETRY_AFTER_HOURS. The `detail`
-    // (why it failed) rides the tick response and the cron's stored HTTP body,
-    // not the sidecar row — the row records that and when, never a guess.
-    const marked = await writeDeferredMarker(regRow, 'fetch_failed', deps);
+    // page past it. FLOWS1-artifact — the marker is keyed on the REAL reason,
+    // not a blanket 'fetch_failed': a CEILING reason (today: `too_large`) gets
+    // the long ceiling expiry so it stops re-asking every 30 minutes for a file
+    // that cannot get smaller; every other reason keeps the existing 24h
+    // transient re-admit. The `detail` (why it failed) rides the tick response
+    // and the cron's stored HTTP body, not the sidecar row.
+    const markerReason = CRE_CEILING_REASONS.includes(built.reason) ? built.reason : 'fetch_failed';
+    const marked = await writeDeferredMarker(regRow, markerReason, deps);
     return {
       ok: false, outcome: 'fetch_failed', document_id: documentId,
       reason: built.reason, detail: built.detail,
-      retry_marked: marked, retry_after_hours: CRE_RETRY_AFTER_HOURS,
+      retry_marked: marked,
+      retry_after_hours: CRE_CEILING_REASONS.includes(built.reason) ? CRE_CEILING_RETRY_AFTER_HOURS : CRE_RETRY_AFTER_HOURS,
     };
   }
 

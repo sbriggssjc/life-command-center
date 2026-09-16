@@ -97,6 +97,14 @@ export async function fetchEligibleDocs(domain, { limit, doctype }, deps = {}) {
 // refetch pass re-hammering a permanently-dead link.
 export const URL_EXPIRED_TERMINAL = 'url_expired';
 
+// FLOWS1-artifact — a distinct terminal for a SharePoint artifact that is real
+// and reachable but above the Get-Artifact flow's chunking cap. `url_expired`
+// would be a lie here (the link is not dead) and would also miscount it
+// against the wrong producer stat; this one is separately reportable and
+// separately retired (see v_artifact_fetch_dead_letter-equivalent: filter
+// property_documents on ingestion_status = ARTIFACT_TOO_LARGE_TERMINAL).
+export const ARTIFACT_TOO_LARGE_TERMINAL = 'artifact_too_large';
+
 /**
  * Build-1 Unit 2 — the refetch-or-retire backlog: URL-only property_documents
  * (bytes never captured at ingestion) whose CDN source_url MIGHT still be live.
@@ -110,7 +118,7 @@ export async function fetchUrlBackfillDocs(domain, { limit, doctype }, deps = {}
   const q = deps.domainQuery || domainQuery;
   let path =
     'property_documents?raw_text=is.null&storage_path=is.null&source_url=not.is.null' +
-    `&or=(ingestion_status.is.null,ingestion_status.not.in.(${URL_EXPIRED_TERMINAL},deed_parsed,${DEED_NO_PARTIES_TERMINAL}))` +
+    `&or=(ingestion_status.is.null,ingestion_status.not.in.(${URL_EXPIRED_TERMINAL},${ARTIFACT_TOO_LARGE_TERMINAL},deed_parsed,${DEED_NO_PARTIES_TERMINAL}))` +
     '&select=document_id,property_id,source_url,document_type,file_name,ingestion_status' +
     `&order=document_id.desc&limit=${limit}`;
   if (doctype && doctype !== 'all') path += `&document_type=ilike.*${encodeURIComponent(doctype)}*`;
@@ -146,6 +154,16 @@ export async function processOneUrlRefetch(domain, row, deps = {}) {
   const NOT_RETIRE = new Set(['upload_failed', 'domain_db_not_configured', 'no_absolute_url', 'no_doc_id']);
   if (NOT_RETIRE.has(stored.reason)) {
     return { document_id: row.document_id, outcome: 'still_pending', reason: stored.reason };
+  }
+
+  // FLOWS1-artifact — too-large is a CEILING (the file's size never shrinks
+  // between ticks), not a dead link. Retire it under its own honest terminal
+  // so it stops being requested every 30 minutes, without calling a live,
+  // reachable file "expired".
+  if (stored.reason === 'too_large') {
+    await q(domain, 'PATCH', `property_documents?document_id=eq.${row.document_id}`,
+      { ingestion_status: ARTIFACT_TOO_LARGE_TERMINAL }, { Prefer: 'return=minimal' }).catch(() => {});
+    return { document_id: row.document_id, outcome: 'retired_too_large', reason: stored.reason, size: stored.size ?? null };
   }
 
   // Dead / expired link → terminal 'url_expired' so it stops counting as pending
@@ -438,6 +456,33 @@ export async function handleDocumentTextTick(req, res, deps = PROD_DEPS) {
   // Build-1 Unit 2 — refetch-or-retire the url-only backlog (bytes never captured
   // at ingestion). Fetches source_url once → stores bytes, else retires 'url_expired'.
   const urlRefetch = mode === 'refetch-url';
+  // FLOWS1-artifact — read-only visibility into the dead-lettered population
+  // (both terminal reasons: a dead CDN link, and a real file over the flow's
+  // size cap), since there is no separate view/table for it. GET only.
+  if (mode === 'dead-letter') {
+    const domainParam0 = (req.query.domain || 'both').toLowerCase();
+    const domains0 = domainParam0 === 'both' ? ['dialysis', 'government'] : [DOMAINS[domainParam0]].filter(Boolean);
+    const limit0 = Math.min(200, Math.max(1, parseInt(req.query.limit || '50', 10)));
+    const q = deps.domainQuery || domainQuery;
+    const out = { mode: 'dead_letter', by_domain: {}, items: [] };
+    for (const domain of domains0) {
+      const short = domain === 'dialysis' ? 'dia' : 'gov';
+      const path =
+        `property_documents?ingestion_status=in.(${URL_EXPIRED_TERMINAL},${ARTIFACT_TOO_LARGE_TERMINAL})` +
+        '&select=document_id,property_id,source_url,document_type,file_name,ingestion_status' +
+        `&order=document_id.desc&limit=${limit0}`;
+      const r = await q(domain, 'GET', path);
+      if (!r.ok) { out.by_domain[short] = { error: 'list_failed', detail: r.data }; continue; }
+      const rows = Array.isArray(r.data) ? r.data : [];
+      out.by_domain[short] = {
+        total: rows.length,
+        url_expired: rows.filter((x) => x.ingestion_status === URL_EXPIRED_TERMINAL).length,
+        too_large: rows.filter((x) => x.ingestion_status === ARTIFACT_TOO_LARGE_TERMINAL).length,
+      };
+      for (const row of rows) out.items.push({ domain: short, ...row });
+    }
+    return res.status(200).json(out);
+  }
   const limit = Math.min(50, Math.max(1, parseInt(req.query.limit || '15', 10)));
   const doctype = (req.query.doctype || 'deed').toLowerCase();          // default the headline lane
   const domainParam = (req.query.domain || 'both').toLowerCase();
@@ -452,6 +497,9 @@ export async function handleDocumentTextTick(req, res, deps = PROD_DEPS) {
     no_parties: 0, no_text: 0, propagated: 0, skipped: 0,
     // Build-1 Unit 2 — refetch-or-retire counters.
     refetched: 0, retired_url_expired: 0, still_pending: 0,
+    // FLOWS1-artifact — a file real and reachable but over the Get-Artifact
+    // flow's chunking cap; counted separately from a dead link.
+    retired_too_large: 0,
     deed_records_created: 0, r51_fed: 0, sales_verified: 0, implied_prices_filled: 0,
     // R59 — BD-spine propagation effects (deed Units 1-4).
     sale_parties_filled: 0, ownership_events: 0, suspected_sales: 0, grantee_entities: 0,
