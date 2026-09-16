@@ -22,9 +22,9 @@ from the exported definitions** (`SB notes/done/*.zip`, 2026-09-16). One addendu
 
 | # | flow | edit | why |
 |---|---|---|---|
-| **F1c** | **Http → Get file (LCC Get Artifact)** | First test failed at `Get file metadata using path` — its *File Path* referenced `body('Get_file_content_using_path')`, and any reference to that chunked body fails. **Fix:** (1) set the metadata step's File Path to the trigger expression (copy it from `Get file content using path`, e.g. `triggerBody()?['server_relative_url']`); (2) drag `Get file metadata` **above** `Get file content`; (3) drag `Get file content` **into the True branch** above the bytes `Response`; (4) bytes `Response` body = `json(concat('{"ok":true,"content_type":"', coalesce(body('Get_file_metadata_using_path')?['MediaType'],'application/octet-stream'), '","content_base64":"', base64(body('Get_file_content_using_path')), '"}'))`; (5) False branch = your metadata response + `"ok": false, "reason": "too_large"`. Test large (→ too_large, no 24 s fetch) then small (→ content_base64). | Large files never enter the chunked fetch; LCC's `FLOWS1-artifact` (merged) reads both shapes. |
+| ~~F1c~~ | ✅ **Done and verified from the export 2026-09-16** (`Http-Getfile(LCCGetArtifact)_20260916163609.zip`): metadata first, Size condition, content fetch in the True branch, bytes Response as specified. Test passed. | |
 
-After F1c and the LCC round: forward the next Saturday digest into `SB notes/`.
+**All seven applied and verified.** Forward the next Saturday digest into `SB notes/`; Cowork closes the counts.
 
 ## Runs / data
 
@@ -39,6 +39,7 @@ After F1c and the LCC round: forward the next Saturday digest into `SB notes/`.
 |---|---|---|---|
 | **S1** | **PRI2 side-by-side** — is the new Priority list (`priority_tab_v2`) the one you would work first? | Cowork produces `docs/audits/PRI2_SIDE_BY_SIDE_2026-09.md` (top 20 of V1 vs V2 for one real day) next turn; you mark which rows you would actually work; flag ON/OFF follows your read. | backlog `PRI2` |
 | **S2** | **Operators tile** — show 21 canonical operators, 45 raw names, or "21 (+878 properties with an unresolved operator name)"? | recommended: the third — it makes ID1's fragmentation visible | backlog `DIA1b-operators` |
+| **S4** | **Two flows on one trigger** — *Flagged Email Intake* and *Outlook Intake to Teams* both fire on "email flagged" and race on the same message (the FLOWS1 404s). Keep both with F2/F3 ordering, fold the Teams card into the intake flow, or make one the only trigger? | recommended: (b) one flow owns the message lifecycle — a later Power Automate edit, not urgent now that F2/F3 hold | backlog `FLOWS-consolidate` |
 | **S3** | **Geocoding flags** — `GEOCODIO_API_KEY` / `GOOGLE_MAPS_API_KEY` are OFF with no reason recorded | turn one on with a monthly cap, or record "off by decision" | backlog `FLAGS-geocode` |
 
 ## Housekeeping
