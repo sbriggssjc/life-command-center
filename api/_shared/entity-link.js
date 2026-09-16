@@ -545,6 +545,12 @@ const STREET_FRAGMENT_RE =
   /\b(?:st|ave|avenue|blvd|dr|rd|ln|pkwy|hwy|way|ct|cir|ter|pl)\.?(?:\s+(?:n|s|e|w|ne|nw|se|sw))?$/i;
 const ENTITY_FIRM_SUFFIX_RE =
   /\b(?:LLC|L\.L\.C|LP|LLP|Inc|Incorporated|Corp|Corporation|Ltd|Trust|Fund|Holdings|Partners|Ptnrs|Capital|Advisors|Realty|Ventures|Cos|Company|Properties|Property|Associates|Group|Management|Mgmt|Development|Developers|Investments|Investors|Enterprises|Bancorp|Bank|Co)\b/i;
+// MISPARSE1 (2026-09-16) — "NAI <City>" is a national CRE franchise naming
+// convention (NAI Columbia, NAI DESCO, NAI Hiffman, …) carrying no suffix
+// word at all, so ENTITY_FIRM_SUFFIX_RE never fired and these leaked through
+// as person-shaped names into the email_fanout review bucket. Anchored as a
+// LEADING token so it can never match inside a real surname.
+const NAI_FRANCHISE_PREFIX_RE = /^NAI\s+\S/i;
 const STREET_LEAD_DIRECTIONAL_RE =
   /^(?:n|s|e|w|ne|nw|se|sw|north|south|east|west|northeast|northwest|southeast|southwest)\b/i;
 const STREET_TRAIL_DIRECTIONAL_RE = /\s(?:n|s|e|w|ne|nw|se|sw)$/i;
@@ -553,7 +559,7 @@ const STREET_TRAIL_DIRECTIONAL_RE = /\s(?:n|s|e|w|ne|nw|se|sw)$/i;
 // Holdings, …). Useful where a 2-token org name ("Truist Bank") would otherwise
 // pass looksLikePersonName and be mis-handled as a person.
 export function hasFirmSuffix(name) {
-  return typeof name === 'string' && ENTITY_FIRM_SUFFIX_RE.test(name);
+  return typeof name === 'string' && (ENTITY_FIRM_SUFFIX_RE.test(name) || NAI_FRANCHISE_PREFIX_RE.test(name));
 }
 
 export function isStreetFragmentName(name) {

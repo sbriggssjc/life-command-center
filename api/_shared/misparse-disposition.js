@@ -108,6 +108,121 @@ export function partitionReviewForNotification(reviewItems, opts = {}) {
   return { notify, silentChrome, duplicate, keys: [...seen] };
 }
 
+// ── Class D2: generic-inbox vs team-roster split (MISPARSE1, 2026-09-16) ───
+//
+// GROUNDING: HP1-P2misparse's `recoverFanoutOwner` recovers at most ONE name
+// per fanned-out email — the one whose local part literally spells it. That
+// is right when the email IS one broker's personal mailbox stapled onto a
+// table of misparsed junk (the TrafficMetrix shape this whole file exists
+// for). It is WRONG when the email is a listing TEAM's shared contact and
+// the page genuinely lists several real brokers under it — CoStar's own
+// team-page layout, not a misparse. Measured live 2026-09-15: of 26
+// `email_fanout` blocks, ~half were named real brokers refused
+// `no_local_part_match` because none of them personally owns the shared
+// address — Edward C. Mann, Clifford L. Lamar, Conrad Buhler, Drew A. Flood,
+// Paul J. Collins among them, alongside genuine junk (`Gross Income`,
+// `PO Box 61381`, firm names) that also failed to match any local part.
+//
+// `email_fanout` was one signal carrying two different facts and the rule
+// could not tell them apart. The split:
+//   • a GENERIC/shared inbox (info@, leasing@, admin@, a role address) is a
+//     real reason to distrust the mapping — keep today's behaviour: recover
+//     the local-part match if any, block the rest.
+//   • a PERSONAL-shaped address (jcollins@, dlongaker@) that fans out to
+//     several DIFFERENT real-looking people is CoStar's team-page shape: one
+//     teammate's mailbox rendered as the page's contact for the whole
+//     roster. Admit every remaining candidate that is itself person-shaped
+//     (2-5 alpha tokens, no junk signal) and not an organization — junk and
+//     firms still refuse, because this only ever WIDENS admission past the
+//     single-owner match, it never weakens the upstream junk/org guards.
+//
+// This is strictly ADDITIVE to `recoverFanoutOwner`: call it on whatever
+// `email_fanout` items remain in `review` AFTER the strict single-owner pass
+// has removed its recoveries. It never re-considers an email that pass
+// already resolved.
+
+const GENERIC_MAILBOX_LOCAL_PART_RE = new RegExp(
+  '^(?:'
+  + 'info|infodesk'
+  + '|leasing|leasingoffice'
+  + '|admin|administrator'
+  + '|office|frontoffice|frontdesk|reception'
+  + '|contact|contactus|contact-us'
+  + '|inquiry|inquiries|enquiry|enquiries'
+  + '|sales|marketing'
+  + '|general|hello|help|support'
+  + '|team|listings?'
+  + '|mail|mailbox|noreply|no-?reply'
+  + '|propertymanagement|pm|management'
+  + '|accounting|ar|billing|invoices?'
+  + ')$',
+  'i',
+);
+
+/** True when an email's local part is a role/shared inbox rather than a
+ *  personal one — the ONLY case where a fan-out email's genuine ambiguity
+ *  should still leave the rest of the batch blocked. */
+export function isGenericMailboxLocalPart(email) {
+  const s = String(email == null ? '' : email).trim().toLowerCase();
+  const at = s.indexOf('@');
+  if (at <= 0) return true; // not even a real address — treat as untrustworthy, same as generic
+  const lp = s.slice(0, at).replace(/[^a-z-]/g, '');
+  if (!lp) return true;
+  return GENERIC_MAILBOX_LOCAL_PART_RE.test(lp);
+}
+
+// Minimal, self-contained person-name SHAPE check (deliberately not imported
+// from entity-link.js — this module stays pure/dependency-free, per the file
+// header, and this check only ever ADMITS past a name that has already
+// survived every upstream junk guard; it never decides identity or writes).
+function looksLikeRosterPersonName(name) {
+  const t = String(name == null ? '' : name).trim();
+  if (!t || t.length < 3 || t.length > 60) return false;
+  const tokens = t.split(/\s+/);
+  if (tokens.length < 2 || tokens.length > 5) return false;
+  return tokens.every((tok) => /^[A-Za-z][A-Za-z'.\-]*$/.test(tok));
+}
+
+/** Widen recovery past the single-owner match for a PERSONAL-shaped shared
+ *  address: admit every remaining candidate that is person-shaped and not an
+ *  organization. A GENERIC/role address is left exactly as
+ *  `recoverFanoutOwner` leaves it — never widened.
+ *
+ *  @param reviewItems  the REMAINING `review` items after `recoverFanoutOwner`
+ *                       has already removed its own recoveries (reason must
+ *                       still be `email_fanout`)
+ *  @param opts.isOrganization  injected, same contract as `recoverFanoutOwner`
+ *  @returns { recovered: [{contact, email, rule:'team_roster'}], refusals } */
+export function recoverTeamRosterBatch(reviewItems, opts = {}) {
+  const items = Array.isArray(reviewItems) ? reviewItems : [];
+  const isOrganization = typeof opts.isOrganization === 'function' ? opts.isOrganization : () => false;
+
+  const byEmail = new Map();
+  for (const r of items) {
+    if (r?.reason !== 'email_fanout') continue;
+    const em = String(r.email || r.contact?.email || '').toLowerCase().trim();
+    if (!em) continue;
+    if (!byEmail.has(em)) byEmail.set(em, []);
+    byEmail.get(em).push(r);
+  }
+
+  const recovered = [];
+  const refusals = [];
+  for (const [em, batch] of byEmail) {
+    if (isGenericMailboxLocalPart(em)) {
+      refusals.push({ email: em, reason: 'generic_mailbox', candidates: batch.map((b) => b?.contact?.name).filter(Boolean) });
+      continue;
+    }
+    for (const r of batch) {
+      const name = r?.contact?.name;
+      if (!name || isNonContactChrome(name) || isOrganization(r.contact)) continue;
+      if (!looksLikeRosterPersonName(name)) continue;
+      recovered.push({ contact: r.contact, email: em, rule: 'team_roster', item: r });
+    }
+  }
+  return { recovered, refusals };
+}
+
 // ── Class D: recover the one real contact inside a fan-out batch ───────────
 //
 // `email_fanout` fires when the scraper staples ONE broker's mailbox onto every
