@@ -534,7 +534,12 @@ describe('DOC18 — the long lane`s cursor is the marker timestamp', () => {
     assert.equal(r.rows.length, 1);
     assert.ok(/order=extracted_at\.asc/.test(paths[0]),
       'the marker timestamp IS the cursor — without it the head never rotates and one unservable document is re-selected forever');
-    assert.ok(/reason=in\.\(over_docai_page_cap,window_failed\)/.test(paths[0]));
+    // FLOWS1-artifact — CRE_CEILING_REASONS is the source of truth for this
+    // clause, not a hardcoded pair; asserting a fixed literal here is exactly
+    // the "guard defends a defect as readily as a fix" trap this repo warns
+    // about when a new ceiling reason (e.g. `too_large`) is added.
+    const expectedReasonClause = `reason=in.(${CRE_CEILING_REASONS.join(',')})`;
+    assert.ok(paths[0].includes(expectedReasonClause), `expected ${expectedReasonClause} in ${paths[0]}`);
     assert.ok(/needs_ocr=is\.true/.test(paths[0]));
   });
 
