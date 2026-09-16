@@ -51,6 +51,7 @@ import { isMisparseName, planContactMinting } from '../_shared/tm-misparse.js';
 import {
   partitionReviewForNotification,
   recoverFanoutOwner,
+  recoverTeamRosterBatch,
   reviewDedupeKey,
 } from '../_shared/misparse-disposition.js';
 // Round 77d (2026-06-02): listing_date derivation moved to a shared module so
@@ -2257,6 +2258,26 @@ async function unpackContacts(propertyEntityId, metadata, workspaceId, userId, d
         fanoutRecovered.map((h) => `${h.contact.name} <= ${h.email} (${h.rule})`).join(' | '));
     }
   }
+  // MISPARSE1 (2026-09-16) — `recoverFanoutOwner` above only ever mints the
+  // ONE name that literally owns the shared mailbox. That is correct for a
+  // GENERIC/role inbox (info@, leasing@) and wrong for a personal-shaped
+  // address CoStar glued onto a whole real team roster (`recoverTeamRosterBatch`
+  // header has the measurement). Runs on whatever `email_fanout` remains
+  // AFTER the strict pass — never reconsiders an email that pass already won.
+  let teamRosterRecovered = [];
+  if (mintPlan.review.length) {
+    const rosterRec = recoverTeamRosterBatch(mintPlan.review, {
+      isOrganization: (c) => contactEntityType(c) !== 'person',
+    });
+    teamRosterRecovered = rosterRec.recovered;
+    if (teamRosterRecovered.length) {
+      const recoveredItems = new Set(teamRosterRecovered.map((h) => h.item));
+      mintPlan.review = mintPlan.review.filter((r) => !recoveredItems.has(r));
+      for (const h of teamRosterRecovered) mintPlan.mint.push(h.contact);
+      console.warn('[sidebar misparse] team-roster recovered:',
+        teamRosterRecovered.map((h) => `${h.contact.name} <= ${h.email} (${h.rule})`).join(' | '));
+    }
+  }
   if (mintPlan.review.length) {
     await routeMisparseContactsToReview(mintPlan.review, {
       propertyEntityId, workspaceId, userId, domain, source, extractedAt,
@@ -2948,6 +2969,11 @@ export function isJunkContactName(name) {
   // Class B: well-known brokerage / firm brand markers.
   const firmBrandRe = /(\bMarcus & Millichap\b|\bCBRE\b|\bJLL\b|\bNewmark\b|\bCushman\b|\bColliers\b|\bAvison Young\b|\bBerkadia\b|\bEastdil\b|\bWalker & Dunlop\b|\bMatthews Real Estate\b|\bHorvath & Tremblay\b|\bKW Commercial\b)/i;
   if (firmBrandRe.test(trimmed)) return true;
+
+  // MISPARSE1 (2026-09-16) — "NAI <City>" is a national CRE franchise naming
+  // convention (NAI Columbia, NAI DESCO, …) with no suffix word at all, so
+  // firmSuffixRe never fired and these leaked into email_fanout.
+  if (/^NAI\s+\S/i.test(trimmed)) return true;
 
   // Class C: pipe-separated firm names ("Colliers | Virginia").
   if (/\|/.test(trimmed)) return true;

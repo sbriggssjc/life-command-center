@@ -80,9 +80,31 @@ const DOC_LABEL_RE = new RegExp(
   + '|description'
   + '|zoning'
   + '|parking'
+  // MISPARSE1 (2026-09-16) — financial-statement line items leaked into the
+  // email_fanout review bucket (`Gross Income`, `Other Income`, `Revenue`,
+  // `Vacancy`, bare `Trust`) because none of the doc-label arms named them.
+  // Same disease, same fix: an anchored, exact section-label match.
+  + '|gross\\s+income'
+  + '|other\\s+income'
+  + '|net\\s+income'
+  + '|operating\\s+income'
+  + '|revenue'
+  + '|vacancy'
+  + '|occupancy'
+  + '|trust'
   + ')(?:\\s+not\\s+available)?\\s*[:.]?$',
   'i',
 );
+
+// MISPARSE1 (2026-09-16) — a mailing address parsed as a "name" (`PO Box
+// 61381`). Never a person, whatever email it is stapled to.
+const PO_BOX_RE = /^p\.?\s*o\.?\s*box\s+\d+$/i;
+
+// MISPARSE1 (2026-09-16) — a listing marketing headline parsed as a "name"
+// (`Absolute NNN leased, Corporate guaranteed Davita Dialysis`). These carry
+// no personal-name shape and use CRE marketing vocabulary a broker's own name
+// never does.
+const MARKETING_HEADLINE_RE = /\b(NNN\s+leased|corporate\s+guaranteed|absolute\s+NNN|investment\s+grade\s+tenant)\b/i;
 
 // (c) bare_title — the "name" is ONLY a job title, with no personal-name token.
 // A word is title-ish if it is a title word or a pure connector; a bare_title
@@ -127,6 +149,14 @@ export function tmMisparseReason(name) {
   const dl = s.match(DOC_LABEL_RE);
   if (dl) {
     return { heuristic: TM_MISPARSE_HEURISTIC, evidence: s.slice(0, 200), signal: 'doc_label', match: dl[0] };
+  }
+  const pob = s.match(PO_BOX_RE);
+  if (pob) {
+    return { heuristic: TM_MISPARSE_HEURISTIC, evidence: s.slice(0, 200), signal: 'po_box', match: pob[0] };
+  }
+  const mh = s.match(MARKETING_HEADLINE_RE);
+  if (mh) {
+    return { heuristic: TM_MISPARSE_HEURISTIC, evidence: s.slice(0, 200), signal: 'marketing_headline', match: mh[0] };
   }
   if (isBareTitle(s)) {
     return { heuristic: TM_MISPARSE_HEURISTIC, evidence: s.slice(0, 200), signal: 'bare_title', match: s.slice(0, 60) };

@@ -17,8 +17,10 @@ import {
   partitionReviewForNotification,
   localPartMatchRule,
   recoverFanoutOwner,
+  recoverTeamRosterBatch,
+  isGenericMailboxLocalPart,
 } from '../api/_shared/misparse-disposition.js';
-import { planContactMinting } from '../api/_shared/tm-misparse.js';
+import { planContactMinting, tmMisparseReason } from '../api/_shared/tm-misparse.js';
 
 const item = (name, reason, email) => ({ reason, email, contact: { name, email } });
 const ORG_RE = /\b(LLC|Inc\.?|Properties|Partners|Consulting|Investments?|Services|REIT|Group|Company|Companies|NAI|DESCO)\b/i;
@@ -210,6 +212,110 @@ test('GUARD INVARIANT: a previously-blocked name still blocks', () => {
   }
   assert.deepEqual(plan.mint.map((c) => c.name), ['Richard Ehmer'],
     'the real broker must still mint');
+});
+
+// ── Class D2: generic-inbox vs team-roster split (MISPARSE1, 2026-09-16) ───
+
+test('isGenericMailboxLocalPart distinguishes role inboxes from personal ones', () => {
+  for (const em of ['info@x.com', 'Leasing@x.com', 'admin@x.com', 'contactus@x.com',
+    'inquiries@x.com', 'PM@x.com', 'no-reply@x.com', 'not-an-email']) {
+    assert.equal(isGenericMailboxLocalPart(em), true, em);
+  }
+  for (const em of ['jcollins@southpace.com', 'dlongaker@trinity-partners.com',
+    'william.collins@cushwake.com', 'jfahner@hanleyinvestment.com']) {
+    assert.equal(isGenericMailboxLocalPart(em), false, em);
+  }
+});
+
+test('financial line items and franchise brands now resolve as junk, not just email_fanout collateral', () => {
+  // MISPARSE1: these leaked into the email_fanout review bucket because no
+  // junk-name arm named them. They must now be caught before ever reaching
+  // the fan-out check.
+  for (const n of ['Gross Income', 'Other Income', 'Net Income', 'Revenue',
+    'Vacancy', 'Occupancy', 'Trust', 'PO Box 61381',
+    'Absolute NNN leased, Corporate guaranteed Davita Dialysis']) {
+    assert.ok(tmMisparseReason(n), `${n} must resolve as a misparse`);
+  }
+  // Franchise brand with no suffix word at all.
+  assert.equal(isNonContactChrome('NAI Columbia'), false); // not chrome — it's a firm, caught elsewhere
+});
+
+test('MISPARSE1 dataset: the same 15 rows from §2, re-measured with the roster recovery', () => {
+  // Identical fixture to "recovery returns exactly the four live owners" above —
+  // this is the measured 26-block population's email_fanout slice. Before this
+  // fix, only the four single-owner matches recovered; the remaining real
+  // brokers (Edward C. Mann, Clifford L. Lamar, Conrad Buhler, Drew A. Flood,
+  // Paul J. Collins) stayed blocked forever behind `no_local_part_match`.
+  const live = [
+    ['dlongaker@trinity-partners.com', 'Dail Longaker'],
+    ['dlongaker@trinity-partners.com', 'Edward C. Mann'],
+    ['dlongaker@trinity-partners.com', 'NAI Columbia'],
+    ['dlongaker@trinity-partners.com', 'View Less'],
+    ['jcollins@southpace.com', 'Clifford L. Lamar'],
+    ['jcollins@southpace.com', 'Conrad Buhler'],
+    ['jcollins@southpace.com', 'James D. Collins'],
+    ['jcollins@southpace.com', 'Southpace Properties, Inc.'],
+    ['jcollins@southpace.com', 'Special Projects & Consulting'],
+    ['jfahner@hanleyinvestment.com', 'Absolute NNN leased, Corporate guaranteed Davita Dialysis'],
+    ['jfahner@hanleyinvestment.com', 'Jacob Fahner'],
+    ['jfahner@hanleyinvestment.com', 'NAI DESCO'],
+    ['william.collins@cushwake.com', 'Drew A. Flood'],
+    ['william.collins@cushwake.com', 'Paul J. Collins'],
+    ['william.collins@cushwake.com', 'William M. Collins'],
+  ].map(([e, n]) => item(n, 'email_fanout', e));
+
+  // Pass 1: the strict single-owner match (unchanged).
+  const strict = recoverFanoutOwner(live, { isOrganization });
+  const strictItems = new Set(strict.recovered.map((h) => h.item));
+  const remaining = live.filter((r) => !strictItems.has(r));
+
+  // Pass 2: the new team-roster widening, on whatever pass 1 left blocked.
+  const roster = recoverTeamRosterBatch(remaining, { isOrganization });
+
+  const admitted = [...strict.recovered, ...roster.recovered].map((h) => h.contact.name).sort();
+  assert.deepEqual(admitted, [
+    'Clifford L. Lamar', 'Conrad Buhler', 'Dail Longaker', 'Drew A. Flood',
+    'Edward C. Mann', 'Jacob Fahner', 'James D. Collins', 'Paul J. Collins',
+    'William M. Collins',
+  ], 'BEFORE: 4 admitted (strict only). AFTER: 9 of the 12 named real brokers admitted.');
+
+  // Junk and firms must still be blocked — the widening never touches them.
+  const stillBlocked = remaining
+    .filter((r) => !roster.recovered.some((h) => h.item === r))
+    .map((r) => r.contact.name)
+    .sort();
+  assert.deepEqual(stillBlocked, [
+    'Absolute NNN leased, Corporate guaranteed Davita Dialysis',
+    'NAI Columbia', 'NAI DESCO', 'Southpace Properties, Inc.',
+    'Special Projects & Consulting', 'View Less',
+  ]);
+});
+
+test('a GENERIC mailbox is never widened, even with real-looking names', () => {
+  const batch = [
+    item('Someone Real', 'email_fanout', 'leasing@bigfirm.com'),
+    item('Another Real Person', 'email_fanout', 'leasing@bigfirm.com'),
+  ];
+  const { recovered, refusals } = recoverTeamRosterBatch(batch, { isOrganization });
+  assert.equal(recovered.length, 0, 'a role inbox stays untrusted no matter who is attached to it');
+  assert.equal(refusals[0].reason, 'generic_mailbox');
+});
+
+test('the roster widening never admits an organization or page chrome', () => {
+  const batch = [
+    item('Southpace Properties, Inc.', 'email_fanout', 'jcollins@southpace.com'),
+    item('View Less', 'email_fanout', 'jcollins@southpace.com'),
+  ];
+  const { recovered } = recoverTeamRosterBatch(batch, { isOrganization });
+  assert.equal(recovered.length, 0);
+});
+
+test('the roster widening never admits a name that fails the person shape', () => {
+  const batch = [
+    item('Absolute NNN leased, Corporate guaranteed Davita Dialysis', 'email_fanout', 'jfahner@hanleyinvestment.com'),
+  ];
+  const { recovered } = recoverTeamRosterBatch(batch, { isOrganization });
+  assert.equal(recovered.length, 0);
 });
 
 test('suppression is a NOTIFICATION change: no disposition helper can mint', () => {

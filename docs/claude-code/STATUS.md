@@ -53,6 +53,18 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-16 — MISPARSE1: email_fanout split into generic-inbox vs team-roster (Cowork)
+
+`isGenericMailboxLocalPart()` + `recoverTeamRosterBatch()` (`api/_shared/misparse-disposition.js`),
+additive to the existing single-owner `recoverFanoutOwner`: a personal-shaped shared mailbox (not
+`info@`/`leasing@`/`admin@`/…) that fans out to several distinct person-shaped, non-org names is now
+admitted whole; a role/generic inbox stays exactly as strict before. Measured on the live 15-row
+`email_fanout` fixture: recovered 4 → 9 of 12 named real brokers, 0 new junk admitted. Strengthened
+`person_junk_name` (`hasFirmSuffix`/`tmMisparseReason`) to catch the genuine junk that had been
+leaking into `email_fanout` instead (financial line items, `PO Box ####`, `NAI <City>` franchise
+brand, CRE marketing headlines) — never touched the working `person_junk_name` rule itself.
+`test/hp1-p2misparse-guard-disposition.test.mjs` +9 (23/23). Full suite 6458/6458, 0 regressions.
+See `docs/os/PLANNED-BACKLOG.md` MISPARSE-BACKLOG1 / HP1-P2misparse.
 ## 2026-09-16 — BR1/BR3 broker_companies registry repair applied live to Dialysis_DB (Claude Code)
 
 **`broker_companies` was a corrupted firm registry** — of 131 rows, 73 (56%) carried a literal `;`
