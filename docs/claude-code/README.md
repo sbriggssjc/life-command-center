@@ -15,6 +15,7 @@ actually runs; the previous `NN-slug` / `.response.md` conventions are retired.
 | `responses/` | Claude Code's reply, saved by Scott as `<ID> desktop response.docx` (gitignored — the reconciliation is the durable record) | Scott |
 | `responses/done/` | reconciled responses (plain move, gitignored) | Cowork moves |
 | `SB notes/` | Scott's in-app observations (docx with screenshots, forwarded `.eml`, anything). `README.md` there is the intake protocol; `TRIAGE.md` is the ledger (`SBN-n`). Processed files go to `SB notes/done/` (`.docx` is gitignored; `.eml`/images are tracked). | Scott drops; Cowork triages |
+| `OPERATOR-CHECKLIST.md` | the one list of manual steps only Scott can do (edge-function deploys, Power Automate edits, hand-fetched payloads). Cowork adds; Scott ticks; Cowork verifies and removes. | Cowork |
 | `STATUS.md` | the running narrative, newest-first, with the Open-threads table at the top. Line-budgeted (3,000) and header-guarded by `test/status-*.test.mjs`; archive verbatim to `docs/history/` before you push. | Cowork |
 
 The **canonical open-work list is `docs/os/PLANNED-BACKLOG.md`**, not this folder: every prompt has a

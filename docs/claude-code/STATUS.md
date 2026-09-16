@@ -40,8 +40,8 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k LIVE** (LCC PR #2506): 218 attested supersessions, 40/43 pairs to sponsor, 16/16 controls untouched, reversible; sponsor-as-edge = future work |
 | **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT | 2026-09-16 | **Arc complete through GOVDEED5b** (gov PRs #400–#405, all live; `latest_deed_*` deed-only, one writer); open: GOVDEED3 (accept gate, prompted), sale-party conflicts 1,290 are a review queue; dia clean |
 | **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, MCP1 | 2026-09-16 | **OWNERGAP2 applied — 20 Philadelphia owners live from public record** (5,494 with owner), ledgered; Harris needs an HCAD payload; MCP1 blocks the context gate; 1,346 `owner_needs_sos` still the feed |
-| **App feedback intake (SBN)** | FLOWS1, HOME1, HOME1-deploy, HOME2, PRI1, PRI2, DIA1, DIA1b, ID3a-drift | 2026-09-16 | SBN-1…9 triaged; HOME1/PRI1/DIA1 rounds done (PRs #2511–#2513); **`daily-briefing` edge fn undeployed (HOME1-deploy)**; FLOWS1 has its evidence; PRI2 + DIA1b prompted |
-| **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–4, INVENTORY1, REPO1 | 2026-09-16 | CLAUDE.md pass 1 done (3,268 lines); **INVENTORY1** prompted — the full plan-vs-built gap map; pass 2 of CLAUDE.md waits on Scott |
+| **App feedback intake (SBN)** | FLOWS1, FLOWS1-crons/-order/-path, HOME1, HOME1-deploy, HOME2, PRI1, PRI2, DIA1, DIA1b, ID3a-drift | 2026-09-16 | SBN-1…9 triaged; FLOWS1 diagnosed (7 flow edits for Scott, 3 LCC rows); HOME1/PRI1/DIA1 done; **`daily-briefing` edge fn still v25 (HOME1-deploy)**; PRI2 + DIA1b prompted |
+| **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–4, INVENTORY1, INVENTORY1b, REPO1 | 2026-09-16 | CLAUDE.md pass 1 done; **INVENTORY1 passes 1–2 on `claude/inventory1-audit` (unmerged)** — 1,779 rows, 9 unexplained-OFF flags, 12 open TODOs, ~124 untraced prompts; **INVENTORY1b** re-tests with DB access; root `.docx` reports converted to `docs/history/root-reports/` |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
 | **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
 | **Broker identity (BR) / BROKER1** | BR1, BR2, BROKER1, BROKER1-sf | 2026-09-11 | BROKER1 prospect-assignment applied live (1,303 assigned) with a real bug found+fixed in production; BROKER1-sf (Salesforce write-back) correctly left unbuilt — no write path exists |
@@ -53,6 +53,36 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 > cuts) were moved **verbatim** to
 > [`docs/history/STATUS_claude-code_2026-08-31_to_2026-09-01.md`](../history/STATUS_claude-code_2026-08-31_to_2026-09-01.md).
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
+
+---
+
+## 2026-09-16 — FLOWS1 and INVENTORY1 reconciled: the flows are diagnosed (and I disagree with the round on one), the inventory is honest about being half an inventory (Cowork)
+
+**FLOWS1 ✅ diagnosis complete**, no LCC code changed. The round read the same 17 screenshots and
+reached the same per-flow causes; it also checked the dead-letter plane (`v_flow_run_failures_open`
+had 2 rows against 750+ digest failures — the webhook records *that* a run failed, never *why*) and
+tied Get Artifact's 709/week to two overlapping 30-minute crons (`lcc-document-text`,
+`lcc-cre-doc-text-backfill`, ~96 ticks/day). Its conclusion — "nothing on the LCC side to fix" — I
+don't accept on two flows and have said so in the row: a cron re-requesting a file that fails
+deterministically ~100 times a day is an LCC defect (no dead-letter, no backoff) whatever the flow does
+about chunking; and the Outlook-Intake 404 happens because our completion callback fires the Move flow
+before the intake flow has read the message — tolerating the 404 hides the ordering. Both are now
+their own rows (**FLOWS1-crons**, **FLOWS1-order**). Scott's seven flow edits are in the new
+**`docs/claude-code/OPERATOR-CHECKLIST.md`** — the one list of steps only he can do, now a standing file. List Folder's stale path (`… MOVED TO R DRIVE …`) is open: the
+round says LCC escapes correctly, so the stored path is wrong, and nobody has named its writer yet.
+
+**INVENTORY1 🟡 two passes, stated limits.** 1,779 CSV rows from headings across architecture, audits,
+history and `prompts/done`; ~20 files deep-read; **no DB, no code, no root `.docx`** (no pandoc in the
+sandbox). Findings worth the round: nine feature flags OFF with no recorded reason; a six-item
+never-tracked cluster in `data_quality_self_learning_loop.md` Phase 2.3–2.6; a ⬜ TODO table from
+2026-05-23 (12 rows) never closed; CONTACTS_HUB described as dormant by its seed and live by
+`CLAUDE.md`; ~124 prompts with no discoverable trace — a worklist, not a verdict. It is on
+`claude/inventory1-audit`, unmerged. The round asked whether to keep scraping or start re-testing;
+re-testing is the answer → **INVENTORY1b**, with DB access and the root reports now readable:
+`docs/history/root-reports/` holds a pandoc conversion of all ten `.docx` files, headers saying they
+are copies, not truth.
+
+Deploy state: Railway `0b6e75b8` = main; `daily-briefing` edge function **still v25** (HOME1-deploy).
 
 ---
 
