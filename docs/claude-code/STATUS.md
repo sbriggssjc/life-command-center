@@ -39,9 +39,9 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **CoStar sidebar / public records (PR5/PRI)** | PR5d, PR-scanner-3, PRI2–PRI6, HCRIS-TIMEOUT, HCRIS-TRACKER-BLIND, HCRIS-QIP-DEFICIENCY-TIMEOUT-PATTERN | 2026-09-15 | PR-scanner-3 shipped (`county_records_needed` action); `PRI6` (the connection-retry/ingestion-lock reliability sweep that started with `PRI1`'s dropped-connection crash) closed ✅ 2026-09-14, both sides confirmed merged — checking on it live is what surfaced `HCRIS-TIMEOUT` (a separate, months-old defect, not a `PRI6` regression). `HCRIS-TIMEOUT` is now three rounds deep: the original fix was correct, the real blocker was the tracker/heartbeat mechanism itself being blind (`HCRIS-TRACKER-BLIND`, fixed same round) — **awaiting live proof from a run Scott triggered 2026-09-15 (post-PR-#7411)**. One flagged, unbuilt follow-up already identified for whenever this closes: `qip_scores_ingestor.py`/`cms_deficiency_ingestor.py` share HCRIS's old bare-timeout bug. |
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k LIVE** (LCC PR #2506): 218 attested supersessions, 40/43 pairs to sponsor, 16/16 controls untouched, reversible; sponsor-as-edge = future work |
 | **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT | 2026-09-16 | **Arc complete through GOVDEED5b** (gov PRs #400–#405, all live; `latest_deed_*` deed-only, one writer); open: GOVDEED3 (accept gate, prompted), sale-party conflicts 1,290 are a review queue; dia clean |
-| **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, MCP1 | 2026-09-16 | OWNERGAP2 applied (20 Philadelphia owners); **OWNERGAP2-harris BUILT** (loader + staging table + PDATA matcher, wired as the primary automated Harris path, operator payload kept as fallback) — hcad.org unreachable from this sandbox (proxy 403), so the real load + apply is still an operator step; MCP1 blocks the context gate; 1,346 `owner_needs_sos` still the feed |
-| **App feedback intake (SBN)** | FLOWS1, FLOWS1-crons/-order/-path, HOME1, HOME1-deploy, HOME2, PRI1, PRI2, DIA1, DIA1b, ID3a-drift | 2026-09-16 | HOME1/PRI1/DIA1 done, **`daily-briefing` v26 deployed**; FLOWS1 diagnosed — Scott's 7 flow edits have a click-path guide (`docs/setup/POWER-AUTOMATE-FLOW-FIXES-2026-09-16.md`); PRI2 + DIA1b prompted |
-| **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–4, INVENTORY1, INVENTORY1b, REPO1 | 2026-09-16 | CLAUDE.md pass 1 done; **INVENTORY1 passes 1–2 on `claude/inventory1-audit` (unmerged)** — 1,779 rows, 9 unexplained-OFF flags, 12 open TODOs, ~124 untraced prompts; **INVENTORY1b** re-tests with DB access; root `.docx` reports converted to `docs/history/root-reports/` |
+| **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, MCP1 | 2026-09-16 | 20 Philadelphia owners live; **MCP1 live** (gate #6 passes); **Harris adapter built, run = operator H1–H5**; 1,346 `owner_needs_sos` still the feed |
+| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact/-order/-path, HOME1, HOME2, PRI1, PRI2, DIA1, DIA1b, DIA1b-operators, ID3a-drift | 2026-09-16 | HOME1/PRI1/DIA1/DIA1b done; **PRI2 built, flag OFF → Scott's side-by-side**; Scott's 7 flow edits verified from exports — F1 option B broke the byte contract → **FLOWS1-artifact** + F1c; FLOWS1-order prompted |
+| **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–4, INVENTORY1, INVENTORY1b, INVENTORY-process, REMEDIATION-2026-05, FLAGS-geocode, REGISTRY-contacts-hub, REPO1 | 2026-09-16 | **INVENTORY1b done (3 rounds, DB-verified)**: 9 flags → 7 deliberate + 2 for Scott; Phase 2.3–2.6 was a stale doc (fixed); May TODOs now a backlog row; "132 untraced prompts" was an under-scoped search; loop changes applied |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
 | **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
 | **Broker identity (BR) / BROKER1** | BR1, BR2, BROKER1, BROKER1-sf | 2026-09-11 | BROKER1 prospect-assignment applied live (1,303 assigned) with a real bug found+fixed in production; BROKER1-sf (Salesforce write-back) correctly left unbuilt — no write path exists |
@@ -53,6 +53,51 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 > cuts) were moved **verbatim** to
 > [`docs/history/STATUS_claude-code_2026-08-31_to_2026-09-01.md`](../history/STATUS_claude-code_2026-08-31_to_2026-09-01.md).
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
+
+---
+
+## 2026-09-16 — Five rounds reconciled (PRI2, DIA1b, MCP1, OWNERGAP2-harris, INVENTORY1b ×3), Scott's seven flow edits verified from their exports, and one of them changed a contract LCC still expects (Cowork)
+
+Railway auto-deployed `8ab35ec9` = main, so PRI2 (flag OFF), DIA1b and MCP1 are running. **MCP1 verified
+live**: `get_property_context(28398, dia)` now returns a labelled facts-only context naming
+`EPISCOPAL HOSPITAL` with the operator flagged — OWNERGAP2's gate #6 finally passes.
+
+**PRI2 ✅ built, flag `priority_tab_v2` OFF.** V1 untouched behind a router; V2 = one ranked list from
+`v_lcc_seller_prospect_queue` with a footer naming each hidden code-doable band's count and producer
+(`/api/priority-hidden-band-counts`). The side-by-side gate is the next step, and it is Scott's read.
+
+**DIA1b ✅.** NPI tile now shows the gated lane (81) with the raw diff (~1,019) as a labelled second line;
+"as of" stamps from an unused `computed_at` on the MV; lease-backfill relabelled as raw backlog (26
+completions ever, all one April bulk); the 45-vs-21 operators question is answered — **both real**: 45
+distinct raw name strings, 21 canonical ids, **878 properties with an operator name and no
+`operator_id`** — the ID1 fragmentation, second instance. Which number the tile should show is Scott's
+call (→ `DIA1b-operators`).
+
+**OWNERGAP2-harris 🟡 built, not run.** Stage table, header-driven parser, matcher on the shared
+Philadelphia matcher (Commercial-over-Personal, FM 1960 alias, refusals), loader CLI. hcad.org is
+proxy-blocked from the sandbox (and from Cowork's container — the download page is JS-rendered), so
+the commercial `state_class` codes are stated assumptions; the run is an operator sequence in
+`OPERATOR-CHECKLIST.md` (download → codebook check → dry-run loader → apply → tick).
+
+**INVENTORY1b ✅ three rounds, merged.** With DB access: 7 of the 9 dark flags are deliberate, 2
+(`GEOCODIO_API_KEY`, `GOOGLE_MAPS_API_KEY`) are a cost call for Scott; Phase 2.3–2.6 is a **stale doc**,
+not a gap (all four sources registered and active — doc fixed in this change); of the twelve May TODOs,
+C7/C9/B6/B8 shipped under other names, C5 is open on gov and shipped on dia, A6a partial, C8/A7/A8/C4/B3
+still open, C2 partial — now one backlog row instead of a dead table; CONTACTS_HUB: `CLAUDE.md` is right,
+the registry note is the stale one; and pass 2's "132 untraced prompts" was an **under-scoped search**
+— all 30 sampled resolved once `migrations/`, `test/`, `api/` and `responses/` were included. 1,789
+rows, ~1,700 still UNMEASURED, and the process recommendations per leak class are in the gap map; the
+one that binds the loop is class 3: *a plan doc's TODO rows either are backlog rows or are retired
+with a pointer the moment the work ships*.
+
+**Scott's flow exports, read.** F2 (web link first), F3 (retry 3×PT20S + run-after), F4 (Flag before
+Move), F5 (`triggerBody()?['Id']`), F7 (concurrency 1) are exactly as specified. F6 already had a
+dead-letter and a timeout response. **F1 took option B** — the flow now returns `{name,size,link,path}`
+— and `fetchSharepointBytes()` still expects `content_base64`, so every Get Artifact call from LCC now
+fails softly instead of loudly. → **FLOWS1-artifact** (both shapes, size cap, dead-letter; supersedes
+FLOWS1-crons) with a one-condition flow addendum F1c. And the export settles FLOWS1-order: the flow
+*also* emits processing-complete at its end, so LCC's early await-and-relay inside the intake
+response is the only reason the move ever runs first → **FLOWS1-order** prompt written from the code.
 
 ---
 

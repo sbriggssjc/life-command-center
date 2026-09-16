@@ -31,6 +31,9 @@ story; the backlog is the state; `docs/os/CURRENT-STATE.md` is the one-page "whe
    database the round touched (`pg_proc`, `cron.job`, counts). Two rounds on 2026-09-16 reported true
    after-states that a cron undid within twenty minutes; the reconciliation caught it, the summary
    could not. Record deviations from the prompt (narrower / wider / skipped) as findings.
+   When checking whether a past prompt "left a trace", look in `supabase/migrations/`, `test/`, `api/`,
+   `docs/claude-code/responses/` and `docs/os/CURRENT-STATE.md` as well as the docs — INVENTORY1's
+   "132 untraced prompts" was a search over four directories; 30 of 30 sampled had shipped.
 5. **Update in the same change**: the backlog row (status + measured outcome), `STATUS.md` (one
    entry, Open-threads row), `CURRENT-STATE.md` when a subsystem's state changed, `CLAUDE.md` when a
    doctrine was earned, the topic page when its topic moved. Move the prompt and response to `done/`.

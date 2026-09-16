@@ -6,6 +6,12 @@
 > 3. There's no centralized place to ask "where did this value come from, and how confident are we?"
 >
 > This doc is the multi-PR rollout plan. Phase 1 is shipped; phases 2-4 are scoped but not implemented.
+>
+> ⚠️ **Status correction 2026-09-16 (INVENTORY1b, measured on LCC Opps):** Phases 2.3–2.6 below still read
+> "NOT STARTED", but `field_source_priority` shows all four sources (CMS chain-org, county records, manual
+> edits, Salesforce) **registered and active** — they shipped under other names (ID3a/PR1–PR2/OWN-T0/
+> Salesforce bridges). The headings are kept for history; treat the state as SHIPPED-ELSEWHERE and see
+> `docs/os/CURRENT-STATE.md` §2 for the live subsystems. Leak class 1 in `docs/audits/INVENTORY1_GAP_MAP_2026-09.md`.
 
 ## Goals
 
@@ -103,19 +109,19 @@ The remaining sidebar writers return counts not row PKs, which prevents post-hoc
 - `upsertDomainOwners` — recorded_owners + ownership_history
 - `upsertDialysisBrokerLinks` / `upsertGovBrokers` — broker linkages
 
-### Phase 2.3 — CMS chain-org sync ⏳ NOT STARTED
+### Phase 2.3 — CMS chain-org sync ⏳ NOT STARTED *(as planned here — shipped under another name, see the 2026-09-16 correction at the top)*
 
 Whatever process populates `dia.properties.medicare_id`, `tenant`, chain reporting. Source name: `cms_chain_org`. Highest non-manual priority for tenant on dialysis.
 
-### Phase 2.4 — County records sync ⏳ NOT STARTED
+### Phase 2.4 — County records sync ⏳ NOT STARTED *(as planned here — shipped under another name, see the 2026-09-16 correction at the top)*
 
 Whatever process populates `properties.assessed_owner`, `parcel_number`, `tax_year`, `latest_deed_date`. Source name: `county_records`. Highest non-manual priority for address, parcel_number, ownership.
 
-### Phase 2.5 — Manual edits ⏳ NOT STARTED
+### Phase 2.5 — Manual edits ⏳ NOT STARTED *(as planned here — shipped under another name, see the 2026-09-16 correction at the top)*
 
 `api/admin.js` apply-change path. Source name: `manual_edit`. Highest priority on every field — explicit human override always wins.
 
-### Phase 2.6 — Salesforce two-way sync ⏳ NOT STARTED
+### Phase 2.6 — Salesforce two-way sync ⏳ NOT STARTED *(as planned here — shipped under another name, see the 2026-09-16 correction at the top)*
 
 Source name: `salesforce`. Per-field priority TBD by which SF object owns the field.
 
