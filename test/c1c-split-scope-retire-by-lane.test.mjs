@@ -202,3 +202,30 @@ test('_lcc_c1c_lane_types() itself is not redefined — both lanes remain valid 
     + 'it would silently change what NULL means for every caller and erase the '
     + 'record that the gov lane is in scope once C1B-GOV-GATE ships, not removed');
 });
+
+// --- C1C-SPLIT-b: the dry run counts TASKS, not lanes ----------------------
+// Found on the first live dry run: by_type said 839, tasks_to_retire said 1,
+// because count(*) ran over the per-lane GROUP BY subquery. Pin the fix.
+const SPLIT_B_MIGRATION = fileURLToPath(new URL(
+  '../supabase/migrations/20260916130000_lcc_c1csplit_b_dry_run_counts_tasks.sql',
+  import.meta.url));
+const SPLIT_B_SQL = stripSqlComments(readFileSync(SPLIT_B_MIGRATION, 'utf8'));
+
+test('C1C-SPLIT-b: the dry-run tasks_to_retire is the SUM of per-lane counts, not count(*) over the groups', () => {
+  const dry = SPLIT_B_SQL.slice(SPLIT_B_SQL.indexOf('if p_dry_run then'), SPLIT_B_SQL.indexOf('with upd as'));
+  must(/'tasks_to_retire',\s*coalesce\(sum\(n\),\s*0\)/.test(dry),
+    'the -b dry run must report coalesce(sum(n), 0) for tasks_to_retire');
+  must(!/'tasks_to_retire',\s*count\(\*\)/.test(dry),
+    'the lane-counting count(*) must be gone from the -b dry run');
+  // positive control: the ORIGINAL split migration still carries the defect,
+  // which is what makes this guard a guard and not a tautology.
+  const dry0 = SPLIT_SQL.slice(SPLIT_SQL.indexOf('if p_dry_run then'), SPLIT_SQL.indexOf('with upd as'));
+  must(/'tasks_to_retire',\s*count\(\*\)/.test(dry0),
+    'positive control: 20260916120000 is expected to still read count(*) (history is not rewritten)');
+});
+
+test('C1C-SPLIT-b keeps the 4-arg signature and the single-signature assertion', () => {
+  must(/p_research_types\s+text\[\]\s+default\s+null/i.test(SPLIT_B_SQL), 'the -b body must keep p_research_types text[] default null');
+  must(/proname\s*=\s*'lcc_c1c_retire_sf_lanes'/.test(SPLIT_B_SQL) && /if v_n <> 1 then/.test(SPLIT_B_SQL),
+    'the -b migration must re-assert exactly one signature');
+});
