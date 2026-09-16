@@ -22,17 +22,18 @@
 
 ## 1. Ownership evidence & the owner gap — backlog §P19, §P15, Open-threads *Deed / owner-conflict* and *Research lanes / owner gap*
 
-- ✅ **Live:** gov `latest_deed_*` split to deed-only with one writer (GOVDEED4/5/5b, gov PRs #400–#405); the 478 manufactured conflicts dispositioned (GOVDEED-478); Salesforce research lanes retired on both databases (C1C, ledgered, reversible); the gov gate on the right arm (C1B-GOV-GATE); **39 assessor-sourced owners written** — Philadelphia 20 (city open API), Harris 19 (HCAD bulk PDATA) — every one citing its source record (OWNERGAP2, -harris, -harris-b); `get_property_context` shows dia-only properties (MCP1).
-- 🟡 **Partial:** Harris — the full HCAD roll is staged (71,282 F1/F2 accounts, 2026-09-16); 1 more owner is resolvable (H7), 2 sit on C2-class accounts (S5), and **27 of the 50 are house numbers HCAD does not carry as situs** — a property-identity gap (§P10a), not a matcher gap. The loader has three real defects found on the real file (OWNERGAP2-harris-c, prompted).
-- 🔴 **Open:** GOVDEED3 (accept gate, handoff to `government-lease`), DEED1-reconcile-2 (migration in the wrong repo), DEED1-emptycompare, DEED1-rentrank, CANON-OWNERSHIP1 (👤 proposal ready), the `18003 Longenbaugh` Rd/Dr duplicate property surfaced by the Harris apply; 1,346 `owner_needs_sos` tasks still the feed with no other consumer.
-- ⏭️ **Next unit:** H7 (apply the 1) and OWNERGAP2-harris-c (loader fixes + C2 switch + placeholder refusal); then the next free-bulk jurisdiction from OWNERGAP1-decision's list, same contract. The 27 situs-gap properties are the first concrete case for §P10a.
+- ✅ **Live:** gov `latest_deed_*` split to deed-only with one writer (GOVDEED4/5/5b, gov PRs #400–#405); the deed accept gate conjunctive on placeholders (GOVDEED3, gov PR #406 — runtime check V1); DEED1-reconcile-2 done; the 478 manufactured conflicts dispositioned (GOVDEED-478); Salesforce research lanes retired on both databases (C1C, ledgered, reversible); the gov gate on the right arm (C1B-GOV-GATE); **39 assessor-sourced owners written** — Philadelphia 20 (city open API), Harris 19 (HCAD bulk PDATA) — every one citing its source record (OWNERGAP2, -harris, -harris-b); `get_property_context` shows dia-only properties (MCP1).
+- 🟡 **Partial:** Harris — the full HCAD roll is staged (71,282 F1/F2 accounts, 2026-09-16); **20 of 50 applied**, 2 sit on C2-class accounts (S5), **27 are house numbers HCAD does not carry as situs** — a property-identity gap (§P10a), not a matcher gap. Two defects found on the real file/apply, both prompted: the loader (OWNERGAP2-harris-c) and the ledger ordering (OWNERGAP2-ledger-order).
+- 🔴 **Open:** DEED1-emptycompare, DEED1-rentrank, CANON-OWNERSHIP1 (👤 proposal ready), the `18003 Longenbaugh` Rd/Dr duplicate property surfaced by the Harris apply; 1,346 `owner_needs_sos` tasks still the feed with no other consumer.
+- ⏭️ **Next unit:** OWNERGAP2-harris-c and OWNERGAP2-ledger-order (both small); then the next free-bulk jurisdiction from OWNERGAP1-decision's list, same contract. The 27 situs-gap properties are the first concrete case for §P10a.
 - 👤 **Decisions:** S5 (may a C2-class HCAD account resolve on an exact situs match?); CANON-OWNERSHIP1 (who owns Dialysis_DB's schema in `CLAUDE.md`).
 
 ## 2. Entity identity at the source of record (ID-series) — backlog §P0d, Open-threads *Identity / operator canonicalization* and *gov agency canonicalization*
 
 - ✅ **Live:** ID2b/ID2b-caps/-caps-2 (operator canonicalization, third comp source fixed at source); ID3a–ID3e (gov agency canonicalization, live-verified); the repo-ownership hazard I16 closed (gov migrations belong to `government-lease`).
-- 🔴 **Open:** ID3d guarantor-registry wiring (prompt in `prompts/`, 🟡); ID3a-drift (the Home gaps widget reads a column ID3a's fold never writes — §P20).
-- ⏭️ **Next unit:** ID3d when a CC slot opens; ID3a-drift rides with HOME2.
+- ✅ **Live (new):** ID3d — `leases.guarantor_id` 1 → 628 of 715, subsidiaries kept distinct from DaVita/Fresenius, real FK, fill-blanks trigger.
+- 🔴 **Open:** ID3d-reconcile (its migration sits in `Dialysis` — port here, remove there; prompted); 87 guarantor strings for review (ID3d-b, not filed yet); ID3a-drift (the Home gaps widget reads a column ID3a's fold never writes — §P20).
+- ⏭️ **Next unit:** ID3d-reconcile; ID3a-drift rides with HOME2.
 
 ## 3. Domain truth, sponsors and SPEs (C2 series) — backlog §P0d, Open-threads *C2g / sponsor↔SPE gate*
 
@@ -42,10 +43,10 @@
 
 ## 4. BD pipeline funnel & operator funnel — backlog §P0b, §HP1, Open-threads *Operator funnel*
 
-- ✅ **Live:** HP1 Today-500 badge; HP1-P1a-fix (608 `bd_opportunities` rows updated in Salesforce — the first LCC→SF UPDATE); BROKER1 prospect assignment (1,303 assigned).
+- ✅ **Live:** HP1 Today-500 badge; HP1-P1a-fix (608 `bd_opportunities` rows updated in Salesforce — the first LCC→SF UPDATE); BROKER1 prospect assignment (1,303 assigned); **BR1/BR3** — `broker_companies` repaired (131 → 75, `;` composites collapsed, write guard) and `broker_company_id` 7.2% → 14.4%.
 - 🟡 **Partial:** the funnel itself — the 2026-08-28 audit measured 1.1% of gov properties with 2+ historical owner links; the rows in §P0b are the ladder from there.
-- 🔴 **Open:** the §P0b rows (re-measure before acting; the audit is three weeks old); BROKER1-sf (SF write-back) deliberately unbuilt; BR1 firm-registry repair (prompt in `prompts/`).
-- ⏭️ **Next unit:** BR1 when a CC slot opens; otherwise this lane advances through lanes 1–3.
+- 🔴 **Open:** the §P0b rows (re-measure before acting; the audit is three weeks old); BROKER1-sf (SF write-back) deliberately unbuilt; **BR4** (broker dedupe — its input is now the 661 unmatched `brokers.company` strings BR1 queued) and **BR5** (firm/agent as two fields) unblocked, not prompted.
+- ⏭️ **Next unit:** BR4 against the 661; otherwise this lane advances through lanes 1–3.
 
 ## 5. App surfaces — Home, Priority, Dialysis Overview, review workbench — backlog §P20, §P16, §HP1, Open-threads *App feedback intake (SBN)* and *App / UX*
 
@@ -94,9 +95,10 @@
 ## 12. Data coherence & known defects — backlog §P0d, §P10, §P10a, §P14, §P21
 
 - ✅ **Live:** the DEPLOY2 unapplied-migration detector (its first real catch was C1C-UNAPPLIED); doc guards in CI (STATUS header/line budget, backlog ID uniqueness, table shape).
-- 🔴 **Open:** REMEDIATION-2026-05 (the May TODOs, now rows, DB-verified); §P10 sized unfixed defects; MISPARSE1 (email fan-out blocking real brokers — prompt in `prompts/`); the Longenbaugh duplicate (lane 1).
+- ✅ **Live (new):** MISPARSE1 — `email_fanout` split by mailbox genericness, 4 → 9 of 12 real brokers recovered on the live fixture.
+- 🔴 **Open:** REMEDIATION-2026-05 (the May TODOs, now rows, DB-verified); §P10 sized unfixed defects; BR1-misparse-handoff / titleparse / fp (the rest of the contact-guard family); the Longenbaugh duplicate (lane 1); **the 27 Harris situs-gap properties are the first concrete §P10a case**.
 - 📐 **Designed:** cross-lane property identity / address resolution (§P10a) — the Harris street-shape bugs are the same class, solved lane-locally again.
-- ⏭️ **Next unit:** MISPARSE1 when a CC slot opens.
+- ⏭️ **Next unit:** BR1-misparse-handoff (firms parsed as persons — the registry it needed now exists).
 
 ## 13. Consumption layer & multi-party ownership — backlog §P1a, §P1b, §P1c
 
@@ -110,7 +112,7 @@
 
 ## 15. Process, documentation & consolidation — backlog §P21, `docs/os/BUILD-TURN-PROTOCOL.md`, `docs/claude-code/README.md`
 
-- ✅ **Live:** the prompt → response → reconcile loop with STATUS/backlog/CURRENT-STATE kept current each turn; SB-notes intake (④); leak-class rules (⑤); INVENTORY1/1b done; CLAUDE.md pass 1 (5,503 → 3,268 lines, rounds archived verbatim); backlog regrouped by category (P19/P20/P21); this file.
+- ✅ **Live:** the prompt → response → reconcile loop with STATUS/backlog/CURRENT-STATE kept current each turn; SB-notes intake (④); leak-class rules (⑤); INVENTORY1/1b done; CLAUDE.md pass 1 (5,503 → 3,268 lines, rounds archived verbatim); backlog regrouped by category (P19/P20/P21); this file; rule ⑤-CC (a CC round appends and updates its own row, never restates).
 - 🔴 **Open:** CLAUDE.md pass 2 (with Scott: which doctrines merge); INVENTORY-process items not yet exercised by a full cycle.
 - ⏭️ **Next unit:** CLAUDE.md pass 2 in chat; re-cut this file after each lane closes a unit.
 
