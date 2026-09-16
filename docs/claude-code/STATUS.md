@@ -35,11 +35,12 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **Ownership (OWN/RO)** | OWN-T0a–T0j, RO3, B1b, AC2/AC3/AC6–AC11 | 2026-09-12 | OWN-T0j verified end-to-end live; RO3 field-mapping design drafted; OWN-T0a/B1b/AC-series propagation work still open |
 | **CoStar sidebar / public records (PR5/PRI)** | PR5d, PR-scanner-3, PRI2–PRI6, HCRIS-TIMEOUT, HCRIS-TRACKER-BLIND, HCRIS-QIP-DEFICIENCY-TIMEOUT-PATTERN | 2026-09-16 | PR-scanner-3 shipped (`county_records_needed` action); `PRI6` closed ✅ 2026-09-14, both sides confirmed merged — checking on it live is what surfaced `HCRIS-TIMEOUT` (a separate, months-old defect, not a `PRI6` regression). `HCRIS-TIMEOUT` is now **four rounds deep, root cause finally isolated 2026-09-16**: two independent structural bugs, neither HCRIS-specific — `ingestion_tracker.start_run()` silently discards its own run id on every call (a `Prefer` header mismatch, repo-wide, also orphans every ingestion lock), and `aux_cms_tables` (step 3 of ~15) swallows its own step-timeout so the pipeline never reaches HCRIS (step ~8) at all. Fix not yet written — this round was deliberately triage-only. One flagged, unbuilt follow-up still queued: `qip_scores_ingestor.py`/`cms_deficiency_ingestor.py` share HCRIS's old bare-timeout bug, still correctly out of scope until the pipeline actually reaches that far. |
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k decided: attested-only widening**, prompted; gov exposes `true_owner_attested` first, then LCC widens the gate for attested rows only (≈858), ledgered + reversible |
-| **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED-478, DEED-DIA-LATENT | 2026-09-16 | GOVDEED4 live; **GOVDEED5 + GOVDEED-478 decided and prompted** (split `latest_deed_*` by source; reject placeholder deeds + clear planted grantee) — 👤 gov; GOVDEED3 prompted; dia clean |
+| **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT | 2026-09-16 | **Arc complete through GOVDEED5b** (gov PRs #400–#405, all live; `latest_deed_*` deed-only, one writer); open: GOVDEED3 (accept gate, prompted), sale-party conflicts 1,290 are a review queue; dia clean |
 | **CoStar sidebar / public records (PR5/PRI)** | PR5d, PR-scanner-3, PRI2–PRI6, HCRIS-TIMEOUT, HCRIS-TRACKER-BLIND, HCRIS-QIP-DEFICIENCY-TIMEOUT-PATTERN | 2026-09-15 | PR-scanner-3 shipped (`county_records_needed` action); `PRI6` (the connection-retry/ingestion-lock reliability sweep that started with `PRI1`'s dropped-connection crash) closed ✅ 2026-09-14, both sides confirmed merged — checking on it live is what surfaced `HCRIS-TIMEOUT` (a separate, months-old defect, not a `PRI6` regression). `HCRIS-TIMEOUT` is now three rounds deep: the original fix was correct, the real blocker was the tracker/heartbeat mechanism itself being blind (`HCRIS-TRACKER-BLIND`, fixed same round) — **awaiting live proof from a run Scott triggered 2026-09-15 (post-PR-#7411)**. One flagged, unbuilt follow-up already identified for whenever this closes: `qip_scores_ingestor.py`/`cms_deficiency_ingestor.py` share HCRIS's old bare-timeout bug. |
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k LIVE** (LCC PR #2506): 218 attested supersessions, 40/43 pairs to sponsor, 16/16 controls untouched, reversible; sponsor-as-edge = future work |
-| **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT | 2026-09-16 | GOVDEED4 + GOVDEED-478 live; GOVDEED5 split landed but a nightly cron re-planted 3,310 sale dates 20 min later → **GOVDEED5b** (👤 gov, six writers not three); GOVDEED3 prompted; dia clean |
-| **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, C1C-UNAPPLIED, OWNERGAP1, OWNERGAP2 | 2026-09-16 | **C1C closed both arms** (839 dia + 1,851 gov retired, reversible); gov gate fixed (SF sealed, SOS unsealed → **1,346 open `owner_needs_sos` with no consumer**); **OWNERGAP2 BUILT 2026-09-16** — Philadelphia verified against the live API at **20/26 (76.9%)**, Harris parser-only (HCAD is Cloudflare-gated), provenance CHECK-enforced; 👤 **nothing applied yet** (0 ledger rows, `recorded_owners` 7,585 / 0 ownergap2), awaiting the Railway redeploy + an operator POST |
+| **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT | 2026-09-16 | **Arc complete through GOVDEED5b** (gov PRs #400–#405, all live; `latest_deed_*` deed-only, one writer); open: GOVDEED3 (accept gate, prompted), sale-party conflicts 1,290 are a review queue; dia clean |
+| **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2 | 2026-09-16 | C1C closed both arms; **OWNERGAP2 merged (PR #2508), NOT run** — next: redeploy Railway ×2 → dry-run tick → apply; 1,346 `owner_needs_sos` waiting on it |
+| **App feedback intake (SBN)** | FLOWS1, HOME1, PRI1, DIA1 | 2026-09-16 | Intake protocol live (`SB notes/README.md` + `TRIAGE.md`); first pass: 8 rows → 4 prompts; FLOWS1 also needs one failed-run screenshot per flow from Scott |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
 | **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
 | **Broker identity (BR) / BROKER1** | BR1, BR2, BROKER1, BROKER1-sf | 2026-09-11 | BROKER1 prospect-assignment applied live (1,303 assigned) with a real bug found+fixed in production; BROKER1-sf (Salesforce write-back) correctly left unbuilt — no write path exists |
@@ -51,6 +52,35 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 > cuts) were moved **verbatim** to
 > [`docs/history/STATUS_claude-code_2026-08-31_to_2026-09-01.md`](../history/STATUS_claude-code_2026-08-31_to_2026-09-01.md).
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
+
+---
+
+## 2026-09-16 — GOVDEED5b + OWNERGAP2 reconciled; the SB-notes intake exists now, and its first pass produced four app prompts (Cowork)
+
+**GOVDEED5b ✅ live** (gov PR #405): the three sale propagators re-pointed to `latest_transfer_*`;
+`pg_proc` writers of `latest_deed_date` 4 → **1**; `latest_deed_date` 3,340 → **43** and holding after a
+hand-run of the 03:30 cron and a trigger fire in rolled-back transactions. Re-measured here: 43 / 43 /
+1 writer. GOVDEED2 → 4 → 478 → 5 → 5b is the whole deed arc, and it is done except GOVDEED3 (the
+accept gate) and the Python writer's deployed state, which the round scoped out and said so.
+
+**OWNERGAP2 🟡 merged, not run** (LCC PR #2508): Philadelphia 20/26 live, Harris payload-only (HCAD is
+bot-walled — the prompt's rule, honoured), guard intact and refusing a real `ABC INC`. Nothing applied
+by design. The next step is an operator sequence: redeploy both Railway services, confirm `/version`,
+dry-run tick, review, apply, and then the number the whole arc exists for — how many of the 4,021.
+
+**SB notes — the intake.** Scott's new folder (`docs/claude-code/SB notes/`) holds what he notices in
+the app. It now has a protocol (`README.md`), a ledger (`TRIAGE.md`, `SBN-n`), a line in
+`BUILD-TURN-PROTOCOL.md` §④, and `docs/claude-code/README.md` was rewritten — it still described
+`NN-slug.response.md` files and a dossier-era trail doc nobody uses; that was the exact misdirection a
+future chat would have walked into. First pass, two files → **8 rows, 4 prompts**: **FLOWS1** (eight PA
+flows failed in a week, Get Artifact 709×; the LCC side first, Scott supplies one failed-run screenshot
+per flow), **HOME1** (the gaps list is 9/10 agency-drift cleaning — ID3a's class — and one real human row;
+Home mirrors Priority; a DaVita deal under *Government highlights* is a lane-key bug to fix), **PRI1**
+(P-bands → one ranked human-only list; spec + label change only), **DIA1** (six action items graded
+human/code/noise; the Market Economics Exhibit button fails silently at `dialysis.js:1744`; tiles are
+stale by 22 rows and one counts a different thing: 45 "operators" vs 21 distinct `operator_id`).
+
+Every screenshot number was checked against the database before it became a row.
 
 ---
 

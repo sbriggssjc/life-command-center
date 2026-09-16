@@ -59,6 +59,12 @@ The other window may have measured this, fixed this, or be mid-flight on it. ***
 running*** has a mirror: ***in flight is not unbuilt.*** **When two honest measurements disagree,
 find the measurement that does not depend on the disputed key** rather than adjudicating keys.
 
+Reconciling also means **intake**: `docs/claude-code/responses/` (Claude Code replies) and
+`docs/claude-code/SB notes/` (Scott's in-app observations — screenshots, forwarded failure mails) are
+read every turn; each unprocessed file becomes `TRIAGE.md` rows, backlog rows and prompts before it moves
+to `done/` (`docs/claude-code/README.md`, `SB notes/README.md`). An observation Scott made in the app is
+parallel work too.
+
 ### ⑤ UPDATE the canonical docs in the SAME change
 
 Not a follow-up. The living pages, whichever the topic touches:
