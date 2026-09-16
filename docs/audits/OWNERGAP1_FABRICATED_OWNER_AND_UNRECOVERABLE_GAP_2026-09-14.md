@@ -589,3 +589,81 @@ sampling has done its job. The next unit of real work is a **matcher against fre
 miss causes above, starting with the jurisdictions that publish bulk files or open APIs. A paid provider remains
 relevant only for **LA-shaped** counties that publish no owner at all — a residual that is now demonstrably a
 small fraction of 4,021, not the whole of it.
+
+---
+
+## 10. OWNERGAP2 — the build, and what it measured (2026-09-16)
+
+The sampling above earned a build. **OWNERGAP2 is that build**, and it changes three of this
+document's own conclusions. Full record: `docs/claude-code/STATUS.md` 2026-09-16 and the
+`ownergap2-*` modules under `api/_shared/`.
+
+**Headline: the matcher was run end to end against the REAL Philadelphia API over the WHOLE
+Philadelphia population, and resolved 20 of 26 (76.9%) — above §8's 68%.** 19 resolved on the
+25 that fired; the 26th (property 36738) is a duplicate address of 28606, which resolved. Three
+refusals were **correct refusals** (multi-parcel), three were genuine no-record.
+
+⚠️ **NOTHING HAS BEEN WRITTEN TO `properties` OR `recorded_owners`.** Measured live at the close
+of the build: `recorded_owners` **7,585 rows, 0 of them `ownergap2*`-sourced**; properties with a
+`recorded_owner_id` **5,473**; `dia_ownergap2_resolution_log` **0 rows**. The tick's GET is a dry
+run and no POST has been issued — applying is an operator step.
+
+### 10.1 §8's prescribed fix was measured and is insufficient
+
+§8 concluded the Philadelphia misses were *"fixed by prefix matching."* Implemented and measured:
+**prefix-only resolves 16 of 26.** It is structurally unable to find a range **containment** row —
+`3823 Market St` lives inside `3817-39 MARKET ST`, whose prefix is `3817`. Prefix **+ containment
++ odd/even parity** resolves **20**. The parity arm is not decoration: `3823` is inside both
+`3817-39` (odd side) and `3816-40` (even side), and without it the property reports two distinct
+owners and a **false `needs_parcel_discriminator`** — a wrong answer that looks exactly like the
+safety rule working.
+
+⚠️ **Philadelphia truncates the END of a range** (`800-34` = 800..834, `798-02` = 798..802), so
+the end must be reconstructed with a carry, never read literally.
+
+### 10.2 A leading directional was being eaten by the house-number parser, costing 5 of 26
+
+The first normaliser matched `^(\d+)\s*(?:-\s*\d+)?\s*([A-Z])?\b`, which captured the `E` of
+`100 E. Lehigh Ave` as a sub-parcel letter and left the street as `LEHIGH AVE`. **Five of the 26
+reported "no record" with no error of any kind.** Fixed by requiring the letter be *attached*
+(`2910R`) and exempting directionals from the detached-letter strip. Same family as every
+plausible-and-wrong measurement in `CLAUDE.md`: the instrument answered confidently instead of
+failing.
+
+### 10.3 The fabrication guard has a live FALSE POSITIVE, and it was not weakened
+
+The City of Philadelphia records **`ABC INC`** as owner of record at `4100 CITY AVE`, and
+`dia_is_fabricated_placeholder_owner('ABC INC')` returns **true**. A real owner-of-record collides
+with the §1 quarantine pattern. **The guard is left exactly as it is** — a real name is worth less
+than the containment. The writer pre-checks and refuses with `blocked_by_fabrication_guard`,
+keeping the name and its citation in the ledger, surfaced by
+`v_dia_ownergap2_fabrication_guard_collisions`. Positive-controlled both directions the same day:
+`XYZ Dialysis Centers LLC` → true, `unknown` → true, `UNIV CITY ASSOCIATES` → false,
+`RALSTON MERCY-DOUGLASS HO` → false.
+
+### 10.4 Harris: measured, and NOT automated
+
+§9 measured 86% by hand in a browser. Probed live from Dialysis_DB via `pg_net`:
+`search.hcad.org` answers **403 with the Cloudflare managed challenge**, `hcad.org` **521**,
+`public.hcad.org/records/quicksearch.asp` **404**, and `download.hcad.org` serves a shell page
+with no enumerable file index. **There is no reachable free API or bulk path**, and automating a
+bot-protected portal is out of scope. Harris therefore ships as a **pure parser + Personal/
+Commercial discriminator fed by an operator-supplied payload** (`fetches: false`), never an
+autonomous fetcher. §9's rate stands as a rate; it is not a claim that the fetch is automatable.
+
+### 10.5 The truncation trap the design nearly shipped
+
+The first Philadelphia query fetched the whole street at `LIMIT 100`. Measured: **MARKET ST holds
+1,218 parcels and WALNUT ST 1,923** — the answer would have been a silent, arbitrary slice, and it
+survived a first verification only because that run happened to narrow to `38%MARKET ST`. The
+shipped query bands on the house number (`house-999 .. house`), orders **descending** so the
+containing range is reachable, and **reports `truncated`** when the page fills. Four live requests
+hit the 250-row limit and all four still resolved.
+
+### 10.6 Population drift from this document's numbers
+
+Re-measured live 2026-09-16 against production: owner-unknown is **4,014**, not 4,021;
+`recorded_owners` **7,582→7,585**, not 7,487; properties with an owner **5,473**, not 5,467.
+Small, real movement — stated rather than silently reconciled. ⚠️ And `county ilike '%harris%'`
+returns **52**, of which **2 are Harrison County (Marshall, TX)** — the adapter keys on equality
+and a guard pins it. §9's Harris population of 50 is correct.

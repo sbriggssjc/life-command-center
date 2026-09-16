@@ -272,6 +272,8 @@ app.all('/api/npi-consume',                (req, res) => { req.query._route = 'n
 
 // W9.4 accelerator (Prompt 101) — Outlook display-name backfill (GET dry-run / POST apply / POST ?reverse=1&batch=).
 app.all('/api/outlook-name-backfill',      (req, res) => { req.query._route = 'outlook-name-backfill';      adminHandler(req, res); });
+// OWNERGAP2 — owner resolution from free public assessor sources (dry-run on GET).
+app.all('/api/ownergap2-owner-resolve-tick', (req, res) => { req.query._route = 'ownergap2-owner-resolve-tick'; adminHandler(req, res); });
 
 // edge-data rewrites (formerly data-proxy)
 app.all('/api/gov-query', (req, res) => { req.query._route = 'edge-data'; req.query._source = 'gov'; adminHandler(req, res); });

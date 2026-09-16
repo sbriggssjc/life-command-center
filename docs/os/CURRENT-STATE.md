@@ -24,8 +24,24 @@
 for a week (C1B-GOV-GATE; `v_ownership_gaps` was live-only with no committed source — now gov PR #403).
 Fixing it sealed `owner_needs_salesforce` (0 passing) and **unsealed `owner_needs_sos` (2,019 passing)**,
 so LCC now carries **1,346 open `owner_needs_sos` tasks with no consumer**. That consumer is
-**OWNERGAP2** (free-source owner matching, prompt written 2026-09-15) — the next build, not a someday.
+**OWNERGAP2** (free-source owner matching) — ✅ **BUILT 2026-09-16, NOT YET APPLIED.**
 §"Salesforce research lanes" below is the *why*; this paragraph is the *state*.
+
+**OWNERGAP2 — owner matching from free public sources, built and verified, zero rows written.**
+Two adapters only, by design. **Philadelphia** (`phl.carto.com`, free open API) was run end to end
+against the LIVE API over the whole Philadelphia population and resolved **20 of 26 (76.9%)** —
+above the 68% measured by hand — with 3 *correct* multi-parcel refusals. **Harris ships
+`fetches: false`**: probed live, HCAD answers a Cloudflare challenge / 521 / 404 and publishes no
+enumerable bulk index, so it is a parser over an operator-supplied payload, never an autonomous
+fetcher (automating a bot-protected portal is out of scope). Every written owner must cite its
+source row — CHECK-enforced on `dia_ownergap2_resolution_log`, positive-controlled in both
+directions live (4 malformed citations refused, 2 well-formed accepted, 0 residue).
+⚠️ **NOTHING IS APPLIED**: the tick's GET is a dry run, no POST has been issued, and the ledger is
+**0 rows**; `recorded_owners` **7,585 / 0 ownergap2-sourced**, properties with an owner **5,473**,
+`true_owner_id` untouched. 👤 Applying is an operator step after the Railway redeploy —
+`POST /api/ownergap2-owner-resolve-tick?jurisdiction=philadelphia_pa`. Audit §10; backlog
+`OWNERGAP2`. ⚠️ Re-measure before quoting the old denominators: owner-unknown is **4,014**, not
+4,021.
 
 **Domain truth now competes where a registry backs it (C2k, LCC PR #2506).** The gov/dia `true_owner`
 (evidence weight 5.0) used to enter `lcc_property_owner_evidence` only on unresolved assets — a
