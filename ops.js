@@ -3069,7 +3069,90 @@ function opsShowMore(key) {
 }
 window.opsShowMore = opsShowMore;
 
+// PRI2 (2026-09-16): behind PRIORITY_TAB_V2, the Priority tab is re-composed
+// onto v_lcc_seller_prospect_queue (the seller doctrine's own ranked list)
+// instead of the P-band worklist. Flag OFF -> byte-identical to the pre-PRI2
+// tab (this delegate is the ONLY change to the v1 path). See
+// docs/audits/PRI2_SIDE_BY_SIDE_<date>.md for the gate before flipping it on.
 async function renderPriorityQueuePage(band) {
+  if (typeof checkFlag === 'function' && checkFlag('priority_tab_v2')) {
+    return renderPriorityQueuePageV2();
+  }
+  return renderPriorityQueuePageV1(band);
+}
+window.renderPriorityQueuePage = renderPriorityQueuePage;
+
+function _pqV2WhyNow(r) {
+  var bits = [];
+  if (r.newer_lease) bits.push('newer lease');
+  if (r.reason_debt) bits.push('debt maturing');
+  if (r.reason_value_creation_developer) bits.push('developer');
+  if (!bits.length && r.reason_to_sell) bits.push(String(r.reason_to_sell).replace(/_/g, ' '));
+  return bits.length ? bits.join(', ') : 'in the seller-timing window';
+}
+
+// The one CTA per row: open the property if we have one, else open the owner.
+function _pqV2Cta(r) {
+  if (r.property_id != null && r.domain) {
+    var dom = r.domain === 'government' ? 'gov' : r.domain === 'dialysis' ? 'dia' : r.domain;
+    return '<button class="q-action primary" onclick="openUnifiedDetail(' + jsStringArg(dom) + ', {property_id: ' + esc(String(r.property_id)) + '}, {}, \'Ownership &amp; CRM\')">Open property →</button>';
+  }
+  if (r.entity_id) {
+    return '<button class="q-action primary" onclick="openEntityDetail(' + jsStringArg(String(r.entity_id)) + ')">Open owner →</button>';
+  }
+  return '';
+}
+
+async function renderPriorityQueueFooterV2(el) {
+  if (!el) return;
+  var res = await opsApi('/api/priority-hidden-band-counts');
+  if (!res.ok || !res.data) {
+    el.innerHTML = '<div class="pq-v2-footer-note">Automated-lane counts unavailable.</div>';
+    return;
+  }
+  var bands = Array.isArray(res.data.bands) ? res.data.bands : [];
+  if (!bands.length) { el.innerHTML = ''; return; }
+  var lines = bands.map(function (b) {
+    return b.n + ' in ' + esc(b.band) + (b.producer
+      ? ' — handled by ' + esc(b.producer)
+      : ' — waiting on an automated producer');
+  });
+  el.innerHTML = '<div class="pq-v2-footer">' + res.data.total + ' resolved automatically today (not shown above): '
+    + lines.join(' · ') + '</div>';
+}
+
+async function renderPriorityQueuePageV2() {
+  var el = document.getElementById('priorityQueueContent');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+  window._pqCurrentBand = null;
+  var res = await opsApi('/api/seller-prospect-queue?chip=all&limit=100');
+  if (!res.ok || !res.data) { el.innerHTML = opsErrorState(res, 'renderPriorityQueuePageV2()', 'Could not load the priority queue'); return; }
+  var data = res.data;
+  var items = Array.isArray(data.items) ? data.items : [];
+  var html = '<div class="ops-header"><h2>Priority Queue</h2>'
+    + '<button class="q-action primary" onclick="renderCadenceDashboard()">Cadence dashboard →</button></div>';
+  html += '<div class="rc-intro">The seller doctrine’s own ranked list — $2.5M–$25M, a newer lease or a reason to sell, an owner nobody has reached. Each row is why-now plus one button.</div>';
+  if (!items.length) {
+    html += '<div class="ops-empty">Nothing in the seller queue right now. ✓</div>';
+  } else {
+    var rows = items.map(function (r) {
+      return '<div class="q-item" data-q-id="' + esc(r.entity_id != null ? String(r.entity_id) : '') + '">'
+        + '<div class="q-item-header"><span class="q-item-title">' + esc(r.owner_name || r.entity_name || 'Owner') + '</span>'
+        + '<div class="q-item-badges"><span class="q-badge">' + esc(_pqV2WhyNow(r)) + '</span></div></div>'
+        + '<div class="q-item-meta">' + esc(_todayMoney ? _todayMoney(r.rank_value) : String(r.rank_value || '')) + '</div>'
+        + '<div class="q-actions">' + _pqV2Cta(r) + '</div>'
+        + '</div>';
+    });
+    html += opsPagedRows('pqv2', rows);
+  }
+  html += '<div id="pqV2Footer" class="pq-v2-footer-wrap"></div>';
+  el.innerHTML = html;
+  renderPriorityQueueFooterV2(document.getElementById('pqV2Footer'));
+}
+window.renderPriorityQueuePageV2 = renderPriorityQueuePageV2;
+
+async function renderPriorityQueuePageV1(band) {
   var el = document.getElementById('priorityQueueContent');
   if (!el) return;
   window._pqCurrentBand = band || null;
@@ -3246,7 +3329,7 @@ async function renderPriorityQueuePage(band) {
   el.innerHTML = html;
   perf.end();
 }
-window.renderPriorityQueuePage = renderPriorityQueuePage;
+window.renderPriorityQueuePageV1 = renderPriorityQueuePageV1;
 
 // Bulk-open the top N owner opportunities still needing one (R4-C §2). Reuses
 // the idempotent open_opportunity path, so re-clicks and overlaps are safe.
