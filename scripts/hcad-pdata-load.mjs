@@ -80,6 +80,37 @@
 // a hand-curated partial load like Cowork's 37-row seed, which deliberately
 // keeps a few C2/X2/L1 rows to exercise that exclusion path). `--include-all`
 // disables the filter for exactly that kind of deliberate broader load.
+//
+// ── OWNERGAP2-harris-c: THE REAL FULL-ROLL LOAD SILENTLY UNDER-WROTE AND MIS-
+//    WROTE ITS OUTPUT (four separate defects, found on Scott's real
+//    2026-09-16 run + fixed here). See
+//    `docs/claude-code/prompts/OWNERGAP2-harris-c-*.md` for the full writeup.
+//    Numbered 1-4 here for cross-reference; NOT the same numbering as the
+//    "PROBLEM 1/2/3" headers above (those are OWNERGAP2-harris-b's).
+//   1. `resolution=merge-duplicates` never fired without an explicit
+//      `on_conflict=acct,file_year` — PostgREST infers an arbiter WITHOUT one
+//      only from the PRIMARY KEY (the `id` bigserial here, which never
+//      collides), not from `uq_hcad_stage_acct_year`. 19 of 72 chunks 23505'd
+//      on the real load; 18,276 of 71,276 rows never landed. Fixed: the POST
+//      path now carries `?on_conflict=acct,file_year` explicitly.
+//   2. The failure was invisible: `flush()` read `.ok`/`.status` off
+//      `upsertRows()`'s real `{written, errors}` return shape, so it always
+//      printed `chunk_at_0_failed:undefined` and `written` never advanced —
+//      "wrote 0 of 71276" even when 53,000 rows had landed. Fixed: the real
+//      shape is read, and a failed chunk's PostgREST `code`/`message` are
+//      printed (not just the HTTP status).
+//   3. The real 2026 `real_acct.txt` header carries NO `name`-shaped column
+//      at all (`acct, yr, mailto, mail_addr_1, ...`), so `owner_name` was
+//      NULL on every one of 71,276 rows. Fixed: `owners.txt`'s ln_num=1 row
+//      (its first row per acct) fills `owner_name` itself when the real_acct
+//      header has no name column (see `hcad-pdata-parse.js`'s header for the
+//      full mapping story) — and `--apply` REFUSES to write at all if any
+//      staged row still has no owner_name after that fallback (prints the
+//      count; a stage with null owners is worse than no stage).
+//   4. HCAD's own placeholder owner string ("CURRENT OWNER", written when
+//      ownership on an account has never been resolved) is filtered by the
+//      MATCHER now, not here — see `isHcadPlaceholderOwnerName` in
+//      `ownergap2-harris-pdata-match.js`.
 // ============================================================================
 
 import { createReadStream, readFileSync, statSync, existsSync, readdirSync } from 'node:fs';
@@ -98,7 +129,7 @@ const UPSERT_BATCH_SIZE = 1000;
 function parseArgs(argv) {
   const out = {
     file: null, owners: null, fileYear: null, apply: false, limit: null,
-    includeAll: false, dsn: null,
+    includeAll: false, includeClasses: [], dsn: null,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
@@ -108,6 +139,9 @@ function parseArgs(argv) {
     else if (a === '--apply') out.apply = true;
     else if (a === '--limit') out.limit = parseInt(argv[++i], 10);
     else if (a === '--include-all') out.includeAll = true;
+    else if (a === '--include-classes') {
+      out.includeClasses = String(argv[++i] || '').split(',').map((c) => c.trim().toUpperCase()).filter(Boolean);
+    }
     else if (a === '--dsn') out.dsn = argv[++i];
     else if (a === '--help' || a === '-h') out.help = true;
   }
@@ -120,7 +154,8 @@ OWNERGAP2-harris HCAD PDATA loader
 
 Usage:
   node --env-file=.env.local scripts/hcad-pdata-load.mjs --file <path> \\
-    [--owners <path>] [--file-year YYYY] [--apply] [--limit N] [--include-all] [--dsn <url>]
+    [--owners <path>] [--file-year YYYY] [--apply] [--limit N] [--include-all] \\
+    [--include-classes C2,X2] [--dsn <url>]
 
   --file <path>       REQUIRED. Path to Real_acct_owner.zip, an extracted
                        real_acct.txt, or a directory containing either.
@@ -139,6 +174,18 @@ Usage:
   --include-all       Stage EVERY state_class, not just F1/F2 (Real,
                        Commercial/Industrial) -- see this file's header for
                        why F1/F2-only is the default for a full 889 MB load.
+  --include-classes C2,X2
+                       Stage these ADDITIONAL state_class codes alongside
+                       F1/F2 (comma-separated), without staging the whole
+                       county the way --include-all does. Pass the SAME list
+                       to the matcher's buildHarrisPdataCandidates /
+                       resolveHarrisFromPdata "includeClasses" option to
+                       admit them at match time too -- staging alone does not
+                       widen what the matcher will accept as real-property
+                       commercial. Whether to ever admit a class like C2
+                       (Texas PTAD "vacant commercial lot") is an operator
+                       decision (S5, docs/os/OPERATOR-CHECKLIST.md), never a
+                       default this script flips on its own.
   --dsn <url>         Alternative to DIA_SUPABASE_URL/DIA_SUPABASE_SERVICE_KEY
                        env vars -- see PROBLEM 3 in this file's header for
                        the normal (env-var) path. Accepts
@@ -215,15 +262,26 @@ async function openSources({ file, owners: ownersPath }) {
 
 /**
  * Stream-parse real_acct.txt line-by-line, filter to F1/F2 (unless
- * `includeAll`), fold in owners.txt's second-owner supplement (fill-blanks
- * only), and upsert in `UPSERT_BATCH_SIZE` batches via `upsert(chunk)`.
- * Never materializes more than one batch of ALREADY-FILTERED rows at once --
- * the whole point of this function existing (OWNERGAP2-harris-b Problem 2).
+ * `includeAll`), fold in owners.txt's owner supplement (fill-blanks only),
+ * and -- once the whole file has been read -- upsert the STAGED rows (never
+ * the raw 889 MB text) via `upsert(rows)`. The DECOMPRESSED TEXT is never
+ * materialized as more than the current line -- the whole point of this
+ * function existing (OWNERGAP2-harris-b Problem 2) -- but the much smaller
+ * set of already-filtered STAGED rows (tens of thousands, not millions) is
+ * now held in memory as one array rather than flushed batch-by-batch, so the
+ * "refuse to apply on a missing owner_name" check below (Problem 3) can run
+ * BEFORE anything is written, not discover the defect after 53,000 rows
+ * already landed.
  *
- * @returns {{totalLines, skippedBlank, staged, classSkipped, written, errors, sampleRow}}
+ * @returns {{totalLines, skippedBlank, staged, classSkipped, written, errors,
+ *   sampleRow, missingOwnerName, ownerNameHeaderMissing}}
  */
 async function streamLoadRealAcct(stream, opts) {
-  const { fileYear, sourceFile, apply, limit, includeAll, ownersByAcct, upsert } = opts;
+  const {
+    fileYear, sourceFile, apply, limit, includeAll, ownersByAcct, upsert,
+    includeClasses = [],
+  } = opts;
+  const includeClassSet = new Set(includeClasses.map((c) => String(c).trim().toUpperCase()).filter(Boolean));
   const rl = createInterface({ input: stream, crlfDelay: Infinity });
 
   let hm = null;
@@ -233,19 +291,8 @@ async function streamLoadRealAcct(stream, opts) {
   let staged = 0;
   let classSkipped = 0;
   let sampleRow = null;
-  let batch = [];
-  let written = 0;
-  const errors = [];
-
-  const flush = async () => {
-    if (!batch.length) return;
-    if (apply) {
-      const r = await upsert(batch);
-      if (!r.ok) errors.push(`chunk_at_${written}_failed:${r.status}`);
-      else written += batch.length;
-    }
-    batch = [];
-  };
+  let missingOwnerName = 0;
+  const rows = [];
 
   for await (const rawLine of rl) {
     lineNo += 1;
@@ -261,6 +308,18 @@ async function streamLoadRealAcct(stream, opts) {
     const { row, blank } = parseRealAcctLine(rawLine, hm, { fileYear, sourceFile });
     if (blank) { skippedBlank += 1; continue; }
 
+    // OWNERGAP2-harris-c PROBLEM 3: the real 2026 real_acct.txt header is
+    // `acct, yr, mailto, mail_addr_1, ...` -- there is NO `name`-shaped
+    // column, so FIELD_CANDIDATES.owner_name matches nothing and every row's
+    // owner_name comes back null from parseRealAcctLine. owners.txt's row at
+    // ln_num 1 (i.e. its FIRST row per acct, in file order -- the same
+    // ordering assumption the owner_name_2 fallback below already makes) IS
+    // the primary owner per the ticket, so it fills owner_name itself when
+    // real_acct.txt's own column is absent, never just a second owner.
+    if (!row.owner_name && ownersByAcct && ownersByAcct.size) {
+      const primary = ownersByAcct.get(row.acct);
+      if (primary && primary.length >= 1 && primary[0].name) row.owner_name = primary[0].name;
+    }
     // Fold owners.txt's SECOND owner in as owner_name_2 -- fill-blanks only,
     // never overwrites a value real_acct.txt's own mailto column already
     // supplied (see hcad-pdata-parse.js's FIELD_CANDIDATES header for why
@@ -270,18 +329,46 @@ async function streamLoadRealAcct(stream, opts) {
       if (extra && extra.length > 1) row.owner_name_2 = extra[1].name;
     }
 
-    if (!includeAll && !isCommercialRealClass(row.state_class)) { classSkipped += 1; continue; }
+    const stateClass = row.state_class ? String(row.state_class).trim().toUpperCase() : null;
+    const admittedByIncludeClasses = !!stateClass && includeClassSet.has(stateClass);
+    if (!includeAll && !admittedByIncludeClasses && !isCommercialRealClass(row.state_class)) {
+      classSkipped += 1; continue;
+    }
     row.is_commercial_class = isAnyCommercialClass(row.state_class);
+
+    if (!row.owner_name) missingOwnerName += 1;
 
     if (!sampleRow) sampleRow = row;
     staged += 1;
     if (Number.isFinite(limit) && staged > limit) { staged -= 1; break; }
-    batch.push(row);
-    if (batch.length >= UPSERT_BATCH_SIZE) await flush();
+    rows.push(row);
   }
-  await flush();
 
-  return { totalLines, skippedBlank, staged, classSkipped, written, errors, sampleRow };
+  const ownerNameHeaderMissing = !(hm && 'owner_name' in hm.map);
+  let written = 0;
+  const errors = [];
+  if (apply) {
+    // OWNERGAP2-harris-c PROBLEM 3 (refusal): a stage with null owners is
+    // worse than no stage -- the matcher would read `owner: null` on every
+    // such row and report `source_states_no_owner`, silently discarding
+    // exactly the real-owner signal this load exists to capture. Refuse the
+    // WHOLE write rather than land a partially-nulled stage; the operator
+    // reruns with a `--owners` file that actually covers the gap, or accepts
+    // the (printed) count as a known ceiling before forcing a partial load.
+    if (missingOwnerName > 0) {
+      errors.push(`refused_missing_owner_name:${missingOwnerName}_of_${staged}_staged_rows_have_no_owner_name`
+        + `${ownerNameHeaderMissing ? ' (real_acct.txt header carries no name column at all)' : ''}`);
+    } else {
+      const r = await upsert(rows);
+      written = r.written;
+      if (r.errors.length) errors.push(...r.errors);
+    }
+  }
+
+  return {
+    totalLines, skippedBlank, staged, classSkipped, written, errors, sampleRow,
+    missingOwnerName, ownerNameHeaderMissing,
+  };
 }
 
 async function upsertRows(rows, deps = {}) {
@@ -290,15 +377,27 @@ async function upsertRows(rows, deps = {}) {
   const errors = [];
   for (let i = 0; i < rows.length; i += UPSERT_BATCH_SIZE) {
     const chunk = rows.slice(i, i + UPSERT_BATCH_SIZE);
-    // The dedup key is the plain unique index on (acct, file_year) -- both
-    // are single, non-expression columns, so PostgREST can infer the ON
-    // CONFLICT arbiter without an explicit on_conflict= query param
-    // (CLAUDE.md's "PostgREST write surface" footgun: an expression/partial
-    // index would NOT be inferable this way, but this one is plain columns).
-    const r = await q('dialysis', 'POST', 'hcad_real_acct_stage', chunk, {
+    // OWNERGAP2-harris-c: `on_conflict=` MUST be passed explicitly. PostgREST
+    // infers an ON CONFLICT arbiter WITHOUT it only from the table's PRIMARY
+    // KEY, never from another unique index -- even a plain-column one
+    // (CLAUDE.md's "PostgREST write surface" footgun talks about expression/
+    // partial indexes being un-inferable; a comment on the pre-fix code
+    // claimed the plain-column form didn't need this, which was itself
+    // wrong). `hcad_real_acct_stage`'s PK is the `id` bigserial, which a
+    // fresh row never collides on -- so every chunk touching one of the
+    // already-staged accounts hit `23505 duplicate key value violates
+    // unique constraint "uq_hcad_stage_acct_year"` on the REAL load (19 of
+    // 72 chunks, 18,276 of 71,276 rows never written).
+    const r = await q('dialysis', 'POST', 'hcad_real_acct_stage?on_conflict=acct,file_year', chunk, {
       Prefer: 'resolution=merge-duplicates,return=minimal',
     });
-    if (!r.ok) { errors.push(`chunk_${i}_failed:${r.status}`); continue; }
+    if (!r.ok) {
+      const code = r.data && typeof r.data === 'object' && !Array.isArray(r.data) ? r.data.code : null;
+      const message = r.data && typeof r.data === 'object' && !Array.isArray(r.data) ? r.data.message : null;
+      errors.push(`chunk_${i}_failed:status=${r.status}${code ? `,code=${code}` : ''}`
+        + `${message ? `,message=${String(message).slice(0, 200)}` : ''}`);
+      continue;
+    }
     written += chunk.length;
   }
   return { written, errors };
@@ -326,14 +425,17 @@ async function main() {
 
   const fileYear = Number.isFinite(args.fileYear) ? args.fileYear : new Date().getFullYear();
   console.log(`[hcad-pdata-load] file_year=${fileYear} apply=${args.apply} `
-    + `include_all=${args.includeAll} source=${args.file}`);
+    + `include_all=${args.includeAll} include_classes=${args.includeClasses.join(',') || 'none'} `
+    + `source=${args.file}`);
 
   const { stream, sourceFile, ownersText } = await openSources(args);
 
-  // owners.txt is the small multi-owner SUPPLEMENT (buffered -- see header);
-  // real_acct.txt's own `name`/`mailto` already source owner_name/owner_name_2
-  // per-line, so this only fills a SECOND owner when real_acct.txt's own
-  // mailto column left owner_name_2 blank.
+  // owners.txt is the small multi-owner SUPPLEMENT (buffered -- see header).
+  // OWNERGAP2-harris-c: on the real 2026 export real_acct.txt carries NO
+  // `name`-shaped column at all, so owners.txt's ln_num=1 row fills
+  // owner_name ITSELF, not just a second owner -- see the fallback inside
+  // `streamLoadRealAcct`. It still only fills owner_name_2 (fill-blanks) when
+  // real_acct.txt's own mailto column left it blank.
   let ownersByAcct = new Map();
   if (ownersText) {
     const ownersParsed = parseOwnersText(ownersText);
@@ -349,7 +451,7 @@ async function main() {
   try {
     result = await streamLoadRealAcct(stream, {
       fileYear, sourceFile, apply: args.apply, limit: args.limit,
-      includeAll: args.includeAll, ownersByAcct,
+      includeAll: args.includeAll, includeClasses: args.includeClasses, ownersByAcct,
       upsert: (rows) => upsertRows(rows),
     });
   } catch (err) {
@@ -361,12 +463,17 @@ async function main() {
     return;
   }
 
-  const filterLabel = args.includeAll ? 'ALL classes (--include-all)' : 'F1/F2 real-commercial only';
+  const filterLabel = args.includeAll
+    ? 'ALL classes (--include-all)'
+    : `F1/F2 real-commercial only${args.includeClasses.length ? ` + ${args.includeClasses.join(',')} (--include-classes)` : ''}`;
   console.log(`[hcad-pdata-load] parsed ${result.totalLines} lines -> ${result.staged} rows staged `
     + `(${filterLabel}) (${result.skippedBlank} skipped blank/no-acct, `
     + `${result.classSkipped} skipped non-F1/F2)`);
   console.log('[hcad-pdata-load] -- see the migration header: F1/F2 classification is UNVERIFIED '
     + 'against the real codebook PDF');
+  console.log(`[hcad-pdata-load] owner_name missing on ${result.missingOwnerName} of ${result.staged} `
+    + `staged rows${result.ownerNameHeaderMissing ? ' (real_acct.txt header carries no name column -- '
+    + 'owners.txt is the sole owner_name source)' : ''}`);
 
   if (!args.apply) {
     console.log('[hcad-pdata-load] DRY RUN -- pass --apply to write to hcad_real_acct_stage.');
@@ -377,7 +484,7 @@ async function main() {
   console.log(`[hcad-pdata-load] wrote ${result.written} of ${result.staged} rows to hcad_real_acct_stage `
     + `(source_file=${sourceFile}, file_year=${fileYear})`);
   if (result.errors.length) {
-    console.error(`[hcad-pdata-load] ${result.errors.length} chunk(s) failed: ${result.errors.join('; ')}`);
+    console.error(`[hcad-pdata-load] ${result.errors.length} error(s): ${result.errors.join('; ')}`);
     process.exit(3);
   }
 }
