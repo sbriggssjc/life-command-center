@@ -21,6 +21,7 @@
 import { authenticate } from '../_shared/auth.js';
 import { domainQuery } from '../_shared/domain-db.js';
 import { PHILADELPHIA, HARRIS, resolveOwnerForProperty } from '../_shared/ownergap2-sources.js';
+import { fetchHarrisPdataForProperty } from '../_shared/ownergap2-harris-pdata-match.js';
 import {
   planOwnerWrite, applyOwnerResolution, loadOperatorKeys,
 } from '../_shared/ownergap2-owner-writeback.js';
@@ -146,15 +147,24 @@ export async function handleOwnerGap2ResolveTick(req, res) {
       verdict = await resolveOwnerForProperty(PHILADELPHIA, { address: property.address },
         { fetchImpl: (...a) => fetch(...a) });
     } else {
-      const payload = harrisPayloads.get(String(property.property_id));
-      if (!payload) {
-        verdict = {
-          status: 'unresolved', reason: 'no_operator_payload_supplied',
-          owner: null, citation: null, sourceRecordIds: [],
-        };
-      } else {
-        verdict = await resolveOwnerForProperty(HARRIS,
-          { ...payload, address: payload.address || property.address }, {});
+      // OWNERGAP2-harris: the free HCAD bulk PDATA stage (loaded by
+      // scripts/hcad-pdata-load.mjs from an operator-supplied local file —
+      // this environment has no egress to hcad.org) is the PRIMARY automated
+      // path. An operator-supplied payload (the pre-existing manual capture
+      // route) remains a FALLBACK for any property the loaded export does not
+      // cover, never removed.
+      verdict = await fetchHarrisPdataForProperty(property.address, {});
+      if (verdict.status !== 'resolved') {
+        const payload = harrisPayloads.get(String(property.property_id));
+        if (payload) {
+          verdict = await resolveOwnerForProperty(HARRIS,
+            { ...payload, address: payload.address || property.address }, {});
+        } else if (!verdict.reason) {
+          verdict = {
+            status: 'unresolved', reason: 'no_operator_payload_supplied',
+            owner: null, citation: null, sourceRecordIds: [],
+          };
+        }
       }
     }
 
