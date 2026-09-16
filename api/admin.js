@@ -18642,6 +18642,28 @@ async function handleNextBestAction(req, res) {
     for (const row of rows) merged.push(row);
   }
 
+  // HOME1/§A (2026-09-16): this widget ("Top data gaps to close") is meant to
+  // be human next-steps only — a named next-source to check plus, where
+  // possible, a sidebar-capturable target URL. `v_next_best_action`
+  // (both dia + gov) also emits DATA-CLEANING drift classes
+  // (gov `agency_drift:*`, dia `cms_chain_drift:*` / `lease_tenant_drift`) —
+  // e.g. "Resolve agency drift: property says 'GSA ...', lease says
+  // 'METROPOLITAN S...'" — which are string-reconciliation gaps a resolver
+  // can close without a human (see the ID3a agency-registry fold,
+  // docs/os/CURRENT-STATE.md), never a research task with a source to check.
+  // Excluded here rather than in the view: this repo does not own the gov DB
+  // objects (CLAUDE.md "ONE REPO OWNS EACH DATABASE'S OBJECTS"), and the dia
+  // view is slated for the same treatment, so the admission predicate lives
+  // in the one place this repo can safely change it.
+  const DRIFT_GAP_TYPE_PREFIXES = ['agency_drift', 'cms_chain_drift', 'lease_tenant_drift'];
+  let suppressedDataCleaning = 0;
+  const humanActionable = merged.filter((row) => {
+    const gt = String(row.gap_type || '');
+    const isDrift = DRIFT_GAP_TYPE_PREFIXES.some((p) => gt === p || gt.startsWith(p + ':'));
+    if (isDrift) { suppressedDataCleaning++; return false; }
+    return true;
+  });
+
   // R4-D #5 (2026-06-05): magnitude plausibility guard. A dia row surfaced a
   // "$950M" gap_value (QA#1 aggregate-bleed class — a portfolio sale price bled
   // onto a single property and not yet auto-nulled). Such artifacts otherwise
@@ -18651,7 +18673,7 @@ async function handleNextBestAction(req, res) {
   // no DB writes — so it never auto-nulls a legitimately large gov building.
   const NBA_VALUE_CEILING = { dialysis: 50000000, government: 250000000 };
   let suppressedImplausible = 0;
-  const plausible = merged.filter(row => {
+  const plausible = humanActionable.filter(row => {
     const ceiling = NBA_VALUE_CEILING[row.source_domain] ?? NBA_VALUE_CEILING.government;
     const v = Number(row.gap_value);
     if (Number.isFinite(v) && v > ceiling) { suppressedImplausible++; return false; }
@@ -18729,6 +18751,7 @@ async function handleNextBestAction(req, res) {
     // magnitude guard) so the "N total open" UI count agrees with the list.
     total_merged:  deduped.length,
     total_raw:     merged.length,
+    suppressed_data_cleaning: suppressedDataCleaning,
     suppressed_implausible: suppressedImplausible,
     returned:      items.length,
     limit, offset,
