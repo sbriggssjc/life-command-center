@@ -5,7 +5,7 @@ systems the repo cannot reach (Power Automate, Salesforce), payloads only a huma
 decisions that are Scott's. Cowork adds a row when a round ends on one of these; Scott ticks it; Cowork
 verifies and removes it in the next turn. Done rows are struck through and dropped after one turn.
 
-Updated 2026-09-16 (late). Railway auto-deploys `main` (web app at `8ab35ec9`); the standalone MCP
+Updated 2026-09-16 (night): F1c re-specified after the first test; H1–H4 done by Cowork from the files in Downloads; H5 waits on `OWNERGAP2-harris-b`. Railway auto-deploys `main` (web app at `8ab35ec9`); the standalone MCP
 service has no `/version` route — Cowork verifies it by calling a tool.
 
 ## Deploys
@@ -22,7 +22,7 @@ from the exported definitions** (`SB notes/done/*.zip`, 2026-09-16). One addendu
 
 | # | flow | edit | why |
 |---|---|---|---|
-| **F1c** | **Http → Get file (LCC Get Artifact)** | You applied option B (metadata + link), which is right for large files but removed the bytes for *all* files. Add a **Condition** after `Get file metadata using path`: `Size` **is less than** `20000000`. **If yes** → a `Response` with the *old* body: `{ "ok": true, "content_base64": "@{base64(body('Get_file_content_using_path'))}", "content_type": "@{body('Get_file_metadata_using_path')?['MediaType']}" }` (Status 200). **If no** → the metadata `Response` you already built, with `"ok": false, "reason": "too_large"` added to its JSON. Save; test with one small file and one large. | LCC's `fetchSharepointBytes()` still expects `content_base64`; since option B, every artifact fetch fails softly. LCC's half (both shapes + dead-letter) is prompt `FLOWS1-artifact`; run F1c first or together. |
+| **F1c** | **Http → Get file (LCC Get Artifact)** | First test failed at `Get file metadata using path` — its *File Path* referenced `body('Get_file_content_using_path')`, and any reference to that chunked body fails. **Fix:** (1) set the metadata step's File Path to the trigger expression (copy it from `Get file content using path`, e.g. `triggerBody()?['server_relative_url']`); (2) drag `Get file metadata` **above** `Get file content`; (3) drag `Get file content` **into the True branch** above the bytes `Response`; (4) bytes `Response` body = `json(concat('{"ok":true,"content_type":"', coalesce(body('Get_file_metadata_using_path')?['MediaType'],'application/octet-stream'), '","content_base64":"', base64(body('Get_file_content_using_path')), '"}'))`; (5) False branch = your metadata response + `"ok": false, "reason": "too_large"`. Test large (→ too_large, no 24 s fetch) then small (→ content_base64). | Large files never enter the chunked fetch; LCC's `FLOWS1-artifact` (merged) reads both shapes. |
 
 After F1c and the LCC round: forward the next Saturday digest into `SB notes/`.
 
@@ -30,11 +30,8 @@ After F1c and the LCC round: forward the next Saturday digest into `SB notes/`.
 
 | # | step | how | verify |
 |---|---|---|---|
-| **H1** | Download HCAD's bulk roll | `https://hcad.org/pdata/pdata-property-downloads.html` → **Real_acct_owner.zip** (no login). Save anywhere, e.g. `C:\Users\scott\Downloads\Real_acct_owner.zip`. | file size tens of MB |
-| **H2** | Check the commercial class codes | open `https://hcad.org/assets/uploads/pdf/pdataCodebook.pdf`, find `state_class`; confirm **F1/F2** are commercial real and **L1/L2** business-personal. If different, tell Cowork (one-line edit in `api/_shared/hcad-pdata-parse.js`). | |
-| **H3** | Dry-run the loader (repo root) | `node scripts/hcad-pdata-load.mjs --file C:\Users\scott\Downloads\Real_acct_owner.zip --file-year 2026` | printed counts: total rows, commercial rows, one sample row — paste them to Cowork |
-| **H4** | Apply | same command + `--apply` | `select count(*) from hcad_real_acct_stage` on Dialysis_DB (Cowork checks) |
-| **H5** | Tell Cowork "H4 done" | Cowork runs the tick dry run (`jurisdiction=harris_tx`), you approve the 20-row read, Cowork applies and re-measures, same as Philadelphia. | |
+| ~~H1–H4~~ | ✅ **Done by Cowork 2026-09-16** from `Downloads\Real_acct_owner.zip` + `pdataCodebook.pdf`: file is tab-delimited with the expected headers; F1 = 68,811 / F2 = 2,465; the stage table migration was applied (it had never run) and a **37-row targeted subset** (the accounts on the 50 target streets) loaded. The loader itself cannot read the 889 MB file (`RangeError: Invalid string length`) and `.env.local` has no Dialysis credentials — both in `OWNERGAP2-harris-b`. | | |
+| **H5** | ⏸ **Waits on `OWNERGAP2-harris-b`** — the live dry run returned 0/50 because the matcher queries the stage with LCC's street shape (`CRENSHAW RD`) while HCAD stores `CRENSHAW` + `RD` separately. After that round: Cowork re-runs the dry run, you approve the read, Cowork applies. | | |
 
 ## Decisions (Scott's)
 

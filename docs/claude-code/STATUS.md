@@ -39,7 +39,7 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **CoStar sidebar / public records (PR5/PRI)** | PR5d, PR-scanner-3, PRI2–PRI6, HCRIS-TIMEOUT, HCRIS-TRACKER-BLIND, HCRIS-QIP-DEFICIENCY-TIMEOUT-PATTERN | 2026-09-15 | PR-scanner-3 shipped (`county_records_needed` action); `PRI6` (the connection-retry/ingestion-lock reliability sweep that started with `PRI1`'s dropped-connection crash) closed ✅ 2026-09-14, both sides confirmed merged — checking on it live is what surfaced `HCRIS-TIMEOUT` (a separate, months-old defect, not a `PRI6` regression). `HCRIS-TIMEOUT` is now three rounds deep: the original fix was correct, the real blocker was the tracker/heartbeat mechanism itself being blind (`HCRIS-TRACKER-BLIND`, fixed same round) — **awaiting live proof from a run Scott triggered 2026-09-15 (post-PR-#7411)**. One flagged, unbuilt follow-up already identified for whenever this closes: `qip_scores_ingestor.py`/`cms_deficiency_ingestor.py` share HCRIS's old bare-timeout bug. |
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k LIVE** (LCC PR #2506): 218 attested supersessions, 40/43 pairs to sponsor, 16/16 controls untouched, reversible; sponsor-as-edge = future work |
 | **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT | 2026-09-16 | **Arc complete through GOVDEED5b** (gov PRs #400–#405, all live; `latest_deed_*` deed-only, one writer); open: GOVDEED3 (accept gate, prompted), sale-party conflicts 1,290 are a review queue; dia clean |
-| **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, MCP1 | 2026-09-16 | 20 Philadelphia owners live; **MCP1 live** (gate #6 passes); **Harris adapter built, run = operator H1–H5**; 1,346 `owner_needs_sos` still the feed |
+| **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, OWNERGAP2-harris-b, MCP1 | 2026-09-16 | 20 Philadelphia owners live; MCP1 live; **Harris stage seeded (37 rows), matcher queries the wrong street shape → harris-b**; 1,346 `owner_needs_sos` still the feed |
 | **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact/-order/-path, HOME1, HOME2, PRI1, PRI2, DIA1, DIA1b, DIA1b-operators, ID3a-drift | 2026-09-16 | HOME1/PRI1/DIA1/DIA1b done; **PRI2 built, flag OFF → Scott's side-by-side**; Scott's 7 flow edits verified from exports — F1 option B broke the byte contract → **FLOWS1-artifact** + F1c; FLOWS1-order prompted |
 | **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–4, INVENTORY1, INVENTORY1b, INVENTORY-process, REMEDIATION-2026-05, FLAGS-geocode, REGISTRY-contacts-hub, REPO1 | 2026-09-16 | **INVENTORY1b done (3 rounds, DB-verified)**: 9 flags → 7 deliberate + 2 for Scott; Phase 2.3–2.6 was a stale doc (fixed); May TODOs now a backlog row; "132 untraced prompts" was an under-scoped search; loop changes applied |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
@@ -53,6 +53,30 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 > cuts) were moved **verbatim** to
 > [`docs/history/STATUS_claude-code_2026-08-31_to_2026-09-01.md`](../history/STATUS_claude-code_2026-08-31_to_2026-09-01.md).
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
+
+---
+
+## 2026-09-16 — Harris: stage table applied and seeded from the real export, first dry run 0/50 for a matcher-shape reason, harris-b written; F1c re-specified after Scott's first test (Cowork)
+
+**F1c.** Scott's first test failed one step earlier than before — `Get file metadata using path` was
+referencing `body('Get_file_content_using_path')`, which trips the same chunked-content rule. The
+corrected shape (metadata first from the trigger path, Condition on Size, content fetch *inside* the
+small-file branch) is in the flow guide and the checklist; large files no longer enter the 24-second
+fetch at all. `FLOWS1-artifact` merged (PR #2528) — LCC reads both response shapes.
+
+**Harris.** Scott downloaded `Real_acct_owner.zip` and the codebook; the loader died on the 889 MB
+`real_acct.txt` (`RangeError: Invalid string length` — it reads the whole file as one string) and has
+no local Dialysis credentials. I read the file directly: tab-delimited, headers exactly as the parser
+expects, **F1 68,811 / F2 2,465** (the assumed codes are right; L1/L2 live in a separate personal-property
+file), and `owners.txt` holds the clean owner name while `mailto` carries care-of text. The stage
+migration had never been applied — applied it — and loaded a **37-row targeted subset** (every account
+on the 50 target streets and house numbers) with `owner_name` from `owners.txt`. Dry run on the deployed
+route: **0 resolved / 50 refused** — 47 `no_staged_rows` because the matcher queries `str=eq.'CRENSHAW RD'`
+while HCAD stores `CRENSHAW` with the suffix in `str_sfx`; 3 `no_matching_record` because the comparison
+demands a suffix LCC's address lacks. Proved the rest of the pipeline locally: `5040 Crenshaw Rd` resolves
+`exact` against the real staged row the moment the fetch shape is right. → **OWNERGAP2-harris-b**
+(fetch shape, optional suffix, streaming loader, owners.txt mapping, creds). Expected on the rerun:
+roughly 25 of the 50 resolve from the subset alone; the rest need the full-roll load.
 
 ---
 

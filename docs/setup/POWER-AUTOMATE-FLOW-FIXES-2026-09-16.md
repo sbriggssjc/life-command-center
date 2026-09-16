@@ -58,6 +58,25 @@ different error text — screenshot one.
 
 ---
 
+### F1c — the corrected design (after Scott's first test, 2026-09-16)
+
+Scott applied option B and then a size Condition; the test failed at **`Get file metadata using
+path`** with the same *chunked content* error, because the metadata step's *File Path* referenced
+`body('Get_file_content_using_path')`. Rule: **nothing may reference the content step's body except
+the bytes `Response` inside the small-file branch.** Final shape:
+
+```
+manual
+→ Get file metadata using path        (File Path = triggerBody()?['server_relative_url'] — same expression as the content step)
+→ Condition: Size is less than 20000000
+   True:  Get file content using path  (moved here)
+          Response 200  body = json(concat('{"ok":true,"content_type":"', coalesce(body('Get_file_metadata_using_path')?['MediaType'],'application/octet-stream'), '","content_base64":"', base64(body('Get_file_content_using_path')), '"}'))
+   False: Response 200  body = your metadata JSON + "ok": false, "reason": "too_large"
+```
+
+Large files never enter the 24-second fetch; small files return the original contract; LCC
+(`FLOWS1-artifact`, merged 2026-09-16) reads both shapes and dead-letters `too_large`.
+
 ## F2 — LCC – Outlook Intake to Teams (Hardened) — 41/week
 
 **What fails.** `HTTP GetEmailWebLink` (Office 365 Outlook → *Send an HTTP request*,
