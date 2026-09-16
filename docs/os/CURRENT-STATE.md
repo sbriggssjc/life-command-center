@@ -24,7 +24,7 @@
 for a week (C1B-GOV-GATE; `v_ownership_gaps` was live-only with no committed source — now gov PR #403).
 Fixing it sealed `owner_needs_salesforce` (0 passing) and **unsealed `owner_needs_sos` (2,019 passing)**,
 so LCC now carries **1,346 open `owner_needs_sos` tasks with no consumer**. That consumer is
-**OWNERGAP2** (free-source owner matching) — ✅ **BUILT 2026-09-16, NOT YET APPLIED.**
+**OWNERGAP2** (free-source owner matching) — ✅ **BUILT (PR #2508) and APPLIED 2026-09-16: 20 Philadelphia owners written from the city assessor**, each citing its OPA record id, ledgered in `dia_ownergap2_resolution_log` (26 rows: 20 resolved / 6 refused); properties with an owner 5,474 → 5,494; Harris waits on an operator-supplied HCAD payload (portal is bot-walled); `get_property_context` cannot yet show these (MCP1).
 §"Salesforce research lanes" below is the *why*; this paragraph is the *state*.
 
 **OWNERGAP2 — owner matching from free public sources, built and verified, zero rows written.**
