@@ -64,6 +64,24 @@ sale dates into `latest_deed_date` — 3,310 properties within 20 minutes of the
 (gov) fixes it; until it lands, read `latest_transfer_*`, never `latest_deed_*`, on gov. Every write
 above is snapshotted in a `_gov_govdeed*_20260916` table with a reversal statement in the migration.
 
+**App surfaces after the SB-notes rounds (2026-09-16, all on Railway `8ab35ec9`).** Home: the data-gaps
+widget no longer shows cleanup classes (agency/CMS/lease/tenant drift); the daily briefing routes
+highlights by short-form domain (`dia`/`gov`) — edge function v26. Priority: bands carry readable labels;
+**`priority_tab_v2` (flag OFF)** renders one ranked list from `v_lcc_seller_prospect_queue` with the
+code-doable bands counted in a footer, pending Scott's side-by-side. Dialysis Overview: the Market
+Economics Exhibit works again (the deployed `data-query` edge function was v41 from July; now v43);
+tiles read one MV with an "as of" stamp; NPI shows the gated lane (81) not the raw diff; Operators
+Tracked's caption says what it counts (45 raw names / 21 canonical ids / 878 unresolved). MCP:
+`get_property_context` returns a labelled facts-only context for dia properties that are not minted LCC
+entities (`resolved_via: domain_facts`) and no longer throws on address lookups. Power Automate: all
+seven FLOWS1 edits applied by Scott and verified from exports; the Get Artifact contract change needs
+LCC's `FLOWS1-artifact` before document ingestion from SharePoint works again.
+
+**Inventory (INVENTORY1 → 1b).** `docs/audits/INVENTORY1_GAP_MAP_2026-09.md` is the plan-vs-built map:
+1,789 intent rows, ~1,700 honestly UNMEASURED; the measured findings are backlog rows
+(`REMEDIATION-2026-05`, `FLAGS-geocode`, `REGISTRY-contacts-hub`) and the process changes are in
+`BUILD-TURN-PROTOCOL.md` ⑤ and `docs/claude-code/README.md`.
+
 **Doctrine earned this week:** *the live catalog is the inventory.* Two rounds inventoried the `sql/`
 tree and missed live objects (a live-only view; three of six `latest_deed_date` writers). Before
 changing a column's semantics, enumerate its writers from `pg_proc` + `cron.job` + `pg_trigger` on the

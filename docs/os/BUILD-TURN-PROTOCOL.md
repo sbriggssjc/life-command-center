@@ -82,6 +82,12 @@ Not a follow-up. The living pages, whichever the topic touches:
 
 **A dated audit is EVIDENCE and stays.** A living page is STATE and gets corrected.
 
+**Leak class 1 (INVENTORY1b, 2026-09-16):** when a capability ships under a *different name* than a
+planning doc gave it, that doc still reads "NOT STARTED" — grep every doc for the old proposed name and
+fix it in the same change. A plan doc's TODO table is either mirrored as backlog rows or retired with a
+"superseded, see row X" pointer the moment the work ships (class 3); nothing important lands only in a
+history file (class 4).
+
 ### ⑥ CORRECT what is now false — in place, never silently
 
 Supersede with a banner that names the old claim, the new truth, and the measurement. **Retain the
