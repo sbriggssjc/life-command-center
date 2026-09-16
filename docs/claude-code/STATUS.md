@@ -33,7 +33,7 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **Market briefs (MB/EB)** | MB1d, MB2a, MB3, MB4, MB5, MB6, MB7, EB1b, P18 | 2026-09-12 | **LIVE**: `MARKET_BRIEF_PSQL` + `MARKET_BRIEF_RENDER` on; the daily email carries the Lane Briefs block (cap-rate bands, on-market, honest CMS staleness gaps, link to `#/briefs/dialysis`), the tab serves live facts, first `market_brief_issues` row frozen. Next: MB2a (the 3 new dialysis RSS URLs all fail 403/404), MB5 P-WEB (blocked on EB1b Anthropic credit), MB6 weekly long-form, MB7 MCP recall |
 | **Operator funnel (OC / HP1)** | HP1, HP1-P1a, HP1-P1a-fix, HP1-P1a-dup | 2026-09-12 | HP1-P1a-fix CLOSED live (608 rows UPDATED, first-ever Salesforce UPDATE to `bd_opportunities`); HP1 P0 (Today 500 badge) fixed+deployed+verified |
 | **Ownership (OWN/RO)** | OWN-T0a–T0j, RO3, B1b, AC2/AC3/AC6–AC11 | 2026-09-12 | OWN-T0j verified end-to-end live; RO3 field-mapping design drafted; OWN-T0a/B1b/AC-series propagation work still open |
-| **CoStar sidebar / public records (PR5/PRI)** | PR5d, PR-scanner-3, PRI2–PRI6, HCRIS-TIMEOUT, HCRIS-TRACKER-BLIND, HCRIS-QIP-DEFICIENCY-TIMEOUT-PATTERN | 2026-09-16 | PR-scanner-3 shipped (`county_records_needed` action); `PRI6` closed ✅ 2026-09-14, both sides confirmed merged — checking on it live is what surfaced `HCRIS-TIMEOUT` (a separate, months-old defect, not a `PRI6` regression). `HCRIS-TIMEOUT` is now **four rounds deep, root cause finally isolated 2026-09-16**: two independent structural bugs, neither HCRIS-specific — `ingestion_tracker.start_run()` silently discards its own run id on every call (a `Prefer` header mismatch, repo-wide, also orphans every ingestion lock), and `aux_cms_tables` (step 3 of ~15) swallows its own step-timeout so the pipeline never reaches HCRIS (step ~8) at all. Fix not yet written — this round was deliberately triage-only. One flagged, unbuilt follow-up still queued: `qip_scores_ingestor.py`/`cms_deficiency_ingestor.py` share HCRIS's old bare-timeout bug, still correctly out of scope until the pipeline actually reaches that far. |
+| **CoStar sidebar / public records (PR5/PRI)** | PR5d, PR-scanner-3, PRI2–PRI6, HCRIS-TIMEOUT, HCRIS-TRACKER-BLIND, HCRIS-QIP-DEFICIENCY-TIMEOUT-PATTERN | 2026-09-16 | PR-scanner-3 shipped (`county_records_needed` action); `PRI6` closed ✅ 2026-09-14, both sides confirmed merged — checking on it live is what surfaced `HCRIS-TIMEOUT` (a separate, months-old defect, not a `PRI6` regression). `HCRIS-TIMEOUT` is now **six rounds deep**: root cause isolated 2026-09-16 (`HCRIS-TIMEOUT-4`, two structural bugs, neither HCRIS-specific), both **fixed and pushed same day** (`HCRIS-TIMEOUT-5`, `Dialysis` PR #7413, commit `226f7e3` — confirmed merged and redeployed by Scott). **A fresh post-fix run was triggered and shows the identical failure shape as every pre-fix run**, and this time was live-monitored to a genuine, previously-unavailable data point: the `cms-ingestion` Railway service ran ~6h+ with zero DB writes past its own 15-minute startup burst, then was reported stopped by Scott — but its `ingestion_tracker` row was **never closed** (`run_status='started'`, `finished_at=null`, still true hours after the reported stop), pointing to a genuine hang killed by the platform rather than a graceful exit or an oblivious loop. Open question for round 6: did this run actually carry PR #7413's fix (redeploy timing vs. run start unconfirmed)? `HCRIS-TIMEOUT` stays 🔴. ⚠️ Separately: a parallel Cowork session's merge (`8cda70b9`, "round8" STATUS/PLANNED-BACKLOG archive) silently reverted this section's `HCRIS-TIMEOUT-5` update back to its round-4 state — restored here; see the dated entry below for the recovery note. One flagged, unbuilt follow-up still queued: `qip_scores_ingestor.py`/`cms_deficiency_ingestor.py` share HCRIS's old bare-timeout bug, still correctly out of scope until the pipeline actually reaches that far. |
 | **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-reconcile-2, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT, CANON-OWNERSHIP1 | 2026-09-16 | **Arc complete through GOVDEED3** (gov PRs #400–#406; V1 = confirm the ingest runtime carries the new gate); DEED1-reconcile-2 done (LCC #2535, Dialysis #7414); CANON-OWNERSHIP1 text fixed, 👤 confirmation open; sale-party conflicts 1,290 are a review queue |
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k LIVE** (LCC PR #2506): 218 attested supersessions, 40/43 pairs to sponsor, 16/16 controls untouched, reversible; sponsor-as-edge = future work |
 | **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, -harris-b, -harris-c, -ledger-order, MCP1 | 2026-09-16 | **40 assessor-sourced owners live** (Philadelphia 20, Harris 20); full HCAD roll staged (71,282); H7 apply exposed a ledger-ordering defect (prompted); Harris rest: 2 → S5, 27 situs gap (§P10a); harris-c prompted |
@@ -566,6 +566,93 @@ stale by 22 rows and one counts a different thing: 45 "operators" vs 21 distinct
 Every screenshot number was checked against the database before it became a row.
 
 ---
+
+## 2026-09-16 — `HCRIS-TIMEOUT-5` fixed both bugs, confirmed merged/redeployed, and a fresh post-fix run still shows the identical failure — plus a content-loss regression from a parallel session's merge, now recovered
+
+**Recovery note first, since it affects trust in this file's history**: this entry (and the `HCRIS-TIMEOUT-5`
+STATUS entry, and the round-5 update to the Open-threads table above) was **written once already earlier
+today, merged to `main` at `ab14c9cf`/PR #2516 — and then silently reverted** by a parallel Cowork session's
+later merge (`8cda70b9`, "docs(round8)... STATUS archived tail12"), which appears to have branched from a
+stale checkout and overwrote this shared section back to its pre-`HCRIS-TIMEOUT-5` state without any conflict
+being raised. Caught by independently re-checking this file against `origin/main` before reporting live-run
+status, rather than assuming a prior write stuck. Re-applying the full content now. This is the same
+doctrine-collision shape `CANON-OWNERSHIP1`/`DIA_OWNERSHIP1` already named for this repo (two branches
+touching a shared append-only doc, one clobbering the other on merge) — worth a guard, not just a one-off fix;
+flagged separately below.
+
+**HCRIS-TIMEOUT-5 (original content, restored)**: Fifth round, first fix round since `HCRIS-TIMEOUT-4`
+isolated the two structural bugs. CC fixed both same day:
+
+- **Discarded run id**: `start_run()` now builds an actual query-builder object and passes it (with
+  `return_representation=True`) into `safe_execute()`, instead of a bare lambda with `.execute()` already
+  baked in — the fix the prior round called for. All named call sites (`main.py:3177`, `run_cms_ingestion.py:
+  852/1786/1833`, `acquire_ingestion_lock()`) route through `start_run()` directly, so **one fix repairs all
+  of them**, confirming the "fix once, fixes everywhere" framing from the `-5` prompt.
+- **Swallowed timeout**: CC reports the loop-vs-hang question this round was specifically asked to resolve
+  **couldn't be settled from the error-log evidence alone** (the ledger only flushes between steps, not
+  per-row) — disclosed plainly rather than guessed. Found independent structural evidence instead: `aux_cms_
+  tables`'s direct `psycopg` calls carry no `statement_timeout`/keepalive tuning (every other DB call in the
+  codebase does), and `SIGALRM` can't interrupt a blocked native socket read. Fixed both angles: `TimeoutError`
+  now re-raised before the per-row `except Exception:`, plus a 60s statement timeout + keepalives on the
+  direct connections.
+
+10 new regression tests, full suite 3,280 passed / 1 pre-existing unrelated failure (confirmed by CC to also
+fail on unmodified `main`). Pushed to `claude/compassionate-hamilton-geof1p`, commit `226f7e3`, `Dialysis` PR
+#7413 — **Scott confirmed both this PR and the corresponding `life-command-center` docs PR merged and
+redeployed.**
+
+**New, since the original entry — live proof attempted, and it did not pass.** Scott triggered a fresh CMS
+ingestion run at 2026-09-16 14:39:20 UTC (confirmed live: the two prior stuck runs from before the fix were
+cleanly reclaimed/closed at that same moment — `593e1e75…`→abandoned, `1fb8af07…`→failed — one small confirming
+sign the fix's reclaim path works). **The new run shows the identical failure shape as every pre-fix round**:
+errors burst from 14:39:32–14:54:55 (~15 min, the same `ratings`/`clinic_quality_metrics` circuit-breaker
+errors as always), then total silence — zero errors of any kind for 5+ hours since. `ingestion_tracker.notes`
+is still `'{}'`, and `facility_cost_reports` hasn't moved off 2026-03-16. **One genuinely new detail**: the
+`"step 'aux_cms_tables' exceeded 900s"` timeout message that fired on every prior run **did not appear at all**
+this time — different behavior, but not yet understood whether that's the fix changing how the timeout
+surfaces or a different blocking point upstream of that check. Scott's own log upload for this run turned out
+to be an unrelated sub-job (`facility_patient_counts` revenue propagation, confirmed genuinely still live via
+`properties.updated_at` moving in real time) — not the `aux_cms_tables`/HCRIS pipeline being tested.
+
+`HCRIS-TIMEOUT` **stays 🔴**. Both bug rows move from "fixed, unproven live" back toward needing a sixth round,
+since the live proof this round exists specifically to get did not materialize. Full writeup:
+`docs/claude-code/responses/done/HCRIS-TIMEOUT-5-fix-the-two-structural-bugs-start-run-header-and-aux-cms-timeout-swallow.response.md`.
+
+## 2026-09-16 — `HCRIS-TIMEOUT`, live-monitoring the post-`HCRIS-TIMEOUT-5` run to a stop: the `cms-ingestion` Railway service ran ~6h+, went silent at minute 15, and its tracker row was never closed
+
+Continuing to live-monitor the run triggered 14:39:20 UTC rather than accept status secondhand. Scott reported
+the `cms-ingestion` Railway service (confirmed by name as the one he's been triggering — the service actually
+running this pipeline) started ~9:38 local, ran 4h18m, and is no longer running on Railway. **Checked Supabase
+directly at that point and again just now (DB time 20:49:31 UTC, ~6h10m after start) — the `ingestion_tracker`
+row for this exact run (`d45f27ff-dfef-459b-afd0-4d7ee9f91e19`) still reads `run_status='started'`,
+`finished_at=null`.** The error burst is still confined to the same `14:39–14:54 UTC` window as every prior
+round (confirmed again, zero errors since); `facility_cost_reports` is still frozen at `2026-03-16`.
+`properties.max(updated_at)` is still advancing in near-real-time (`20:44:08 UTC`, 5 minutes old at the time of
+the check) — but that's not this pipeline: the sibling `facility_patient_counts`/`ingestion_lock` tracker row
+(`ec39768b-47a3-4868-8536-75da0677c1fe`, started the same minute) is *also* still open, and is the more likely
+source of that write activity.
+
+**Reading, stated plainly**: `cms-ingestion` produced zero DB-visible activity for ~6 hours after its own
+15-minute startup burst, was reportedly stopped by Railway's platform (not a graceful app exit — the tracker
+row was never closed), and the database has no record of it ever finishing. This is new, real evidence toward
+"genuine hang," not "keeps looping obliviously" — an obliviously-looping process would still be expected to hit
+the same circuit-breaker tables occasionally; six hours of total silence looks like something blocked on a call
+that never returns. That's exactly the shape `HCRIS-TIMEOUT-5`'s statement-timeout/keepalive fix for the direct
+`psycopg` calls was meant to prevent — which raises the open question for round 6: **did this particular run
+actually carry PR #7413's fix?** The redeploy timestamp relative to this run's 14:39:20 UTC start is not yet
+confirmed from this side (no Railway access from Cowork). Asked Scott directly for the deploy history/timestamp
+and, if available, the actual crash/exit log (exit code, restart count, traceback — not an app content log,
+which was the wrong artifact last time).
+
+Two smaller notes on the record: (1) Scott's initial "it looks like that run has completed" claim was checked
+directly and was not correct — `run_status='started'` at the time, ~5h47m in; corrected in-conversation, not
+carried into this file as fact until independently confirmed. (2) A log upload Scott provided for this run
+(`logs.1789573371348.json`) was confirmed to be an unrelated sub-job (`facility_patient_counts` revenue
+propagation, zero hits on any HCRIS/`aux_cms_tables`/tracker term) — not useful for this pipeline, flagged to
+Scott rather than mined for false signal.
+
+`HCRIS-TIMEOUT` stays 🔴, now with a concrete "hang, not loop" data point for round 6 to build on, pending the
+Railway deploy-timing/crash-log confirmation.
 
 ## 2026-09-16 — `HCRIS-TIMEOUT-4`: root cause finally isolated — two structural bugs, neither one HCRIS-specific, and this round deliberately did not fix them
 
