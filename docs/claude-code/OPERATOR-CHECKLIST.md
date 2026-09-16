@@ -5,7 +5,7 @@ systems the repo cannot reach (Power Automate, Salesforce), payloads only a huma
 decisions that are Scott's. Cowork adds a row when a round ends on one of these; Scott ticks it; Cowork
 verifies and removes it in the next turn. Done rows are struck through and dropped after one turn.
 
-Updated 2026-09-16 (late): H7 applied; **V1 (where the gov ingest runs) is the one open verify step**; three prompts to send (harris-c, ledger-order, ID3d-reconcile); decisions S1–S5 are Scott's. Railway auto-deploys `main` (web app at `ac96fd45`); the standalone MCP
+Updated 2026-09-16 (late): all three prompts merged and running; open for Scott: **D3** (merge Dialysis PR #7416), **V1** (where the gov ingest runs), decisions **S1–S5** below. Railway auto-deploys `main` (web app at `ac96fd45`); the standalone MCP
 service has no `/version` route — Cowork verifies it by calling a tool.
 
 ## Deploys
@@ -14,6 +14,7 @@ service has no `/version` route — Cowork verifies it by calling a tool.
 |---|---|---|---|---|
 | ~~D1~~ | ✅ `daily-briefing` v26 (2026-09-16) | | | behavioural check: next briefing lists The Villages under Dialysis |
 | ~~D2~~ | ✅ INVENTORY1 branch merged | | | |
+| **D3** | 👤 Merge **Dialysis PR #7416** (removes the ID3d migration + pytest guard from the `Dialysis` repo; the LCC copy landed in #2539) | the doctrine: Dialysis_DB schema is recorded here, not there | GitHub → sbriggssjc/Dialysis → PR #7416 → merge | Cowork checks the file is gone from `Dialysis` main |
 | **V1** | 👤 **Where does `public_record_ingest.py` run?** GOVDEED3 (gov PR #406) changed `save_deed_record`'s accept gate; it is merged, but the gov ingestion is a Python process — if it runs on your machine or a scheduled task from a checked-out copy, pull `government-lease` main there; if it runs on a Railway/other service, redeploy it. | tell Cowork where it runs, or pull/redeploy | Cowork checks the next ingest's rejected-row log for `placeholder` reasons and that `deed_records` dateless count stops growing (5,671 on 2026-09-16) |
 
 ## Power Automate
@@ -44,7 +45,7 @@ from the exported definitions** (`SB notes/done/*.zip`, 2026-09-16). One addendu
 | **S2** | **Operators tile** — show 21 canonical operators, 45 raw names, or "21 (+878 properties with an unresolved operator name)"? | recommended: the third — it makes ID1's fragmentation visible | backlog `DIA1b-operators` |
 | **S4** | **Two flows on one trigger** — *Flagged Email Intake* and *Outlook Intake to Teams* both fire on "email flagged" and race on the same message (the FLOWS1 404s). Keep both with F2/F3 ordering, fold the Teams card into the intake flow, or make one the only trigger? | recommended: (b) one flow owns the message lifecycle — a later Power Automate edit, not urgent now that F2/F3 hold | backlog `FLOWS-consolidate` |
 | **S3** | **Geocoding flags** — `GEOCODIO_API_KEY` / `GOOGLE_MAPS_API_KEY` are OFF with no reason recorded | turn one on with a monthly cap, or record "off by decision" | backlog `FLAGS-geocode` |
-| **S5** | **HCAD class C2 accounts** — two open Harris clinics sit on accounts HCAD classes **C2** (Texas PTAD "vacant commercial lot"): `380 E Little York Rd` → `380 LITTLE YORK LLC`, `10311 S Post Oak Rd` → `LUEL PARTNERSHIP LTD`. The load and matcher are F1/F2 only by the OWNERGAP2-harris prompt's rule. | (a) allow C2 when the situs matches exactly (the owner LLC is named for the address in one case), or (b) keep F1/F2 and leave them for a parcel-discriminator pass | `OWNERGAP2-harris-c` builds the switch; Cowork runs the dry run with it on |
+| **S5** | **HCAD class C2 accounts** — two open Harris clinics sit on accounts HCAD classes **C2** (Texas PTAD "vacant commercial lot"): `380 E Little York Rd` → `380 LITTLE YORK LLC`, `10311 S Post Oak Rd` → `LUEL PARTNERSHIP LTD`. The load and matcher are F1/F2 only by the OWNERGAP2-harris prompt's rule. | (a) allow C2 when the situs matches exactly (the owner LLC is named for the address in one case), or (b) keep F1/F2 and leave them for a parcel-discriminator pass | harris-c built the switch on the loader and matcher; **if (a):** one small prompt wires an `include_classes` parameter on the tick and Cowork re-stages with `--include-classes C2` and runs the dry run; **if (b):** nothing more to build |
 
 ## Housekeeping
 

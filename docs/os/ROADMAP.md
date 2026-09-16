@@ -23,17 +23,17 @@
 ## 1. Ownership evidence & the owner gap — backlog §P19, §P15, Open-threads *Deed / owner-conflict* and *Research lanes / owner gap*
 
 - ✅ **Live:** gov `latest_deed_*` split to deed-only with one writer (GOVDEED4/5/5b, gov PRs #400–#405); the deed accept gate conjunctive on placeholders (GOVDEED3, gov PR #406 — runtime check V1); DEED1-reconcile-2 done; the 478 manufactured conflicts dispositioned (GOVDEED-478); Salesforce research lanes retired on both databases (C1C, ledgered, reversible); the gov gate on the right arm (C1B-GOV-GATE); **39 assessor-sourced owners written** — Philadelphia 20 (city open API), Harris 19 (HCAD bulk PDATA) — every one citing its source record (OWNERGAP2, -harris, -harris-b); `get_property_context` shows dia-only properties (MCP1).
-- 🟡 **Partial:** Harris — the full HCAD roll is staged (71,282 F1/F2 accounts, 2026-09-16); **20 of 50 applied**, 2 sit on C2-class accounts (S5), **27 are house numbers HCAD does not carry as situs** — a property-identity gap (§P10a), not a matcher gap. Two defects found on the real file/apply, both prompted: the loader (OWNERGAP2-harris-c) and the ledger ordering (OWNERGAP2-ledger-order).
+- 🟡 **Partial:** Harris — the full HCAD roll is staged (71,282 F1/F2 accounts, 2026-09-16); **20 of 50 applied**, 2 sit on C2-class accounts (S5), **27 are house numbers HCAD does not carry as situs** — a property-identity gap (§P10a), not a matcher gap. Both defects found on the real file/apply are fixed and running (OWNERGAP2-harris-c, -ledger-order; PRs #2541, #2540).
 - 🔴 **Open:** DEED1-emptycompare, DEED1-rentrank, CANON-OWNERSHIP1 (👤 proposal ready), the `18003 Longenbaugh` Rd/Dr duplicate property surfaced by the Harris apply; 1,346 `owner_needs_sos` tasks still the feed with no other consumer.
-- ⏭️ **Next unit:** OWNERGAP2-harris-c and OWNERGAP2-ledger-order (both small); then the next free-bulk jurisdiction from OWNERGAP1-decision's list, same contract. The 27 situs-gap properties are the first concrete case for §P10a.
+- ⏭️ **Next unit:** S5 (then, if (a), the tick parameter + a C2 re-stage); then the next free-bulk jurisdiction from OWNERGAP1-decision's list, same contract. The 27 situs-gap properties are the first concrete case for §P10a.
 - 👤 **Decisions:** S5 (may a C2-class HCAD account resolve on an exact situs match?); CANON-OWNERSHIP1 (who owns Dialysis_DB's schema in `CLAUDE.md`).
 
 ## 2. Entity identity at the source of record (ID-series) — backlog §P0d, Open-threads *Identity / operator canonicalization* and *gov agency canonicalization*
 
 - ✅ **Live:** ID2b/ID2b-caps/-caps-2 (operator canonicalization, third comp source fixed at source); ID3a–ID3e (gov agency canonicalization, live-verified); the repo-ownership hazard I16 closed (gov migrations belong to `government-lease`).
 - ✅ **Live (new):** ID3d — `leases.guarantor_id` 1 → 628 of 715, subsidiaries kept distinct from DaVita/Fresenius, real FK, fill-blanks trigger.
-- 🔴 **Open:** ID3d-reconcile (its migration sits in `Dialysis` — port here, remove there; prompted); 87 guarantor strings for review (ID3d-b, not filed yet); ID3a-drift (the Home gaps widget reads a column ID3a's fold never writes — §P20).
-- ⏭️ **Next unit:** ID3d-reconcile; ID3a-drift rides with HOME2.
+- 🔴 **Open:** ID3d-b (81 guarantor strings / 87 leases for review — filed, not prompted); D3 (merge the Dialysis removal PR #7416); ID3a-drift (the Home gaps widget reads a column ID3a's fold never writes — §P20).
+- ⏭️ **Next unit:** ID3d-b when a review rule for multi-party and personal guarantors is decided; ID3a-drift rides with HOME2.
 
 ## 3. Domain truth, sponsors and SPEs (C2 series) — backlog §P0d, Open-threads *C2g / sponsor↔SPE gate*
 
@@ -112,7 +112,7 @@
 
 ## 15. Process, documentation & consolidation — backlog §P21, `docs/os/BUILD-TURN-PROTOCOL.md`, `docs/claude-code/README.md`
 
-- ✅ **Live:** the prompt → response → reconcile loop with STATUS/backlog/CURRENT-STATE kept current each turn; SB-notes intake (④); leak-class rules (⑤); INVENTORY1/1b done; CLAUDE.md pass 1 (5,503 → 3,268 lines, rounds archived verbatim); backlog regrouped by category (P19/P20/P21); this file; rule ⑤-CC (a CC round appends and updates its own row, never restates).
+- ✅ **Live:** the prompt → response → reconcile loop with STATUS/backlog/CURRENT-STATE kept current each turn; SB-notes intake (④); leak-class rules (⑤); INVENTORY1/1b done; CLAUDE.md pass 1 (5,503 → 3,268 lines, rounds archived verbatim); backlog regrouped by category (P19/P20/P21); this file; rule ⑤-CC (a CC round appends and updates its own row, never restates); Cowork commits as 3-way patches, not whole-file copies (PROCESS-MERGE-CLOBBER).
 - 🔴 **Open:** CLAUDE.md pass 2 (with Scott: which doctrines merge); INVENTORY-process items not yet exercised by a full cycle.
 - ⏭️ **Next unit:** CLAUDE.md pass 2 in chat; re-cut this file after each lane closes a unit.
 
