@@ -204,3 +204,18 @@ matching machinery. The 10 with a textual link are the only ones worth proposing
 candidates without that read-through first.
 
 **Filed as reviewed, not built.** No rows written to either confirm table.
+
+---
+
+## 8. Superseded in part by the read-through (2026-09-15, Cowork) — §7's premise corrected
+
+§7 measured *names* and found a link on 10 of 58. The read-through
+[`C2g_58_PAIR_READ_2026-09-15.md`](C2g_58_PAIR_READ_2026-09-15.md) read the gov **registry** fields
+the name check never looked at (`recorded_owners.managers`, `latest_sale_grantor`, `assessed_owner`)
+and found the SPE's SOS-registered manager IS the Salesforce-linked org on **43 of 111** pairs
+(`llc_research_source='sos_registry'`); only 16 have no evidence either way. §7's "no bulk feed,
+read first" recommendation stands and was followed; its "three explanations stay open" premise is
+now closed for 95 of 111. **And the reason LCC never shows the sponsor is a gate, not a feeder:**
+`v_lcc_domain_owner_candidates` proposes the domain `true_owner` only for assets with no resolved
+owner — 936 gov + 100 dia resolved assets sit behind it. That is `supersession-tie-lane-2026-08.md`
+§4's decision, re-sized. 👤 Scott. Nothing written.

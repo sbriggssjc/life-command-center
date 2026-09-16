@@ -114,3 +114,14 @@ The 50-with-multiple-true-buyers are the only genuinely ambiguous ones, and
 Finance Inc` / `SMBC Leasing And Finance Inc`) — those are merge candidates, not
 ownership questions, and cleaning them is what makes the duplicate visible rather
 than what hides it.
+
+## 6. Re-sized (2026-09-15, Cowork): the same decision reaches 1,036 assets through the domain feeder
+
+§4's "`domain_true_owner` already outranks `rel_purchase`" is true of the weights (5.0 vs 4.0) and
+false of the flow: `v_lcc_domain_owner_candidates` proposes the domain `true_owner` **only for
+assets with no resolved owner**, so on any asset `supersession`/`relationship_graph` reached first
+it never runs. Resolved assets whose domain `true_owner` disagrees with LCC's pick and would be
+eligible: **936 gov + 100 dia**. Same semantic choice as §4, through a different door; the 63 here
+are a subset. Evidence and the 111-pair read that surfaced it:
+[`C2g_58_PAIR_READ_2026-09-15.md`](../audits/C2g_58_PAIR_READ_2026-09-15.md) §§3–4. Still 👤, still
+not built.
