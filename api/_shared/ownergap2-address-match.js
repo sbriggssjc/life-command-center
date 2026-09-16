@@ -104,6 +104,20 @@ export const STREET_ALIASES = {
     { a: 'CYPRESS CREEK PKWY', b: 'FM 1960 RD' },
     { a: 'CYPRESS CREEK PKWY', b: 'FM 1960 W' },
     { a: 'FM 1960 BYP', b: 'FM 1960 BYPASS RD W' },
+    // OWNERGAP2-harris-b: HCAD's own `str` column carries BOTH spellings for
+    // sibling accounts at the SAME address — verified live 2026-09-16,
+    // acct 1240120010001 files under `STATE HIGHWAY 249` (normalizeAddress's
+    // SUFFIX_MAP canonicalizes "HIGHWAY" -> "HWY" regardless of its position
+    // in the string, so the LCC-side key becomes `STATE HWY 249`) while
+    // 1240120010004/5 file under `SH 249`, all three owned by the same LLC
+    // at 12430. The generic trailing-suffix strip cannot find this alias —
+    // "HWY"/"249" are not the LAST token pair a suffix-only strip removes.
+    { a: 'STATE HWY 249', b: 'SH 249' },
+    // Per the ticket (OWNERGAP2-harris-b spec) — a colloquial name for a
+    // stretch of the East Loop (IH-610 East); not present in the live
+    // 37-row seed, kept as an explicit, evidence-cited entry per the ticket
+    // rather than guessed at match time.
+    { a: 'N LOOP E', b: 'NORTH LOOP' },
   ],
   // OWNERGAP1 §8 named `CITY AVE` vs `CITY LINE AVE`. Philadelphia's OPA file
   // indexes the city-side frontage as CITY AVE; the postal/marketing name is

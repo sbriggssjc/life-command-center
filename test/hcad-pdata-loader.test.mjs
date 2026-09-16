@@ -9,9 +9,14 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { Readable } from 'node:stream';
 
-import { upsertRows } from '../scripts/hcad-pdata-load.mjs';
+import { upsertRows, streamLoadRealAcct } from '../scripts/hcad-pdata-load.mjs';
 import { parseRealAcctText } from '../api/_shared/hcad-pdata-parse.js';
+
+function linesToStream(lines) {
+  return Readable.from(lines.map((l) => `${l}\n`));
+}
 
 function stubDomainQuery(calls) {
   return async (domain, method, path, body, headers) => {
@@ -59,13 +64,117 @@ test('a chunk that fails is reported, never silently dropped', async () => {
   assert.match(errors[0], /failed:500/);
 });
 
-test('the loader batches at UPSERT_BATCH_SIZE so one PostgREST call cannot silently truncate a huge export', async () => {
+test('the loader batches at UPSERT_BATCH_SIZE (1000, OWNERGAP2-harris-b) so one PostgREST call '
+  + 'cannot silently truncate a huge export', async () => {
   const calls = [];
-  const rows = Array.from({ length: 1200 }, (_, i) => ({ acct: String(i), file_year: 2026 }));
+  const rows = Array.from({ length: 2500 }, (_, i) => ({ acct: String(i), file_year: 2026 }));
   const { written } = await upsertRows(rows, { domainQuery: stubDomainQuery(calls) });
-  assert.equal(written, 1200);
-  // 500-row batches -> 3 calls for 1200 rows.
+  assert.equal(written, 2500);
+  // 1000-row batches -> 3 calls for 2500 rows.
   assert.equal(calls.length, 3);
-  assert.equal(calls[0].body.length, 500);
-  assert.equal(calls[2].body.length, 200);
+  assert.equal(calls[0].body.length, 1000);
+  assert.equal(calls[2].body.length, 500);
+});
+
+// ── streamLoadRealAcct — the OWNERGAP2-harris-b streaming rewrite ───────────
+// Problem 2: the real real_acct.txt is ~889 MB uncompressed; readFileSync-> a
+// string and JSZip's `.async('string')` both throw `RangeError: Invalid
+// string length` on Scott's machine. These tests feed streamLoadRealAcct a
+// real Node Readable (never a pre-buffered string) so the STREAMING contract
+// itself is pinned, not just the per-line parse.
+
+test('streamLoadRealAcct never materializes more than one batch -- fed a stream, never a string', async () => {
+  const header = 'acct\tname\tmailto\tstr_num\tstr\tstr_sfx\tstate_class';
+  const rows = [];
+  for (let i = 1; i <= 2500; i += 1) {
+    rows.push(`${i}\tOwner ${i} LLC\tOwner ${i} LLC\t${i}\tMAIN\tST\tF1`);
+  }
+  const stream = linesToStream([header, ...rows]);
+  const calls = [];
+  const result = await streamLoadRealAcct(stream, {
+    fileYear: 2026, sourceFile: 'real_acct.txt', apply: true, limit: null, includeAll: false,
+    ownersByAcct: new Map(),
+    upsert: async (batch) => { calls.push(batch.length); return { ok: true, status: 200 }; },
+  });
+  assert.equal(result.totalLines, 2500);
+  assert.equal(result.staged, 2500);
+  assert.equal(result.written, 2500);
+  // 1000-row batches -> 3 upsert calls, never one 2500-row call.
+  assert.deepEqual(calls, [1000, 1000, 500]);
+});
+
+test('streamLoadRealAcct filters to F1/F2 WHILE STREAMING, unless --include-all', async () => {
+  const header = 'acct\tname\tstr_num\tstr\tstr_sfx\tstate_class';
+  const lines = [
+    header,
+    '1\tCommercial Real LLC\t100\tMAIN\tST\tF1',
+    '2\tIndustrial Real LLC\t200\tMAIN\tST\tF2',
+    '3\tPersonal BPP LLC\t300\tMAIN\tST\tL1',
+    '4\tResidential Owner\t400\tMAIN\tST\tA1',
+    '5\tVacant Lot LLC\t500\tMAIN\tST\tC1',
+  ];
+  const filtered = await streamLoadRealAcct(linesToStream(lines), {
+    fileYear: 2026, sourceFile: 'real_acct.txt', apply: false, limit: null, includeAll: false,
+    ownersByAcct: new Map(), upsert: async () => ({ ok: true, status: 200 }),
+  });
+  assert.equal(filtered.staged, 2); // F1 + F2 only
+  assert.equal(filtered.classSkipped, 3); // L1, A1, C1
+
+  const all = await streamLoadRealAcct(linesToStream(lines), {
+    fileYear: 2026, sourceFile: 'real_acct.txt', apply: false, limit: null, includeAll: true,
+    ownersByAcct: new Map(), upsert: async () => ({ ok: true, status: 200 }),
+  });
+  assert.equal(all.staged, 5);
+  assert.equal(all.classSkipped, 0);
+});
+
+test('streamLoadRealAcct --limit stops after the first N F1/F2 rows, not the first N lines', async () => {
+  const header = 'acct\tname\tstr_num\tstr\tstr_sfx\tstate_class';
+  const lines = [
+    header,
+    '1\tA LLC\t1\tMAIN\tST\tA1', // not commercial -- does not count toward limit
+    '2\tB LLC\t2\tMAIN\tST\tF1',
+    '3\tC LLC\t3\tMAIN\tST\tF1',
+    '4\tD LLC\t4\tMAIN\tST\tF1',
+  ];
+  const r = await streamLoadRealAcct(linesToStream(lines), {
+    fileYear: 2026, sourceFile: 'real_acct.txt', apply: false, limit: 2, includeAll: false,
+    ownersByAcct: new Map(), upsert: async () => ({ ok: true, status: 200 }),
+  });
+  assert.equal(r.staged, 2);
+});
+
+test('streamLoadRealAcct folds owners.txt\'s second owner into owner_name_2 ONLY when still blank', async () => {
+  const header = 'acct\tname\tmailto\tstr_num\tstr\tstr_sfx\tstate_class';
+  const lines = [
+    header,
+    // mailto already carries owner_name_2 -- owners.txt supplement must NOT override it.
+    '1\tOwner One LLC\tOwner One LLC C/O SOMEONE\t1\tMAIN\tST\tF1',
+    // no mailto at all -- owners.txt's second name fills the blank.
+    '2\tOwner Two LLC\t\t2\tMAIN\tST\tF1',
+  ];
+  const ownersByAcct = new Map([
+    ['1', [{ name: 'Owner One LLC' }, { name: 'Second Owner For One' }]],
+    ['2', [{ name: 'Owner Two LLC' }, { name: 'Second Owner For Two' }]],
+  ]);
+  let sent = [];
+  await streamLoadRealAcct(linesToStream(lines), {
+    fileYear: 2026, sourceFile: 'real_acct.txt', apply: true, limit: null, includeAll: false,
+    ownersByAcct,
+    upsert: async (batch) => { sent = sent.concat(batch); return { ok: true, status: 200 }; },
+  });
+  const byAcct = Object.fromEntries(sent.map((r) => [r.acct, r]));
+  assert.equal(byAcct['1'].owner_name_2, 'Owner One LLC C/O SOMEONE'); // untouched
+  assert.equal(byAcct['2'].owner_name_2, 'Second Owner For Two'); // filled from owners.txt
+});
+
+test('streamLoadRealAcct refuses (never guesses) when the header lacks the required acct column', async () => {
+  const lines = ['name\tstate_class', 'Foo LLC\tF1'];
+  await assert.rejects(
+    () => streamLoadRealAcct(linesToStream(lines), {
+      fileYear: 2026, sourceFile: 'real_acct.txt', apply: false, limit: null, includeAll: false,
+      ownersByAcct: new Map(), upsert: async () => ({ ok: true, status: 200 }),
+    }),
+    /missing_required_columns/,
+  );
 });

@@ -22,6 +22,7 @@ import {
 } from '../api/_shared/hcad-pdata-parse.js';
 import {
   buildHarrisPdataCandidates, resolveHarrisFromPdata, stageRowToLocation,
+  harrisPdataStreetKeys, harrisBareStreetKeys, harrisStreetsMatch,
 } from '../api/_shared/ownergap2-harris-pdata-match.js';
 import { assertCitation, planOwnerWrite } from '../api/_shared/ownergap2-owner-writeback.js';
 
@@ -77,6 +78,29 @@ test('raw_row carries every column the loader saw, per the migration\'s recovera
   assert.equal(row.raw_row.acct, '9');
   assert.equal(row.raw_row.owner_name, 'Corp LLC');
   assert.equal(row.raw_row.state_class, 'F1');
+});
+
+// OWNERGAP2-harris-b: owner_name / owner_name_2 mapping, corrected against
+// the real 37-row seed (owner_name = HCAD's `name`; owner_name_2 =
+// `mailto`, which restates `name` and appends care-of text when present —
+// e.g. "2000 CRAWFORD PROPERTY LLC" / "...C/O BOXER PROPERTY"). `mailto`
+// must land in owner_name_2, never fall back into owner_name.
+test('owner_name_2 sources from mailto, never overwrites owner_name with care-of text', () => {
+  const header = 'acct\tname\tmailto\tstate_class';
+  const text = `${header}\n1\tROSENBERG ANDREW TRUSTEE\tROSENBERG ANDREW TRUSTEE C/O ANGELA K HESS C P A, P C\tF1`;
+  const r = parseRealAcctText(text, { fileYear: 2026, sourceFile: 'real_acct.txt' });
+  assert.equal(r.ok, true);
+  assert.equal(r.rows[0].owner_name, 'ROSENBERG ANDREW TRUSTEE');
+  assert.equal(r.rows[0].owner_name_2, 'ROSENBERG ANDREW TRUSTEE C/O ANGELA K HESS C P A, P C');
+});
+
+test('a header with ONLY mailto (no name/owner_name) never writes care-of text into owner_name', () => {
+  const header = 'acct\tmailto\tstate_class';
+  const text = `${header}\n1\t% TERRELL MATTOX & ASSOC\tF1`;
+  const r = parseRealAcctText(text, { fileYear: 2026, sourceFile: 'real_acct.txt' });
+  assert.equal(r.ok, true);
+  assert.equal(r.rows[0].owner_name, null);
+  assert.equal(r.rows[0].owner_name_2, '% TERRELL MATTOX & ASSOC');
 });
 
 test('parseOwnersText folds a second owner name, keyed by acct', () => {
@@ -169,10 +193,121 @@ test('the FM 1960 / Cypress Creek Pkwy alias resolves a Harris PDATA row filed u
   assert.equal(r.matchArm, 'exact_via_alias');
 });
 
-test('stageRowToLocation prefers site_addr_1..3, falls back to str_num+str+str_sfx', () => {
+test('stageRowToLocation uses site_addr_1 ALONE, falls back to str_num+str+str_sfx', () => {
   assert.equal(stageRowToLocation({ site_addr_1: '100 MAIN ST' }), '100 MAIN ST');
   assert.equal(stageRowToLocation({ str_num: '100', str: 'MAIN', str_sfx: 'ST' }), '100 MAIN ST');
   assert.equal(stageRowToLocation({}), null);
+});
+
+// OWNERGAP2-harris-b: site_addr_2/site_addr_3 are the situs CITY/ZIP on
+// every real staged row, NEVER a continuation of the street address —
+// joining them (the pre-fix behaviour) fed "PASADENA 77505" into the street
+// parser and made every real row a street_mismatch.
+test('stageRowToLocation does NOT drag city/zip (site_addr_2/3) into the match string', () => {
+  const loc = stageRowToLocation({
+    site_addr_1: '5040 CRENSHAW RD', site_addr_2: 'PASADENA', site_addr_3: '77505',
+  });
+  assert.equal(loc, '5040 CRENSHAW RD');
+});
+
+// ── OWNERGAP2-harris-b: bare-key query shape, verified against the REAL
+// 37-row Cowork seed (Dialysis_DB, queried live 2026-09-16) ─────────────────
+
+test('harrisPdataStreetKeys derives the BARE key HCAD\'s str column holds, not the suffixed form', () => {
+  // Real staged row: 5040 CRENSHAW RD -> str='CRENSHAW', str_sfx='RD'.
+  assert.deepEqual(harrisPdataStreetKeys('5040 Crenshaw Rd').slice(0, 1), ['CRENSHAW']);
+  // Real staged row: 3327 S SAM HOUSTON PKY E -> str='SAM HOUSTON'.
+  assert.ok(harrisPdataStreetKeys('3327 Sam Houston Pkwy').includes('SAM HOUSTON'));
+});
+
+test('a street whose own NAME collides with a directional word (Northwest Fwy) still keys correctly', () => {
+  // normalizeAddress collapses "NORTHWEST" -> "NW" (DIRECTIONAL_MAP applies
+  // to any token, not just a genuine leading qualifier); the naive bare-key
+  // strip then reads "NW" as a directional and discards it, leaving just
+  // "FWY". harrisPdataStreetKeys must also try the expanded reading.
+  const keys = harrisPdataStreetKeys('20320 Northwest Fwy');
+  assert.ok(keys.includes('NORTHWEST'), `expected 'NORTHWEST' among ${JSON.stringify(keys)}`);
+});
+
+test('harrisBareStreetKeys returns BOTH readings of a directional-shaped leading token', () => {
+  const keys = harrisBareStreetKeys('NW FWY');
+  assert.ok(keys.includes('NORTHWEST'));
+});
+
+test('the STATE HWY 249 / SH 249 alias resolves a real Harris PDATA row (HCAD stages BOTH spellings)', () => {
+  const rows = [
+    { acct: '1240120010004', owner_name: 'IVT ANTOINE TOWN CENTER HOUSTON LLC', str_num: '12430', str: 'SH 249', str_sfx: null, state_class: 'F1' },
+  ];
+  const r = resolveHarrisFromPdata('12430 State Hwy 249', rows);
+  assert.equal(r.status, 'resolved');
+  assert.equal(r.owner, 'IVT ANTOINE TOWN CENTER HOUSTON LLC');
+});
+
+// ── OWNERGAP2-harris-b: suffix-optional / directional-optional comparison,
+// against the REAL rows that failed the deployed dry run ────────────────────
+
+test('a suffix present on HCAD\'s side only is OPTIONAL when the LCC address has none (Live Oak, Center, La Concha)', () => {
+  const liveOak = resolveHarrisFromPdata('1550 Live Oak', [
+    { acct: 'LO', owner_name: 'LIVE OAK BAY AREA PRT LTD', site_addr_1: '1550 LIVE OAK ST', state_class: 'F1' },
+  ]);
+  assert.equal(liveOak.status, 'resolved');
+  assert.equal(liveOak.owner, 'LIVE OAK BAY AREA PRT LTD');
+
+  const center = resolveHarrisFromPdata('4621 Center', [
+    { acct: 'CTR', owner_name: 'GBCBM LTD', site_addr_1: '4621 CENTER ST', state_class: 'F1' },
+  ]);
+  assert.equal(center.status, 'resolved');
+  assert.equal(center.owner, 'GBCBM LTD');
+});
+
+test('a directional present on HCAD\'s side only is OPTIONAL, both leading and trailing (Sam Houston Pkwy, 34th)', () => {
+  const samHouston = resolveHarrisFromPdata('3327 Sam Houston Pkwy', [
+    { acct: 'SH1', owner_name: 'SOUTHPOINT BUILDING 5 LLC', site_addr_1: '3327 S SAM HOUSTON PKY E', state_class: 'F1' },
+  ]);
+  assert.equal(samHouston.status, 'resolved');
+  assert.equal(samHouston.owner, 'SOUTHPOINT BUILDING 5 LLC');
+
+  const thirtyFourth = resolveHarrisFromPdata('2001 34th St', [
+    { acct: 'T34', owner_name: 'ROY AND VEVA MORRISON RANCH CORPORATION', site_addr_1: '2001 W 34TH ST', state_class: 'F1' },
+  ]);
+  assert.equal(thirtyFourth.status, 'resolved');
+  assert.equal(thirtyFourth.owner, 'ROY AND VEVA MORRISON RANCH CORPORATION');
+});
+
+test('a directional present on BOTH sides and DISAGREEING is a genuine contradiction, still refused', () => {
+  const r = resolveHarrisFromPdata('3203 FM 1960 Rd W', [
+    { acct: 'E1', owner_name: 'WRONG SIDE LLC', site_addr_1: '3203 FM 1960 RD E', state_class: 'F1' },
+  ]);
+  assert.notEqual(r.status, 'resolved');
+});
+
+test('harrisStreetsMatch: a suffix present on BOTH sides that DISAGREES is a real mismatch, never widened', () => {
+  assert.equal(harrisStreetsMatch('CRENSHAW RD', 'CRENSHAW ST'), false);
+  // ...but a suffix present on only ONE side is optional (the ticket's rule).
+  assert.equal(harrisStreetsMatch('CRENSHAW', 'CRENSHAW ST'), true);
+  // core street name must still be exactly equal -- no similarity scoring.
+  assert.equal(harrisStreetsMatch('CRENSHAW', 'CRAWFORD'), false);
+});
+
+test('the Little York 2711 population (2 accounts, 2 DIFFERENT owners) is refused, never guessed', () => {
+  const rows = [
+    { acct: 'A', owner_name: 'PRAM INTERNATIONAL INC', site_addr_1: '2711 LITTLE YORK RD', state_class: 'F1' },
+    { acct: 'B', owner_name: 'PRAM REAL ESTATE LLC', site_addr_1: '2711 LITTLE YORK RD', state_class: 'F1' },
+  ];
+  const r = resolveHarrisFromPdata('2711 Little York Rd', rows);
+  assert.equal(r.status, 'needs_parcel_discriminator');
+  assert.equal(r.owner, null);
+});
+
+test('the FM 2920 population (2 accounts, SAME owner) resolves cleanly', () => {
+  const rows = [
+    { acct: 'A', owner_name: 'DD MEDICAL DEVELOPMENT PARTNERS LLC', site_addr_1: '2950 FM 2920 RD', state_class: 'F1' },
+    { acct: 'B', owner_name: 'DD MEDICAL DEVELOPMENT PARTNERS LLC', site_addr_1: '2950 FM 2920 RD', state_class: 'F1' },
+  ];
+  const r = resolveHarrisFromPdata('2950 FM 2920 Rd', rows);
+  assert.equal(r.status, 'resolved');
+  assert.equal(r.owner, 'DD MEDICAL DEVELOPMENT PARTNERS LLC');
+  assert.equal(r.sourceRecordIds.length, 2);
 });
 
 test('no staged rows at all -> honest no_staged_rows, never a fabricated match', () => {
