@@ -207,6 +207,7 @@ app.all('/api/recorder-portal', (req, res) => { req.query._route = 'recorder-por
 app.all('/api/public-records-capture', (req, res) => { req.query._route = 'public-records-capture'; adminHandler(req, res); });
 app.all('/api/priority-queue', (req, res) => { req.query._route = 'priority-queue'; adminHandler(req, res); });
 app.all('/api/seller-prospect-queue', (req, res) => { req.query._route = 'seller-prospect-queue'; adminHandler(req, res); });
+app.all('/api/priority-hidden-band-counts', (req, res) => { req.query._route = 'priority-hidden-band-counts'; adminHandler(req, res); });
 app.all('/api/priority-trigger-properties', (req, res) => { req.query._route = 'priority-trigger-properties'; adminHandler(req, res); });
 app.all('/api/review-counts', (req, res) => { req.query._route = 'review-counts'; adminHandler(req, res); });
 app.all('/api/news-alerts', (req, res) => { req.query._route = 'news-alerts'; adminHandler(req, res); });
