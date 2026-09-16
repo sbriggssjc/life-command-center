@@ -5,7 +5,7 @@ systems the repo cannot reach (Power Automate, Salesforce), payloads only a huma
 decisions that are Scott's. Cowork adds a row when a round ends on one of these; Scott ticks it; Cowork
 verifies and removes it in the next turn. Done rows are struck through and dropped after one turn.
 
-Updated 2026-09-16 (night): F1c re-specified after the first test; H1–H4 done by Cowork from the files in Downloads; H5 waits on `OWNERGAP2-harris-b`. Railway auto-deploys `main` (web app at `8ab35ec9`); the standalone MCP
+Updated 2026-09-16 (late): H5 done — 19 Harris owners applied; **H6 (full HCAD roll load) is the one open run step**; decisions S1–S4 still Scott's. Railway auto-deploys `main` (web app at `ac96fd45`); the standalone MCP
 service has no `/version` route — Cowork verifies it by calling a tool.
 
 ## Deploys
@@ -31,7 +31,8 @@ from the exported definitions** (`SB notes/done/*.zip`, 2026-09-16). One addendu
 | # | step | how | verify |
 |---|---|---|---|
 | ~~H1–H4~~ | ✅ **Done by Cowork 2026-09-16** from `Downloads\Real_acct_owner.zip` + `pdataCodebook.pdf`: file is tab-delimited with the expected headers; F1 = 68,811 / F2 = 2,465; the stage table migration was applied (it had never run) and a **37-row targeted subset** (the accounts on the 50 target streets) loaded. The loader itself cannot read the 889 MB file (`RangeError: Invalid string length`) and `.env.local` has no Dialysis credentials — both in `OWNERGAP2-harris-b`. | | |
-| **H5** | ⏸ **Waits on `OWNERGAP2-harris-b`** — the live dry run returned 0/50 because the matcher queries the stage with LCC's street shape (`CRENSHAW RD`) while HCAD stores `CRENSHAW` + `RD` separately. After that round: Cowork re-runs the dry run, you approve the read, Cowork applies. | | |
+| ~~H5~~ | ✅ **Done 2026-09-16 (Cowork, Scott's go).** Second dry run on deployed `ac96fd45` (PR #2531): 19 resolved / 31 refused; applied under batch `ownergap2_harris_tx_20260916` → **wrote 19**; properties with an owner 5,494 → 5,517; TX `true_owner_id` fingerprint unchanged. Spot-check for you: `9001 Kirby` → GILCHRIST WILLIAM E (three HCAD accounts on that address; the matcher saw one F1/F2 owner). | | |
+| **H6** | 🔴 **Full-roll HCAD load — the 41 still-open Harris targets need streets the 37-row subset does not cover.** From the repo root, with `DIA_SUPABASE_URL` and `DIA_SUPABASE_SERVICE_KEY` added to `.env.local` (Supabase dashboard → Dialysis_DB `zqzrriwuavgrquhisnoa` → Project Settings → API: URL + `service_role` key), run `node --env-file=.env.local scripts/hcad-pdata-load.mjs --file "C:\Users\scott\Downloads\Real_acct_owner.zip" --file-year 2026` (dry run: prints total / F1+F2 counts and a sample row), then the same with `--apply`. Alternative to the env vars: `--dsn "<Dialysis_DB postgres connection string>"`. It streams the 889 MB file and upserts in 1,000-row batches on `(acct, file_year)`; the existing 37 rows are overwritten with identical values (same `owner_name` = `owners.txt`, `mailto` → `owner_name_2`). ~71k rows; expect a few minutes. Paste the dry-run and apply output into the chat. | `node --env-file=.env.local scripts/hcad-pdata-load.mjs …` | Cowork re-runs the Harris dry run (population 50), you approve the read, Cowork applies; then the "how many of the 4,014 have an owner" number is re-measured. |
 
 ## Decisions (Scott's)
 

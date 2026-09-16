@@ -24,24 +24,25 @@
 for a week (C1B-GOV-GATE; `v_ownership_gaps` was live-only with no committed source — now gov PR #403).
 Fixing it sealed `owner_needs_salesforce` (0 passing) and **unsealed `owner_needs_sos` (2,019 passing)**,
 so LCC now carries **1,346 open `owner_needs_sos` tasks with no consumer**. That consumer is
-**OWNERGAP2** (free-source owner matching) — ✅ **BUILT (PR #2508) and APPLIED 2026-09-16: 20 Philadelphia owners written from the city assessor**, each citing its OPA record id, ledgered in `dia_ownergap2_resolution_log` (26 rows: 20 resolved / 6 refused); properties with an owner 5,474 → 5,494; Harris waits on an operator-supplied HCAD payload (portal is bot-walled); `get_property_context` cannot yet show these (MCP1).
+**OWNERGAP2** (free-source owner matching) — ✅ **BUILT (PR #2508) and APPLIED 2026-09-16: 20 Philadelphia owners written from the city assessor** (OPA ids, ledgered), then ✅ **19 Harris owners written from HCAD's bulk PDATA export** (PR #2524 stage + loader, PR #2531 matcher fix; batch `ownergap2_harris_tx_20260916`, each citing its HCAD account). Ledger `dia_ownergap2_resolution_log` 76 rows (harris 19/31, philadelphia 20/6); properties with an owner **5,474 → 5,517**; `true_owner_id` fingerprints (PA, TX) unchanged. 41 Harris targets remain open until the full roll is loaded (checklist **H6**, streaming loader). `get_property_context` now shows these (MCP1 live).
 §"Salesforce research lanes" below is the *why*; this paragraph is the *state*.
 
-**OWNERGAP2 — owner matching from free public sources, built and verified, zero rows written.**
-Two adapters only, by design. **Philadelphia** (`phl.carto.com`, free open API) was run end to end
-against the LIVE API over the whole Philadelphia population and resolved **20 of 26 (76.9%)** —
-above the 68% measured by hand — with 3 *correct* multi-parcel refusals. **Harris ships
-`fetches: false`**: probed live, HCAD answers a Cloudflare challenge / 521 / 404 and publishes no
-enumerable bulk index, so it is a parser over an operator-supplied payload, never an autonomous
-fetcher (automating a bot-protected portal is out of scope). Every written owner must cite its
-source row — CHECK-enforced on `dia_ownergap2_resolution_log`, positive-controlled in both
-directions live (4 malformed citations refused, 2 well-formed accepted, 0 residue).
-⚠️ **NOTHING IS APPLIED**: the tick's GET is a dry run, no POST has been issued, and the ledger is
-**0 rows**; `recorded_owners` **7,585 / 0 ownergap2-sourced**, properties with an owner **5,473**,
-`true_owner_id` untouched. 👤 Applying is an operator step after the Railway redeploy —
-`POST /api/ownergap2-owner-resolve-tick?jurisdiction=philadelphia_pa`. Audit §10; backlog
-`OWNERGAP2`. ⚠️ Re-measure before quoting the old denominators: owner-unknown is **4,014**, not
-4,021.
+**OWNERGAP2 — owner matching from free public sources: two adapters, both applied.**
+Two adapters only, by design. **Philadelphia** (`phl.carto.com`, free open API) resolved **20 of 26
+(76.9%)** — above the 68% measured by hand — with 3 *correct* multi-parcel refusals; applied
+2026-09-16. **Harris** was first shipped `fetches: false` (the HCAD *portal* is bot-walled — Cloudflare
+challenge / 521 / 404 — and automating it is out of scope); it was then re-based on HCAD's **free bulk
+PDATA export** (`Real_acct_owner.zip` → `real_acct.txt` + `owners.txt`, tab-delimited, F1 68,811 /
+F2 2,465 commercial accounts): staged in `hcad_real_acct_stage` on Dialysis_DB (migration
+`20261012090000`), matched by HCAD's own street shape (`str` + `str_sfx`, suffix optional on LCC's
+side), **19 of 50 resolved and applied** from a 37-row targeted subset; the 41 still open wait on the
+**full-roll load** (`scripts/hcad-pdata-load.mjs`, streaming, `--dsn` or `DIA_SUPABASE_*` in
+`.env.local` — checklist H6). Every written owner must cite its source row — CHECK-enforced on
+`dia_ownergap2_resolution_log`, positive-controlled live. Fabrication guard untouched (`ABC INC`
+is a real Philadelphia owner the guard still refuses). Measured 2026-09-16 after both applies:
+ledger **76 rows**, `recorded_owners` ownergap2-sourced 36 distinct, properties with an owner
+**5,517**. Audit §10; backlog `OWNERGAP2`, `OWNERGAP2-harris`, `OWNERGAP2-harris-b`. ⚠️ Re-measure
+before quoting the old denominators: owner-unknown was **4,014** before the applies, not 4,021.
 
 **Domain truth now competes where a registry backs it (C2k, LCC PR #2506).** The gov/dia `true_owner`
 (evidence weight 5.0) used to enter `lcc_property_owner_evidence` only on unresolved assets — a
