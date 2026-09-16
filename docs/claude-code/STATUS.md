@@ -35,7 +35,7 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **Ownership (OWN/RO)** | OWN-T0a–T0j, RO3, B1b, AC2/AC3/AC6–AC11 | 2026-09-12 | OWN-T0j verified end-to-end live; RO3 field-mapping design drafted; OWN-T0a/B1b/AC-series propagation work still open |
 | **CoStar sidebar / public records (PR5/PRI)** | PR5d, PR-scanner-3, PRI2–PRI6, HCRIS-TIMEOUT, HCRIS-TRACKER-BLIND, HCRIS-QIP-DEFICIENCY-TIMEOUT-PATTERN | 2026-09-15 | PR-scanner-3 shipped (`county_records_needed` action); `PRI6` (the connection-retry/ingestion-lock reliability sweep that started with `PRI1`'s dropped-connection crash) closed ✅ 2026-09-14, both sides confirmed merged — checking on it live is what surfaced `HCRIS-TIMEOUT` (a separate, months-old defect, not a `PRI6` regression). `HCRIS-TIMEOUT` is now three rounds deep: the original fix was correct, the real blocker was the tracker/heartbeat mechanism itself being blind (`HCRIS-TRACKER-BLIND`, fixed same round) — **awaiting live proof from a run Scott triggered 2026-09-15 (post-PR-#7411)**. One flagged, unbuilt follow-up already identified for whenever this closes: `qip_scores_ingestor.py`/`cms_deficiency_ingestor.py` share HCRIS's old bare-timeout bug. |
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-15 | 111-pair read done: 43 SOS-attested, 16 no evidence; blocker is the `v_lcc_domain_owner_candidates` unresolved-only gate — 👤 C2k (936 gov + 100 dia), same decision as tie-lane §4 |
-| **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-emptycompare, DEED2, GOVDEED1–4, GOVDEED-478, DEED-DIA-LATENT | 2026-09-16 | GOVDEED2 live; **GOVDEED4 built in gov PR #401, migration UNAPPLIED** (demotes the 676 in place, ledgered) — read it for the 493 `latest_deed_date` / 25 `ownership_history` rows before applying; GOVDEED3 + GOVDEED-478 open; dia clean |
+| **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED-478, DEED-DIA-LATENT | 2026-09-16 | **GOVDEED4 APPLIED LIVE** (676 demoted, 168 real dated remain; 147 properties reconciled: 12 repointed / 135 cleared, ledgered); GOVDEED5 side-finding: `latest_deed_date` has 3 writers, only 43 of 2,401 trace to a deed; GOVDEED3 + GOVDEED-478 open; dia clean |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
 | **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
 | **Broker identity (BR) / BROKER1** | BR1, BR2, BROKER1, BROKER1-sf | 2026-09-11 | BROKER1 prospect-assignment applied live (1,303 assigned) with a real bug found+fixed in production; BROKER1-sf (Salesforce write-back) correctly left unbuilt — no write path exists |
@@ -47,6 +47,35 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 > cuts) were moved **verbatim** to
 > [`docs/history/STATUS_claude-code_2026-08-31_to_2026-09-01.md`](../history/STATUS_claude-code_2026-08-31_to_2026-09-01.md).
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
+
+---
+
+## 2026-09-16 — GOVDEED4 applied live: 676 dates demoted, 147 properties reconciled (12 repointed, 135 cleared), and `latest_deed_date` turns out to have three writers (Cowork)
+
+Gov PR #401 merged; read the migration first. Confirmed what the response left unsaid: it never
+touches `properties`, and `propagate_deed_to_property` only ever SETs. Measured before applying:
+**147** properties (⚠️ not 493 — that earlier figure counted join rows, not distinct properties;
+corrected in the backlog and the entry below) carried a `latest_deed_date` from a soon-to-be-demoted
+deed; 12 had another real dated deed to fall back to, 135 did not. Scott chose apply + clear.
+
+Applied `20260916_gov_govdeed4_low_confidence_date_guard` to `scknotsqkcheojiaewwh`: **168 dated /
+676 approx / 676 in the snapshot**, 0 `low` rows still dated, remaining dated by confidence
+∅ 145 · medium 21 · high 2 — exactly the migration's own expected numbers. Then, ledgered in
+`_gov_govdeed4_cleared_properties_20260916` (147 rows, prior date + grantee, `outcome`): ran
+`propagate_deed_to_property` → `latest_deed_set = 12` (the predicted 12), then NULLed
+`latest_deed_date` + `latest_deed_grantee` on the properties still pointing at a demoted deed with no
+surviving dated source → **135 cleared**. Ledger reads `{cleared: 135, repointed: 12}`.
+`properties.latest_deed_date = '2023-10-01'` went 130 → **5** (those 5 come from `sales_transactions`,
+not deeds — see below). 17 `ownership_history` rows still carry a demoted deed's date; left as-is for the
+GOVDEED-478 disposition, as the handoff said.
+
+⭐ Side-finding while verifying: of **2,401** properties with a `latest_deed_date`, only **43** trace to
+a bridged dated deed. **2,263** match `sales_transactions.sale_date` — written by the intel sweep
+(`20260508_gov_intel_sweep_tier3c_and_true_owner.sql` l.191, `latest_deed_date = l.sale_date`) —
+and a third writer, `sync_properties_from_sources.py` l.1723, also SETs from deeds. The column is
+mostly a sale date wearing a deed name; **75** values trace to nothing at all. Not this defect (a
+CoStar sale month is a different convention from a model guess), but it belongs in the backlog as
+**GOVDEED5** before anyone reads `latest_deed_date` as "there is a deed." Nothing else changed.
 
 ---
 
@@ -69,8 +98,8 @@ existing rows in place** (`recording_date` → approx, `recording_date` set NULL
 to `_gov_govdeed4_demoted_dates_20260916` for reversal. The handoff deferred that to the GOVDEED-478
 disposition round. It is ledgered and reversible, and it is the disposition that round would most
 likely have chosen — so acceptable, but it makes the apply a **data change**, not a guard. ⚠️ What the
-response does **not** say: the **493** `properties.latest_deed_date` values and **25**
-`ownership_history` rows sourced from those deeds. Demoting the deed does not clear them; unless the
+response does **not** say: the `properties.latest_deed_date` values (**147** distinct properties — first written
+here as 493, which was join rows) and **25** `ownership_history` rows sourced from those deeds. Demoting the deed does not clear them; unless the
 migration re-runs propagation (unreadable from here — no repo access to gov from this session), those
 493 keep a date whose source row no longer has one. That is the first thing to read in the SQL.
 
