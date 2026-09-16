@@ -340,10 +340,18 @@ export async function uploadDocToFolder({ folderPath, fileName, bytes, fetchImpl
  * Fetch raw artifact bytes from SharePoint via the PA "Get Artifact" flow.
  * The Supabase byte-read stays in intake-extractor.js (its base64-recovery +
  * diagnostic path is unchanged); this only covers the sharepoint_pa backend.
- * Contract:
- *   trigger body  { server_relative_url }
- *   response      { ok:true, content_base64, content_type }
- * @returns {Promise<{ok:boolean, buffer?:Buffer, contentType?:string, status?:number, detail?:string}>}
+ *
+ * FLOWS1-artifact (2026-09-16) — the flow now answers in ONE OF TWO shapes,
+ * and the caller must accept both:
+ *   bytes (small file, F1c addendum): { ok:true, content_base64, content_type }
+ *   metadata-only (file above the flow's chunking cap):
+ *     { name, size, link, path }             — no `ok` key at all (the F1
+ *     option-B shape, `Get file metadata using path` + `Response`), OR
+ *     { ok:false, reason:'too_large', ... }  — after the F1c addendum lands.
+ * A metadata-only reply is a TERMINAL, NAMED outcome (`reason:'too_large'`),
+ * never the generic `pa_fetch_failed` — the caller (`document-text.js`) uses
+ * the distinction to dead-letter instead of retrying forever every 30 min.
+ * @returns {Promise<{ok:boolean, buffer?:Buffer, contentType?:string, status?:number, detail?:string, reason?:string, size?:number, name?:string}>}
  */
 export async function fetchSharepointBytes({ storageRef, fetchImpl }) {
   const fetchUrl = process.env.SHAREPOINT_FETCH_URL;
@@ -359,14 +367,29 @@ export async function fetchSharepointBytes({ storageRef, fetchImpl }) {
     const text = await res.text().catch(() => '');
     let json = null;
     try { json = text ? JSON.parse(text) : null; } catch { /* keep text */ }
-    if (!res.ok || !json?.ok || !json?.content_base64) {
-      return { ok: false, status: res.status, detail: String(json?.error || text || 'pa_fetch_failed').slice(0, 200) };
+
+    // Explicit too-large reply (F1c addendum, once shipped).
+    if (json && json.ok === false && json.reason === 'too_large') {
+      return { ok: false, reason: 'too_large', size: json.size ?? null, name: json.name || null, status: res.status };
     }
-    return {
-      ok: true,
-      buffer: Buffer.from(json.content_base64, 'base64'),
-      contentType: json.content_type || null,
-    };
+    // Bytes shape: success.
+    if (res.ok && json?.ok && json?.content_base64) {
+      return {
+        ok: true,
+        buffer: Buffer.from(json.content_base64, 'base64'),
+        contentType: json.content_type || null,
+      };
+    }
+    // Metadata-only shape (pre-F1c live export): { name, size, link, path },
+    // no `ok` key, no `content_base64`. This is the flow refusing to inline
+    // a file too large for its chunking limit — treat it as `too_large`, not
+    // a generic failure, so the caller can dead-letter rather than re-ask
+    // every tick forever.
+    if (res.ok && json && json.ok === undefined && json.content_base64 === undefined &&
+        (json.link || json.path) && json.size != null) {
+      return { ok: false, reason: 'too_large', size: json.size ?? null, name: json.name || null, status: res.status };
+    }
+    return { ok: false, status: res.status, detail: String(json?.error || text || 'pa_fetch_failed').slice(0, 200) };
   } catch (err) {
     return { ok: false, detail: err?.message?.slice(0, 200) || 'pa_fetch_error' };
   }
