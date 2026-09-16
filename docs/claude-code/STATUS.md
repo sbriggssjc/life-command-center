@@ -34,8 +34,9 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **Operator funnel (OC / HP1)** | HP1, HP1-P1a, HP1-P1a-fix, HP1-P1a-dup | 2026-09-12 | HP1-P1a-fix CLOSED live (608 rows UPDATED, first-ever Salesforce UPDATE to `bd_opportunities`); HP1 P0 (Today 500 badge) fixed+deployed+verified |
 | **Ownership (OWN/RO)** | OWN-T0a–T0j, RO3, B1b, AC2/AC3/AC6–AC11 | 2026-09-12 | OWN-T0j verified end-to-end live; RO3 field-mapping design drafted; OWN-T0a/B1b/AC-series propagation work still open |
 | **CoStar sidebar / public records (PR5/PRI)** | PR5d, PR-scanner-3, PRI2–PRI6, HCRIS-TIMEOUT, HCRIS-TRACKER-BLIND, HCRIS-QIP-DEFICIENCY-TIMEOUT-PATTERN | 2026-09-15 | PR-scanner-3 shipped (`county_records_needed` action); `PRI6` (the connection-retry/ingestion-lock reliability sweep that started with `PRI1`'s dropped-connection crash) closed ✅ 2026-09-14, both sides confirmed merged — checking on it live is what surfaced `HCRIS-TIMEOUT` (a separate, months-old defect, not a `PRI6` regression). `HCRIS-TIMEOUT` is now three rounds deep: the original fix was correct, the real blocker was the tracker/heartbeat mechanism itself being blind (`HCRIS-TRACKER-BLIND`, fixed same round) — **awaiting live proof from a run Scott triggered 2026-09-15 (post-PR-#7411)**. One flagged, unbuilt follow-up already identified for whenever this closes: `qip_scores_ingestor.py`/`cms_deficiency_ingestor.py` share HCRIS's old bare-timeout bug. |
-| **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k decided: attested-only widening**, prompted; gov exposes `true_owner_attested` first, then LCC widens the gate for attested rows only (≈858), ledgered + reversible |
-| **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED-478, DEED-DIA-LATENT | 2026-09-16 | GOVDEED4 live; **GOVDEED5 + GOVDEED-478 decided and prompted** (split `latest_deed_*` by source; reject placeholder deeds + clear planted grantee) — 👤 gov; GOVDEED3 prompted; dia clean |
+| **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k LIVE** (LCC PR #2506): 218 attested supersessions, 40/43 pairs to sponsor, 16/16 controls untouched, reversible; sponsor-as-edge = future work |
+| **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT | 2026-09-16 | GOVDEED4 + GOVDEED-478 live; GOVDEED5 split landed but a nightly cron re-planted 3,310 sale dates 20 min later → **GOVDEED5b** (👤 gov, six writers not three); GOVDEED3 prompted; dia clean |
+| **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, C1C-UNAPPLIED, OWNERGAP1, OWNERGAP2 | 2026-09-16 | **C1C closed both arms** (839 dia + 1,851 gov retired, reversible); gov gate fixed (SF sealed, SOS unsealed → **1,346 open `owner_needs_sos` with no consumer**); **OWNERGAP2 is the next build** (prompt written 2026-09-15, two adapters) |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
 | **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
 | **Broker identity (BR) / BROKER1** | BR1, BR2, BROKER1, BROKER1-sf | 2026-09-11 | BROKER1 prospect-assignment applied live (1,303 assigned) with a real bug found+fixed in production; BROKER1-sf (Salesforce write-back) correctly left unbuilt — no write path exists |
@@ -47,6 +48,38 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 > cuts) were moved **verbatim** to
 > [`docs/history/STATUS_claude-code_2026-08-31_to_2026-09-01.md`](../history/STATUS_claude-code_2026-08-31_to_2026-09-01.md).
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
+
+---
+
+## 2026-09-16 — All four rounds landed; C1C closed on both arms; GOVDEED5 was undone by a nightly cron twenty minutes after it applied (Cowork)
+
+Reconciled the four responses against live state on both databases.
+
+**C1B-GOV-GATE ✅** (gov PR #403): SF arm sealed (0 passing), SOS unsealed (2,019). `v_ownership_gaps`
+had no committed source anywhere before this — it was live-only. Then ran **C1C's gov arm** here:
+dry run 1,851 / real run `c1c-gov-20260916` **1,851 retired**; watch view `{dia 839, gov 1851}`;
+the SF lane is gone from the lane summary. C1C is closed. Consequence to carry: LCC now holds
+**1,346 open `owner_needs_sos`** tasks and nothing consumes them — OWNERGAP2 is next, not someday.
+
+**GOVDEED-478 ✅** (gov PR #402): 4,995 deed rows marked `rejected_placeholder` (kept, not deleted);
+290 grantees cleared, 91 grantee+price, 97 held because a sale corroborates them; conflicts
+899 → 518 at the time.
+
+**C2k ✅** (gov attestation 856 → LCC PR #2506): 234 eligible (13 fill / 221 supersede), 218
+superseded, 40/43 A-class pairs to the sponsor (the other 3 were already there), 16/16 controls
+untouched, unsupersede round-trips 218/218. CI caught `lcc_c2k_unsupersede` created with the default
+anon grant — a function that rewrites ownership, callable unauthenticated — fixed before merge.
+That is the SEC1 test doing exactly its job.
+
+**GOVDEED5 🟡** (gov PR #404): the split landed and reported 43/43 truthfully — at 03:09 UTC. At
+03:30 the `gov-propagate-recompute-tick` cron ran `propagate_sales_recompute`, whose candidate
+predicate treats a NULL `latest_deed_date` as 1900 and whose write is `latest_deed_date =
+sale_date`: **3,310** properties got a sale date back by 03:35. `pg_proc` has **six** writers; the
+round inventoried the `sql/` tree and found three. Two more are triggers on the sales tables. Live
+now: 3,340 / 2,743 / conflicts 1,295. → **GOVDEED5b** handoff written. Same class as C1B-GOV-GATE:
+the live catalog, not the repo, is the inventory.
+
+Queue: four prompts + responses to `done/`; GOVDEED5b in `prompts/`.
 
 ---
 
