@@ -23,10 +23,10 @@
 ## 1. Ownership evidence & the owner gap — backlog §P19, §P15, Open-threads *Deed / owner-conflict* and *Research lanes / owner gap*
 
 - ✅ **Live:** gov `latest_deed_*` split to deed-only with one writer (GOVDEED4/5/5b, gov PRs #400–#405); the 478 manufactured conflicts dispositioned (GOVDEED-478); Salesforce research lanes retired on both databases (C1C, ledgered, reversible); the gov gate on the right arm (C1B-GOV-GATE); **39 assessor-sourced owners written** — Philadelphia 20 (city open API), Harris 19 (HCAD bulk PDATA) — every one citing its source record (OWNERGAP2, -harris, -harris-b); `get_property_context` shows dia-only properties (MCP1).
-- 🟡 **Partial:** Harris — 41 of the 50 targets still open because only a 37-row subset of the HCAD roll is staged.
+- 🟡 **Partial:** Harris — the full HCAD roll is staged (71,282 F1/F2 accounts, 2026-09-16); 1 more owner is resolvable (H7), 2 sit on C2-class accounts (S5), and **27 of the 50 are house numbers HCAD does not carry as situs** — a property-identity gap (§P10a), not a matcher gap. The loader has three real defects found on the real file (OWNERGAP2-harris-c, prompted).
 - 🔴 **Open:** GOVDEED3 (accept gate, handoff to `government-lease`), DEED1-reconcile-2 (migration in the wrong repo), DEED1-emptycompare, DEED1-rentrank, CANON-OWNERSHIP1 (👤 proposal ready), the `18003 Longenbaugh` Rd/Dr duplicate property surfaced by the Harris apply; 1,346 `owner_needs_sos` tasks still the feed with no other consumer.
-- ⏭️ **Next unit:** **H6** — Scott runs the streaming loader over the full `Real_acct_owner.zip` (`OPERATOR-CHECKLIST.md`), Cowork re-runs the Harris dry run, Scott approves, Cowork applies. After that: the next free-bulk jurisdiction from OWNERGAP1-decision's list, same contract.
-- 👤 **Decisions:** CANON-OWNERSHIP1 (who owns Dialysis_DB's schema in `CLAUDE.md`).
+- ⏭️ **Next unit:** H7 (apply the 1) and OWNERGAP2-harris-c (loader fixes + C2 switch + placeholder refusal); then the next free-bulk jurisdiction from OWNERGAP1-decision's list, same contract. The 27 situs-gap properties are the first concrete case for §P10a.
+- 👤 **Decisions:** S5 (may a C2-class HCAD account resolve on an exact situs match?); CANON-OWNERSHIP1 (who owns Dialysis_DB's schema in `CLAUDE.md`).
 
 ## 2. Entity identity at the source of record (ID-series) — backlog §P0d, Open-threads *Identity / operator canonicalization* and *gov agency canonicalization*
 

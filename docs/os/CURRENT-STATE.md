@@ -24,7 +24,7 @@
 for a week (C1B-GOV-GATE; `v_ownership_gaps` was live-only with no committed source — now gov PR #403).
 Fixing it sealed `owner_needs_salesforce` (0 passing) and **unsealed `owner_needs_sos` (2,019 passing)**,
 so LCC now carries **1,346 open `owner_needs_sos` tasks with no consumer**. That consumer is
-**OWNERGAP2** (free-source owner matching) — ✅ **BUILT (PR #2508) and APPLIED 2026-09-16: 20 Philadelphia owners written from the city assessor** (OPA ids, ledgered), then ✅ **19 Harris owners written from HCAD's bulk PDATA export** (PR #2524 stage + loader, PR #2531 matcher fix; batch `ownergap2_harris_tx_20260916`, each citing its HCAD account). Ledger `dia_ownergap2_resolution_log` 76 rows (harris 19/31, philadelphia 20/6); properties with an owner **5,474 → 5,517**; `true_owner_id` fingerprints (PA, TX) unchanged. 41 Harris targets remain open until the full roll is loaded (checklist **H6**, streaming loader). `get_property_context` now shows these (MCP1 live).
+**OWNERGAP2** (free-source owner matching) — ✅ **BUILT (PR #2508) and APPLIED 2026-09-16: 20 Philadelphia owners written from the city assessor** (OPA ids, ledgered), then ✅ **19 Harris owners written from HCAD's bulk PDATA export** (PR #2524 stage + loader, PR #2531 matcher fix; batch `ownergap2_harris_tx_20260916`, each citing its HCAD account). Ledger `dia_ownergap2_resolution_log` 76 rows (harris 19/31, philadelphia 20/6); properties with an owner **5,474 → 5,517**; `true_owner_id` fingerprints (PA, TX) unchanged. Full HCAD roll staged 2026-09-16 (71,282 F1/F2 accounts, all with an owner — after Cowork repaired the loader's three defects on the real file, see `OWNERGAP2-harris-c`); of the 31 Harris targets still open, 1 is resolvable (H7), 2 sit on C2-class accounts (S5), 27 are house numbers HCAD does not carry as situs. `get_property_context` now shows these (MCP1 live).
 §"Salesforce research lanes" below is the *why*; this paragraph is the *state*.
 
 **OWNERGAP2 — owner matching from free public sources: two adapters, both applied.**
@@ -35,9 +35,9 @@ challenge / 521 / 404 — and automating it is out of scope); it was then re-bas
 PDATA export** (`Real_acct_owner.zip` → `real_acct.txt` + `owners.txt`, tab-delimited, F1 68,811 /
 F2 2,465 commercial accounts): staged in `hcad_real_acct_stage` on Dialysis_DB (migration
 `20261012090000`), matched by HCAD's own street shape (`str` + `str_sfx`, suffix optional on LCC's
-side), **19 of 50 resolved and applied** from a 37-row targeted subset; the 41 still open wait on the
-**full-roll load** (`scripts/hcad-pdata-load.mjs`, streaming, `--dsn` or `DIA_SUPABASE_*` in
-`.env.local` — checklist H6). Every written owner must cite its source row — CHECK-enforced on
+side), **19 of 50 resolved and applied** from a 37-row targeted subset; the full roll (71,282 accounts) was
+staged 2026-09-16 and found 1 more (H7), 2 on C2-class accounts (S5) and 27 whose LCC house number
+is not an HCAD situs number — a §P10a property-identity gap, not a matcher gap. Every written owner must cite its source row — CHECK-enforced on
 `dia_ownergap2_resolution_log`, positive-controlled live. Fabrication guard untouched (`ABC INC`
 is a real Philadelphia owner the guard still refuses). Measured 2026-09-16 after both applies:
 ledger **76 rows**, `recorded_owners` ownergap2-sourced 36 distinct, properties with an owner

@@ -36,7 +36,7 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **CoStar sidebar / public records (PR5/PRI)** | PR5d, PR-scanner-3, PRI2–PRI6, HCRIS-TIMEOUT, HCRIS-TRACKER-BLIND, HCRIS-QIP-DEFICIENCY-TIMEOUT-PATTERN | 2026-09-16 | PR-scanner-3 shipped (`county_records_needed` action); `PRI6` closed ✅ 2026-09-14, both sides confirmed merged — checking on it live is what surfaced `HCRIS-TIMEOUT` (a separate, months-old defect, not a `PRI6` regression). `HCRIS-TIMEOUT` is now **four rounds deep, root cause finally isolated 2026-09-16**: two independent structural bugs, neither HCRIS-specific — `ingestion_tracker.start_run()` silently discards its own run id on every call (a `Prefer` header mismatch, repo-wide, also orphans every ingestion lock), and `aux_cms_tables` (step 3 of ~15) swallows its own step-timeout so the pipeline never reaches HCRIS (step ~8) at all. Fix not yet written — this round was deliberately triage-only. One flagged, unbuilt follow-up still queued: `qip_scores_ingestor.py`/`cms_deficiency_ingestor.py` share HCRIS's old bare-timeout bug, still correctly out of scope until the pipeline actually reaches that far. |
 | **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT | 2026-09-16 | **Arc complete through GOVDEED5b** (gov PRs #400–#405, all live; `latest_deed_*` deed-only, one writer); open: GOVDEED3 (accept gate, prompted), sale-party conflicts 1,290 are a review queue; dia clean |
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k LIVE** (LCC PR #2506): 218 attested supersessions, 40/43 pairs to sponsor, 16/16 controls untouched, reversible; sponsor-as-edge = future work |
-| **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, OWNERGAP2-harris-b, MCP1 | 2026-09-16 | **39 assessor-sourced owners live** (Philadelphia 20 + Harris 19, batch `ownergap2_harris_tx_20260916`); harris-b merged (PR #2531); 41 Harris still open → **H6 full-roll load**; MCP1 live; 1,346 `owner_needs_sos` still the feed |
+| **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, OWNERGAP2-harris-b, OWNERGAP2-harris-c, MCP1 | 2026-09-16 | **39 assessor-sourced owners live**; full HCAD roll staged (71,282) after Cowork repaired the loader (harris-c prompted); of 31 Harris still open: 1 to apply (H7), 2 → S5 (C2 class), 27 are a situs-numbering gap (§P10a); MCP1 live |
 | **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS1-order, FLOWS1-path, FLOWS-consolidate, HOME1, HOME2, PRI1, PRI2, DIA1, DIA1b, DIA1b-operators, ID3a-drift | 2026-09-16 | **FLOWS1-artifact live**, F1c verified; **FLOWS1-order refuted** (the race is two flows on one trigger → `FLOWS-consolidate`, Scott's call); PRI2 flag OFF → side-by-side; FLOWS1-path open |
 | **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–4, INVENTORY1, INVENTORY1b, INVENTORY-process, REMEDIATION-2026-05, FLAGS-geocode, REGISTRY-contacts-hub, REPO1, ROADMAP | 2026-09-16 | INVENTORY1b done (DB-verified); **backlog regrouped by category (P19 ownership evidence / P20 app & flows / P21 inventory & process)** and `docs/os/ROADMAP.md` added as the category-level live/partial/open view; CLAUDE.md pass 2 with Scott still ahead |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
@@ -118,6 +118,49 @@ findings the first apply produced).
   ID3c/BR1-misparse-handoff annotated unblocked), `docs/os/CURRENT-STATE.md` (Dialysis_DB section).
 
 ---
+
+---
+
+## 2026-09-16 — H6: the loader wrote nothing twice on the real HCAD file; Cowork repaired it and staged the full roll; the third dry run says the rest is a situs gap, not a matcher gap (Cowork)
+
+**Scott's two runs.** Run 1 had no Dialysis credentials in `.env.local` (`[ops-db] WARN … DIA_SUPABASE_URL`)
+— every chunk 503'd, reported as `chunk_at_0_failed:undefined`. Run 2, with the credentials, parsed
+1,628,306 lines → 71,276 F1/F2 rows and again reported `wrote 0 of 71276 … 72 chunk(s) failed`. The
+DB said otherwise: 53,000 rows had landed. Patching a copy of the loader in the VM to print PostgREST's
+body found the real error on the other 19 chunks: `23505 duplicate key value violates unique constraint
+"uq_hcad_stage_acct_year"`. The POST carries `Prefer: resolution=merge-duplicates` but no
+`on_conflict=acct,file_year`; PostgREST infers the arbiter from the primary key only, so every chunk
+holding one of Cowork's 37 seeded accounts failed. And the `wrote 0` was a second bug: `flush()` reads
+`r.ok`/`r.status` from `upsertRows`, which returns `{ written, errors }`.
+
+**Then the worse one.** `owner_name` was NULL on all 71,276 rows — and the upsert had overwritten the 37
+seeded owners with NULL. The 2026 `real_acct.txt` header is `acct, yr, mailto, mail_addr_1, …`: **no
+`name` column**, so the parser's candidate list matched nothing; the loader only used `owners.txt` for a
+second owner. The harris-b prompt had specified `owners.txt` ln 1 as the owner of record. Cowork's
+patched copy (on_conflict; `owner_name` from `owners.txt`; honest accounting) re-ran in ~60 s:
+**71,282 rows, 0 without an owner, 68,811 F1 / 2,465 F2**, seeded rows restored (`2000 CRAWFORD
+PROPERTY LLC` back). 995 rows carry HCAD's placeholder `CURRENT OWNER`; none was ever applied (checked
+`recorded_owners`). All three fixes + the placeholder refusal + a C2 switch → **`OWNERGAP2-harris-c`**
+(prompt written). Nothing in the repo changed this round; the patched copy lives in the VM only.
+
+**Third live dry run (full roll, deployed `ac96fd45`, population 31 still open): 1 resolved / 30
+refused** — 27 `no_staged_rows`, 2 `no_records_returned`, 1 `no_matching_record`. With the whole roll
+staged, `no_staged_rows` means HCAD has no account at that street+number. Checked in the raw file, all
+classes, for 20 of the 27: `5208 Atascocita Rd` (HCAD: 5123/5131/5132/5210/5212/5220/5226), `6626
+Antoine Dr` (6601/6696/6700), `2254 Holcombe Blvd` (2245/2249/2250/2265 W), `2920 Fulton St`
+(2901/2902), `2916 Woodridge Dr` (2900/2928), `1426 Kingwood Dr` (1409/1450), `10923 Scarsdale Blvd`
+(10901–10906), `20435 Cypresswood Dr` (20434/20445/20467)… **LCC's house numbers are not HCAD situs
+numbers.** That is the §P10a property-identity problem (a clinic inside a larger parcel or a
+tenant-facing number) and needs a parcel discriminator, not a looser matcher — nearest-number is
+guessing and stays forbidden. Two of the 30 are the class filter: `380 E Little York Rd`
+(`0222430000049`, **C2**, `380 LITTLE YORK LLC`) and `10311 S Post Oak Rd` (`0440360000028`, **C2**,
+`LUEL PARTNERSHIP LTD`) → decision **S5**. The 1 resolved: `2626 South Loop West` → `AMALGAMATED
+HOUSTON HOLDINGS LLC` (`1145390000003`, exact; the `2626 W LOOP S` account on West Loop South correctly
+not taken) → **H7**, applied on Scott's go.
+
+**Net for the lane:** the Harris population is 50; 19 applied, 1 applying, 2 pending S5, 27 need a
+parcel discriminator, 1 is the Longenbaugh Rd/Dr duplicate. The free-bulk pattern holds — the ceiling
+here is address identity, which is now measured, not assumed.
 
 ## 2026-09-16 — Harris owners applied (19) via HCAD bulk PDATA; backlog regrouped by category; ROADMAP.md added (Cowork)
 
