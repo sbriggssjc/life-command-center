@@ -210,3 +210,12 @@ requires 22 second reviews, but `unknown` property form or low primary confidenc
 Reviewers must preserve private citations, the frozen CMS identity, source-exception dispositions, and any
 explicit disagreement. They must not use the workbench as authority for a canonical-property, Salesforce,
 outreach, production-opportunity, IDTF, or lane-advance write.
+
+### 14.1 Provisional analytical checkpoint — 2026-09-15
+
+One authenticated human primary submission and zero independent second reviews were measured read-only after
+review began. A separate evidence-cited provisional pass across all 50 candidates was retained privately and
+recorded here only as an identifier-free aggregate checkpoint. It is not a substitute for persisted primary
+scorecards, required different-person second reviews, or the official gate receipt. Its provisional
+`enrichment_only` recommendation grants no activation authority. See
+`docs/audits/HEALTHCARE_ASC_50_PROVISIONAL_REVIEW_CHECKPOINT_2026-09-15.md`.

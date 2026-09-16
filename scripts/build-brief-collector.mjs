@@ -13,6 +13,15 @@
  *
  * NO dashboard, no Ollama narrative — those are XB3/XB4. This script reports; it never fixes.
  *
+ * DEPLOY2-unapplied — merged-but-never-applied MIGRATION detector (added 2026-09-16). Parses the
+ * most recent `supabase/migrations/*.sql` window for declared CREATE objects and probes them
+ * against the live DB via `lcc_probe_schema_objects` (migration 20260916120100). See the rule's
+ * own header comment further down for the full design + the rejected version-number design.
+ * DEPLOY2-coverage (2026-09-16) corrected its WINDOW on three axes — git add-date instead of
+ * filename sort, `dialysis/` in scope (it is live and owned by THIS repo; only `government/` is
+ * retired), and routing by TARGET DATABASE instead of by directory. Which project is covered by
+ * which repo's detector: **docs/architecture/MIGRATION-COVERAGE-MAP.md**.
+ *
  * ⚠️ BRANCH DEBT IS SCOPED TO WHAT A GITHUB ACTIONS CHECKOUT CAN SEE. Scott's "618 local
  * branches" (docs/os/PLANNED-BACKLOG.md XB2) describes HIS machine's clutter, which a fresh
  * CI clone cannot observe at all — it only has `origin/*` refs. `remote_branch_debt` below
@@ -40,6 +49,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { diaSupabaseKey } from '../api/_shared/supabase-keys.js';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -192,6 +202,298 @@ export function orphanPromptFindings(promptFilenames, responseFilenames) {
 }
 
 // ---------------------------------------------------------------------------
+// DEPLOY2-unapplied — migration-merged-but-not-applied detector.
+//
+// WHY THIS EXISTS: three migrations (HP1-P1a-fix, OWNERGAP1, XB2-precision) merged to `main` and
+// were never actually applied to the live database, and nothing said so -- the "merged is not
+// running" class this repo has been bitten by repeatedly for CODE (checked via `/version` +
+// `git merge-base`), with no equivalent check for MIGRATIONS. This rule is that check's migration
+// half. It needs BOTH the migration FILES (filesystem/git state) and the LIVE DATABASE (via the
+// `lcc_probe_schema_objects` RPC, migration 20260916120100) -- the exact split this repo's own
+// 20260915120000 migration documents ("filesystem state is not queryable from Postgres"), which is
+// why this rule lives here and not in the `lcc_build_brief_db_audit()` SQL RPC.
+//
+// ⚠️ REJECTED DESIGN, DO NOT REVIVE: comparing migration-FILENAME version numbers against
+// `supabase_migrations.schema_migrations.version` (the live-applied-migrations table). This
+// repo's migration timestamps are SYNTHETIC SEQUENCE NUMBERS, not real clock times -- 885 files,
+// only 742 unique version prefixes (98 collisions), and 87 file versions are dated in the FUTURE
+// relative to any calendar date they were written on. `schema_migrations` stamps its own
+// real-apply-time version, unrelated to the file's number. A version-string-membership check would
+// therefore flag nearly every recently-merged migration as "unapplied" -- wrong on its entire
+// visible output, exactly the "a detector aimed at the wrong population returns a comfortable
+// answer" failure this repo's Class 11 doctrine warns about. The check MUST be content-anchored
+// (does the migration's own declared object exist?), never version-anchored.
+//
+// THE RULE: for each migration file in a bounded recent WINDOW, parse every
+// `CREATE [OR REPLACE] FUNCTION|VIEW|TABLE|TRIGGER|INDEX|TYPE|POLICY` statement to find its
+// declared "creatable objects" (kind + name), probe each against the live DB, and classify:
+//   - APPLIED     -- every declared object is present.
+//   - UNAPPLIED   -- at least one declared object is absent. This IS a finding (higher severity).
+//   - UNVERIFIABLE -- the migration declares NO creatable object at all (a pure UPDATE/INSERT/
+//     ALTER/DROP migration -- exactly OWNERGAP1's and B1's shape). This is ALSO a finding, at
+//     LOWER severity, and must NEVER be silently folded into APPLIED -- a data-only backfill that
+//     never ran leaves no trace for an existence check to find, which is precisely the failure
+//     class this rule exists to catch. Collapsing it into "clean" would defeat the whole point.
+//
+// ⚠️ KNOWN, DOCUMENTED WEAKNESS -- STATED HERE, NOT HIDDEN: existence is a WEAKER verdict than
+// absence. A `CREATE OR REPLACE FUNCTION` of an object that ALREADY EXISTED (from an earlier
+// migration) probes as "present" even if THIS migration's redefinition never ran -- this is
+// exactly the XB2-precision failure (the function existed, just with the pre-fix body missing a
+// GROUP BY). APPLIED here means "this migration's declared objects are not absent", not "this
+// migration's current body is live". A stronger body-diff check (normalized
+// `pg_get_functiondef()` comparison) was evaluated and NOT shipped -- see STALE_CHECK_NOT_SHIPPED
+// below for the measured false-positive rate that disqualified it.
+//
+// WINDOW (corrected by DEPLOY2-coverage, 2026-09-16): the most recently ADDED-TO-GIT
+// MIGRATION_WINDOW_SIZE files across `supabase/migrations/` ROOT **and** `supabase/migrations/
+// dialysis/`. A window (not all files) because a migration merged a year ago and never separately
+// verified is a different, colder problem than one merged last week and silently unapplied.
+//
+// ⚠️ THE PREVIOUS HEADER HERE WAS HALF FALSE AND THAT IS WHY IT SURVIVED. It said "`dialysis/`
+// and `government/` are historical copies of a database owned by another repo per this repo's own
+// ONE REPO OWNS EACH DATABASE'S OBJECTS doctrine". That is TRUE of `government/` -- it carries a
+// README, the `HISTORICAL — DO NOT RE-APPLY` marker on every file, and a dedicated guard
+// (test/gov-migrations-directory-retired.test.mjs); `government-lease` owns that database. It is
+// FALSE of `dialysis/`: 0 of its 282 files carry any retirement marker, it had no README at all
+// until DEPLOY2-coverage added one, and CLAUDE.md's own ownership table names THIS repo as the
+// owner of Dialysis_DB. The gov retirement was generalized to dia without checking, and the cost
+// was exact: `dialysis/20260914150000_dia_ownergap1_fabricated_owner_quarantine.sql` is
+// **OWNERGAP1**, one of the three incidents this rule was built to catch, and the rule could not
+// see it.
+//
+// ⚠️ AND THE WINDOW WAS SORTED BY FILENAME, WHICH IS NOT A CLOCK. This repo's migration timestamps
+// are SYNTHETIC SEQUENCE NUMBERS (the REJECTED DESIGN note above measures 98 filename collisions
+// and 87 future-dated files) -- so files arrive out of filename order. Measured 2026-09-16: the
+// filename-sorted floor was `20260930121500` while 107 migrations had been added in the previous
+// 14 days, 64 of them outside that window and 24 of those root-level. Sorting the window by the
+// same synthetic timestamp the rule already refused to trust for the APPLIED check is the same
+// mistake in a second place. The window is ordered by **git add-date** now
+// (`git log --diff-filter=A`), in ONE pass -- never one `git log` per file.
+//
+// MIGRATION_WINDOW_SIZE is UNCHANGED at 60. The measured add-rate is ~107 migrations per 14 days
+// (~7.6/day), so 60 is roughly a one-week horizon -- which is the population this rule targets
+// (recent merges), and the same number the rule shipped with, so the before/after delta is
+// attributable to the window ORDER and the dia directory rather than to a resized window.
+const MIGRATION_WINDOW_SIZE = 60;
+
+/** Repo-relative migration roots this rule scans, and the database each targets by DEFAULT. */
+const MIGRATION_ROOT_DIR = 'supabase/migrations';
+const MIGRATION_DIA_DIR = 'supabase/migrations/dialysis';
+// `supabase/migrations/government/` is deliberately NOT scanned -- it is retired (see that
+// directory's README) and re-reading its stale files would report the LIVE, CORRECT government
+// database as wrong. See docs/architecture/MIGRATION-COVERAGE-MAP.md for who covers that project.
+//
+// Exported so the guard can assert the SCANNED SET directly rather than grepping for a directory
+// name in source (a grep would match this very comment, which names government/ while explaining
+// why it is excluded -- A5c/N18).
+export const MIGRATION_SCAN_DIRS = Object.freeze([MIGRATION_ROOT_DIR, MIGRATION_DIA_DIR]);
+
+/**
+ * Which database a migration file targets. DEPLOY2-coverage §2b: "root → LCC Opps" is NOT true --
+ * 31 root-level migrations carry a `gov_`/`dia_` prefix and target the other two projects
+ * (`20260812120000_gov_credit_classifier_expand_state_federal.sql` declares
+ * `public.gov_credit_buckets_from_text`, which is ABSENT from LCC Opps). Probing one of those
+ * against LCC Opps emits a FALSE `unapplied` at `critical` severity -- the loudest finding on the
+ * most trusted rule, about a migration that is perfectly applied to the database it was written
+ * for. Today 0 of 60 are in the filename-sorted window; that is luck, and the git-add-date window
+ * destroys it.
+ *
+ * Returns 'lcc_opps' | 'dia_db' | 'gov_db', or **null when the target cannot be determined with
+ * confidence**. Null is NOT defaulted to LCC Opps: defaulting is precisely what manufactures the
+ * false critical, and a rule that guesses wrong loudly is worse than one that says it does not
+ * know (the caller emits UNVERIFIABLE / `target database undetermined`).
+ *
+ * Directory decides first (a file under `dialysis/` targets Dialysis_DB whatever it is named);
+ * otherwise the FIRST token after the numeric timestamp prefix decides, because that is the
+ * convention the 31 cross-target root files actually follow.
+ */
+export function migrationTargetDatabase(relPath) {
+  const norm = String(relPath || '').replace(/\\/g, '/');
+  const base = norm.split('/').pop() || '';
+  const dir = norm.slice(0, Math.max(0, norm.length - base.length)).replace(/\/$/, '');
+
+  if (dir === MIGRATION_DIA_DIR) return 'dia_db';
+  if (dir === 'supabase/migrations/government') return 'gov_db';
+  if (dir !== MIGRATION_ROOT_DIR && dir !== '') return null; // an unknown subdirectory: fail closed
+
+  const m = /^[0-9]+_([a-z0-9]+)/i.exec(base);
+  if (!m) return null;
+  const token = m[1].toLowerCase();
+  if (token === 'lcc') return 'lcc_opps';
+  if (token === 'gov' || token === 'government') return 'gov_db';
+  if (token === 'dia' || token === 'dialysis') return 'dia_db';
+  return null; // e.g. `cm_`, `field_`, `property_` -- genuinely ambiguous, so say so
+}
+
+/**
+ * Order migration paths newest-first-last (ascending, so `.slice(-N)` takes the newest N) by the
+ * date the file was ADDED TO GIT, not by its synthetic filename timestamp.
+ *
+ * ⚠️ A FILE WITH NO ADD-DATE IS THE NEWEST THING IN THE REPO, NEVER DROPPED. An untracked or
+ * brand-new file returns nothing from `git log`; treating that as "no date, skip it" would
+ * silently exclude the freshest migration -- P180 (unknown is not zero) on the exact population
+ * this rule exists to watch. Undated files sort to the END (i.e. into the window).
+ *
+ * Ties (two files added in one commit, which is the common case) break on filename for
+ * determinism, so two runs over one checkout produce the same window.
+ */
+export function sortMigrationsByAddDate(files, addDates) {
+  const dateOf = (f) => (addDates instanceof Map ? addDates.get(f) : addDates?.[f]) || null;
+  return [...files].sort((a, b) => {
+    const da = dateOf(a);
+    const db = dateOf(b);
+    if (da && db) return da === db ? a.localeCompare(b) : da.localeCompare(db);
+    if (!da && !db) return a.localeCompare(b);
+    return da ? -1 : 1; // the UNDATED one sorts later (newest)
+  });
+}
+
+// Handles: OR REPLACE (function/view only, harmless elsewhere) · UNIQUE INDEX · CONCURRENTLY ·
+// IF NOT EXISTS · an optional schema qualifier (public.foo) that must NOT be captured as the name.
+const OBJECT_KIND_RE =
+  /create\s+(?:or\s+replace\s+)?(?:unique\s+)?(function|view|table|trigger|index|type|policy)\s+(?:concurrently\s+)?(?:if\s+not\s+exists\s+)?(?:[a-zA-Z_][a-zA-Z0-9_]*\.)?([a-zA-Z_][a-zA-Z0-9_]*)/gi;
+
+/**
+ * Strip SQL comments (line `--` and block `/* ... *​/`) before scanning, per this repo's standing
+ * "strip comments before grepping source" doctrine (A5c/N18/B1) -- a migration's own header prose
+ * routinely narrates `CREATE FUNCTION ...` while explaining a DIFFERENT migration's history, which
+ * would otherwise be misread as a declared object of THIS file.
+ */
+export function stripSqlComments(sql) {
+  return sql
+    .replace(/--[^\n]*/g, '')
+    .replace(/\/\*[\s\S]*?\*\//g, '');
+}
+
+/**
+ * Parse a migration file's SQL text for declared "creatable objects" -- {kind, name} pairs for
+ * every `CREATE [OR REPLACE] FUNCTION|VIEW|TABLE|TRIGGER|INDEX|TYPE|POLICY` statement. `TRIGGER`
+ * and `INDEX` never take `OR REPLACE` in Postgres, `CREATE INDEX ... ON <table>` names the index
+ * (first identifier after the kind keyword, which the shared regex already captures), and
+ * `CREATE TRIGGER <name> ... ON <table>` likewise names the trigger first. Comments are stripped
+ * first (see stripSqlComments). Deliberately regex-based, not a full SQL parser -- this repo's own
+ * migrations are hand-written and consistent enough that a full parser would be overkill for a
+ * detector whose job is "did this file declare an object", not "is this file valid SQL".
+ */
+export function parseDeclaredObjects(sqlText) {
+  const clean = stripSqlComments(sqlText);
+  const out = [];
+  const seen = new Set();
+  let m;
+  OBJECT_KIND_RE.lastIndex = 0;
+  while ((m = OBJECT_KIND_RE.exec(clean))) {
+    const kind = m[1].toLowerCase();
+    const name = m[2];
+    const key = `${kind}:${name.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ kind, name });
+  }
+  return out;
+}
+
+/**
+ * Classify one migration's application state from its declared objects + a map of
+ * `"kind:name"` -> boolean|null (probe result; null = unknown kind, never treated as absent).
+ *
+ * Returns { verdict: 'applied'|'unapplied'|'unverifiable', missing: [{kind,name}] }.
+ *
+ * UNVERIFIABLE (no declared objects at all) is a DISTINCT verdict from APPLIED -- see the file
+ * header. It must never be produced by folding an empty `declared` array into "nothing missing,
+ * therefore applied"; that is exactly the silent-success shape this rule exists to prevent.
+ */
+export function classifyMigrationApplication(declared, existsByKey) {
+  if (!declared || declared.length === 0) {
+    return { verdict: 'unverifiable', missing: [] };
+  }
+  const missing = declared.filter((o) => existsByKey[`${o.kind}:${o.name.toLowerCase()}`] === false);
+  return { verdict: missing.length > 0 ? 'unapplied' : 'applied', missing };
+}
+
+/**
+ * Build the {rule, severity, subject, measured, detail} finding for one migration, or null when
+ * the migration is APPLIED (no finding -- a clean migration is silent, per this repo's
+ * noise-discipline doctrine). UNAPPLIED is 'critical' (a declared object the migration exists to
+ * create/redefine is provably absent from the live DB -- HP1-P1a-fix's shape, where deployed code
+ * called a non-existent RPC). UNVERIFIABLE is 'warn', explicitly lower, because it is a KNOWN GAP
+ * in what this detector can see, not a proven defect -- conflating the two severities would make
+ * every ordinary data-only migration in the window read as urgent.
+ *
+ * DEPLOY2-coverage adds `opts.target` (which database the file targets, per
+ * migrationTargetDatabase) and `opts.unverifiableReason`. An UNDETERMINED target short-circuits to
+ * UNVERIFIABLE **before any probe result is consulted** -- never defaulted to LCC Opps, because
+ * that default is what emits a false `critical` on a `gov_`-prefixed root migration that is
+ * correctly applied to the government project.
+ */
+export function migrationApplicationFinding(fileName, declared, existsByKey, opts = {}) {
+  const target = opts.target ?? null;
+  const forcedReason = opts.unverifiableReason || null;
+  if (forcedReason) {
+    return {
+      rule: 'migration_unapplied',
+      severity: 'warn',
+      subject: fileName,
+      measured: {
+        verdict: 'unverifiable',
+        target_database: target,
+        unverifiable_reason: forcedReason,
+        declared_object_count: Array.isArray(declared) ? declared.length : 0,
+      },
+      detail:
+        `${fileName} could not be checked: ${forcedReason}. Its application state is UNKNOWN from ` +
+        `this rule -- NOT a clean bill of health; a check that looks like it ran is the defect this ` +
+        `arc exists to close (B6a).` +
+        (forcedReason.startsWith('target database undetermined')
+          ? ` It is deliberately NOT probed against LCC Opps: defaulting an undetermined target there ` +
+            `emits a false "unapplied" at critical severity for a migration that is correctly applied ` +
+            `to the database it was written for (DEPLOY2-coverage §2b).`
+          : ''),
+    };
+  }
+  const { verdict, missing } = classifyMigrationApplication(declared, existsByKey);
+  if (verdict === 'applied') return null;
+  if (verdict === 'unverifiable') {
+    return {
+      rule: 'migration_unapplied',
+      severity: 'warn',
+      subject: fileName,
+      measured: { verdict, target_database: target, declared_object_count: 0 },
+      detail:
+        `${fileName} declares no probeable object (CREATE FUNCTION/VIEW/TABLE/TRIGGER/INDEX/TYPE/POLICY) -- ` +
+        `it is a data-only UPDATE/INSERT/ALTER/DROP migration whose application state is UNKNOWN from this ` +
+        `check. This is a known instrument gap, not a clean bill of health -- a backfill migration that never ` +
+        `ran leaves no trace an existence probe can find (OWNERGAP1's shape).`,
+    };
+  }
+  return {
+    rule: 'migration_unapplied',
+    severity: 'critical',
+    subject: fileName,
+    measured: {
+      verdict,
+      target_database: target,
+      declared_object_count: declared.length,
+      missing: missing.map((o) => `${o.kind}:${o.name}`),
+    },
+    detail:
+      `${fileName} declares ${missing.length} of ${declared.length} object(s) that are ABSENT from the live ` +
+      `database (${missing.map((o) => `${o.kind} ${o.name}`).join(', ')}) -- this migration is merged to ` +
+      `main but was never applied (or was rolled back). Note the mirror-image weakness: an "applied" ` +
+      `verdict here means the objects are not absent, never that this migration's CURRENT body is live -- a ` +
+      `CREATE OR REPLACE of an already-existing object cannot be distinguished from a stale pre-fix body by ` +
+      `existence alone (the XB2-precision shape).`,
+  };
+}
+
+// STALE_CHECK_NOT_SHIPPED (2026-09-16): a stronger check -- for CREATE OR REPLACE FUNCTION
+// migrations, normalize (lowercase + whitespace-collapse) both the file's CREATE FUNCTION body and
+// live `pg_get_functiondef()`, and flag a mismatch as a candidate STALE verdict -- was evaluated
+// against every CREATE OR REPLACE FUNCTION in the live MIGRATION_WINDOW_SIZE window before
+// deciding whether to ship it. It was NOT shipped. Reasoning + the measured false-positive rate
+// are recorded in docs/os/PLANNED-BACKLOG.md under DEPLOY2-unapplied and are not restated here to
+// avoid the two copies drifting (this file's job is to say WHAT ships, not re-derive WHY not).
+
+// ---------------------------------------------------------------------------
 // Repo-side collection (fs + git). Only called from main(), never imported by tests.
 // ---------------------------------------------------------------------------
 
@@ -299,6 +601,92 @@ function collectRepoFindings() {
   return { commitSha, findings, raw };
 }
 
+/**
+ * ONE `git log` pass over `supabase/migrations` producing relPath -> ISO add-date. Never one
+ * `git log` per file -- 1,100+ files x one subprocess each is a different kind of defect.
+ *
+ * Returns {dates, degraded, reason}. ⚠️ `degraded` is NOT silent: if git history is unavailable
+ * (no `.git`, a shallow clone with no history for these paths, git not on PATH) the caller FALLS
+ * BACK to filename sort **and says so on the snapshot** (B6a: a skipped step must EMIT, not
+ * vanish). A degraded window that looks identical to a healthy one is exactly how this defect
+ * survived its own review.
+ *
+ * ⚠️ A SHALLOW CLONE REPORTS THE GRAFT BOUNDARY AS THE "ADD" for every file older than the
+ * boundary (CLAUDE.md, entity-identity section). CI checks out with `fetch-depth: 0` so this is
+ * accurate there; a shallow checkout is reported as `shallow_clone` in the degraded reason so a
+ * reader never mistakes graft-boundary dates for real ones.
+ */
+function buildMigrationAddDates() {
+  let shallow = false;
+  try {
+    shallow = git(['rev-parse', '--is-shallow-repository']) === 'true';
+  } catch (_e) {
+    /* not fatal -- fall through and let the log attempt decide */
+  }
+  let raw;
+  try {
+    raw = git([
+      'log',
+      '--diff-filter=A',
+      '--name-only',
+      '--format=%H%x09%aI',
+      '--',
+      MIGRATION_ROOT_DIR,
+    ]);
+  } catch (e) {
+    return { dates: new Map(), degraded: true, reason: `git_log_unavailable:${String(e.message || e).slice(0, 120)}` };
+  }
+  const dates = new Map();
+  let current = null;
+  for (const line of raw.split('\n')) {
+    const t = line.trim();
+    if (!t) continue;
+    const header = /^[0-9a-f]{7,40}\t(.+)$/i.exec(t);
+    if (header) {
+      current = header[1];
+      continue;
+    }
+    if (t.startsWith(`${MIGRATION_ROOT_DIR}/`) && !dates.has(t)) dates.set(t, current);
+  }
+  if (dates.size === 0) {
+    return { dates, degraded: true, reason: 'git_log_returned_no_adds' };
+  }
+  return {
+    dates,
+    degraded: shallow,
+    reason: shallow ? 'shallow_clone_add_dates_are_graft_boundary' : null,
+  };
+}
+
+/**
+ * The most recently ADDED-TO-GIT MIGRATION_WINDOW_SIZE files across the root and `dialysis/`
+ * directories (see the corrected DEPLOY2-unapplied header above for why both, and why add-date
+ * rather than filename). `government/` is excluded on purpose -- it is retired and re-reading its
+ * stale files would report the live, correct government database as wrong.
+ *
+ * Returns {files, windowDegraded, windowDegradedReason, scanned} -- `files` are repo-relative
+ * paths, so every downstream consumer routes on the same string `migrationTargetDatabase` reads.
+ */
+function listRecentMigrationFiles() {
+  const dirs = MIGRATION_SCAN_DIRS;
+  const all = [];
+  for (const rel of dirs) {
+    const abs = path.join(REPO_ROOT, rel);
+    if (!fs.existsSync(abs)) continue;
+    for (const d of fs.readdirSync(abs, { withFileTypes: true })) {
+      if (d.isFile() && d.name.toLowerCase().endsWith('.sql')) all.push(`${rel}/${d.name}`);
+    }
+  }
+  const { dates, degraded, reason } = buildMigrationAddDates();
+  const ordered = degraded && dates.size === 0 ? [...all].sort() : sortMigrationsByAddDate(all, dates);
+  return {
+    files: ordered.slice(-MIGRATION_WINDOW_SIZE),
+    windowDegraded: Boolean(degraded),
+    windowDegradedReason: reason,
+    scanned: all.length,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // DB-side collection.
 // ---------------------------------------------------------------------------
@@ -319,6 +707,136 @@ async function collectDbFindings() {
   }
   const findings = await res.json();
   return { findings: Array.isArray(findings) ? findings : [], skipped: false };
+}
+
+/**
+ * DEPLOY2-unapplied. Parses the recent migration WINDOW's declared objects, probes them in ONE
+ * batch against `lcc_probe_schema_objects` (migration 20260916120100), and returns
+ * {findings, migrations_checked, unapplied_count, unverifiable_count}. Fails soft on any DB error
+ * (no creds, RPC unreachable) -- returns skipped:true with a reason, same contract as
+ * collectDbFindings, because this collector must never crash the whole build brief over one rule.
+ */
+async function probeProject(url, key, objects) {
+  if (objects.length === 0) return { ok: true, existsByKey: {} };
+  try {
+    const res = await fetch(`${url}/rest/v1/rpc/lcc_probe_schema_objects`, {
+      method: 'POST',
+      headers: { apikey: key, Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ p_objects: objects }),
+    });
+    if (!res.ok) {
+      // ⚠️ NEVER read an authorization failure as "no objects missing". The dia key resolved by
+      // diaSupabaseKey() may be the anon JWT (#720 -- the names lie), so a 401/403 is a live
+      // possibility and must surface as a SKIP carrying the status, not as a clean probe.
+      return { ok: false, reason: `probe_rpc_http_${res.status}` };
+    }
+    const rows = await res.json();
+    const existsByKey = {};
+    for (const r of rows) existsByKey[`${r.kind}:${String(r.name).toLowerCase()}`] = r.exists;
+    return { ok: true, existsByKey };
+  } catch (e) {
+    return { ok: false, reason: `probe_rpc_error:${String(e.message || e).slice(0, 160)}` };
+  }
+}
+
+async function collectMigrationApplicationFindings(projects) {
+  const { files, windowDegraded, windowDegradedReason, scanned } = listRecentMigrationFiles();
+
+  // Group the window by TARGET DATABASE before probing anything (DEPLOY2-coverage §2b).
+  const perFile = new Map(); // relPath -> {declared, target}
+  const byTarget = new Map(); // target -> {objects, seen}
+  for (const file of files) {
+    let sql;
+    try {
+      sql = fs.readFileSync(path.join(REPO_ROOT, file), 'utf8');
+    } catch (_e) {
+      continue; // unreadable file -- skip rather than crash the whole rule
+    }
+    const declared = parseDeclaredObjects(sql);
+    const target = migrationTargetDatabase(file);
+    perFile.set(file, { declared, target });
+    if (!target) continue; // undetermined: never probed anywhere
+    if (!byTarget.has(target)) byTarget.set(target, { objects: [], seen: new Set() });
+    const bucket = byTarget.get(target);
+    for (const o of declared) {
+      const k = `${o.kind}:${o.name.toLowerCase()}`;
+      if (bucket.seen.has(k)) continue;
+      bucket.seen.add(k);
+      bucket.objects.push(o);
+    }
+  }
+
+  // Probe each project independently. A project that cannot be reached SKIPS ITS OWN FILES with a
+  // named reason -- it never silently reduces to "root only, all clean" (B6a).
+  const existsByTarget = {};
+  const projectStatus = {};
+  for (const [target, bucket] of byTarget) {
+    const proj = projects[target];
+    if (!proj || !proj.url || !proj.key) {
+      projectStatus[target] = { skipped: true, reason: proj?.absentReason || `no_${target}_credentials` };
+      continue;
+    }
+    const r = await probeProject(proj.url, proj.key, bucket.objects);
+    if (!r.ok) {
+      projectStatus[target] = { skipped: true, reason: r.reason };
+      continue;
+    }
+    existsByTarget[target] = r.existsByKey;
+    projectStatus[target] = { skipped: false, objects_probed: bucket.objects.length };
+  }
+
+  const findings = [];
+  const counts = { unapplied: 0, unverifiable: 0, applied: 0 };
+  const byTargetCounts = {};
+  for (const [file, { declared, target }] of perFile) {
+    const bump = (k) => {
+      byTargetCounts[target || 'undetermined'] = byTargetCounts[target || 'undetermined'] || {
+        checked: 0,
+        unapplied: 0,
+        unverifiable: 0,
+        applied: 0,
+      };
+      byTargetCounts[target || 'undetermined'].checked += 1;
+      if (k) byTargetCounts[target || 'undetermined'][k] += 1;
+    };
+    let reason = null;
+    if (!target) {
+      reason = 'target database undetermined';
+    } else if (target === 'gov_db') {
+      // The government project is owned by `government-lease` and has no detector here by
+      // decision (GOVDEPLOY1). Saying so is the point -- see MIGRATION-COVERAGE-MAP.md.
+      reason = 'target database is the government project, which this repo does not audit (GOVDEPLOY1)';
+    } else if (projectStatus[target]?.skipped) {
+      reason = `probe skipped for ${target}: ${projectStatus[target].reason}`;
+    }
+    const f = migrationApplicationFinding(file, declared, existsByTarget[target] || {}, {
+      target,
+      unverifiableReason: reason,
+    });
+    if (!f) {
+      counts.applied += 1;
+      bump('applied');
+      continue;
+    }
+    findings.push(f);
+    if (f.measured.verdict === 'unapplied') counts.unapplied += 1;
+    else counts.unverifiable += 1;
+    bump(f.measured.verdict);
+  }
+
+  return {
+    findings,
+    skipped: false,
+    migrations_checked: perFile.size,
+    migrations_available: scanned,
+    unapplied_count: counts.unapplied,
+    unverifiable_count: counts.unverifiable,
+    applied_count: counts.applied,
+    by_target: byTargetCounts,
+    project_status: projectStatus,
+    window_degraded: windowDegraded,
+    window_degraded_reason: windowDegradedReason,
+  };
 }
 
 /**
@@ -379,7 +897,39 @@ async function main() {
 
   const repo = collectRepoFindings();
   const db = await collectDbFindings();
-  const findings = [...repo.findings, ...db.findings];
+  // DEPLOY2-coverage: one project descriptor per target database. The dia key goes through the
+  // SHARED resolver `diaSupabaseKey()` (api/_shared/supabase-keys.js, GitHub issue #720) rather
+  // than reading an env var directly -- `DIA_SUPABASE_KEY` historically holds the ANON JWT and is
+  // scheduled for a Phase 4 mass-revoke, while `DIA_SUPABASE_SERVICE_KEY` does not exist yet, so
+  // hardcoding either name is wrong in one direction or the other. The resolver prefers the
+  // service key and falls back to the anon one, which makes this rule upgrade itself the day
+  // Scott sets the service key, with no second change here.
+  const migrationProjects = {
+    lcc_opps: {
+      url: process.env.LCC_SUPABASE_URL || process.env.SUPABASE_URL,
+      key: process.env.LCC_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY,
+      absentReason: 'no_lcc_credentials',
+    },
+    dia_db: {
+      url: process.env.DIA_SUPABASE_URL,
+      key: diaSupabaseKey(),
+      absentReason: 'no_dia_credentials (DIA_SUPABASE_URL / DIA_SUPABASE_SERVICE_KEY|DIA_SUPABASE_KEY)',
+    },
+    // gov_db intentionally absent -- GOVDEPLOY1 / docs/architecture/MIGRATION-COVERAGE-MAP.md.
+  };
+  const migrationAudit = await collectMigrationApplicationFindings(migrationProjects);
+  const findings = [...repo.findings, ...db.findings, ...migrationAudit.findings];
+  repo.raw.migration_audit = {
+    migrations_checked: migrationAudit.migrations_checked,
+    migrations_available: migrationAudit.migrations_available,
+    unapplied_count: migrationAudit.unapplied_count,
+    unverifiable_count: migrationAudit.unverifiable_count,
+    applied_count: migrationAudit.applied_count,
+    by_target: migrationAudit.by_target,
+    project_status: migrationAudit.project_status,
+    window_degraded: migrationAudit.window_degraded,
+    window_degraded_reason: migrationAudit.window_degraded_reason,
+  };
 
   // branch_debt (XB2-precision) reads the raw total collectRepoFindings already gathered; the
   // trend needs a DB round trip repo collection cannot make, so it is added here with the same
@@ -397,6 +947,22 @@ async function main() {
 
   if (db.skipped) {
     console.log(`\n(DB-side rules skipped: ${db.reason})`);
+  }
+  console.log(
+    `(migration_unapplied: checked ${migrationAudit.migrations_checked} of ` +
+      `${migrationAudit.migrations_available} migrations -- ${migrationAudit.unapplied_count} unapplied, ` +
+      `${migrationAudit.unverifiable_count} unverifiable, ${migrationAudit.applied_count} applied)`,
+  );
+  for (const [target, c] of Object.entries(migrationAudit.by_target || {})) {
+    console.log(
+      `   ${target.padEnd(14)} checked:${c.checked} applied:${c.applied} unapplied:${c.unapplied} unverifiable:${c.unverifiable}`,
+    );
+  }
+  for (const [target, s] of Object.entries(migrationAudit.project_status || {})) {
+    if (s.skipped) console.log(`   ⚠️ ${target} probe SKIPPED: ${s.reason}`);
+  }
+  if (migrationAudit.window_degraded) {
+    console.log(`   ⚠️ migration window DEGRADED: ${migrationAudit.window_degraded_reason}`);
   }
 
   if (write) {

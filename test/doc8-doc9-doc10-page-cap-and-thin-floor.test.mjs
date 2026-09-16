@@ -248,9 +248,13 @@ describe('DOC8 — above the cap, no OCR is attempted and the marker is NAMED', 
 
   it('the over-cap marker is a CEILING reason with a longer expiry, not a transient', () => {
     // ⚠️ DOC18 added `window_failed` — "the multi-call window RAN and produced
-    // nothing", a different fact from "never attempted". The set is still PINNED
-    // (an accidental widening must be deliberate), just to the current membership.
-    assert.deepEqual([...CRE_CEILING_REASONS], ['over_docai_page_cap', 'window_failed']);
+    // nothing", a different fact from "never attempted". FLOWS1-artifact added
+    // `too_large` — a SharePoint artifact real, reachable, and over the Get-
+    // Artifact flow's chunking cap; its size does not change between ticks, so
+    // it is a ceiling, not a transient, same as the other two. The set is
+    // still PINNED (an accidental widening must be deliberate), just to the
+    // current (now three-member) membership.
+    assert.deepEqual([...CRE_CEILING_REASONS], ['over_docai_page_cap', 'window_failed', 'too_large']);
     assert.ok(!CRE_RETRY_REASONS.includes('over_docai_page_cap'),
       'a 24 h retry on a known-unservable document parks the batch on it forever');
   });

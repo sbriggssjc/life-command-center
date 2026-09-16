@@ -239,51 +239,175 @@ state.
    unknown-role, multiple Salesforce accounts, low name similarity) -- not swept, needs its own review
    pass. Full detail: `docs/claude-code/STATUS.md` 2026-09-15 entry,
    `supabase/migrations/20261102160000_lcc_own_t0c_trailing_the_and_fuzzy_merge_sweep.sql`.
-2. **🟡 RULE DECIDED, not yet built — `entities.canonical_name` as an enforced UNIQUE key**
-   (`[N15c] (2)`, `tier0-owner-contact-system.md` §6). Scott's answer: *"Yes, probably good to
-   establish the name standard for each group that is most accurate and use it everywhere, merging
-   those naming variants that do not comply."* Was blocked by #1; #1's merge sweep is done, so this is
-   now much closer to safe, but NOT yet measured -- the 3,772/8,005 remaining canonical_name
-   collisions (the review-gated tail) would still violate a hard unique constraint today. Next step:
-   measure how close to unique-clean the population is after a review pass on that tail, then add the
-   constraint.
-3. **🟡 RULE DECIDED, not yet built — `lcc_finalize_entity_portfolios`'s supersession rule**
-   (`[OWN-T0g]`, sized 2026-09-14, not shipped). Scott's answer: *"If there was a deed or a transfer
-   of ownership in some clear capacity, then the prior ownership has ended. Accuracy first."* Next
-   step: classify which `ownership_source` producers represent genuine transfer evidence (likely
-   `gov_ownership_chain`, `county_deed`, sales-transaction sources) vs. which do not (likely
-   `gsa_lease_diff`, `lcc_property_owner`, generic restatements), then change
-   `lcc_finalize_entity_portfolios` (a live, cron-critical `SECURITY DEFINER` function, both dia and
-   gov domains) to compare a new transfer-evidenced fact against ALL existing current facts for that
-   property, not just the current sync payload, and end-date the prior one only then. Higher risk than
-   #1 -- a live ingestion path -- needs a dry-run sizing pass before shipping.
-4. **🟡 RULE DECIDED, not yet built — 1,475 Salesforce-campaign orphans** (`[N15]`,
+2. **🟡 RULE DECIDED, MEASURED 2026-09-15, not yet safe to build -- `entities.canonical_name` as an
+   enforced UNIQUE key** (`[N15c] (2)`, `tier0-owner-contact-system.md` §6). Scott's answer: *"Yes,
+   probably good to establish the name standard for each group that is most accurate and use it
+   everywhere, merging those naming variants that do not comply."* Was blocked by #1; #1's merge sweep
+   is done, so this decision moved from "blocked" to "measure the remaining tail," which is what this
+   pass did -- **result: the constraint is still not safe to add.**
+
+   **Live measurement of `v_lcc_merge_candidates`** (the same view #1's sweep already used): **2,201
+   groups / 4,738 entities remain, and 0 are `auto_mergeable` today** -- every previously-safe tier was
+   already swept by #1; everything left genuinely needs a human call. Breakdown by `review_reason`:
+   `bridged_unknown_pinned` 1,644g/3,539e, `no_role_or_sf_signal` 340g/688e, `multiple_sf_accounts`
+   89g/193e, `low_name_similarity` 64g/143e, `normalizer_blind_review_only` 64g/175e.
+
+   **The dominant class, read further**: of the 1,644 `bridged_unknown_pinned` groups, **1,484
+   groups / 3,087 entities (68% of the whole tail) are name-compatible but carry ZERO Salesforce
+   corroboration** -- no signal either confirming or ruling out that two same-named entities are truly
+   the same company (vs. two different "ABC Properties LLC" in different states). Checked for a cheap
+   second corroboration signal before concluding review is unavoidable: `entities.normalized_address`.
+   **Dead end** -- all 1,484 groups have at least one member with a NULL address; this bridged-owner
+   population simply never carried address data to begin with, so address cannot break the tie for any
+   of them. No other cheap, already-captured signal was found. The remaining ~91 `bridged_unknown_pinned`
+   groups with 2+ real SF accounts, and the `low_name_similarity`/`normalizer_blind_review_only`
+   classes, are correctly held for the reason already on file (genuinely different firms sharing a
+   name, or a normalizer collision) -- these should stay held, not reviewed for merge.
+
+   **What this means for the UNIQUE constraint**: adding it today would either fail outright (thousands
+   of existing canonical_name duplicates) or force blind-merging 4,738 entities with no corroborating
+   signal on most of them -- directly against Scott's "accuracy first" instruction from decision #1.
+   **Scott's call: build a Decision Center review lane** for the 2,201 groups so he/the team can work
+   through them in normal course, rather than a scoped constraint or holding off.
+
+   **Reviewed the existing Decision Center machinery before building anything (per this repo's own
+   standing discipline) -- and the lane already exists, fully wired, no code change needed.** The
+   `merge_duplicate_entities` federated lane (`api/admin.js` ~line 8886) already reads THREE sources:
+   `v_lcc_merge_candidates` filtered to `auto_mergeable OR sf_inheritance` (213 of the 2,201 groups),
+   `v_lcc_person_email_merge_candidates`, and -- critically -- `v_lcc_canonical_twin_candidates`, a
+   "surface-only, never auto-merged, human-verdict-only" view over ALL same-canonical-name org twins,
+   explicitly documented in its own code comment as existing to add "the previously-invisible groups."
+   Sampled 200 of the 1,988 groups NOT covered by the `auto_mergeable/sf_inheritance` filter against
+   `v_lcc_canonical_twin_candidates`: **200 of 200 already present.** The lane already shows this exact
+   population today, deduped by winner_id, paginated (no hard cap truncating it), with a working
+   verdict path (`merge` -> `lcc_merge_entity` directly, reversible; `research` -> a research task).
+
+   **The actual gap is not machinery, it's throughput.** `lcc_decisions` shows only **13 `merge` + 1
+   `research` verdict ever recorded** against this lane, against a live population in the thousands --
+   the same "built but unworked" shape `[UX-T1c]`'s census already found across other federated lanes
+   (12 of 28 with zero verdicts ever). **Nothing to build here.** The lane is live in the app's Decision
+   Center today; it needs Scott or the team to work through it, not more code. Decision #2 (the UNIQUE
+   constraint) stays open until that review lands -- re-measure `v_lcc_merge_candidates`'s remaining
+   count periodically to see progress, and revisit the constraint once the tail is materially smaller.
+3. **✅ CLOSED 2026-09-15 — `lcc_finalize_entity_portfolios`'s supersession rule** (`[OWN-T0g]`).
+   Scott's answer: *"If there was a deed or a transfer of ownership in some clear capacity, then the
+   prior ownership has ended. Accuracy first."* Classified `ownership_source` producers by data, not
+   assumption (live query against `lcc_entity_portfolio_facts`): `county_deed`, `gov_ownership_chain`,
+   `sales_transaction`, `sales_transactions_seller_exit` are genuine recorded transfer instruments;
+   `gsa_lease_diff`, `gsa_lease_lessor`, `lcc_property_owner`, `county_records`, `costar`/
+   `costar_sidebar`, and null are lease-record restatements, internal snapshots, or market data -- not
+   proof an ownership change happened. Sized the live blast radius against `v_lcc_property_multi_current`'s
+   735 `multi_current_distinct_parties` population before writing anything: 72 properties had a
+   transfer-evidenced current fact competing with a stale current fact for a different party; of
+   those, 57 were safe to auto-resolve (the stale fact's own last-known date was on or before the
+   transfer's date, or unknown) and 15 were a genuine unresolved conflict (the "stale" fact was itself
+   dated *later* than the transfer) -- deliberately left alone for `v_lcc_portfolio_ownership_conflict`
+   / human review, never guessed. Shipped `lcc_own_t0g_supersede_by_transfer_evidence(p_dry_run,
+   p_batch_tag)`, reversible via `lcc_own_t0g_revert_supersession(batch_tag)`, fully logged to
+   `lcc_own_t0g_supersession_log`. Ran it live (batch `own_t0g_2026-09-15`): dry run matched live
+   exactly, **65 facts / 61 properties superseded**, 0 failures; re-running the dry run afterward found
+   **0** remaining (idempotent, self-terminating). `v_lcc_property_multi_current`'s
+   `multi_current_distinct_parties` count dropped **735 → 678**. Verified the known genuine co-ownership
+   case (gov/1708, The Greystone Group vs. Silverstone Company) was correctly left untouched -- neither
+   of its current facts carries transfer evidence, so the rule correctly declines to guess. **Also wired
+   the forward fix**: `lcc_finalize_entity_portfolios` (live, cron-critical, `SECURITY DEFINER`, both
+   dia and gov domains) now calls the same supersession function, live, at the end of every run --
+   scanning the WHOLE table (cheap, ~14k rows), not just that run's payload, which is what actually
+   closes the cross-sync-batch gap the audit found. Verified the modified live function still runs
+   clean (`select * from lcc_finalize_entity_portfolios()`, no error, no unintended side effect --
+   `multi_current_distinct_parties` stayed at 678, 0 new log rows since nothing was left to supersede).
+   Migrations: `supabase/migrations/20261102180000_lcc_own_t0g_transfer_supersession.sql` (log table +
+   both functions), `supabase/migrations/20261102190000_lcc_own_t0g_finalize_calls_supersession.sql`
+   (the forward-fix wiring into `lcc_finalize_entity_portfolios`). Full detail:
+   `docs/claude-code/STATUS.md` 2026-09-15 entry.
+4. **✅ CLOSED 2026-09-15 — 1,475 Salesforce-campaign orphans** (`[N15]`,
    `tier0-owner-contact-system.md` §6). Scott's answer: *"These are members of a specific group?
    Usually means that there is some vested interest in the space mapped by the name. Some may be
    brokers, some may be a new fund exploring the space, but the vast majority will be owners or prior
    owners and the membership is evidence that some prior research has concluded that in our team's BD
    history and just because the LCC doesn't yet have that connection mapped, does not mean that its
-   not out there undiscovered."* Decision: give them hub rows (become addressable entities in the
-   graph), not stay excluded. Next step: review the Salesforce-campaign data structure and the
-   existing hub/entity-minting machinery, then mint entity/hub rows for the 1,475.
-5. **🟡 RULE DECIDED, not yet run — T2b: widen ownership resolution to the remaining 2,241
-   properties / 2,054 owners** (`connectivity-and-open-threads.md` §4k.1). Scott's answer: *"Yes,
-   again, the objective is accurate coverage of all properties in our target submarket. We want to get
-   there as fast and efficiently as possible."* Sized safe and cheap already (duplicate-group growth
-   lower than T2a's actual). Next step: locate the T2b execution mechanism (analogous to T2a's) and
-   run it.
-6. **🟡 RULE DECIDED, not yet built — what evidence promotes an owner out of `unknown` role**
-   (`connectivity-and-open-threads.md` §4o). Scott's answer: *"If they currently own an asset in our
-   target market, that broker assigned to working that market should be assigned the prospecting and
-   cadence should match the schedule planned for (7 touchpoints in the first 6 months, average 4 a
-   year thereafter, but each client interaction and profile dictates the exact timing and content)."*
-   Decision: current ownership of an asset in the target market alone promotes an owner out of
-   `unknown` (no additional signal needed); the covering broker for that market gets assigned
-   prospecting; cadence follows the 7-touch/6-month, ~4/year-thereafter template, individualized by
-   client interaction/profile. Next step: review the existing cadence engine (touch-count/cadence
-   machinery referenced under `UX-T1a-touchcount`, and the `P112` doctrine -- never seed a cadence for
-   a contact with no method) and existing broker/market-assignment data before building the promotion
-   rule and cadence template. Most product-shaped of the six, needs its own design pass.
+   not out there undiscovered."* Re-measured live: the SF-campaign gate held at exactly 1,475 (the
+   source table, `lcc_sf_list_membership`, is a frozen 2026-07-16→07-21 snapshot -- not itself
+   live-syncing, a separate gap not fixed here). Shipped `lcc_n15_mint_sf_campaign_hub_rows`
+   (dry-run-safe, reversible), reusing the existing `lcc_tier0_company_confirms_domain`
+   anti-fabrication gate from P197 -- `company_name` written only when the person's own email domain
+   corroborates it (228 of 1,475, 15%; the rest correctly left blank, not guessed). Ran live: 1,475
+   `unified_contacts` hub rows created, 0 failures, fully logged and reversible. Does not touch the
+   ~4,197 email orphans outside the SF-campaign gate, and does not itself change Tier 0's blockage
+   (P197 already fixed that separately with a read-time resolver) -- this is Scott's stated
+   connectivity-coverage goal, not a Tier 0 fix. Migration:
+   `supabase/migrations/20261102170000_lcc_n15_sf_campaign_hub_mint.sql`.
+5. **✅ CLOSED 2026-09-15 — T2b: widened ownership resolution to the remaining properties**
+   (`connectivity-and-open-threads.md` §4k.1). Scott's answer: *"Yes, again, the objective is accurate
+   coverage of all properties in our target submarket. We want to get there as fast and efficiently as
+   possible."* Re-measured live before running: 2,255 properties / 2,068 owners (essentially unchanged
+   composition from the 2,241/2,054 sizing -- 805 under $50k, 712 at $50-100k, 537 rent-unknown). Ran
+   the same mechanism T2a used, `lcc_mint_gov_asset_entities` + `lcc_ingest_domain_owner_evidence`
+   (self-excluding view, so T2b's population was simply whatever remained in
+   `v_lcc_c2e_asset_mint_plan` after T2a): dry run matched live exactly, 2,255 minted / 0 skipped,
+   2,255 assets resolved, 0 orphans. The 7-row evidence gap is the identical brokerage guard T2a hit
+   (`Stan Johnson Co`, `NAI Pfefferle`, `Bradford Allen Realty Services`, `SVN®`) -- working as
+   designed. `v_lcc_c2e_asset_mint_plan` now reads 0 -- gov ownership resolution is exhausted at the
+   $100k+/below-$100k tranche split; both tranches are fully applied. Migration/data-operation detail:
+   `docs/os/PLANNED-BACKLOG.md`'s `C2e-T2b` row, `docs/claude-code/STATUS.md` 2026-09-15 entry.
+6. **✅ CLOSED 2026-09-15 -- what evidence promotes an owner out of `unknown` role, and how prospecting
+   coverage should widen** (`connectivity-and-open-threads.md` §4o). Scott's original answer: *"If they
+   currently own an asset in our target market, that broker assigned to working that market should be
+   assigned the prospecting and cadence should match the schedule planned for (7 touchpoints in the
+   first 6 months, average 4 a year thereafter, but each client interaction and profile dictates the
+   exact timing and content)."* Follow-up answer, resolving the one open scope question below, verbatim:
+   *"Yes, we want to pursue, in research, until every current and prior owner of a building leased to
+   one of the operators or agencies in our target swimlanes (dialysis and government-leased) are known
+   and connected to our LCC app and code processes. The brokers can then make the election on whether
+   to pursue the account or not individually, with the guidance and coaching of the LCC on the next best
+   relatively important lead."*
+
+   **Review** (per the decision's own "review before building" instruction) found more already-shipped
+   machinery than expected, and one genuine category error caught before it was built:
+   - **Cadence engine** (`api/_shared/cadence-engine.js`): already implements the exact 7-touch/6-month,
+     ~4/year-thereafter template. No new machinery needed, and none was built -- per Scott's "brokers
+     can make the election," a cadence should start when a broker elects to pursue an account, not be
+     bulk-seeded for everyone who is merely known and connected.
+   - **Broker/market assignment**: `BROKER1` (shipped + live 2026-09-11) already is the broker-to-market
+     rule -- vertical default (`gov`->Scott, `dia`->Kelly Largent, Scott catch-all, Nate excluded),
+     fill-blanks-only, reversible. No new policy needed, only a wider population to run it over.
+   - **Role classification -- caught before writing anything**: the OLD scalar `entities.owner_role` /
+     `behavioral_override` (`effective_owner_role`) is a HUMAN-manual-override field by convention
+     (`owner-role-classification.md`) -- writing a system-derived "promotion" into it would have been a
+     category error, the exact "second registry" / fabrication class this repo avoids. The live
+     deterministic role-SET view (`v_lcc_entity_roles`) already correctly classifies **445 of 447**
+     reachable current owners `investor_owner` and **3,804 of 3,820** prior owners `former_owner` --
+     computed live, no backfill needed. **Promotion was never a data gap; it was already correct in the
+     system that has the right semantics.** The OLD scalar column stays stale and unused for gating
+     (C6, 2026-08-29, already dropped the role predicate from the live queue) -- fixing its display on
+     the operator card, if it still reads 'unknown' there, is a UI concern, not a data build, and is not
+     addressed here.
+
+   **Sizing, live 2026-09-15**: current target-market owners at `effective_owner_role = 'unknown'`:
+   3,322 distinct, 447 reachable. Prior owners (held a fact that ended, holds none now): 3,820 distinct,
+   197 reachable. Reachability is the dominant bottleneck for both populations (86.5% of current, 94.8%
+   of prior owners are NOT reachable) -- this is a contact-data-sourcing gap, not a role/broker-mechanics
+   gap, and lines up with the already-filed, not-yet-decided **owner-enrichment-adapters** question
+   (`FLAGDARK1`, `PLANNED-BACKLOG.md`) -- address/deed/SOS/websearch/OpenCorporates adapters are the
+   actual lever for moving these reachability numbers, not anything in this decision's scope.
+
+   **Shipped**: `lcc_own_t0i_extend_broker_assignment(p_dry_run)` -- the identical BROKER1
+   vertical-default policy, applied over the wider population Scott's follow-up asked for (every
+   reachable current-OR-prior target-market owner, not just the live priority-queue's lease-timing
+   bands), fill-blanks-only, reversible (`delete ... where set_by like 'own_t0i_%'`). Does not touch
+   `lcc_broker1_assign_prospect_brokers` or its population. Dry run matched live exactly: **1,044
+   reachable owners total, 487 already assigned, 557 newly defaulted** (315 gov->Scott, 238 dia->Kelly,
+   4 catch-all->Scott). Re-run afterward: 0 remaining, idempotent. Verified Nate untouched (0 rows).
+   Migration: `supabase/migrations/20261102200000_lcc_own_t0i_extend_broker_assignment.sql`.
+
+   **What "known and connected" now means concretely, for every reachable current-or-prior owner**: role
+   is already correctly classified (`v_lcc_entity_roles`), a broker is now assigned (BROKER1 +
+   OWN-T0i together), and the current-owner half already surfaces in the live seller-prospecting queue
+   wherever lease timing puts them in-band -- brokers now have what they need to make the pursue/no-
+   pursue election Scott described. **Not shipped, deliberately**: a bulk cadence seed (contradicts
+   "brokers elect individually") and any change to the priority queue's lease-timing bands themselves
+   (a separate, larger ranking-surface decision, not required by this answer once "known and connected"
+   is read as data/assignment connectivity rather than forced outreach).
 
 **✅ Resolved and shipped:** banks and CMBS trustees excluded from prospecting (`[N3c]`, Scott
 2026-09-14, see `tier0-owner-contact-system.md` §4/§6) -- revisitable if lender prospecting via
@@ -306,12 +430,12 @@ quote, and each will have moved by the time this is read again:
 | Stage 3 | canonical_name collisions, full population (not property-scoped) | **3,772 groups / 8,005 entities** | was 6,636/14,007 before 09-15's sweep; remainder is the review-gated tail (`bridged_unknown_pinned`, `multiple_sf_accounts`, etc.) -- feeds decision #2 |
 | Stage 3 | tombstone-duplicate-current defect | **0** | ✅ shipped 09-14 (OWN-T0d), was 11 |
 | Stage 3 | `ownership_source` producer noise (`[OWN-T0f]`) | **0 action needed** | ✅ reviewed 09-14, already handled |
-| Stage 3 | portfolio-facts supersession gap (`[OWN-T0g]`) | open | rule decided 09-15 (decision #3); not yet built |
+| Stage 3 | portfolio-facts supersession gap (`[OWN-T0g]`) | **✅ closed** | shipped 09-15 -- 65 facts/61 properties superseded live (batch `own_t0g_2026-09-15`), `multi_current_distinct_parties` 735→678; forward fix wired into `lcc_finalize_entity_portfolios` so every future sync self-heals |
 | Stage 4 | owner-to-person linkage | 13.5% | 1,377 of 10,187 as of 09-14 -- not yet re-measured post-merge-sweep; entity-dedup can shift this denominator, recheck next pass |
 | Stage 4 | Tier 0 auto-attach mechanism | ✅ verified working | 9 writes 09-13, confirmed live 09-14 |
 | Stage 4 | banks/CMBS trustees in prospecting pool | excluded | ✅ shipped 09-14 |
-| Stage 4 | Salesforce-campaign orphans (`[N15]`) | 1,475 | rule decided 09-15 (decision #4: mint hub rows); not yet built |
-| Stage 4 | remaining unresolved ownership (T2b) | 2,241 properties / 2,054 owners | rule decided 09-15 (decision #5: run it); not yet run |
+| Stage 4 | Salesforce-campaign orphans (`[N15]`) | **0 remaining in the gated population** | ✅ shipped 09-15 -- 1,475 `unified_contacts` hub rows minted live, 228 with a domain-confirmed company |
+| Stage 4 | remaining unresolved ownership (T2b) | **0 remaining in the mint plan** | ✅ shipped 09-15 -- 2,255 gov properties minted and resolved, both tranches of gov asset-anchor resolution now fully applied |
 | Stage 4 | owner-role promotion doctrine | none live | rule decided 09-15 (decision #6); not yet built |
 | Stage 4/5 | "reached" (person-link definition, C4/C5) | 618 of 6,480 (9.5%) | 08-28 measurement, not re-measured this session |
 | Stage 5 | Salesforce deal-book linkage (`[UX12a]`) | 0 of 4,785 | producer does not exist |

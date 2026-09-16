@@ -97,3 +97,125 @@ surface normally has. **Sizing that is the next question; it is not sized here.*
 - **Value.** This population was selected by *Salesforce attachment*, not portfolio value. No dollar
   figure should be attached to it.
 - **dia.** gov only.
+
+---
+
+## 6. Live reconfirmation, 2026-09-15 (Cowork) — the diagnosis still holds, the "next question" is still unsized
+
+Re-ran this audit's population from scratch, independently, against LCC Opps live — not from a
+saved query (none was checked into the repo), so the join shape differs slightly from the original
+(SF-linkage traced through `entity_relationships` `works_at` edges to a person carrying a
+`salesforce` `external_identities` row, rather than however the 2026-08-28 pass built it). The count
+landed at **70 distinct SF-linked gov owner-orgs / 86 owner-property pairs** against the live
+"property + asset entity present, still unresolved" bucket the C2g re-measurement (this session,
+earlier) sized at **78** — close enough (a live population, 3 weeks and one T2b/OWN-T0g/OWN-T0c
+merge sweep later, plus a slightly different reconstruction of "SF-linked") to trust the shape, not
+exact enough to replace 78 as the tracked number.
+
+**The split by name-similarity to the resolved winner, at owner level (n=70):**
+
+| class | n | share |
+|---|---:|---:|
+| unrelated name (`similarity < 0.3`) | 58 | 83% |
+| medium similarity (0.3–0.5) | 4 | 6% |
+| high similarity (≥0.5, near/exact name match) | 8 | 11% |
+
+This reproduces C2h's own 69/8/2 split (§2 above) almost exactly in proportion — **the sponsor↔SPE
+class is still ~83% of the residue**, not a shrinking or one-time artifact.
+
+**Confirmed mechanism, not just shape.** Joined the resolved winner's `lcc_property_owner.source`
+and `confidence`:
+
+| `source` | n (of 70) | avg `confidence` | of which unrelated-name |
+|---|---:|---:|---:|
+| `supersession` | 52 (74%) | **flat 0.750** | 47 |
+| `relationship_graph` | 18 (26%) | 0.899 | 11 |
+
+The flat 0.750 confidence across every `supersession` row is the same signature
+`supersession-tie-lane-2026-08.md` describes: `lcc_supersede_property_owner` picking the
+**title-holding SPE** (`buyer`) over the **beneficial owner** (`true_buyer`/sponsor) whenever both
+are present — a role-precedence question that doc's §4 explicitly left **"not built pending that
+call"** and which `PLANNED-BACKLOG.md`'s sizing-docs list still shows as unshipped. C2h and the
+supersession-tie-lane doc are describing the **same unresolved precedence decision** from two
+different angles (owner-org connectivity vs. tie-breaking); they should be read together.
+
+**The 8 high-similarity pairs**: spot-checked against the two dedup surfaces —
+`v_lcc_merge_candidates` and `v_lcc_canonical_twin_candidates` (decision #2's population,
+`ownership-truth-pipeline-state.md`). **5 of 8 exact-name pairs already appear in both views** (e.g.
+`vineland construction co`, `american infrastructure funds`, `us fed properties`, `susquehanna
+holdings`, `emr land co formerly elk mountain ranch`) — already flagged, already sitting in the
+`merge_duplicate_entities` Decision Center lane, no new machinery needed. **1 exact-name pair is
+NOT flagged by either view** (`sarita mutscher`, same name, different entity id, different
+confidence-weighted resolution) — worth a look as a possible dedup-view gap, not raised here as a
+new backlog item pending someone confirming it's not a same-name-different-person case. The
+remaining 2 (`gba associates` / `gba associates partnership`, `levin living` / `levin`) are partial
+matches below either view's threshold — consistent with `low_name_similarity`, decision #2's own
+smallest review-reason bucket.
+
+**Also reconfirmed, narrower than before:** 0 of the 58 unrelated-name pairs sit in
+`lcc_domain_owner_ambiguous` (still not a parked-abstention population), and only 2 of 58 ever
+appear as a `candidate_owner_entity` in `lcc_property_owner_evidence` for their asset — the feeder
+isn't losing a close contest on these, it resolved confidently (avg 0.75–0.90) to the SPE and never
+seriously considered the sponsor.
+
+**Net: nothing here contradicts C2h. It reconfirms C2h, live, three weeks later, at the same
+proportions.** The still-open, still-unsized step is exactly what C2h's §4 named and never sized:
+feeding the ~58 sponsor→SPE pairs as candidates into `lcc_owner_sponsor_domain` (P190) and
+`lcc_ownership_sponsor_family` (A3) — both confirm-only by design, both still tiny (**8** and **34**
+rows respectively, unchanged in order of magnitude from C2h's description of P190 as "8 curated
+entries"). **Not sized here either** — sizing the sponsor-confirm feed, and separately, resolving
+the `supersession-tie-lane-2026-08.md` buyer-vs-true_buyer precedence decision Scott hasn't made
+yet, are the two concrete next steps, and neither is a "diagnose C2g" task anymore. `PLANNED-BACKLOG.md`'s
+C2g row still reads as if the diagnosis were open; it is not, and should be re-pointed at these two
+narrower, already-scoped decisions rather than continuing to frame this as an unsolved mystery.
+
+---
+
+## 7. Sizing the confirm-surface feed (2026-09-15, Cowork) — precision check first, and it came back too low to bulk-feed
+
+Before proposing any rows for `lcc_owner_sponsor_domain`/`lcc_ownership_sponsor_family`, checked
+whether the 58 "unrelated name" pairs from §6 actually carry a **textual** sponsor↔SPE signature —
+shared initials (`browman development co` → `bdc livermore l p`) or a shared significant word
+(`neman real estate investments` → `neman family irrevocable`) — the same kind of evidence C2h's §2
+table used for its named examples.
+
+**Only 10 of 58 (17%) show any textual link at all** (5 by initials, 5 by shared word; no overlap
+between the two sets). The other **48 of 58 (83%)** — `praveen gupta`→`cary st ssa`, `murray
+hills`→`ten`, `sletten`→`es builders`, `thomas holm`→`1521 north carpenter road`, and 44 more —
+have **no discoverable naming relationship whatsoever** between the Salesforce-linked owner and the
+resolved title-holder.
+
+**This does not overturn §1's finding that the resolution mechanism (title-SPE via `supersession`)
+is structurally correct and not a feeder bug — that still holds.** It does mean C2h's "sponsor↔SPE"
+*explanation* for why the two names differ was demonstrated on its own hand-picked examples (all of
+which do show a naming link), not on the full population. For the 48 with no textual link, at least
+three explanations stay open and undistinguished: a real sponsor-family relationship with
+non-obvious/rebranded naming; a Salesforce contact who has moved on or was never actually tied to
+this specific property; or the resolved title-holder genuinely being correct with no sponsor
+relationship to the SF-linked org at all (a stale or mistaken CRM attachment, not an LCC defect).
+
+**Recommendation: do not bulk-feed these into the confirm surfaces.** `lcc_owner_sponsor_domain`
+and `lcc_ownership_sponsor_family` are confirm-only by design precisely because A3 measured a
+lexical sponsor detector at ~25% precision — feeding 48 textually-unlinked pairs into a "candidate"
+list and hoping a human catches the bad ones is the same shape of mistake this repo has already paid
+for repeatedly (P196, P188). The right-sized next step, if this is worth doing at all, is a **short
+manual read-through of 58 rows** (not a build) — small enough for one sitting — rather than any new
+matching machinery. The 10 with a textual link are the only ones worth proposing as confirm-surface
+candidates without that read-through first.
+
+**Filed as reviewed, not built.** No rows written to either confirm table.
+
+---
+
+## 8. Superseded in part by the read-through (2026-09-15, Cowork) — §7's premise corrected
+
+§7 measured *names* and found a link on 10 of 58. The read-through
+[`C2g_58_PAIR_READ_2026-09-15.md`](C2g_58_PAIR_READ_2026-09-15.md) read the gov **registry** fields
+the name check never looked at (`recorded_owners.managers`, `latest_sale_grantor`, `assessed_owner`)
+and found the SPE's SOS-registered manager IS the Salesforce-linked org on **43 of 111** pairs
+(`llc_research_source='sos_registry'`); only 16 have no evidence either way. §7's "no bulk feed,
+read first" recommendation stands and was followed; its "three explanations stay open" premise is
+now closed for 95 of 111. **And the reason LCC never shows the sponsor is a gate, not a feeder:**
+`v_lcc_domain_owner_candidates` proposes the domain `true_owner` only for assets with no resolved
+owner — 936 gov + 100 dia resolved assets sit behind it. That is `supersession-tie-lane-2026-08.md`
+§4's decision, re-sized. 👤 Scott. Nothing written.

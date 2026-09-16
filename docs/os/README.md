@@ -34,6 +34,7 @@ engines were copied and diverged). Full statement: `architecture/connected-agent
 | Layer | Source of truth | Notes |
 |---|---|---|
 | **Where we are right now** | **`docs/os/CURRENT-STATE.md`** | What is LIVE · what is flag-gated OFF and why · the canonical-doc map. Read this first. |
+| **The lanes, one screen each** | **`docs/os/ROADMAP.md`** | Per category: live · partial · open · next unit · Scott's decision, pointing at backlog rows. Read when the question is "what is next in lane X?" (added 2026-09-16). |
 | **Everything unbuilt-but-intended** | **`docs/os/PLANNED-BACKLOG.md`** | ONE ranked backlog, every row citing where it came from. Nothing is dropped, only re-ranked or explicitly retired. |
 | **Brain — engines/data** | `mcp/` + `api/` (this repo) | One implementation each; MCP + HTTP return identical JSON |
 | **Memory — Cortex** | `log_memory`/`recall_memory`, `draft_and_log` signals, relationship/email discovery | Write-gated (log_memory Claude/MCP-only) |

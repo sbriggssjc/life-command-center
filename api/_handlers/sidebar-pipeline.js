@@ -3086,6 +3086,13 @@ export async function fetchAndStoreDocBytes(domain, { docId, propertyId, sourceU
     const spFetch = deps.fetchSharepointBytes || fetchSharepointBytes;
     const sp = await spFetch({ storageRef: sourceUrl, fetchImpl: deps.spFetchImpl });
     if (!sp.ok) {
+      // FLOWS1-artifact — a named terminal reason (`too_large`: the file is
+      // above the Get-Artifact flow's chunking cap) is carried through as-is
+      // rather than collapsed into the generic `sharepoint_fetch_failed`, so
+      // the caller can retire it with an honest label instead of `url_expired`.
+      if (sp.reason === 'too_large') {
+        return { ok: false, reason: 'too_large', size: sp.size ?? null, name: sp.name || null, detail: sp.detail };
+      }
       const unset = /SHAREPOINT_FETCH_URL unset|missing storage_ref/i.test(sp.detail || '');
       return { ok: false, reason: unset ? 'sharepoint_fetch_unset' : 'sharepoint_fetch_failed', detail: sp.detail };
     }

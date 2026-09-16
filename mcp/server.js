@@ -234,7 +234,7 @@ async function fetchEntityValueMap(ids) {
 // Pick the canonical/best entity from a candidate set: drop junk, then rank by
 // value (priority-queue rent) → Salesforce identity → has contact info → name.
 async function chooseBestEntity(rows) {
-  const list = (rows || []).filter((e) => !isJunkEntityRow(e));
+  const list = (Array.isArray(rows) ? rows : []).filter((e) => !isJunkEntityRow(e));
   if (list.length <= 1) return list[0] || null;
   const valueMap = await fetchEntityValueMap(list.map((e) => e.id));
   list.sort((a, b) => {
@@ -1217,7 +1217,7 @@ export const TOOL_HANDLERS = {
         return textResult({ ...resolution, error: "Property not found", entity_id, property_id, domain, address });
       }
       if (!resolution.entity && resolution.domain_property) {
-        const fb = await assembleDomainPropertyFallback(resolution.domain_property);
+        const fb = await assembleDomainPropertyFallback(resolution.domain_property, resolution.resolved_via);
         if (fb) return textResult({ ...fb, resolution });
       }
 
@@ -1726,22 +1726,92 @@ export function negotiateProtocolVersion(requestedVersion) {
   return requested >= MCP_MIN_PROTOCOL_VERSION ? requested : MCP_MIN_PROTOCOL_VERSION;
 }
 
-async function assembleDomainPropertyFallback(domainProperty) {
+// MCP1 — the single, shared definition of "is this domain true_owners row an
+// OPERATOR/TENANT, not the landlord" (P113/PDR2). Mirrors
+// api/_shared/true-owner-operator-guard.js — the MCP server is a standalone
+// deploy and does not import the api/ tree (see normalizeAddressLite above),
+// so this is a deliberate, commented copy, not a second invention. Keep the
+// two in lock-step if either changes.
+const TRUE_OWNER_OPERATOR_SELECT_FIELDS = {
+  dia: 'is_operator_not_owner,owner_type,owner_role',
+  gov: 'owner_role',
+};
+function trueOwnerOperatorSelectFields(dom) {
+  return TRUE_OWNER_OPERATOR_SELECT_FIELDS[dom] || 'owner_role';
+}
+function isTrueOwnerOperator(row) {
+  if (!row || typeof row !== 'object') return false;
+  return !!row.is_operator_not_owner
+    || String(row.owner_type || '').toLowerCase() === 'operator'
+    || String(row.owner_role || '').toLowerCase() === 'operator';
+}
+
+// MCP1 — owner facts for a domain property that has NO LCC asset entity
+// (never minted, or minted outside the C2e eligible set). Reads the domain's
+// own recorded_owners/true_owners rows directly by the property's FK, exactly
+// like operations.js's assemblePropertyDossier ownership block, but keyed off
+// a raw domain property row rather than an entity. Never mints anything —
+// this is a read tool.
+async function domainOwnershipFacts(dom, domainQueryFn, property) {
+  const ownership = {
+    recorded_owner_name: null, true_owner_name: null,
+    true_owner_is_operator: false, operator_name: null,
+  };
+  if (!property) return ownership;
+  const ownerCalls = [];
+  if (property.recorded_owner_id != null) {
+    ownerCalls.push(
+      domainQueryFn('GET', `recorded_owners?recorded_owner_id=eq.${enc(property.recorded_owner_id)}&select=recorded_owner_id,name&limit=1`)
+        .then((r) => ({ kind: 'recorded', r }))
+        .catch(() => ({ kind: 'recorded', r: { ok: false, data: [] } }))
+    );
+  }
+  if (property.true_owner_id != null) {
+    const toSelect = `true_owner_id,name,${trueOwnerOperatorSelectFields(dom)}`;
+    ownerCalls.push(
+      domainQueryFn('GET', `true_owners?true_owner_id=eq.${enc(property.true_owner_id)}&select=${toSelect}&limit=1`)
+        .then((r) => ({ kind: 'true', r }))
+        .catch(() => ({ kind: 'true', r: { ok: false, data: [] } }))
+    );
+  }
+  for (const { kind, r } of await Promise.all(ownerCalls)) {
+    const row = r && r.ok && Array.isArray(r.data) ? r.data[0] : null;
+    if (!row?.name) continue;
+    if (kind === 'recorded') {
+      ownership.recorded_owner_name = row.name;
+    } else if (isTrueOwnerOperator(row)) {
+      ownership.true_owner_is_operator = true;
+      ownership.operator_name = row.name;
+    } else {
+      ownership.true_owner_name = row.name;
+    }
+  }
+  return ownership;
+}
+
+async function assembleDomainPropertyFallback(domainProperty, resolvedVia = null) {
   const dom = normPropertyDomain(domainProperty?.domain);
   if (!dom || !domainProperty?.property_id) return null;
+  const pid = domainProperty.property_id;
+  const facts_only = resolvedVia === 'domain_property_direct_id';
   if (dom === 'gov') {
-    const pid = domainProperty.property_id;
-    const [leases, owners, lead] = await Promise.all([
+    const [leases, owners, lead, propRow] = await Promise.all([
       govQuery('GET', `gsa_leases?property_id=eq.${enc(pid)}&select=*&limit=5`).catch(() => ({ data: [] })),
       govQuery('GET', `ownership_history?property_id=eq.${enc(pid)}&select=*&order=transfer_date.desc&limit=10`).catch(() => ({ data: [] })),
       govQuery('GET', `prospect_leads?property_id=eq.${enc(pid)}&select=*&limit=1`).catch(() => ({ data: [] })),
+      govQuery('GET', `properties?property_id=eq.${enc(pid)}&select=property_id,recorded_owner_id,true_owner_id&limit=1`).catch(() => ({ data: [] })),
     ]);
+    const ownership = await domainOwnershipFacts('gov', govQuery, propRow.data?.[0]);
     return {
-      resolved_via: 'gov_property_fallback',
-      note: 'No LCC asset entity for this property yet — resolved directly from the government domain by address.',
+      resolved_via: facts_only ? 'domain_facts' : 'gov_property_fallback',
+      entity_id: null,
+      note: facts_only
+        ? 'No LCC asset entity for this property — facts-only context read directly from the government domain by property id.'
+        : 'No LCC asset entity for this property yet — resolved directly from the government domain by address.',
       property: { ...domainProperty, domain: 'gov' },
       entity: null,
       context_packet: null,
+      ownership,
       gov_data: {
         gsa_leases: leases.data || [],
         ownership_history: owners.data || [],
@@ -1750,14 +1820,21 @@ async function assembleDomainPropertyFallback(domainProperty) {
     };
   }
   if (dom === 'dia') {
-    const leases = await diaQuery('GET', `leases?property_id=eq.${enc(domainProperty.property_id)}&select=*&limit=5`)
-      .catch(() => ({ data: [] }));
+    const [leases, propRow] = await Promise.all([
+      diaQuery('GET', `leases?property_id=eq.${enc(pid)}&select=*&limit=5`).catch(() => ({ data: [] })),
+      diaQuery('GET', `properties?property_id=eq.${enc(pid)}&select=property_id,recorded_owner_id,true_owner_id&limit=1`).catch(() => ({ data: [] })),
+    ]);
+    const ownership = await domainOwnershipFacts('dia', diaQuery, propRow.data?.[0]);
     return {
-      resolved_via: 'dia_property_fallback',
-      note: 'No LCC asset entity for this property yet — resolved directly from the dialysis domain by address.',
+      resolved_via: facts_only ? 'domain_facts' : 'dia_property_fallback',
+      entity_id: null,
+      note: facts_only
+        ? 'No LCC asset entity for this property — facts-only context read directly from the dialysis domain by property id.'
+        : 'No LCC asset entity for this property yet — resolved directly from the dialysis domain by address.',
       property: { ...domainProperty, domain: 'dia' },
       entity: null,
       context_packet: null,
+      ownership,
       dia_data: { leases: leases.data || [] },
     };
   }

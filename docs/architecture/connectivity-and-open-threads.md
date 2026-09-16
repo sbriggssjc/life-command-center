@@ -1186,7 +1186,17 @@ extrapolated. What *did* arrive exactly where C2a said is the **owner cliff**: 2
 
 **T2b is safe to run and low-value to run.** Nothing measured argues against it on graph grounds; it
 is cheaper than the tranche just completed. The decision is purely whether *"resolve all ownership,
-rank later"* should be applied to a population ~96% un-contactable today. **Not run.**
+rank later"* should be applied to a population ~96% un-contactable today.
+
+✅ **SHIPPED 2026-09-15 (Scott + Cowork).** Scott: *"Yes, again, the objective is accurate coverage of
+all properties in our target submarket. We want to get there as fast and efficiently as possible."*
+Re-measured live before running (2,255/2,068, essentially unchanged from this section's sizing). Ran
+`lcc_mint_gov_asset_entities` (dry-run matched live exactly): 2,255 minted, 0 skipped, batch
+`t2b_gov_2026-09-15`. Drove `lcc_ingest_domain_owner_evidence(false, 3000, 't2b_evidence_2026-09-15')`
+in the same pass as this section requires: 2,255 assets resolved, the same 7-brokerage residual as
+T2a (`Stan Johnson Co` x4, `NAI Pfefferle`, `Bradford Allen Realty Services`, `SVN®`) — the guard
+working as designed, not a defect. `v_lcc_c2e_asset_mint_plan` now reads 0 — both tranches fully
+applied. Full detail: `docs/os/PLANNED-BACKLOG.md`'s `C2e-T2b` row.
 
 ⚠️ Public-body figures stay **lower bounds** — `lcc_looks_like_person` returns true for `CITY OF
 SALEM` / `BROOME COUNTY` (A3/P196). A pattern floor over T2a's owners is 182 of 2,300 (7.9%); the
@@ -1606,11 +1616,12 @@ T2b mints the 74. It does not touch the 79 (already minted), the 248 (own nothin
 ### The next question — 79 gov owner-orgs the feeder should have resolved
 
 Property present, asset entity present, owner anchored — and `lcc_property_owner_evidence` names
-them **zero times** (only 17 of 222 gov orgs here were ever a candidate). **Undiagnosed by design.**
-Test in order: the **400/run cap** on cron 225 (both mints had to drive it explicitly); the
-**`lcc_domain_owner_ambiguous`** lane, where a parked row would make these *correct abstentions*;
-then the **brokerage/junk/placeholder guards**. ⚠️ **In this arc every "silent producer" that looked
-like a defect turned out, at least partly, to be a guard doing its job** — read the verdicts first.
+them **zero times** (only 17 of 222 gov orgs here were ever a candidate). ✅ **Answered same day —
+see §4n below: it is not a defect, it is the sponsor↔SPE gap** (`C2h_SPONSOR_SPE_NOT_A_FEEDER_DEFECT_2026-08-28.md`).
+**Reconfirmed live 2026-09-15** (same doc, §6): 83% of the still-unresolved slice is the identical
+shape three weeks later — `lcc_property_owner` resolving to the title-holding SPE via `supersession`
+at a flat 0.75 confidence, while the Salesforce person sits at the sponsor. Not the batch cap, not
+the ambiguous lane (0 of 58 sampled), not a guard (unchanged from C2h's own 2-of-79).
 connected"* is, measured, **~652 people at 489 owner-orgs.** The rest are correctly unconnected.
 
 ### ⚠️ It also settles T2b independently: minting it would connect **74 orgs**
@@ -1625,11 +1636,18 @@ cost is settled across 4,570 minted entities), so it can be revisited if the ran
 
 **489 orgs / 652 people**: companies that **are** domain property owners, **have** Salesforce people
 attached, and whose properties are **not** resolved to them. ⚠️ **415 of the 489 are NOT reachable
-by minting** — they are anchored and unresolved for some other reason. **That is the next thing to
-size, and it is deliberately undiagnosed here.** Candidates in order: the `lcc_reconcile_property_owner`
-0.55 confidence gate (the documented 876-asset supersession class); a dia **operator** in the owner
-slot (P113); or an org anchored in one domain with properties in the other. **Do not assume — this
-arc has three instrument errors on record from assuming.**
+by minting** — they are anchored and unresolved for some other reason. ✅ **Diagnosed same day for
+the gov side, §4n / mechanism reconfirmed live 2026-09-15**: `lcc_property_owner` is resolving to
+the title-holding SPE via `supersession` at a flat 0.75 confidence, not silently failing — that part
+is structural and not a feeder bug. ⚠️ **But the "it's a sponsor↔SPE naming pattern" explanation
+only checks out textually for 10 of 58 (17%) of the reconfirmed pairs** (`C2h_...md` §7,
+2026-09-15) — the other 48 have no discoverable naming link at all between the SF-linked org and
+the resolved owner, so they need individual reading, not a bulk confirm-surface feed (would repeat
+the ~25%-precision lexical-detector mistake this repo already paid for once, per A3/P196). What is
+still genuinely unsized: that manual read-through (58 rows, one sitting), and the separate,
+still-open buyer-vs-true_buyer precedence decision in `supersession-tie-lane-2026-08.md` §4, which
+Scott has not yet made. **Do not assume — this arc has three instrument errors on record from
+assuming, and "textually similar name" almost became a fourth.**
 
 
 ---
@@ -1753,6 +1771,30 @@ DECLARED irregular feed. Backlog **B6c-feed**.
 
 
 ---
+
+### 4n-b. Read-through done (2026-09-15, Cowork): 43 of 111 are SOS-attested, and the blocker is a gate
+
+Evidence: [`C2g_58_PAIR_READ_2026-09-15.md`](../audits/C2g_58_PAIR_READ_2026-09-15.md). Read-through
+only — nothing written, no rows proposed to either confirm surface.
+
+The "58 pairs with no naming link" were read one at a time against gov's registry fields. **43 of
+111 pairs: the SPE's Secretary-of-State-registered manager is the Salesforce-linked owner-org or its
+contact** (`sos_registry`, 40 `exact` + 2 `norm_core`, 1 `sam_entity`). 23 are wording-variant
+duplicates (decision #2's lane; `US Fed Properties Trust Inc`/`…Trust` alone is 12). 9 are conflicts
+*inside* gov (recorded vs. deed vs. assessed), 6 are LCC contradicting gov's own recorded owner with
+nothing behind it, **2 are LCC resolving to the deed grantor — the seller**, 1 is a genuine sale
+(`Consilium` → Easterly; the CRM contact is stale, LCC is right), 8 are name-only, 16 have nothing.
+
+**Why LCC never shows the sponsor:** `v_lcc_domain_owner_candidates`'s `unresolved` CTE proposes the
+domain `true_owner` **only for assets with no resolved owner**. Once `supersession` has placed the
+SPE at 0.75, domain truth (weight 5.0, the highest in the feeder) is never entered as evidence. On
+the 92 assets read, `domain_true_owner` evidence rows: **0**. The R6 "domain truth outranks name
+patterns" doctrine is implemented as a gap-filler. **Blast radius of lifting the gate: 936 gov +
+100 dia resolved assets** whose domain `true_owner` disagrees with LCC's pick and would be eligible.
+That is the `supersession-tie-lane-2026-08.md` §4 decision (beneficial owner vs. title SPE), sized
+at **1,036 assets, not 63**. 👤 Scott. ⛔ Not the token-keyed `lcc_ownership_sponsor_family` — most
+A-class SPEs carry no sponsor token (`300 Fifth Avenue LLC` ← Martin Selig); it cannot hold a
+per-entity manager link. Backlog **C2k**.
 
 ## 4o. C4 — the ranking layer: the whole BD queue is gated on one unset column
 

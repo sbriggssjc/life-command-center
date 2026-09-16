@@ -59,6 +59,12 @@ The other window may have measured this, fixed this, or be mid-flight on it. ***
 running*** has a mirror: ***in flight is not unbuilt.*** **When two honest measurements disagree,
 find the measurement that does not depend on the disputed key** rather than adjudicating keys.
 
+Reconciling also means **intake**: `docs/claude-code/responses/` (Claude Code replies) and
+`docs/claude-code/SB notes/` (Scott's in-app observations — screenshots, forwarded failure mails) are
+read every turn; each unprocessed file becomes `TRIAGE.md` rows, backlog rows and prompts before it moves
+to `done/` (`docs/claude-code/README.md`, `SB notes/README.md`). An observation Scott made in the app is
+parallel work too.
+
 ### ⑤ UPDATE the canonical docs in the SAME change
 
 Not a follow-up. The living pages, whichever the topic touches:
@@ -75,6 +81,12 @@ Not a follow-up. The living pages, whichever the topic touches:
 | where anything is filed | `docs/os/DOCUMENTATION-MAP.md` |
 
 **A dated audit is EVIDENCE and stays.** A living page is STATE and gets corrected.
+
+**Leak class 1 (INVENTORY1b, 2026-09-16):** when a capability ships under a *different name* than a
+planning doc gave it, that doc still reads "NOT STARTED" — grep every doc for the old proposed name and
+fix it in the same change. A plan doc's TODO table is either mirrored as backlog rows or retired with a
+"superseded, see row X" pointer the moment the work ships (class 3); nothing important lands only in a
+history file (class 4).
 
 ### ⑥ CORRECT what is now false — in place, never silently
 

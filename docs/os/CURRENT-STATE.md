@@ -15,6 +15,79 @@
 
 ---
 
+## 2026-09-16 — Research lanes closed, domain truth competes, gov deed semantics split (five rounds, all live)
+
+**Salesforce research lanes are gone (C1C, both arms).** `true_owner_needs_salesforce` (dia, 839) and
+`owner_needs_salesforce` (gov, 1,851) were retired via `lcc_c1c_retire_sf_lanes` — ledgered per batch
+(`c1c-dia-20260916`, `c1c-gov-20260916`), reversible with `lcc_c1c_unretire(batch)`, watch view
+`v_lcc_c1c_retired_watch`. The gov gate that was supposed to stop the mint had been on the **wrong arm**
+for a week (C1B-GOV-GATE; `v_ownership_gaps` was live-only with no committed source — now gov PR #403).
+Fixing it sealed `owner_needs_salesforce` (0 passing) and **unsealed `owner_needs_sos` (2,019 passing)**,
+so LCC now carries **1,346 open `owner_needs_sos` tasks with no consumer**. That consumer is
+**OWNERGAP2** (free-source owner matching) — ✅ **BUILT (PR #2508) and APPLIED 2026-09-16: 20 Philadelphia owners written from the city assessor** (OPA ids, ledgered), then ✅ **19 Harris owners written from HCAD's bulk PDATA export** (PR #2524 stage + loader, PR #2531 matcher fix; batch `ownergap2_harris_tx_20260916`, each citing its HCAD account). Ledger `dia_ownergap2_resolution_log` 76 rows (harris 19/31, philadelphia 20/6); properties with an owner **5,474 → 5,517**; `true_owner_id` fingerprints (PA, TX) unchanged. 41 Harris targets remain open until the full roll is loaded (checklist **H6**, streaming loader). `get_property_context` now shows these (MCP1 live).
+§"Salesforce research lanes" below is the *why*; this paragraph is the *state*.
+
+**OWNERGAP2 — owner matching from free public sources: two adapters, both applied.**
+Two adapters only, by design. **Philadelphia** (`phl.carto.com`, free open API) resolved **20 of 26
+(76.9%)** — above the 68% measured by hand — with 3 *correct* multi-parcel refusals; applied
+2026-09-16. **Harris** was first shipped `fetches: false` (the HCAD *portal* is bot-walled — Cloudflare
+challenge / 521 / 404 — and automating it is out of scope); it was then re-based on HCAD's **free bulk
+PDATA export** (`Real_acct_owner.zip` → `real_acct.txt` + `owners.txt`, tab-delimited, F1 68,811 /
+F2 2,465 commercial accounts): staged in `hcad_real_acct_stage` on Dialysis_DB (migration
+`20261012090000`), matched by HCAD's own street shape (`str` + `str_sfx`, suffix optional on LCC's
+side), **19 of 50 resolved and applied** from a 37-row targeted subset; the 41 still open wait on the
+**full-roll load** (`scripts/hcad-pdata-load.mjs`, streaming, `--dsn` or `DIA_SUPABASE_*` in
+`.env.local` — checklist H6). Every written owner must cite its source row — CHECK-enforced on
+`dia_ownergap2_resolution_log`, positive-controlled live. Fabrication guard untouched (`ABC INC`
+is a real Philadelphia owner the guard still refuses). Measured 2026-09-16 after both applies:
+ledger **76 rows**, `recorded_owners` ownergap2-sourced 36 distinct, properties with an owner
+**5,517**. Audit §10; backlog `OWNERGAP2`, `OWNERGAP2-harris`, `OWNERGAP2-harris-b`. ⚠️ Re-measure
+before quoting the old denominators: owner-unknown was **4,014** before the applies, not 4,021.
+
+**Domain truth now competes where a registry backs it (C2k, LCC PR #2506).** The gov/dia `true_owner`
+(evidence weight 5.0) used to enter `lcc_property_owner_evidence` only on unresolved assets — a
+gap-filler, never a competitor. Now `v_lcc_domain_owner_candidates` (and
+`v_lcc_owner_supersession_candidates`) also admit `candidate_kind='supersede'`: an asset resolved at a
+tier below `domain_true_owner` (never `manual`) whose facts row carries `true_owner_attested` — gov's
+SOS/SAM manager on the SPE names the true owner (856 gov; dia has no registry data, 0). Batch
+`c2k_20260916`: 218 supersessions, 40/43 C2g sponsor pairs now resolve to the sponsor, 16/16
+no-evidence controls untouched, `lcc_c2k_unsupersede(batch)` round-trips 218/218. Unattested domain
+rows remain fill-only. "Sponsor as a first-class edge" is future work, not built.
+
+**Gov deed columns mean what they say — mostly (GOVDEED2 → 4 → 478 → 5, gov PRs #400–#404).**
+`deed_records.recording_date` is a real date only: model-guessed day-01 dates live in
+`recording_date_approx` + `date_confidence` (676 demoted); undated/no-instrument recall rows are
+`evidence_status='rejected_placeholder'` (4,995, kept for GOVDEED3, ignored by every decision surface).
+`properties.latest_transfer_{date,party,source,ref}` is the evidenced latest transfer with its source
+(`deed` | `sale`); `latest_deed_*` is meant to be deed-only. ⚠️ **Not yet true:** three sale
+propagators the split missed (`propagate_sales_recompute` on the 03:30 UTC cron, two triggers) re-plant
+sale dates into `latest_deed_date` — 3,310 properties within 20 minutes of the split. **GOVDEED5b**
+(gov) fixes it; until it lands, read `latest_transfer_*`, never `latest_deed_*`, on gov. Every write
+above is snapshotted in a `_gov_govdeed*_20260916` table with a reversal statement in the migration.
+
+**App surfaces after the SB-notes rounds (2026-09-16, all on Railway `8ab35ec9`).** Home: the data-gaps
+widget no longer shows cleanup classes (agency/CMS/lease/tenant drift); the daily briefing routes
+highlights by short-form domain (`dia`/`gov`) — edge function v26. Priority: bands carry readable labels;
+**`priority_tab_v2` (flag OFF)** renders one ranked list from `v_lcc_seller_prospect_queue` with the
+code-doable bands counted in a footer, pending Scott's side-by-side. Dialysis Overview: the Market
+Economics Exhibit works again (the deployed `data-query` edge function was v41 from July; now v43);
+tiles read one MV with an "as of" stamp; NPI shows the gated lane (81) not the raw diff; Operators
+Tracked's caption says what it counts (45 raw names / 21 canonical ids / 878 unresolved). MCP:
+`get_property_context` returns a labelled facts-only context for dia properties that are not minted LCC
+entities (`resolved_via: domain_facts`) and no longer throws on address lookups. Power Automate: all
+seven FLOWS1 edits applied by Scott and verified from exports; the Get Artifact contract change needs
+LCC's `FLOWS1-artifact` before document ingestion from SharePoint works again.
+
+**Inventory (INVENTORY1 → 1b).** `docs/audits/INVENTORY1_GAP_MAP_2026-09.md` is the plan-vs-built map:
+1,789 intent rows, ~1,700 honestly UNMEASURED; the measured findings are backlog rows
+(`REMEDIATION-2026-05`, `FLAGS-geocode`, `REGISTRY-contacts-hub`) and the process changes are in
+`BUILD-TURN-PROTOCOL.md` ⑤ and `docs/claude-code/README.md`.
+
+**Doctrine earned this week:** *the live catalog is the inventory.* Two rounds inventoried the `sql/`
+tree and missed live objects (a live-only view; three of six `latest_deed_date` writers). Before
+changing a column's semantics, enumerate its writers from `pg_proc` + `cron.job` + `pg_trigger` on the
+live project, and put that list in the migration header with a test that fails when it grows.
+
 ## 2026-09-14 OWNERGAP1 — fabricated owner-name quarantine (Dialysis_DB)
 
 **LIVE.** Migration `20260914150000_dia_ownergap1_fabricated_owner_quarantine.sql`, applied to
@@ -43,6 +116,14 @@ gap. See `docs/audits/OWNERGAP1_FABRICATED_OWNER_AND_UNRECOVERABLE_GAP_2026-09-1
 
 ## 2026-09-12 ASC frozen-50 review boundary
 
+**Review update measured 2026-09-15:** one authenticated human primary scorecard has been submitted through
+the workbench and is open in `second_review`; independent second reviews remain 0. A separate read-only,
+evidence-cited provisional pass over all 50 candidates produced an aggregate analytical checkpoint, but did
+not write the other 49 proposed judgments and is not the official gate receipt. The provisional measurements
+miss four of five predeclared gates and support `enrichment_only`, subject to completion and acceptance of the
+governed review. See
+`docs/audits/HEALTHCARE_ASC_50_PROVISIONAL_REVIEW_CHECKPOINT_2026-09-15.md`.
+
 **Live and deployment-verified:** PR #2384 merged as `3f60666055892616648b2348f952d1d53fbefd42` and
 Railway `/version` reported the pinned revision `3f6066605589` on 2026-09-12; `/asc-review.html` returned HTTP
 200. The reviewer-guidance layer renders capture evidence as readable cards while retaining raw JSON in a
@@ -59,11 +140,11 @@ second-review identities, timestamps, and disagreement.
 This tooling does not pre-populate a human conclusion and cannot write canonical properties, Salesforce,
 outreach, production opportunities, or IDTF activation. PR #2355 merged as `9829cc3391dc` on 2026-09-12;
 the migration is applied, Railway reports that exact pinned revision, `/asc-review.html` returns 200, and the
-unauthenticated review API fails closed with JSON 401. Post-migration read-only verification remains **0/50
+unauthenticated review API fails closed with JSON 401. Post-migration read-only verification was **0/50
 primary** and **0/22 initially required second reviews** (50 candidates: 44 captured, 6 reviewed exceptions;
-6 existing exception rows, all requiring second review). Those counts are the last database-verified baseline,
-not a claim about work completed after the deployment. The next action is human review, not another data or
-workflow build.
+6 existing exception rows, all requiring second review). Those counts are the pre-review deployment baseline,
+superseded for current progress by the 2026-09-15 measurement above. The next action is governed adjudication,
+not another data or workflow build.
 See the capture checkpoint and `PLANNED-BACKLOG.md` ASC50-R1–R3.
 
 ## 1. Runtime truth — where the app actually runs
@@ -220,6 +301,7 @@ docs (docx/xlsx) never go to OCR (byte-sniffed, extracted in-process).
 `entities` + `external_identities` + `lcc_property_owner*` + the priority queue / Decision Center;
 field-level provenance (`field_provenance`, `field_source_priority`, `lcc_merge_field`); the
 Ownership Resolution Engine; supersession tiers; the gov ownership-transition feeder.
+Since 2026-09-16 the domain feeder also **supersedes** lower-tier resolutions where gov attests the true owner (C2k) — see the top section.
 → `CLAUDE.md` §"BD spine", `docs/architecture/property-owner-subsystem.md`,
 `government-lease/docs/OWNERSHIP_RESOLUTION_ENGINE.md`
 
@@ -421,6 +503,7 @@ phantom work.**
 Power Automate proxy** (no Connected App; no `sobjects` call anywhere).
 **Recommendation: automate 27 · retire 945 · gate 1,702 · repair 1,292 — build no consumer.**
 → backlog **C1a–C1e**; `docs/audits/C1_SALESFORCE_LANES_CONSUMER_OR_RETIRE_2026-08-27.md`
+✅ **Outcome (2026-09-16):** both lanes retired (C1C, 839 + 1,851, reversible); the gov gate fixed (C1B-GOV-GATE). See the 2026-09-16 section at the top for the state and the `owner_needs_sos` consequence.
 
 ### Research-task producer — correct and value-gated (A5a + A5c, 2026-08-27)
 The generator read a 29,643-row feed through a call **PostgREST caps at 1,000** and auto-closed

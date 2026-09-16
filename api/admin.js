@@ -134,6 +134,7 @@ import { handleBroker1AssignTick } from './_handlers/broker1-assign-tick.js';
 import { handleAmbiguousEntityAutomergeTick } from './_handlers/ambiguous-entity-automerge-tick.js';
 import { handleBenchRankTick } from './_handlers/bench-rank-tick.js';
 import { handleBriefingAnalystTakeTick } from './_handlers/briefing-analyst-take-tick.js';
+import { handleOwnerGap2ResolveTick } from './_handlers/ownergap2-owner-resolve-tick.js';
 import { runDownstreamPipeline } from './_handlers/intake-extractor.js';
 import { createPropertyFromIntake } from './_handlers/intake-create-property.js';
 import {
@@ -243,6 +244,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'priority-band':              return handlePriorityBand(req, res);
     case 'priority-queue':             return handlePriorityQueueList(req, res);
     case 'seller-prospect-queue':      return handleSellerProspectQueue(req, res);
+    case 'priority-hidden-band-counts': return handlePriorityHiddenBandCounts(req, res);
     case 'priority-trigger-properties': return handlePriorityTriggerProperties(req, res);
     case 'review-counts':              return handleReviewCounts(req, res);
     case 'news-alerts':                return handleNewsAlerts(req, res);
@@ -284,6 +286,10 @@ export default withErrorHandler(async function handler(req, res) {
     case 'agency-risk-consume':        return handleAgencyRiskConsume(req, res);
     case 'npi-consume':                return handleNpiConsume(req, res);
     case 'outlook-name-backfill':      return handleOutlookNameBackfill(req, res);
+    // OWNERGAP2 — resolve owner-unknown dia properties from free public
+    // assessor sources. GET is a dry run (the default); POST writes, ledgered
+    // and reversible by batch tag. Two jurisdictions only, by design.
+    case 'ownergap2-owner-resolve-tick': return handleOwnerGap2ResolveTick(req, res);
     default:
       return res.status(400).json({ error: 'Unknown admin route' });
   }
@@ -7542,6 +7548,45 @@ async function handleSellerProspectQueue(req, res) {
     funnel: (summaryR.ok && Array.isArray(summaryR.data)) ? summaryR.data : null,
     items,
   });
+}
+
+// ============================================================================
+// PRI2 (2026-09-16) — footer counts for the code-doable priority bands
+// GET /api/admin?_route=priority-hidden-band-counts
+//   The four bands UX-T1a Unit 3 already hid from the human surface (P0.4,
+//   P-CONTACT, P0.5, P-BUYER) each have a named automated consumer -- this
+//   just reads their CURRENT queue size off v_priority_queue_band_counts
+//   (human_surface=is.false) so the Priority tab v2 footer can say "N
+//   resolved automatically" / "N waiting on <producer>" instead of silently
+//   dropping the population the way a pure hide would. Read-only; no new view.
+// ============================================================================
+const PRIORITY_HIDDEN_BAND_PRODUCERS = {
+  'P0.4': 'ownership-resolution sweep (cron 244)',
+  'P-CONTACT': 'Tier 0 auto-attach sweep',
+  'P0.5': 'CRM hygiene (bulk-open opportunities)',
+  'P-BUYER': 'buyer-pursuit-by-deal-flow (no queue work needed)',
+};
+async function handlePriorityHiddenBandCounts(req, res) {
+  if (req.method !== 'GET') return res.status(405).json({ error: 'GET only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const r = await opsQuery('GET', 'v_priority_queue_band_counts?select=priority_band,n&human_surface=is.false',
+    undefined, { countMode: 'none' }).catch((e) => {
+      console.warn('[priority-hidden-band-counts] query threw:', e?.message || e);
+      return { ok: false, status: 0, data: null };
+    });
+  if (!r.ok) {
+    return res.status(502).json({ error: 'list_failed', detail: r.data });
+  }
+  const rows = Array.isArray(r.data) ? r.data : [];
+  const bands = rows.map((row) => ({
+    band: row.priority_band,
+    n: Number(row.n) || 0,
+    producer: PRIORITY_HIDDEN_BAND_PRODUCERS[row.priority_band] || null,
+  }));
+  const total = bands.reduce((s, b) => s + b.n, 0);
+  return res.status(200).json({ bands, total });
 }
 
 // ============================================================================
@@ -18637,6 +18682,28 @@ async function handleNextBestAction(req, res) {
     for (const row of rows) merged.push(row);
   }
 
+  // HOME1/§A (2026-09-16): this widget ("Top data gaps to close") is meant to
+  // be human next-steps only — a named next-source to check plus, where
+  // possible, a sidebar-capturable target URL. `v_next_best_action`
+  // (both dia + gov) also emits DATA-CLEANING drift classes
+  // (gov `agency_drift:*`, dia `cms_chain_drift:*` / `lease_tenant_drift`) —
+  // e.g. "Resolve agency drift: property says 'GSA ...', lease says
+  // 'METROPOLITAN S...'" — which are string-reconciliation gaps a resolver
+  // can close without a human (see the ID3a agency-registry fold,
+  // docs/os/CURRENT-STATE.md), never a research task with a source to check.
+  // Excluded here rather than in the view: this repo does not own the gov DB
+  // objects (CLAUDE.md "ONE REPO OWNS EACH DATABASE'S OBJECTS"), and the dia
+  // view is slated for the same treatment, so the admission predicate lives
+  // in the one place this repo can safely change it.
+  const DRIFT_GAP_TYPE_PREFIXES = ['agency_drift', 'cms_chain_drift', 'lease_tenant_drift'];
+  let suppressedDataCleaning = 0;
+  const humanActionable = merged.filter((row) => {
+    const gt = String(row.gap_type || '');
+    const isDrift = DRIFT_GAP_TYPE_PREFIXES.some((p) => gt === p || gt.startsWith(p + ':'));
+    if (isDrift) { suppressedDataCleaning++; return false; }
+    return true;
+  });
+
   // R4-D #5 (2026-06-05): magnitude plausibility guard. A dia row surfaced a
   // "$950M" gap_value (QA#1 aggregate-bleed class — a portfolio sale price bled
   // onto a single property and not yet auto-nulled). Such artifacts otherwise
@@ -18646,7 +18713,7 @@ async function handleNextBestAction(req, res) {
   // no DB writes — so it never auto-nulls a legitimately large gov building.
   const NBA_VALUE_CEILING = { dialysis: 50000000, government: 250000000 };
   let suppressedImplausible = 0;
-  const plausible = merged.filter(row => {
+  const plausible = humanActionable.filter(row => {
     const ceiling = NBA_VALUE_CEILING[row.source_domain] ?? NBA_VALUE_CEILING.government;
     const v = Number(row.gap_value);
     if (Number.isFinite(v) && v > ceiling) { suppressedImplausible++; return false; }
@@ -18724,6 +18791,7 @@ async function handleNextBestAction(req, res) {
     // magnitude guard) so the "N total open" UI count agrees with the list.
     total_merged:  deduped.length,
     total_raw:     merged.length,
+    suppressed_data_cleaning: suppressedDataCleaning,
     suppressed_implausible: suppressedImplausible,
     returned:      items.length,
     limit, offset,

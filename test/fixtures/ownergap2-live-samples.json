@@ -1,0 +1,136 @@
+{
+  "_source": "Captured LIVE 2026-09-16 from https://phl.carto.com/api/v2/sql (table opa_properties_public), routed through Dialysis_DB pg_net because this sandbox has no direct egress to phl.carto.com (the agent proxy answers 403 to CONNECT). Harris fixtures are the operator-capture shape described in OWNERGAP1 §9 — HCAD is NOT fetched by this build (search.hcad.org answered 403 with the Cloudflare managed challenge on the same day).",
+  "_why_fixtures": "npm test is hermetic by guard (test/_helpers/net-guard.mjs throws on any non-loopback host). These are the real bytes the real query returned, so the matcher is exercised against production data without a test ever reaching a real host.",
+  "philadelphia": {
+    "4126 Walnut St": {
+      "note": "range_start — OWNERGAP1 §8's motivating row.",
+      "rows": [
+        { "parcel_number": "882000790", "location": "4126-38 WALNUT ST", "owner_1": "UNIV CITY ASSOCIATES", "owner_2": null, "mailing_address_1": "730 FRANKLIN BLDG", "mailing_street": "3451 WALNUT ST", "mailing_city_state": "PHILADELPHIA PA", "mailing_zip": "19104", "mailing_care_of": null }
+      ]
+    },
+    "3823 Market St": {
+      "note": "range_contains AND parity. 3823 is odd: it is inside 3817-39 (odd side, RALSTON) and NOT inside 3816-40 (even side, UNIVERSITY CITY). Without the parity rule both match, two distinct owners appear, and a resolvable property is wrongly refused as multi-parcel.",
+      "rows": [
+        { "parcel_number": "881822820", "location": "3817-39 MARKET ST", "owner_1": "RALSTON MERCY-DOUGLASS HO", "owner_2": null },
+        { "parcel_number": "x2", "location": "3801-15 MARKET ST", "owner_1": "FIRST DISTRICT", "owner_2": null },
+        { "parcel_number": "x3", "location": "3800-14 MARKET ST", "owner_1": "UNIV CITY SCIENCE CTR", "owner_2": null },
+        { "parcel_number": "x4", "location": "3816-40 MARKET ST", "owner_1": "UNIVERSITY CITY", "owner_2": null }
+      ]
+    },
+    "3300 Henry Ave": {
+      "note": "MULTI-PARCEL — Falls Center. Six rows, five distinct owners. Must refuse.",
+      "rows": [
+        { "parcel_number": "882920450", "location": "3300 HENRY AVE", "owner_1": "3300 HENRY LP", "owner_2": null },
+        { "parcel_number": "883560020", "location": "3300 HENRY AVE", "owner_1": "3300 HENRY LP", "owner_2": null },
+        { "parcel_number": "883560040", "location": "3300 HENRY AVE", "owner_1": "UNIT FOUR FALLS CENTERS LP", "owner_2": null },
+        { "parcel_number": "881136900", "location": "3300 HENRY AVE", "owner_1": "UNIT ONE FALLS CENTER LP", "owner_2": null },
+        { "parcel_number": "883560060", "location": "3300 HENRY AVE", "owner_1": "UNIT SIX FALLS CENTER LP", "owner_2": null },
+        { "parcel_number": "883560030", "location": "3300 HENRY AVE", "owner_1": "UNIT THREE FALLS CENTER L", "owner_2": null }
+      ]
+    },
+    "2910 South 70th St": {
+      "note": "Two parcels, ONE owner (2910R is the rear lot). Unambiguous — the answer is the same either way — so this resolves rather than refusing.",
+      "rows": [
+        { "parcel_number": "882088610", "location": "2910R S 70TH ST", "owner_1": "BLUE BELL ASSOC", "owner_2": null },
+        { "parcel_number": "882088600", "location": "2910 S 70TH ST", "owner_1": "BLUE BELL ASSOC", "owner_2": null }
+      ]
+    },
+    "834 Walnut St": {
+      "note": "range_contains into a range with FOUR distinct owners (800-34 WALNUT ST). Correctly refused — containment is not a licence to guess.",
+      "rows": [
+        { "parcel_number": "w1", "location": "805-13 WALNUT ST", "owner_1": "804 SANSOM L P", "owner_2": null },
+        { "parcel_number": "w2", "location": "800-34 WALNUT ST", "owner_1": "PHILADELPHIA AUTHORITY FO", "owner_2": null },
+        { "parcel_number": "w3", "location": "800-34 WALNUT ST", "owner_1": "TRUSTEES OF THE UNIV. OF PENNSYLVANIA", "owner_2": null },
+        { "parcel_number": "w5", "location": "800-34 WALNUT ST", "owner_1": "CITY OF PHILA TRUSTEE", "owner_2": null },
+        { "parcel_number": "w6", "location": "825 WALNUT ST", "owner_1": "WALNUT ST THEATRE", "owner_2": null },
+        { "parcel_number": "w8", "location": "815R WALNUT ST", "owner_1": "SEPTA", "owner_2": null }
+      ]
+    },
+    "100 E. Lehigh Ave.": {
+      "note": "Leading DIRECTIONAL. The first cut of normalizeAddress ate the `E` as a house letter and this read as no_matching_record.",
+      "rows": [
+        { "parcel_number": "777012002", "location": "100 E LEHIGH AVE", "owner_1": "EPISCOPAL HOSPITAL", "owner_2": null }
+      ]
+    },
+    "1172 S Broad Street": {
+      "note": "Leading directional + range_start + `Street` -> `ST`.",
+      "rows": [
+        { "parcel_number": "882000440", "location": "1172-74 S BROAD ST", "owner_1": "FILIPPONE-NEWMAN LLC", "owner_2": null }
+      ]
+    },
+    "3020 Market Street, Suite 10": {
+      "note": "Suite tail stripped; range_start.",
+      "rows": [
+        { "parcel_number": "883071700", "location": "3020-52 MARKET ST", "owner_1": "3020 MARKET OPERATING LP", "owner_2": null }
+      ]
+    },
+    "4190 City Avenue, Suite 124": {
+      "note": "range_contains at the exact range END (4182-90). Also carries `4100 CITY AVE => ABC INC` — a REAL Philadelphia owner whose name trips the OWNERGAP1 fabrication guard.",
+      "rows": [
+        { "parcel_number": "a1", "location": "4100 CITY AVE", "owner_1": "ABC INC", "owner_2": null },
+        { "parcel_number": "a2", "location": "4130-50 CITY AVE", "owner_1": "PHILA COLLEGE OF", "owner_2": null },
+        { "parcel_number": "a3", "location": "4152-80 CITY AVE", "owner_1": "PHILA COLLEGE OF", "owner_2": null },
+        { "parcel_number": "774010040", "location": "4182-90 CITY AVE", "owner_1": "PHILA COLLEGE OF", "owner_2": null }
+      ]
+    },
+    "4508 City Line Ave.": {
+      "note": "STREET ALIAS (CITY LINE AVE -> CITY AVE) widens the search and the house number then correctly REFUSES: 4508 is not 4500 and 4500 is not a range. An alias must widen what is searched, never what may be written.",
+      "rows": [
+        { "parcel_number": "c1", "location": "4500 CITY AVE", "owner_1": "CITY CENTRE 2 PHILADELPHIA PA LLC", "owner_2": null }
+      ]
+    },
+    "3401 Fox St, Building 5": {
+      "note": "Genuine no-record: the city returns nothing on this street in band.",
+      "rows": []
+    }
+  },
+  "harris": {
+    "5040 Crenshaw Rd": {
+      "note": "OWNERGAP1 §9's worked example. HCAD types the accounts ITSELF: the tenant's equipment is Personal, the building is Commercial.",
+      "address": "5040 Crenshaw Rd",
+      "source_url": "https://search.hcad.org/",
+      "source_query": "HCAD real-property account search for 5040 Crenshaw Rd",
+      "accounts": [
+        { "account_number": "2354592", "account_type": "Personal", "owner_name": "FRESENIUS MEDICAL CARE GREATER SOUTHEAST HOUSTON LLC", "site_address": "5040 CRENSHAW RD" },
+        { "account_number": "2372349", "account_type": "Personal", "owner_name": "FUSA MARKETING", "site_address": "5040 CRENSHAW RD" },
+        { "account_number": "1274060000005", "account_type": "Commercial", "owner_name": "CRENSHAW MOB LLC", "site_address": "5040 CRENSHAW RD" }
+      ]
+    },
+    "10923 Scarsdale Blvd": {
+      "address": "10923 Scarsdale Blvd",
+      "source_url": "https://search.hcad.org/",
+      "source_query": "HCAD real-property account search for 10923 Scarsdale Blvd",
+      "accounts": [
+        { "account_number": "p-pike", "account_type": "Personal", "owner_name": "PIKE DIALYSIS LLC", "site_address": "10923 SCARSDALE BLVD" },
+        { "account_number": "c-beamer", "account_type": "Commercial", "owner_name": "BEAMER SCARSDALE LP", "site_address": "10923 SCARSDALE BLVD" }
+      ]
+    },
+    "2920 Fulton St": {
+      "address": "2920 Fulton St",
+      "source_url": "https://search.hcad.org/",
+      "source_query": "HCAD real-property account search for 2920 Fulton St",
+      "accounts": [
+        { "account_number": "p-bma", "account_type": "Personal", "owner_name": "BIO-MEDICAL APPLICATIONS OF TEXAS INC", "site_address": "2920 FULTON ST" },
+        { "account_number": "c-fulton", "account_type": "Commercial", "owner_name": "FULTON SHOPPING CENTER INC", "site_address": "2920 FULTON ST" }
+      ]
+    },
+    "4427 Cypress Creek Pkwy": {
+      "note": "STREET ALIAS — Cypress Creek Parkway is Houston's renamed FM 1960 and HCAD indexes it under the name it holds. OWNERGAP1 §9's only Harris miss.",
+      "address": "4427 Cypress Creek Pkwy",
+      "source_url": "https://search.hcad.org/",
+      "source_query": "HCAD real-property account search for 4427 FM 1960 Rd W",
+      "accounts": [
+        { "account_number": "c-fm1960", "account_type": "Commercial", "owner_name": "FM 1960 RETAIL PARTNERS LP", "site_address": "4427 FM 1960 RD W" }
+      ]
+    },
+    "untyped account": {
+      "note": "An account HCAD did not type. Must be REPORTED, never admitted — treating a missing type as 'probably the building' re-derives the exact judgement the type exists to make.",
+      "address": "5040 Crenshaw Rd",
+      "source_url": "https://search.hcad.org/",
+      "source_query": "HCAD real-property account search for 5040 Crenshaw Rd",
+      "accounts": [
+        { "account_number": "u-1", "account_type": null, "owner_name": "SOME PARTY LLC", "site_address": "5040 CRENSHAW RD" }
+      ]
+    }
+  }
+}

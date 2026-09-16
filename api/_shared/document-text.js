@@ -108,7 +108,15 @@ export async function fetchDocBytes({ sourceUrl, storageRef, storagePath, storag
       storageRef: ref,
       fetchImpl: fetchImpl || ((u, o) => fetchWithTimeout(u, o, FETCH_TIMEOUT_MS)),
     });
-    if (!sp.ok) return { ok: false, status: sp.status || 0, detail: sp.detail || 'sharepoint_fetch_failed' };
+    if (!sp.ok) {
+      return {
+        ok: false, status: sp.status || 0, detail: sp.detail || 'sharepoint_fetch_failed',
+        // FLOWS1-artifact — carry the flow's named terminal reason (`too_large`)
+        // through unmangled; a generic `sharepoint_fetch_failed` would look
+        // retriable and re-feed the same doomed request every tick.
+        reason: sp.reason || null, size: sp.size ?? null,
+      };
+    }
     return { ok: true, buffer: sp.buffer, contentType: sp.contentType || null, via: 'sharepoint' };
   }
   return { ok: false, status: 0, detail: 'no_source_url_or_ref' };
@@ -729,7 +737,17 @@ export async function extractDocumentText(
     sourceUrl, storageRef, storagePath, storageGet: deps.storageGet, fetchImpl: deps.fetchImpl,
   });
   if (!fetched.ok) {
-    return { ok: false, reason: 'fetch_failed', status: fetched.status || 0, detail: fetched.detail || null };
+    // FLOWS1-artifact — a named terminal reason from the byte fetch (today:
+    // `too_large` from the SharePoint Get-Artifact flow) survives as-is so the
+    // caller can dead-letter it; anything else stays the generic (retriable)
+    // `fetch_failed`, unchanged from before.
+    return {
+      ok: false,
+      reason: fetched.reason || 'fetch_failed',
+      status: fetched.status || 0,
+      detail: fetched.detail || null,
+      size: fetched.size ?? null,
+    };
   }
   const fetchedVia = fetched.via || null;
   const buffer = fetched.buffer;
