@@ -39,6 +39,7 @@ import {
   assertCitation, planOwnerWrite, matchedNameIsOperator,
   wouldTripFabricationGuard, applyOwnerResolution,
 } from '../api/_shared/ownergap2-owner-writeback.js';
+import { checkBatchTagCollision } from '../api/_handlers/ownergap2-owner-resolve-tick.js';
 
 const ROOT = new URL('..', import.meta.url).pathname;
 const FIX = JSON.parse(readFileSync(new URL('./fixtures/ownergap2-live-samples.json', import.meta.url), 'utf8'));
@@ -491,6 +492,150 @@ test('a miss stays a miss — no fallback to the operator, ever', async () => {
   // Nothing touched properties or recorded_owners.
   assert.ok(!calls.some((c) => c.method !== 'GET' && /^properties/.test(c.path)));
   assert.ok(!calls.some((c) => c.method !== 'GET' && /^recorded_owners/.test(c.path)));
+});
+
+test('🚨 OWNERGAP2-ledger-order: a failed ledger write rolls the owner write back', async () => {
+  // Reproduces the incident: the ledger INSERT fails (here, standing in for
+  // the real cause -- a reused batch_tag colliding with an already-open
+  // attempt on uq_dia_ownergap2_open_attempt) while the owner upsert and the
+  // property PATCH already succeeded. `wrote` must read false and the
+  // property must be handed back to NULL, not left pointing at an uncited
+  // owner.
+  const property = { property_id: 41, recorded_owner_id: null, operator: null };
+  const plan = planOwnerWrite(property, {
+    status: 'resolved', owner: 'ROLLBACK TEST LLC',
+    citation: { jurisdiction: PHILADELPHIA, source_record_ids: ['x1'], source_query: 'q' },
+  }, {});
+  assert.equal(plan.action, 'write');
+
+  const calls = [];
+  const fakeQuery = async (domain, method, path, body) => {
+    calls.push({ domain, method, path, body });
+    if (method === 'GET' && path.startsWith('recorded_owners?name=')) {
+      return { ok: true, status: 200, data: [] }; // no existing owner row
+    }
+    if (method === 'POST' && path === 'recorded_owners') {
+      return { ok: true, status: 201, data: [{ recorded_owner_id: 'owner-41', name: 'ROLLBACK TEST LLC' }] };
+    }
+    if (method === 'GET' && path.startsWith('recorded_owners?recorded_owner_id=')) {
+      return { ok: true, status: 200, data: [{ recorded_owner_id: 'owner-41', name: 'ROLLBACK TEST LLC', fabrication_quarantined_at: null }] };
+    }
+    if (method === 'PATCH' && path.startsWith('properties?property_id=eq.41&recorded_owner_id=is.null')) {
+      return { ok: true, status: 200, data: [{ property_id: 41 }] }; // one row affected
+    }
+    if (method === 'POST' && path === 'dia_ownergap2_resolution_log') {
+      // The ledger insert fails -- e.g. the unique index refuses a second
+      // open attempt for (batch_tag, property_id).
+      return { ok: false, status: 409, data: { code: '23505' } };
+    }
+    if (method === 'PATCH' && path.startsWith('properties?property_id=eq.41&recorded_owner_id=eq.owner-41')) {
+      return { ok: true, status: 200, data: [{ property_id: 41 }] }; // rollback
+    }
+    throw new Error(`unexpected call: ${method} ${path}`);
+  };
+
+  const r = await applyOwnerResolution(property, plan, 'reused_batch_tag',
+    { dryRun: false, jurisdiction: PHILADELPHIA }, { domainQuery: fakeQuery });
+
+  assert.equal(r.wrote, false, 'a failed ledger write must never report wrote:true');
+  assert.equal(r.action, 'refuse');
+  assert.match(r.reason, /^ledger_write_failed:/);
+
+  // The rollback PATCH actually happened, re-asserting we still owned the
+  // value before nulling it.
+  const rollback = calls.find((c) => c.method === 'PATCH'
+    && c.path.includes('recorded_owner_id=eq.owner-41'));
+  assert.ok(rollback, 'the property must be rolled back to NULL when the ledger write fails');
+  assert.deepEqual(rollback.body, { recorded_owner_id: null });
+
+  // And the ledger write was attempted before we declared success -- the
+  // ordering invariant this fix exists to enforce.
+  const ledgerCallIndex = calls.findIndex((c) => c.path === 'dia_ownergap2_resolution_log');
+  const rollbackIndex = calls.indexOf(rollback);
+  assert.ok(ledgerCallIndex >= 0 && ledgerCallIndex < rollbackIndex);
+});
+
+test('a successful ledger write leaves the property resolution standing', async () => {
+  const property = { property_id: 42, recorded_owner_id: null, operator: null };
+  const plan = planOwnerWrite(property, {
+    status: 'resolved', owner: 'GOOD WRITE LLC',
+    citation: { jurisdiction: PHILADELPHIA, source_record_ids: ['x2'], source_query: 'q' },
+  }, {});
+
+  const fakeQuery = async (domain, method, path) => {
+    if (method === 'GET' && path.startsWith('recorded_owners?name=')) return { ok: true, status: 200, data: [] };
+    if (method === 'POST' && path === 'recorded_owners') {
+      return { ok: true, status: 201, data: [{ recorded_owner_id: 'owner-42', name: 'GOOD WRITE LLC' }] };
+    }
+    if (method === 'GET' && path.startsWith('recorded_owners?recorded_owner_id=')) {
+      return { ok: true, status: 200, data: [{ recorded_owner_id: 'owner-42', name: 'GOOD WRITE LLC', fabrication_quarantined_at: null }] };
+    }
+    if (method === 'PATCH' && path.startsWith('properties?property_id=eq.42&recorded_owner_id=is.null')) {
+      return { ok: true, status: 200, data: [{ property_id: 42 }] };
+    }
+    if (method === 'POST' && path === 'dia_ownergap2_resolution_log') return { ok: true, status: 201, data: null };
+    throw new Error(`unexpected call: ${method} ${path}`);
+  };
+
+  const r = await applyOwnerResolution(property, plan, 'fresh_batch_tag',
+    { dryRun: false, jurisdiction: PHILADELPHIA }, { domainQuery: fakeQuery });
+  assert.equal(r.wrote, true);
+  assert.equal(r.action, 'write');
+  assert.equal(r.recorded_owner_id, 'owner-42');
+});
+
+// ── OWNERGAP2-ledger-order: batch_tag reuse must be refused loudly ─────────
+
+test('🚨 an explicit batch_tag colliding with an open ledger attempt is refused', async () => {
+  const fakeQuery = async (domain, method, path) => {
+    assert.equal(method, 'GET');
+    assert.match(path, /^dia_ownergap2_resolution_log\?batch_tag=eq\.ownergap2_harris_tx_20260916/);
+    assert.match(path, /reverted_at=is\.null/);
+    assert.match(path, /property_id=in\.\(101,102\)/);
+    return { ok: true, status: 200, data: [{ property_id: 101 }] };
+  };
+  const r = await checkBatchTagCollision('ownergap2_harris_tx_20260916', [101, 102], { domainQuery: fakeQuery });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.collidingIds, [101]);
+});
+
+test('a batch_tag with no open attempts for the population is clean', async () => {
+  const fakeQuery = async () => ({ ok: true, status: 200, data: [] });
+  const r = await checkBatchTagCollision('brand_new_tag', [1, 2, 3], { domainQuery: fakeQuery });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.collidingIds, []);
+});
+
+test('an empty population never round-trips to the database', async () => {
+  let called = false;
+  const fakeQuery = async () => { called = true; return { ok: true, status: 200, data: [] }; };
+  const r = await checkBatchTagCollision('anything', [], { domainQuery: fakeQuery });
+  assert.equal(r.ok, true);
+  assert.equal(called, false);
+});
+
+test('the collision check surfaces a failed lookup rather than assuming clean', async () => {
+  const fakeQuery = async () => ({ ok: false, status: 500, data: { message: 'boom' } });
+  const r = await checkBatchTagCollision('tag', [1], { domainQuery: fakeQuery });
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /^batch_tag_collision_check_failed:500/);
+});
+
+test('the default batch_tag is minute-granular, not day-granular', () => {
+  const src = stripComments(readFileSync(`${ROOT}api/_handlers/ownergap2-owner-resolve-tick.js`, 'utf8'));
+  // The pre-fix default sliced the ISO string to 10 chars (date only), which
+  // is exactly how a same-day re-run reused a tag and silently lost its
+  // ledger row underneath a successful owner write.
+  assert.ok(!/toISOString\(\)\.slice\(0,\s*10\)/.test(src),
+    'a day-granularity default batch_tag reproduces OWNERGAP2-ledger-order');
+  assert.match(src, /toISOString\(\)\.slice\(0,\s*16\)/);
+});
+
+test('the handler refuses on collision before writing anything', () => {
+  const src = stripComments(readFileSync(`${ROOT}api/_handlers/ownergap2-owner-resolve-tick.js`, 'utf8'));
+  assert.match(src, /checkBatchTagCollision/);
+  assert.match(src, /batch_tag_collision/);
+  assert.match(src, /status\(409\)/);
 });
 
 test('dry run is the DEFAULT and writes nothing at all', async () => {
