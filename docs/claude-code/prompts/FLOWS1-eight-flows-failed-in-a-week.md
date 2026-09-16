@@ -52,6 +52,28 @@ history, which nothing in this repo can read. So this round is split:
    show to confirm · the fix if it is ours. Where a fix is ours and obvious (a route that 500s on a
    payload it should accept), fix it in this round with a test; otherwise stop at the diagnosis.
 
+## Addendum 2026-09-16 — the run screenshots arrived (SBN-9, `SB notes/done/Failed flows.docx`, 17 shots, read by Cowork)
+
+The failure reason for every one of the eight is now known. Most are flow-side; **four have an LCC
+cause or an LCC fix**. Read this before step 1; it replaces the guessing.
+
+| flow | failing step | error, verbatim shape | side | what it means |
+|---|---|---|---|---|
+| **Get file (LCC Get Artifact)** 709 | `Response` (after `Get file content using path` succeeds in 16–24 s) | `InvalidTemplate … The template language function 'body' cannot be used when the referenced action outputs body has large aggregated partial content … only … actions that support chunked transfer mode` | **both** | The file is too large for a `Response` built from `body(...)`. Flow: return the content via an action that supports chunking, or return a SharePoint download URL/`$content` reference instead of the bytes. LCC: find the caller that asks ~100×/day for files this large (document capture? OM ingest?) — that arithmetic is step 1 — and either request a URL or cap the size it asks for. |
+| **Outlook Intake to Teams (Hardened)** 41 | `HTTP GetEmailWebLink` (Graph `GET /me/messages/{id}`) right after `HTTP PostIntakeMessage` (LCC, 17–24 s) succeeds | `NotFound — The specified object was not found in the store` | **LCC-caused race** | LCC's intake completes and the **Processing Complete → Move Message** flow moves the mail before this flow fetches its web link; a moved message has a new id. Fix on our side: the completion callback must not fire the move until intake-to-Teams has finished, or the web link is fetched *before* `PostIntakeMessage`. |
+| **List Folder (SharePoint)** 39 | `Send an HTTP request to SharePoint` | `BadRequest … GetFolderByServerRelativeUrl('/sites/TeamBriggs20/Shared Documents/PROPERTIES/Portfolio/Rockwell Automation-IPS - Portfolio 6 - MOVED TO R DRIVE/DD/Round 2/Rec''d/3100 Pinson Valley Parkway, Brimingham, AL') is not valid` | **LCC** | A path with an apostrophe (`Rec'd`). The OData literal needs the quote doubled exactly once; the screenshot shows `Rec''d` already, so either LCC pre-escapes and the flow escapes again, or the folder itself was renamed ("MOVED TO R DRIVE") and no longer exists. Step: log what LCC sends, compare to the flow's expression, and check the folder exists. |
+| **SF Listing Activity → LCC engagement** 35 | `Get record` (Salesforce `GetItem_V2`, table `Listing__c`) | `parameters … may not be null or empty: 'id'` | flow | The trigger `When a record is modified` fires without an id in the field the `Get record` step reads. Scott's flow: map the trigger's record id (or the trigger is on the wrong object). LCC is never reached. |
+| **Processing Complete → Move Message** 7 | `Flag email (V2)` after `Move email (V2)` succeeds | `PreconditionFailed — the change key passed … does not match the current change key` | flow | Move then Flag on the same `messageId`: after the move the item has a new id/change key. Reorder (flag first, then move) or flag by the moved message's new id. LCC's HTTP step succeeded. |
+| **Flagged Email Intake** 6 | `Get email (V2)` right after the `When an email is flagged (V3)` trigger | `NotFound — not found in the store` | **LCC-adjacent race** | Same family as Outlook Intake: the message is moved (by the Move flow) between trigger and read. Fix with the Outlook-Intake sequencing. |
+| **Http → Switch / Get Account / Respond (account)** 6 | `Respond (account)` / `Response` inside `Switch` (31–57 s) | `504 Gateway Timeout — the client application timed out waiting for a response` | **both** | The Salesforce lookups inside the Switch take 30–60 s and the HTTP caller (LCC) times out first. LCC: which route calls this, with what timeout; consider async (call, then poll) for account/contact lookups. Flow: fewer chained lookups per case. |
+| **Outlook Calendar – LCC Sync** 1 | `Update file` (OneDrive) | `Save Conflict — changes conflict with those made concurrently` | flow, benign | Two runs overlapped on one file. Concurrency control = 1 on the flow. |
+
+**So for step 5's table:** LCC-facing and ours to fix = Get Artifact (caller + size), Outlook Intake +
+Flagged Intake (the move-before-read race — one fix), List Folder (path escaping / existence), Switch
+(timeout/async). Scott's to fix in Power Automate = SF Listing Activity (trigger id), Move Message (order),
+Calendar (concurrency). Do the LCC four in this round with tests; write the three flow fixes as a
+checklist for Scott in the response (step, what to change, why), since flow exports are not edited here.
+
 ## Prohibitions
 
 - ⛔ Do not touch a flow definition (`flow-*.json` at the repo root are exports, not sources — see
