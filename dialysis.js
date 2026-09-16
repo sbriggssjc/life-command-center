@@ -1749,18 +1749,34 @@ async function _diaMarketEconomicsExhibit() {
   const pct = v => v == null ? '—' : (Number(v) * 100).toFixed(1) + '%';
   const usdBn = v => v == null ? '—' : '$' + (Number(v) / 1e9).toFixed(1) + 'B';
   let scale = [], oper = [], mkt = [];
+  let _fetchErr = null;
   try {
     const [a, b, c] = await Promise.all([
-      diaQuery('v_dia_econ_scale_curve', '*', { order: 'volume_band.asc', limit: 20 }).catch(() => []),
-      diaQuery('v_dia_econ_operator_benchmark', '*', { order: 'clinics.desc', limit: 20 }).catch(() => []),
-      diaQuery('v_dia_econ_market_summary', '*', { order: 'total_revenue.desc', limit: 60 }).catch(() => [])
+      diaQuery('v_dia_econ_scale_curve', '*', { order: 'volume_band.asc', limit: 20 }).catch(e => { _fetchErr = _fetchErr || e; return []; }),
+      diaQuery('v_dia_econ_operator_benchmark', '*', { order: 'clinics.desc', limit: 20 }).catch(e => { _fetchErr = _fetchErr || e; return []; }),
+      diaQuery('v_dia_econ_market_summary', '*', { order: 'total_revenue.desc', limit: 60 }).catch(e => { _fetchErr = _fetchErr || e; return []; })
     ]);
     scale = Array.isArray(a) ? a : (a && a.data) || [];
     oper = Array.isArray(b) ? b : (b && b.data) || [];
     mkt = Array.isArray(c) ? c : (c && c.data) || [];
-  } catch (e) { /* fall through to empty-state */ }
+  } catch (e) { _fetchErr = _fetchErr || e; }
+  // Surface a real error via the app's telemetry/toast path — an async
+  // handler that swallows this silently (the pre-fix behavior) means a
+  // stale/misconfigured data-query edge function reads as "did nothing"
+  // rather than an actionable failure. See CLAUDE.md "merged is not
+  // running": a 403 here almost always means the deployed edge fn's
+  // allowlist has drifted from the repo's.
   if (!scale.length && !oper.length) {
-    alert('Market economics data is not available yet. If this persists, the data-query edge function may need a redeploy to expose the new views.');
+    if (_fetchErr && typeof lccReportError === 'function') {
+      lccReportError('Market Economics Exhibit', _fetchErr, {
+        tier: 'error',
+        userMessage: 'Market economics data failed to load — the data-query edge function may need redeploying (v_dia_econ_* views missing from its allowlist).'
+      });
+    } else {
+      alert(_fetchErr
+        ? ('Market economics data failed to load: ' + (_fetchErr.message || _fetchErr))
+        : 'Market economics data is not available yet (the views returned no rows).');
+    }
     return;
   }
   const natl = mkt.find(m => m.state === 'US') || null;
