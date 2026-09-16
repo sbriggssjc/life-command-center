@@ -57,8 +57,9 @@ wrong) · UNMEASURED (not independently checked at this pass's depth).**
 | **refuted/retired** (heading self-reports, pass-1 scope) | 16 | pass 1 |
 | **not-started/planned** (heading self-reports, pass-1 scope) | 5 | pass 1 |
 | **partial/in-progress** (heading self-reports, pass-1 scope) | 2 | pass 1 |
-| **PARTIAL, DB/code-corroborated** (remediation-plan TODOs, this round + prior) | 4 of 12 shown shipped-under-another-name (C7, C9, B6, B8); 2 still-open (C4, B3); 1 partial-progress (C2); 5 UNMEASURED (C5, C8, A6a, A7, A8) | INVENTORY1b item 3 |
+| **PARTIAL, DB/code-corroborated** (remediation-plan TODOs, this round + prior) | 4 of 12 shown shipped-under-another-name (C7, C9, B6, B8); 3 still-open, DB-confirmed (C4, B3, C8); 1 partial-progress (C2); 1 domain-split partial, DB-confirmed (A6a — dia shipped with 616 grandfathered residual, gov not started); 1 still-open, DB-confirmed (C5 — gated on A6a and A6a is not complete on gov); 2 still-open, DB-confirmed (A7 — 11.7%/13.2% SF-link coverage on gov vs an ≥60% target; A8 — no batch-harvest signature found in dia `contacts`) | INVENTORY1b item 3 (Round 2) + **Round 3 — DB-verified** below |
 | **root-report intent, this round** | 10 rows, states: 5 shipped/live, 2 partial (with a named stale reference), 3 unmeasured | INVENTORY1b item 6 / CSV `INV1-1780`–`INV1-1789` |
+| **LIVE, DB-verified prompt traces (Round 3)** | 3 of 4 previously-flagged prompt claims confirmed shipped by direct query (ID2bcaps2, SALE1a, RATINGS3); 1 confirmed still-open (HP1-P2misparse-fp) | **Round 3 — DB-verified** below |
 | **unspecified in heading** (no explicit status word, pass 1) | 425 | pass 1 |
 | **unspecified, pass 2 (history + prompt titles)** | 1,212 (all of pass 2's rows — pass 2's own convention is every row defaults to `stated: unspecified` unless the title carries a status word) | pass 2 |
 | **UNMEASURED** (everything else — the overwhelming majority of 1,789 rows) | ~1,700+ | all three rounds, honestly |
@@ -107,8 +108,18 @@ too, but that is an inference from n=30, not a re-measurement of the full 132.
 exists; B6 — migrations on `main` for both domains; B8 — a data-health surface exists,
 placement unconfirmed), 2 genuinely still-open (C4 — no BEFORE INSERT dedup trigger found; B3
 — no `deed-relink-tick` cron found), 1 partial (C2 — a contacts-persistence path exists, the
-"writer refactor" half unconfirmed), **5 UNMEASURED (C5, C8, A6a, A7, A8 — would need
-`ownership_history` row-count queries and SF-link-coverage queries not run this round)**.
+"writer refactor" half unconfirmed), and **5 rows left UNMEASURED that round (C5, C8, A6a, A7,
+A8)** — **all 5 resolved this round (Round 3) with live queries; see "Round 3 — DB-verified"
+below.** Summary: C5 still-open (no EXCLUDE constraint on gov); C8 still-open (`marketing_leads`
+is 0 rows, no evidence the backfill ever ran); A6a is a domain split — **dia shipped it** (an
+`EXCLUDE USING gist` constraint exists on `dia.ownership_history` with 616 rows carrying
+`overlap_grandfathered=true`, i.e. residual overlaps deliberately fenced rather than fully
+closed) **while gov never started** (gov's `ownership_history` is transition-shaped, not
+interval-shaped, so the plan's daterange-EXCLUDE design as written doesn't even apply to gov's
+live schema); A7 still-open (gov SF-link coverage measures 11.7% on `recorded_owners` / 13.2% on
+`true_owners`, both far under the plan's ≥60% target); A8 still-open (no batch-harvest signature
+in dia `contacts` — `costar_sidebar` rows are a continuous organic stream from 2025-06-14 to
+today with no distinct one-time-backfill spike after the plan's 2026-05-23 date).
 ⚠️ Same-named A/B/C tags recur across time in this codebase (May-2026 tags vs later
 2026-08/09 tags with the same letter+digit) — treat every one of these 12 as a dated
 hypothesis to re-test, per `CLAUDE.md`'s own "re-measure a dated blocker" doctrine, not a
@@ -197,18 +208,224 @@ existing rule, under-enforced for prose-only findings that never got a structure
 - **72 of 102 plain-slug + all 30 numbered "no-trace" prompts** — only 30 were re-sampled this
   round; the rest were not re-checked against the wider grep scope that resolved the sampled
   30.
-- **5 remediation-plan TODO rows (C5, C8, A6a, A7, A8)** — would need live `ownership_history`
-  row-count queries and `unified_contacts`/SF-link-coverage queries. **Supabase MCP tools were
-  not available in this session** (unlike the prior INVENTORY1b round, which had them for
-  items 1 and 4) — this is the single largest concrete "DB access would help" gap carried
-  forward.
+- **~~5 remediation-plan TODO rows (C5, C8, A6a, A7, A8)~~ — RESOLVED Round 3 (2026-09-16),
+  Supabase MCP live queries.** See "Round 3 — DB-verified" below.
 - **Root report internals beyond the opening/executive-summary section** — 10 reports were
   read at their opening + a few targeted greps for named artefacts (Context Broker, sf_push.py,
   marketing_leads, openUnifiedDetail); none was read start-to-finish, so any finding buried
-  deeper in a 300–785-line report is not represented in the CSV rows this round added.
+  deeper in a 300–785-line report is not represented in the CSV rows this round added. **Still
+  unmeasured after Round 3** (out of this round's scope).
 - **Whether specific PA (Power Automate) flows described in the root reports (GovLease→SF,
   RCM lead intake, Salesforce Activities sync) still point at the live Railway host vs. a
-  stale Vercel reference** — this needs either the PA tenant itself or an `edge_logs`
-  writer-IP fingerprint query (the technique `CLAUDE.md`'s P194/J13 sections document), neither
-  reachable from this session.
+  stale Vercel reference** — **PARTIALLY resolved Round 3**: `edge_logs` on LCC Opps shows live,
+  current-day (2026-09-16), `node`-UA REST traffic against `xengecqvemvfknjvbvrq.supabase.co`
+  correlated with `rcm1.com`-addressed correspondence (`unified_contacts` lookups) and
+  RCM-named SharePoint documents (`folder_feed_seen`) — i.e. SOME RCM-related traffic is live
+  and hitting the correct (Railway, not stale-Vercel) host. **This does NOT confirm the specific
+  "RCM/LoopNet lead intake → `marketing_leads`" flow C8 describes** — `marketing_leads` itself is
+  0 rows (see Round 3 below), so whichever PA flow is live, it is not the one C8's webhook fix
+  was meant to unblock. The GovLease→SF flow specifically was not independently checked — **still
+  genuinely inconclusive**: no distinguishing log signal (a gov-project `edge_logs`/`query_logs`
+  sweep for that flow's writer fingerprint) was run this round, and the 24-hour log retention
+  window this tool exposes cannot answer a "does this flow still exist / still point at the
+  right host" question that depends on the PA tenant's own definition, not on recent traffic.
 - **Ghosts** — genuinely unmeasured across all three rounds; no positive or negative finding.
+
+---
+
+## Round 3 — DB-verified (2026-09-16, Supabase MCP live queries against all three projects)
+
+**Scope:** resolve every item the prior two rounds explicitly flagged "unmeasured — needs DB
+access": remediation-plan TODOs C5/C8/A6a/A7/A8, the 2 undecided feature flags, 4 unresolved
+prompt-trace claims (ID2bcaps2, SALE1a, RATINGS3, HP1-P2misparse-fp), and a PA-flow live-host
+check. All queries below are read-only `SELECT`s; no schema changes, no writes, no flag flips.
+
+### Remediation-plan TODOs (item 3's 5 UNMEASURED rows)
+
+**C5 — `ownership_history` EXCLUDE constraint (gated on A6a).**
+```sql
+select conname, contype, pg_get_constraintdef(oid)
+from pg_constraint where conrelid = 'public.ownership_history'::regclass;
+```
+- **gov** (`scknotsqkcheojiaewwh`): result has **no `contype='x'` row** — only a PK, 4 FKs, and one
+  CHECK on `ownership_state`. No EXCLUDE constraint exists.
+- **dia** (`zqzrriwuavgrquhisnoa`): result **includes** `excl_oh_no_overlap` — `EXCLUDE USING gist
+  (property_id WITH =, daterange(COALESCE(start_date, ownership_start),
+  COALESCE(end_date, ownership_end, 'infinity'::date), '[)') WITH &&) WHERE (ownership_state =
+  'active' AND property_id IS NOT NULL AND overlap_grandfathered = false AND
+  COALESCE(start_date, ownership_start) IS NOT NULL)`.
+- **Verdict: confirmed-still-open on gov; confirmed-shipped on dia (with a carve-out — see A6a
+  below).** The plan's C5 text names one constraint for one shared design; the two domains
+  diverged — gov's `ownership_history` schema doesn't even carry `ownership_start_date`/
+  `ownership_end_date` columns (it's transition-shaped: `prior_owner`/`new_owner`/`transfer_date`,
+  per `CLAUDE.md`'s B5/B6c-dup sections), so the EXCLUDE-on-daterange design as written cannot
+  apply to gov's live schema without a rewrite, not just a backfill.
+
+**A6a — ownership_history chronological closure (gated C5 on this).**
+```sql
+select overlap_grandfathered, ownership_state, count(*) from ownership_history group by 1,2;
+```
+dia result: `{false,'active',8785}`, `{false,'superseded',1024}`, `{true,'active',616}`.
+- **Verdict: confirmed-partial, domain-split.** dia's EXCLUDE constraint is live with a
+  `WHERE overlap_grandfathered = false` carve-out — i.e. A6a's backfill ran, resolved most
+  overlaps, and **616 residual active overlapping rows were fenced off (`overlap_grandfathered
+  = true`) rather than fully closed**, exactly the shape the plan's own A6a text anticipated
+  ("residual real overlaps → `research_tasks` for analyst"). This is in the right order of
+  magnitude versus the plan's stated dia estimate (1,111 rows) — not exact, consistent with
+  partial closure since 2026-05-23. **gov has no equivalent work at all** — no
+  `overlap_grandfathered` column, no EXCLUDE constraint, confirmed by the C5 query above.
+
+**C8 — RCM/LoopNet auth fix + `marketing_leads` backfill.**
+```sql
+select source, count(*), min(created_at), max(created_at) from marketing_leads group by source;
+```
+Result: **empty — 0 rows total in `marketing_leads`** (LCC Opps).
+- **Verdict: confirmed-still-open.** Whatever the auth-fix status, the doc's own acceptance
+  criterion ("replay last 7 days of inbound emails to backfill `marketing_leads`") has
+  categorically not happened — the table has never held a row. See the PA-flow-host section
+  below for a related, partial finding (some RCM-addressed traffic IS live on the correct host,
+  just not landing in `marketing_leads`).
+
+**A7 — owner→SF link backfill (target: coverage rises toward ≥60%).**
+```sql
+select count(*) total, count(sf_account_id) linked, round(100.0*count(sf_account_id)/count(*),1) pct
+from recorded_owners;   -- gov: 17259 total, 2019 linked, 11.7%
+select count(*) total, count(sf_account_id) linked, round(100.0*count(sf_account_id)/count(*),1) pct
+from true_owners;       -- gov: 16274 total, 2142 linked, 13.2%
+```
+- **Verdict: confirmed-still-open.** 11.7%/13.2% is well under the plan's ≥60% target (and below
+  even the doc's stated starting baseline of "1.5%/20%" on one of the two metrics — a different
+  denominator than what this query measured, so not directly comparable, but the target itself
+  is clearly unmet).
+
+**A8 — CoStar Contacts retroactive harvest.**
+```sql
+select data_source, count(*), count(sale_id) with_sale_link, min(created_at), max(created_at)
+from contacts group by data_source;
+select created_at::date d, count(*) from contacts where data_source='costar_sidebar'
+group by 1 order by count(*) desc limit 10;
+```
+Result: `costar_sidebar` rows run continuously **2025-06-14 → 2026-09-16** (today) with no
+column recording a distinct backfill batch; the single largest single-day count (574 on
+2026-04-28) predates the plan's own 2026-05-23 date and reads as ordinary capture-burst
+variance, not a post-plan retroactive-harvest job.
+- **Verdict: confirmed-still-open, no evidence found.** A8's own text names it optional
+  ("if not [cached], skip — going-forward C2 covers new captures"), so absence of a distinct
+  harvest signature is consistent with the operator having exercised that skip clause — this is
+  a "not done" finding, not necessarily a "should have been done and wasn't" finding.
+
+### The 2 undecided flags (`GEOCODIO_API_KEY`, `GOOGLE_MAPS_API_KEY`)
+
+Round 2 already classified these correctly as genuinely-undecided cost/ops questions rather than
+defects (registry `notes` say "duration unknown / never configured"; parent tick
+`geocode-backfill` runs other tiers fine without them). **Round 3 did not find any downstream
+table, cron log, or DB signal that changes that verdict** — there is no `geocode_backfill_runs`
+row, health alert, or `feature_flags_registry` note suggesting either key was ever provisioned
+and then revoked, which would have implied a deliberate "tried it, didn't work" decision rather
+than "never configured." **Verdict unchanged from Round 2: genuinely-undecided, not a defect.**
+
+### 4 prompt-trace claims
+
+**ID2bcaps2 — the operator-id band-collision fix, re-run live.**
+```sql
+select operator, count(*) from properties
+where operator ilike '%fresenius%' or operator ilike '%davita%' group by operator;
+-- Fresenius: 3,733 · Fresenius Medical Care: 36 (raw text still split, as expected)
+select o.operator_id, o.name, count(p.property_id)
+from operators o left join properties p on p.operator_id = o.operator_id
+where o.name ilike '%fresenius%' group by 1,2;
+-- operator_id=5 'Fresenius Medical Care': 3,769 properties (= 3,733 + 36, exactly)
+```
+- **Verdict: confirmed-shipped.** The raw `properties.operator` text column staying split is
+  expected and correct — `planOperatorCapRateBands` (read directly, `api/_handlers/market-brief-
+  psql-tick.js`) groups on the **registry-resolved `operator_id`**, never the raw text, precisely
+  to survive this split. The query proves the registry side resolves both text spellings to one
+  `operator_id` with zero residue (3,733 + 36 = 3,769 exactly) — the band-collision this prompt
+  fixed cannot recur for Fresenius on the current data.
+
+**SALE1a — post-decision row count on `v_dia_sale1_price_review`.**
+```sql
+select count(*) from v_dia_sale1_price_review;                         -- 136 (was 165 at filing)
+select review_class, count(*), count(*) filter (where cap_rate_final is not null)
+from v_dia_sale1_price_review group by review_class;
+-- ledger_disagreement: 96 (was 132) · deed_says_undisclosed: 40 (was 33)
+```
+- **Verdict: confirmed-shipped (partial completion, actively decreasing).** The view is
+  dynamically computed (not a frozen snapshot), so this reading proves per-row decisions have
+  been applied and are changing the live membership: `ledger_disagreement` fell by 36 while
+  `deed_says_undisclosed` rose by 7 — consistent with rows being reclassified/resolved per the
+  prompt's own null-vs-reset rule, not merely aging out. 29 net rows have left the review
+  population since the 165-row baseline. Not fully closed (136 remain), but the mechanism the
+  prompt asked for is demonstrably running.
+
+**RATINGS3 — live-proven upsert fix (third attempt after two false "fixed" claims).**
+```sql
+select indexdef from pg_indexes where tablename='ratings' and indexname='ratings_medicare_id_uidx';
+-- CREATE UNIQUE INDEX ratings_medicare_id_uidx ON public.ratings USING btree (medicare_id)
+--   WHERE (medicare_id IS NOT NULL)
+select medicare_id, count(*) from ratings where medicare_id is not null
+group by medicare_id having count(*) > 1;                              -- 0 rows (no duplicates)
+select count(*), max(updated_at), count(*) filter (where updated_at > now() - interval '30 days')
+from ratings;                                                          -- 7013, 2026-09-16, 7013
+```
+- **Verdict: confirmed-shipped.** The unique index exists, zero duplicate `medicare_id` rows
+  exist under it, and all 7,013 rows carry an `updated_at` inside the last 30 days with the
+  newest stamped today — live evidence the upsert is both unique-constrained and actively
+  writing, which is exactly the "prove it live" bar this prompt's own title sets after two prior
+  false claims.
+
+**HP1-P2misparse-fp — the street-suffix false-positive fix, test-fixture / code diff.**
+```
+grep -n "Brian Lane|blane@northmarq|Jim Street" api/_shared/tm-misparse.js
+  test/tm-misparse.test.mjs api/_shared/misparse-disposition.js   → 0 hits, any file
+grep -n "localPartMatchRule" api/_handlers/sidebar-pipeline.js api/_shared/tm-misparse.js
+  → 0 hits (the corroborating-email discriminator from the prior HP1-P2misparse prompt is never
+    called from the street_suffix code path in tm-misparse.js, nor from the sidebar-pipeline
+    contact-mint path)
+```
+Corroborating DB check (LCC Opps): an entity `canonical_name='brian lane'`,
+`email='blane@norhmarq.com'` (note: typo'd domain, `norhmarq` not `northmarq`), `entity_type=
+'person'` **does exist** — but this does not confirm the fix, because that entity could equally
+have arrived via Outlook/SF sync (channels the misparse guard doesn't gate) rather than a
+now-unblocked CoStar sidebar capture; the typo'd domain is itself suggestive of a different,
+non-CoStar source.
+- **Verdict: confirmed-still-open.** `STREET_SUFFIX_RE` (tm-misparse.js:42) still fires
+  unconditionally on a name ending in a street-suffix word, with no call to the corroborating-
+  email discriminator (`localPartMatchRule`) that the prompt's own §4 says already exists and
+  should be consulted before rejecting. No fixture for the named cases (`Brian Lane`, `Jim
+  Street`) was added to `test/tm-misparse.test.mjs`. The prompt's own fix is not on `main`.
+
+### PA-flow live-host verification (root-report follow-up)
+
+`mcp__Supabase__query_logs` on LCC Opps (`edge_logs`, last ~1h window, 2026-09-16):
+```sql
+select timestamp, event_message from logs where source='edge_logs'
+and (event_message ilike '%rcm%' or event_message ilike '%loopnet%'
+     or event_message ilike '%marketing-lead%' or event_message ilike '%govlease%')
+order by timestamp desc limit 20;
+```
+Returned 20 rows, all **today, UA `node`** (i.e. a server process, not a stale serverless
+client), split between `unified_contacts?email=in.(...)` lookups against `*@rcm1.com` inboxes
+(`cbre@rcm1.com`, `northmarqlistings@rcm1.com`, `investmentsale@rcm1.com`) and
+`folder_feed_seen` hits on SharePoint paths containing `RCM.pdf`/`RCM.docx.pdf` filenames under
+`PROPERTIES/.../DD/Buyer Information/.../Lease and Amendments/`.
+- **Verdict: genuinely-inconclusive-because-partial-evidence-only.** This confirms SOME
+  RCM-addressed traffic is live, current, and hitting the correct host (Railway → LCC Opps
+  REST, not a stale Vercel deployment) — a positive signal against the P194-class "retired
+  deployment still answering" failure mode for at least this slice of RCM activity. It does
+  **not** confirm the specific PA flow C8 names (RCM/LoopNet lead intake writing
+  `marketing_leads`), which the C8 query above shows has never written a row — whatever this
+  traffic is, it is an email-correspondence/document-matching path (Outlook or SharePoint sync
+  reading `rcm1.com` senders and matching `RCM`-named lease documents), not a lead-intake webhook.
+  The **GovLease→SF flow specifically was not checked** — no distinguishing search term was run
+  against gov-project logs, and the tool's 24-hour retention window cannot answer whether a PA
+  flow's *definition* still points at a live host versus only whether recent traffic exists;
+  those are different questions and only the second is answerable from here. **Left as
+  genuinely-inconclusive**, not guessed.
+
+### What Round 3 did NOT resolve (carried forward, same as before)
+
+- Root report internals beyond the opening section (items 5–7 of the original prompt).
+- The GovLease→SF PA-flow live-host question specifically (see above).
+- Whether the 2 undecided geocoding flags should be turned on — this is a human yes/no, not a
+  measurement gap.
