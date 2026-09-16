@@ -244,6 +244,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'priority-band':              return handlePriorityBand(req, res);
     case 'priority-queue':             return handlePriorityQueueList(req, res);
     case 'seller-prospect-queue':      return handleSellerProspectQueue(req, res);
+    case 'priority-hidden-band-counts': return handlePriorityHiddenBandCounts(req, res);
     case 'priority-trigger-properties': return handlePriorityTriggerProperties(req, res);
     case 'review-counts':              return handleReviewCounts(req, res);
     case 'news-alerts':                return handleNewsAlerts(req, res);
@@ -7547,6 +7548,45 @@ async function handleSellerProspectQueue(req, res) {
     funnel: (summaryR.ok && Array.isArray(summaryR.data)) ? summaryR.data : null,
     items,
   });
+}
+
+// ============================================================================
+// PRI2 (2026-09-16) — footer counts for the code-doable priority bands
+// GET /api/admin?_route=priority-hidden-band-counts
+//   The four bands UX-T1a Unit 3 already hid from the human surface (P0.4,
+//   P-CONTACT, P0.5, P-BUYER) each have a named automated consumer -- this
+//   just reads their CURRENT queue size off v_priority_queue_band_counts
+//   (human_surface=is.false) so the Priority tab v2 footer can say "N
+//   resolved automatically" / "N waiting on <producer>" instead of silently
+//   dropping the population the way a pure hide would. Read-only; no new view.
+// ============================================================================
+const PRIORITY_HIDDEN_BAND_PRODUCERS = {
+  'P0.4': 'ownership-resolution sweep (cron 244)',
+  'P-CONTACT': 'Tier 0 auto-attach sweep',
+  'P0.5': 'CRM hygiene (bulk-open opportunities)',
+  'P-BUYER': 'buyer-pursuit-by-deal-flow (no queue work needed)',
+};
+async function handlePriorityHiddenBandCounts(req, res) {
+  if (req.method !== 'GET') return res.status(405).json({ error: 'GET only' });
+  const user = await authenticate(req, res);
+  if (!user) return;
+
+  const r = await opsQuery('GET', 'v_priority_queue_band_counts?select=priority_band,n&human_surface=is.false',
+    undefined, { countMode: 'none' }).catch((e) => {
+      console.warn('[priority-hidden-band-counts] query threw:', e?.message || e);
+      return { ok: false, status: 0, data: null };
+    });
+  if (!r.ok) {
+    return res.status(502).json({ error: 'list_failed', detail: r.data });
+  }
+  const rows = Array.isArray(r.data) ? r.data : [];
+  const bands = rows.map((row) => ({
+    band: row.priority_band,
+    n: Number(row.n) || 0,
+    producer: PRIORITY_HIDDEN_BAND_PRODUCERS[row.priority_band] || null,
+  }));
+  const total = bands.reduce((s, b) => s + b.n, 0);
+  return res.status(200).json({ bands, total });
 }
 
 // ============================================================================
