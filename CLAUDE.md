@@ -360,6 +360,17 @@ plus Stage 1's `dc-lanes.js` out of `ops.js`). Map + the full extraction recipe:
 
 ## Core doctrines (apply to every change)
 
+### 🗄️ THE LIVE CATALOG IS THE INVENTORY — ENUMERATE WRITERS FROM `pg_proc`, `cron.job`, `pg_trigger` BEFORE CHANGING A COLUMN'S MEANING (GOVDEED5b / C1B-GOV-GATE, 2026-09-16)
+
+Two rounds in one day inventoried the `sql/` tree and shipped against it. C1B-GOV-GATE: the view being
+fixed (`v_ownership_gaps`) had **no committed source anywhere** — it was live-only, so the repo's copy was
+the wrong arm. GOVDEED5: the split found three `latest_deed_date` writers in the tree; `pg_proc` had
+**six**, one on a 03:30 UTC cron and two as triggers, and the cron re-planted 3,310 values twenty minutes
+after the migration reported success. The rule: before a semantic change to a column, list every writer
+from the **live** catalog (`pg_get_functiondef` grep, `cron.job`, `pg_trigger`), put the list in the
+migration header, and add a test that fails when the list grows. A repo grep is a hypothesis about the
+database, not a fact about it.
+
 ### 🗄️ ONE REPO OWNS EACH DATABASE'S OBJECTS (Scott, 2026-09-12)
 
 `government-lease` owns the **government** DB's migrations, functions, views and triggers. This repo's
@@ -2011,8 +2022,11 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
   > `sf_seller`(3.5) > `rel_owns`(3.0). `domain_true_owner` (P113, `lcc_ingest_domain_owner_evidence`,
   dry-run default, batch-reversible via `lcc_domain_owner_evidence_log`) outranks `rel_purchase` because it
   is the domain's curated CURRENT owner-of-record, whereas a purchase edge is ONE historical transaction.
-  Dry-run surface `v_lcc_domain_owner_candidates`; ambiguity lane `lcc_domain_owner_ambiguous`. Fill-blanks:
-  it only ever touches assets with no resolved owner.
+  Dry-run surface `v_lcc_domain_owner_candidates`; ambiguity lane `lcc_domain_owner_ambiguous`. Fill-blanks
+  by default — **plus, since C2k (2026-09-16), `candidate_kind='supersede'`:** an asset resolved at a tier
+  below `domain_true_owner` (never `manual`) whose gov facts row is `true_owner_attested` (SOS/SAM manager
+  on the SPE names the true owner) is superseded, ledgered with the prior owner, reversible via
+  `lcc_c2k_unsupersede(batch)`. Unattested domain rows stay fill-only; a name pattern is never attestation.
 - **Ownership Resolution Engine (ORE):** multi-signal authority-weighted reconciliation
   (`lcc_reconcile_owner`, `lcc_signal_authority`, `lcc_reconcile_config.match_threshold`), owner-address
   observations store (append-only, never-collapse), SOS/deed/institution-registry enrichment. Full design:
