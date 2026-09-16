@@ -1,5 +1,9 @@
 # INVENTORY1 — Intent Inventory & Gap Map (2026-09-16)
 
+> **Pass 2 covers the two sources this pass explicitly skipped** (`docs/history/**` and
+> `docs/claude-code/prompts/done/**`, 491 files, 1,212 more CSV rows) — see
+> [`INVENTORY1_GAP_MAP_PASS2_2026-09.md`](INVENTORY1_GAP_MAP_PASS2_2026-09.md).
+
 ## ⚠️ Method and honest scope limitation (read first)
 
 This round asked for an exhaustive read of ~240 architecture docs, ~126 audit docs, ~188
