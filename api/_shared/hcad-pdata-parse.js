@@ -31,12 +31,33 @@
 //       see the migration header for the same point made about state_class.
 // ============================================================================
 
+// OWNERGAP2-harris-b — owner_name / owner_name_2 mapping, CORRECTED against
+// the real 37-row seed live on Dialysis_DB (queried 2026-09-16). Every row
+// there carries a NON-NULL owner_name_2: equal to owner_name when the
+// account has no special mailing instruction, and owner_name PLUS a care-of
+// suffix when it does --
+//   owner_name='2000 CRAWFORD PROPERTY LLC'
+//   owner_name_2='2000 CRAWFORD PROPERTY LLC C/O BOXER PROPERTY'
+//   owner_name='ROSENBERG ANDREW TRUSTEE'
+//   owner_name_2='ROSENBERG ANDREW TRUSTEE C/O ANGELA K HESS C P A, P C'
+// That shape is HCAD's own `name` (owner of record) + `mailto` (the mailing
+// name, which restates `name` and appends care-of/attn text when present) --
+// NOT a second-owner-of-multiple-owners supplement. `mailto` must therefore
+// map to owner_name_2, never fall back INTO owner_name (a prior version of
+// this list had 'mailto' as an owner_name fallback candidate, which would
+// have written care-of text — "% TERRELL MATTOX & ASSOC" — into the owner-
+// of-record field on any header that lacked a plain 'name'/'owner_name'
+// column). owners.txt's ln_num=1 row is the SAME primary owner by
+// definition, so real_acct.txt's own `name` column remains the source for
+// owner_name; owners.txt is used only as a fill-blanks SECOND-owner
+// supplement (see the loader), never to override a name real_acct.txt
+// already states.
 /** Candidate header names for each logical field, most-likely first. Extend
  * this list (never guess a POSITION) if a real export uses a different name. */
 const FIELD_CANDIDATES = {
   acct: ['acct', 'account', 'account_number', 'hcad_num'],
-  owner_name: ['owner_name', 'name', 'mailto', 'owner1', 'owner_1'],
-  owner_name_2: ['owner_name_2', 'name2', 'owner2', 'owner_2', 'aka'],
+  owner_name: ['owner_name', 'name', 'owner1', 'owner_1'],
+  owner_name_2: ['mailto', 'mail_to', 'owner_name_2', 'name2', 'owner2', 'owner_2', 'aka'],
   mail_addr_1: ['mail_addr_1', 'mailing_address_1', 'mail_address_1', 'mail_addr1'],
   mail_addr_2: ['mail_addr_2', 'mailing_address_2', 'mail_address_2', 'mail_addr2'],
   mail_city: ['mail_city', 'mailing_city'],
@@ -100,44 +121,43 @@ function splitLine(line, delimiter) {
 }
 
 /**
- * Parse `real_acct.txt` into staging rows.
- * @param {string} text - the raw file content (already decoded).
+ * Parse ONE data line into a staging row (or a blank marker), given an
+ * already-built header map. Factored out of `parseRealAcctText` (OWNERGAP2-
+ * harris-b) so the STREAMING loader (`scripts/hcad-pdata-load.mjs`, which
+ * cannot hold an 889 MB file as one buffered string) and the buffered
+ * in-memory parser below run through exactly ONE per-line implementation —
+ * never two copies of this logic that can drift (CLAUDE.md: "single
+ * normalizer, no drift").
+ *
+ * @param {string} rawLine
+ * @param {{map:object, delimiter:string}} hm - from `mapHeader()`.
  * @param {object} opts - { fileYear: number, sourceFile: string }
- * @returns {{ok:boolean, reason?:string, missing?:string[], rows:object[], totalLines:number, skippedBlank:number}}
+ * @returns {{row:object|null, blank:boolean}}
  */
-export function parseRealAcctText(text, opts = {}) {
-  const out = { ok: false, rows: [], totalLines: 0, skippedBlank: 0 };
-  if (text == null || String(text).trim() === '') { out.reason = 'empty_file'; return out; }
-  const lines = String(text).split(/\r\n|\r|\n/);
-  const header = lines[0];
-  if (header == null) { out.reason = 'no_header'; return out; }
-  const hm = mapHeader(header);
-  if (!hm.ok) { out.reason = 'missing_required_columns'; out.missing = hm.missing; return out; }
+export function parseRealAcctLine(rawLine, hm, opts = {}) {
+  if (rawLine == null || rawLine.trim() === '') return { row: null, blank: true };
+  const cells = splitLine(rawLine, hm.delimiter);
+  const get = (field) => {
+    const idx = hm.map[field];
+    if (idx == null) return null;
+    const v = cells[idx];
+    return v == null || v.trim() === '' ? null : v.trim();
+  };
+  const acct = get('acct');
+  if (!acct) return { row: null, blank: true };
 
   const fileYear = Number.isFinite(opts.fileYear) ? opts.fileYear : new Date().getFullYear();
   const sourceFile = opts.sourceFile || null;
 
-  for (let i = 1; i < lines.length; i += 1) {
-    const raw = lines[i];
-    out.totalLines += 1;
-    if (raw == null || raw.trim() === '') { out.skippedBlank += 1; continue; }
-    const cells = splitLine(raw, hm.delimiter);
-    const get = (field) => {
-      const idx = hm.map[field];
-      if (idx == null) return null;
-      const v = cells[idx];
-      return v == null || v.trim() === '' ? null : v.trim();
-    };
-    const acct = get('acct');
-    if (!acct) { out.skippedBlank += 1; continue; }
+  const raw_row = {};
+  for (const field of Object.keys(FIELD_CANDIDATES)) {
+    const v = get(field);
+    if (v != null) raw_row[field] = v;
+  }
 
-    const raw_row = {};
-    for (const field of Object.keys(FIELD_CANDIDATES)) {
-      const v = get(field);
-      if (v != null) raw_row[field] = v;
-    }
-
-    out.rows.push({
+  return {
+    blank: false,
+    row: {
       acct,
       file_year: fileYear,
       owner_name: get('owner_name'),
@@ -156,7 +176,30 @@ export function parseRealAcctText(text, opts = {}) {
       state_class: get('state_class'),
       raw_row,
       source_file: sourceFile,
-    });
+    },
+  };
+}
+
+/**
+ * Parse `real_acct.txt` into staging rows.
+ * @param {string} text - the raw file content (already decoded).
+ * @param {object} opts - { fileYear: number, sourceFile: string }
+ * @returns {{ok:boolean, reason?:string, missing?:string[], rows:object[], totalLines:number, skippedBlank:number}}
+ */
+export function parseRealAcctText(text, opts = {}) {
+  const out = { ok: false, rows: [], totalLines: 0, skippedBlank: 0 };
+  if (text == null || String(text).trim() === '') { out.reason = 'empty_file'; return out; }
+  const lines = String(text).split(/\r\n|\r|\n/);
+  const header = lines[0];
+  if (header == null) { out.reason = 'no_header'; return out; }
+  const hm = mapHeader(header);
+  if (!hm.ok) { out.reason = 'missing_required_columns'; out.missing = hm.missing; return out; }
+
+  for (let i = 1; i < lines.length; i += 1) {
+    out.totalLines += 1;
+    const { row, blank } = parseRealAcctLine(lines[i], hm, opts);
+    if (blank) { out.skippedBlank += 1; continue; }
+    out.rows.push(row);
   }
   out.ok = true;
   return out;
