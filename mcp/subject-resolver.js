@@ -130,7 +130,20 @@ function envelope(status, fields = {}) {
 async function safeQuery(fn, method, path, fallback = []) {
   if (!fn) return { data: fallback };
   try {
-    return await fn(method, path);
+    const r = await fn(method, path);
+    // A non-2xx PostgREST response resolves (does not throw) with `data` set
+    // to the error BODY — an object like {code,message,hint}, not an array.
+    // MCP1: an unescaped comma/period in a free-text address (e.g.
+    // "100 E. Lehigh Ave., Philadelphia, PA") breaks the `or=(...)` filter
+    // list syntax, PostgREST 400s, and every caller downstream that does
+    // `(r.data || []).filter(...)` crashed with "filter is not a function"
+    // because the object is truthy — `|| []` never fires. Treat any
+    // not-ok response (or a data payload that isn't the array shape callers
+    // expect) as the fallback, same as a thrown network error.
+    if (!r || r.ok === false || !Array.isArray(r.data)) {
+      return { data: fallback, error: r && r.ok === false ? r.data : undefined };
+    }
+    return r;
   } catch {
     return { data: fallback };
   }
@@ -154,7 +167,7 @@ async function fetchValueMap(ids, opsQuery) {
 }
 
 async function rankEntities(rows, opsQuery, canonicalId = null) {
-  const list = uniqBy((rows || []).filter((e) => !isJunkEntityRow(e)), (e) => e.id);
+  const list = uniqBy((Array.isArray(rows) ? rows : []).filter((e) => !isJunkEntityRow(e)), (e) => e.id);
   const valueMap = await fetchValueMap(list.map((e) => e.id), opsQuery);
   list.sort((a, b) => {
     if (canonicalId) {
@@ -315,6 +328,49 @@ async function resolveProperty(ref, opts) {
         confidence: 1,
         resolved_via: 'property_identity',
         candidates,
+      });
+    }
+
+    // MCP1: a property_id with no `external_identities(asset)` row is invisible
+    // above — that identity mirror only covers the C2e value-floor MINTED set
+    // (1,784 of ~11,802 dia assets, measured 2026-09-16), not every domain
+    // property. Before giving up, check the domain's OWN `properties` table
+    // directly by id: `lcc_property_owner_facts` (read by get_property_context's
+    // domain fallback below) is keyed on (source_domain, source_property_id),
+    // independent of any LCC entity ever being minted. Never mint an entity
+    // here — this is a read tool.
+    const directHits = [];
+    for (const dom of domains) {
+      if (!domainAvailable(opts, dom)) continue;
+      const q = domainFnsFor(opts, dom);
+      const extraSel = dom === 'gov' ? ',agency' : ',tenant,operator,chain_canonical';
+      const r = await safeQuery(
+        q,
+        'GET',
+        `properties?property_id=eq.${enc(property_id)}&select=property_id,address,city,state${extraSel}&limit=1`,
+        []
+      );
+      const row = (r.data || [])[0];
+      if (row) directHits.push({ domain: dom, property: row });
+    }
+    const directCandidates = directHits.map((hit) => propertyCandidate(hit.property, {
+      domain: hit.domain,
+      confidence: 0.8,
+      resolved_via: 'domain_property_direct_id',
+    }));
+    if (directCandidates.length > 1) {
+      return envelope('ambiguous', { raw_ref: raw, type: 'asset', confidence: 0, resolved_via: 'domain_property_direct_id', candidates: directCandidates });
+    }
+    if (directCandidates.length === 1) {
+      return envelope('resolved', {
+        raw_ref: raw,
+        entity: null,
+        type: 'asset',
+        confidence: 0.8,
+        resolved_via: 'domain_property_direct_id',
+        candidates: directCandidates,
+        domain_property: directCandidates[0].domain_property,
+        note: 'No LCC asset entity for this property — resolved directly from the domain database by id. Facts-only context (no entity_id).',
       });
     }
   }
