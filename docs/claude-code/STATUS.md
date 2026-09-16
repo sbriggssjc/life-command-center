@@ -41,7 +41,7 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–4, INVENTORY1, INVENTORY1b, INVENTORY-process, REMEDIATION-2026-05, FLAGS-geocode, REGISTRY-contacts-hub, REPO1, ROADMAP | 2026-09-16 | INVENTORY1b done (DB-verified); **backlog regrouped by category (P19 ownership evidence / P20 app & flows / P21 inventory & process)** and `docs/os/ROADMAP.md` added as the category-level live/partial/open view; CLAUDE.md pass 2 with Scott still ahead |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
 | **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
-| **Broker identity (BR) / BROKER1** | BR1, BR2, BROKER1, BROKER1-sf | 2026-09-11 | BROKER1 prospect-assignment applied live (1,303 assigned) with a real bug found+fixed in production; BROKER1-sf (Salesforce write-back) correctly left unbuilt — no write path exists |
+| **Broker identity (BR) / BROKER1**, BR3, BR4, BR5 | BR1, BR2, BR3, BR4, BR5, BROKER1, BROKER1-sf | 2026-09-16 | BR1/BR3 SHIPPED (Dialysis_DB registry repair, 63 composite rows collapsed, 6 firms minted verbatim, 10 routed to review, `brokers.broker_company_id` coverage 7.2%→14.4%); BR4/BR5/ID3c now unblocked, not yet built; BROKER1 prospect-assignment applied live (1,303 assigned); BROKER1-sf correctly left unbuilt — no write path exists
 | **gov agency canonicalization (ID3a\*)** | ID3a, ID3a-b, ID3a-c, ID3a-d, ID3e, I14, I16 | 2026-09-12 | ID3a-b/c/d/e all shipped and live-verified; repo-ownership hazard (I16) found and closed — `government-lease` owns the gov DB's migrations, LCC's copy retired |
 | **CI / producer health (B6d/B6e)** | B6d-cms-*, B6d-assessor-*, B6d-pri-*, B6e-ci-*, B6e-fred-* | archived 2026-09-11 | Suite is a real merge gate (`Run Tests` unmasked, green once on `main`); `pip-audit`/secrets-grep/ruff still masked; full detail in the 2026-08-29→09-11 archive and `docs/architecture/producer-health-and-ci-enforcement.md` |
 
@@ -65,6 +65,71 @@ leaking into `email_fanout` instead (financial line items, `PO Box ####`, `NAI <
 brand, CRE marketing headlines) — never touched the working `person_junk_name` rule itself.
 `test/hp1-p2misparse-guard-disposition.test.mjs` +9 (23/23). Full suite 6458/6458, 0 regressions.
 See `docs/os/PLANNED-BACKLOG.md` MISPARSE-BACKLOG1 / HP1-P2misparse.
+## 2026-09-16 — BR1/BR3 broker_companies registry repair applied live to Dialysis_DB (Claude Code)
+
+**`broker_companies` was a corrupted firm registry** — of 131 rows, 73 (56%) carried a literal `;`
+composite capture artifact ("`<firm>; <agent surname>`", occasionally a genuinely ambiguous
+multi-party capture), and `brokers.broker_company_id` was wired on only 184 of 2,542 rows (7.2%).
+Re-measured live before building (the PLANNED-BACKLOG counts were stale): confirmed 73/131, and
+that the `&` vs `;` distinction (BR3) holds exactly — `&` names a real firm (`Lee & Associates`,
+`Cushman & Wakefield`, `Horvath & Tremblay`), `;` is the capture pipeline's composite separator.
+
+**Applied via Supabase MCP (`apply_migration`) directly against Dialysis_DB `zqzrriwuavgrquhisnoa`,
+then committed to the repo** as `supabase/migrations/dialysis/20260916120000_dia_br1_broker_company_registry_repair.sql`.
+Dry-run first, then real apply, then the fleet-wide `brokers.broker_company_id` backfill, then a
+hardening pass (RLS + `search_path` on the four new tables/functions — closed both advisor
+findings the first apply produced).
+
+- **Classifier, not a hand-enumerated list.** `br1_classify_composite()` splits each `;`-row into
+  firm-token / agent-text and flags four GENERIC ambiguity shapes (more than one `;`; a stray `:`
+  alongside the `;`; the firm and agent text sharing a prefix in either direction — the
+  "`reichel; reichel realty`" / "`silver; silver group`" reversed-capture shape; an agent token
+  that itself names another existing firm — the "`cole; m&m`" shape). **10 of 73 rows are
+  genuinely ambiguous and were routed to `dia_broker_company_composite_review`, untouched.**
+- **A real bug found mid-build and fixed before applying for real:** the agent-token splitter's
+  first draft used `\s*(&|,| and )\s*` — optional whitespace around `&` — which shreds a tight
+  firm abbreviation like `m&m`/`c&w`/`b&e` into two garbage tokens and made the classifier blind
+  to `"cole; m&m"` naming a second real firm. Fixed to `\s+&\s+|,\s*|\s+and\s+` (mandatory
+  surrounding whitespace), caught by a dry-run diff before the real apply, and pinned with a
+  positive-controlled test.
+- **Resolution order: exact match against an existing bare canonical row, then a small
+  evidence-backed alias table, then mint verbatim (never fabricate an expansion).** Two aliases
+  seeded, both citing evidence already present verbatim elsewhere in the table (`m&m` →
+  `marcus & millichap`, whose fuller spelling already exists as its own bare row; `c&w` →
+  `cushman & wakefield`, minted from the literal firm-token text of the
+  `"cushman & wakefield; sheldon"` row). **The `m&m` alias never actually fires** — a bare `m&m`
+  row already existed and exact-match wins first, so all 37 `m&m;<agent>` composites collapsed
+  onto the pre-existing abbreviated row, not onto `marcus & millichap`. That is the SAFER outcome:
+  merging those two bare rows into one identity is the ID3c decision this unit deliberately stays
+  out of.
+- **Live result:** 63 collapsed (colliers 5-way onto the existing bare `colliers` row; `m&m`
+  37-way; `c&w` 10-way onto a newly-minted `cushman & wakefield`; `kw`/`encore`/`svn` 1–2-way
+  each); 6 new firms minted verbatim (`b&e`, `berkeley capital advisors`, `coldwell`,
+  `cp partners`, `horvath & tremblay`, `ribeiro corp`); 7 brokers created, 49 filled from blank;
+  1 pre-existing broker FK repointed off a composite id before its row was deleted (measured live:
+  81 brokers rows already pointed straight at a composite id — `broker_company_history` and
+  `sale_brokers` also FK `broker_companies` and are repointed the same way). `broker_companies`
+  131 → 75. Fleet-wide `brokers.broker_company_id` backfill (exact/alias match only): 126 more
+  filled, 661 `brokers.company` values with no registry match routed to review (raw text intact,
+  never used to mint a company) → **coverage 184/2,542 (7.2%) → 366/2,549 (14.4%)**.
+- **Guard against a new composite ever landing again:** `trg_br1_guard_no_composite_company_name`
+  (BEFORE INSERT/UPDATE OF company_name) rejects any value containing `;` — verified live with a
+  real INSERT that raised 23514.
+- **Parity/audit view `v_br1_broker_company_parity`** — confirmed only the 10 collapsed-into firms
+  (`b&e`, `berkeley capital advisors`, `coldwell`, `colliers`, `cp partners`, `cushman & wakefield`,
+  `encore`, `m&m`, `ribeiro corp`, `svn`) show a `broker_count` movement; nothing else moved.
+- **Idempotent, verified live**: re-running `br1_repair_broker_companies` after the real apply
+  returns `composites_seen=10, resolved_collapsed=0, companies_minted=0` — the 10 ambiguous rows
+  and nothing else.
+- **Not done here, by scope:** no `brokers` dedupe (BR4), no display-layer change (BR5), no
+  identity merge across the `m&m`/`marcus & millichap` bare-row pair or any other ID3c collision.
+  All three are now unblocked.
+- **Guard:** `test/br1-broker-company-registry-repair.test.mjs` (20 tests; positive-controlled —
+  reverting the whitespace-guarded `&`-split regex back to the loose form turns the guard red).
+- Docs updated in the same change: `docs/os/PLANNED-BACKLOG.md` (BR1/BR3 marked ✅ shipped, BR4/BR5/
+  ID3c/BR1-misparse-handoff annotated unblocked), `docs/os/CURRENT-STATE.md` (Dialysis_DB section).
+
+---
 
 ---
 
