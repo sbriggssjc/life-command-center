@@ -1052,7 +1052,8 @@ async function loadDiaData() {
     var [freshness, invSummary, moversUpRaw, moversDownRaw,
          npiSignalSummary, propQueue, leaseQueue, leaseSummaryRows, outcomes, recon,
          sfActivities, patientAsOfRows, outcomesCountRes,
-         onMarketRows, ownershipCovRows, llcHealthRows, listingConfirmRows, prospectCntRes
+         onMarketRows, ownershipCovRows, llcHealthRows, listingConfirmRows, prospectCntRes,
+         researchLanesRes
     ] = await Promise.all([
       diaQuery('v_counts_freshness', '*').catch(function(e) { console.warn('Freshness view timeout', e); return []; }),
       diaQuery('v_clinic_inventory_diff_summary', '*').catch(function(e) { console.warn('Inv summary timeout', e); return []; }),
@@ -1093,7 +1094,22 @@ async function loadDiaData() {
       diaQuery('v_ownership_coverage', '*', { limit: 1 }).catch(function() { return []; }),           // Ownership Coverage (1 row)
       diaQuery('v_llc_research_queue_health', '*', { limit: 50 }).catch(function() { return []; }),   // LLC queue counts (~5 rows)
       diaQuery('v_listings_needing_manual_confirmation', '*', { limit: 1000 }).catch(function() { return []; }), // Listings-confirm (~500)
-      diaQuery('v_prospect_targets', 'true_owner_id', { limit: 1, includeCount: true }).catch(function() { return { data: [], count: null }; }) // Unprospected owners count
+      diaQuery('v_prospect_targets', 'true_owner_id', { limit: 1, includeCount: true }).catch(function() { return { data: [], count: null }; }), // Unprospected owners count
+      // DIA1b — the GATED NPI lane count. v_npi_inventory_signal_summary (dia,
+      // above) is a raw diff-vs-auto-resolved tally; the actionable count lives
+      // in v_lcc_research_lane_summary on LCC Opps (npi_missing_inventory +
+      // npi_new_registration open_tasks), the same gated-lane pattern every
+      // other research surface reads (CLAUDE.md "Producer/Consumer"). Read via
+      // the existing /api/queue?view=research_lanes sub-route — no new view,
+      // no new table. opsApi is defined in ops.js, which loads AFTER
+      // dialysis.js in index.html, but this call only ever fires at RUNTIME
+      // (inside loadDiaData(), after all scripts have parsed), so the load-order
+      // rule ("an extracted sibling loads before its parent") does not apply —
+      // this is a call-time reference, not a parse-time one. Null (never 0) on
+      // any failure so the tile can tell "no gated signals" from "couldn't load".
+      (typeof opsApi === 'function'
+        ? opsApi('/api/queue?view=research_lanes').catch(function(e) { console.warn('research lane summary load failed:', e && e.message); return null; })
+        : Promise.resolve(null))
     ]);
 
     // Assign core data
@@ -1154,6 +1170,23 @@ async function loadDiaData() {
     // Unprospected Owners — the actionable BD-target count (count=exact).
     diaData.unprospectedCount = (prospectCntRes && typeof prospectCntRes.count === 'number' && prospectCntRes.count > 0)
       ? prospectCntRes.count : ((prospectCntRes && Array.isArray(prospectCntRes.data)) ? prospectCntRes.data.length : null);
+
+    // DIA1b — gated NPI lane open count (LCC Opps `v_lcc_research_lane_summary`,
+    // research_type IN npi_missing_inventory/npi_new_registration). null =
+    // "could not load", NEVER coerced to 0, so the NPI tile can fall back to
+    // the raw diff honestly instead of reporting a false all-clear.
+    diaData.npiLaneOpen = null;
+    diaData.npiLaneLoaded = false;
+    try {
+      var _laneItems = (researchLanesRes && Array.isArray(researchLanesRes.items)) ? researchLanesRes.items : null;
+      if (_laneItems) {
+        var _npiLaneTypes = { npi_missing_inventory: 1, npi_new_registration: 1 };
+        diaData.npiLaneOpen = _laneItems
+          .filter(function(r) { return r && _npiLaneTypes[r.research_type]; })
+          .reduce(function(s, r) { return s + (Number(r.open_tasks) || 0); }, 0);
+        diaData.npiLaneLoaded = true;
+      }
+    } catch (e) { console.warn('npi lane summary parse failed', e); }
 
     // Honest "as of" period for the CMS patient-count tiles (the newest GENUINE
     // reporting period, not a year-end re-stamp). null when unavailable.
@@ -1496,6 +1529,29 @@ function _diaParseJ(raw) {
   try { return typeof raw === 'string' ? JSON.parse(raw) : raw; } catch (e) { return []; }
 }
 
+// DIA1b — MV freshness label. `mv_dia_overview_stats.computed_at` is a plain
+// `now()` stamped by the CREATE-OR-REPLACE-VIEW-backed MV at REFRESH time
+// (cron `dia-refresh-overview-stats`, daily 01:00 UTC), so it is honest about
+// how stale a Portfolio-Glance/Lease-Risk number can be — a tile computed from
+// this MV can differ from a live `count(*)` by however many rows changed since
+// this timestamp (measured live 2026-09 at ±1-22 rows). Never invents a value;
+// a missing/unparseable computed_at renders nothing rather than a fabricated
+// "just now".
+function _diaMvAsOfLabel(mv) {
+  if (!mv || mv.computed_at == null) return null;
+  try {
+    var d = new Date(mv.computed_at);
+    if (isNaN(d.getTime())) return null;
+    return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  } catch (e) { return null; }
+}
+function _diaMvAsOfLine(mv) {
+  var a = _diaMvAsOfLabel(mv);
+  return a
+    ? '<div style="font-size:11px;color:var(--text3);margin-bottom:8px;padding-left:2px">Snapshot as of <strong>' + a + '</strong> (refreshed daily) — live totals may differ by a few rows until the next refresh</div>'
+    : '';
+}
+
 // ── UI Phase 2: value-first Overview blocks (driven by mv_dia_overview_stats) ──
 // Portfolio at a Glance — mirrors gov's section 1. Honest denominators: headline
 // is ACTIVE properties (dia has no archived class), NOT the CMS-clinic count
@@ -1510,12 +1566,20 @@ function renderDiaPortfolioGlanceInner() {
     return '<div class="dia-info-card" style="padding:16px;color:var(--text3);font-size:12px">Portfolio summary unavailable</div>';
   }
   const n = v => Number(v) || 0;
-  let h = '<div class="dia-grid dia-grid-5">';
+  let h = _diaMvAsOfLine(mv);
+  h += '<div class="dia-grid dia-grid-5">';
   h += infoCard({ title: 'Total Properties', value: fmtN(n(mv.total_properties)), sub: 'dialysis facilities tracked', color: 'blue', tab: 'search' });
   h += infoCard({ title: 'Total SF', value: fmtN(Math.round(n(mv.total_sf) / 1e6)) + 'M', sub: fmtN(n(mv.properties_with_sf)) + ' with size data', color: 'green', tab: 'search' });
   h += infoCard({ title: 'Projected Annual Rent', value: '$' + fmtN(Math.round(n(mv.total_rent) / 1e6)) + 'M', sub: fmtN(n(mv.properties_with_rent)) + ' with lease rent', color: 'cyan', tab: 'sales' });
   h += infoCard({ title: 'Avg Rent / SF', value: mv.avg_rent_psf ? '$' + Number(mv.avg_rent_psf).toFixed(2) : '—', sub: fmtN(n(mv.properties_with_rent)) + ' properties', color: 'purple', tab: 'sales' });
-  h += infoCard({ title: 'Operators Tracked', value: fmtN(n(mv.operators_tracked)), sub: 'distinct operators', color: 'yellow', tab: 'search' });
+  // DIA1b: `operators_tracked` counts DISTINCT RAW operator-name STRINGS on
+  // v_property_attributes_portfolio (properties.operator, free text) — it is
+  // NOT the canonical operator count. properties.operator_id (the ID2 registry)
+  // resolves the same portfolio to fewer distinct operators (e.g. "Fresenius"
+  // and "Fresenius Medical Care" are two rows here, one operator there). See
+  // docs/audits/DIA1_TILES_2026-09.md "Operators Tracked" for the measured
+  // gap — flagged for Scott's decision, NOT silently reworded to match either number.
+  h += infoCard({ title: 'Operators Tracked', value: fmtN(n(mv.operators_tracked)), sub: 'distinct operator NAMES (raw text, not canonicalized)', color: 'yellow', tab: 'search' });
   h += '</div>';
   // Second row mirrors gov's NOI row (Total NOI · Avg NOI/Property · Contacts).
   // dia is NNN so net rent ≈ NOI; the Avg tile is total net rent / active property.
@@ -1541,7 +1605,8 @@ function renderDiaLeaseExpRiskInner() {
   const n = v => Number(v) || 0;
   const dated = n(mv.properties_with_lease_exp);
   const pct = v => dated > 0 ? (v / dated * 100).toFixed(1) + '% of dated leases' : '';
-  let h = '<div class="dia-grid dia-grid-5">';
+  let h = _diaMvAsOfLine(mv);
+  h += '<div class="dia-grid dia-grid-5">';
   h += infoCard({ title: 'Expiring < 6 Months', value: fmtN(n(mv.exp_lease_lt_6mo)), sub: pct(n(mv.exp_lease_lt_6mo)), color: 'red', tab: 'sales' });
   h += infoCard({ title: 'Expiring < 1 Year', value: fmtN(n(mv.exp_lease_lt_1yr)), sub: pct(n(mv.exp_lease_lt_1yr)), color: 'orange', tab: 'sales' });
   h += infoCard({ title: 'Expired / Holdover', value: fmtN(n(mv.lease_expired_count)), sub: fmtN(n(mv.lease_expired_stale)) + ' expired >1yr (stale)', color: 'red', tab: 'sales' });
@@ -1683,13 +1748,25 @@ function renderDiaActionItemsInner() {
       detail: 'Potential closures — check for acquisition or disposition opportunities',
       action: 'Review closures', tab: 'inventory', preFilter: 'removed' });
   }
+  // DIA1b — NPI signals: `npiRawActionable` (raw diff minus auto-resolved) is
+  // NOT the same as the gated lane's actual open count (v_lcc_research_lane_summary
+  // on LCC Opps, research_type IN npi_missing_inventory/npi_new_registration —
+  // it additionally excludes duplicate_inventory_npi, which routes to a
+  // Decision-Center dedup lane, not this research lane). DIA1 measured the raw
+  // number reading ~1,100 while the lane read 81. The PRIMARY value shown is
+  // the gated lane's open count when it loaded; the raw diff is kept as an
+  // explicit, clearly-labelled secondary figure — never silently dropped.
   const npiSignalCount = (typeof diaData !== 'undefined' && diaData.npiSummary) ? Object.values(diaData.npiSummary).reduce((s, r) => s + (r.signal_count || 0), 0) : 0;
   const npiAutoResolvable = (typeof diaData !== 'undefined' && diaData.npiSummary) ? Object.values(diaData.npiSummary).reduce((s, r) => s + (r.auto_resolvable_count || 0), 0) : 0;
-  const npiActionableCount = Math.max(0, npiSignalCount - npiAutoResolvable);
-  if (npiActionableCount > 0) {
+  const npiRawActionable = Math.max(0, npiSignalCount - npiAutoResolvable);
+  const npiLaneOpen = (typeof diaData !== 'undefined' && diaData.npiLaneLoaded && diaData.npiLaneOpen != null) ? diaData.npiLaneOpen : null;
+  const npiDisplayCount = npiLaneOpen != null ? npiLaneOpen : npiRawActionable;
+  if (npiDisplayCount > 0) {
     dq.push({ icon: '📡', color: '#fb923c', urgency: 'warning',
-      title: npiActionableCount + ' NPI signal' + (npiActionableCount > 1 ? 's' : '') + ' need review',
-      detail: 'Clinics with missing or duplicate NPIs — fix data quality issues that block ownership matching',
+      title: fmtN(npiDisplayCount) + ' NPI signal' + (npiDisplayCount !== 1 ? 's' : '') + ' need review'
+        + (npiLaneOpen == null ? ' (raw — lane count unavailable)' : ''),
+      detail: 'Clinics with missing or duplicate NPIs — fix data quality issues that block ownership matching'
+        + (npiLaneOpen != null ? ' · raw signals (not all actionable): ' + fmtN(npiRawActionable) : ''),
       action: 'Review Signals', tab: 'npi' });
   }
   const propQueueLen = (typeof diaData !== 'undefined' && diaData.propertyReviewQueue) ? diaData.propertyReviewQueue.length : 0;
@@ -1699,13 +1776,20 @@ function renderDiaActionItemsInner() {
       detail: 'Unlinked clinics need property matching for lease + ownership data',
       action: 'Start Review', tab: 'research' });
   }
+  // DIA1b — lease backfill: this IS a raw backlog count, not a value-ranked or
+  // auto-retired actionable queue. A real capture path exists (Research tab →
+  // "Mark Reviewed"/verified_lease outcome), but measured 2026-09-16 it has
+  // recorded exactly 26 completions, ALL on one timestamp (2026-04-29, a
+  // one-time bulk pass) and 0 since — 0.8% of the backlog, no organic use in
+  // 4+ months. Labelled as a backlog, never as a ranked action list, per the
+  // NPI-tile treatment (see docs/audits/DIA1_TILES_2026-09.md).
   const leaseBackfillLen = (typeof diaData !== 'undefined' && diaData.leaseBackfillRows) ? diaData.leaseBackfillRows.length : 0;
   const leaseBackfillExact = (typeof diaData !== 'undefined' && diaData.leaseBackfillCount != null && diaData.leaseBackfillCount > 0)
     ? diaData.leaseBackfillCount : leaseBackfillLen;
   if (leaseBackfillExact > 20) {
     dq.push({ icon: '📋', color: '#22d3ee', urgency: 'info',
-      title: fmtN(leaseBackfillExact) + ' clinic' + (leaseBackfillExact > 1 ? 's' : '') + ' need lease backfill',
-      detail: 'Missing lease data — prioritize high-value clinics',
+      title: fmtN(leaseBackfillExact) + ' clinic' + (leaseBackfillExact > 1 ? 's' : '') + ' missing lease data (raw backlog)',
+      detail: 'Not a ranked/actionable queue — a manual review path exists but is largely unworked. See Research tab.',
       action: 'Backfill Leases', tab: 'research' });
   }
   const addedCount = (typeof diaData !== 'undefined' && diaData.inventorySummary) ? (diaData.inventorySummary.added?.clinic_count || 0) : 0;
@@ -2239,7 +2323,11 @@ function renderDiaOverview() {
   const npiSignalCount = Object.values(diaData.npiSummary).reduce((s,r) => s + (r.signal_count||0), 0);
   // Round 76eb: actionable = total minus auto_resolvable (which the matview hides by default)
   const npiAutoResolvable = Object.values(diaData.npiSummary).reduce((s,r) => s + (r.auto_resolvable_count||0), 0);
-  const npiActionableCount = Math.max(0, npiSignalCount - npiAutoResolvable);
+  const npiActionableCount = Math.max(0, npiSignalCount - npiAutoResolvable); // raw diff, kept as the secondary figure
+  // DIA1b — prefer the gated lane's open count (see renderDiaActionItemsInner);
+  // null when the cross-project fetch hasn't landed/failed.
+  const npiLaneOpenCount = (diaData.npiLaneLoaded && diaData.npiLaneOpen != null) ? diaData.npiLaneOpen : null;
+  const npiDisplayCount = npiLaneOpenCount != null ? npiLaneOpenCount : npiActionableCount;
   const propQueueLen = diaData.propertyReviewQueue?.length || 0;
   const leaseBackfillLen = diaData.leaseBackfillRows?.length || 0;
   // UI Phase 3 Unit 0a — the honest backlog size = the count=exact probe
@@ -2392,7 +2480,11 @@ function renderDiaOverview() {
   html += '<div id="diaOverviewPatientMetrics">' + renderPatientMetricsInner() + '</div>';
   html += '<div class="dia-grid dia-grid-4" style="margin-top:10px">';
   html += infoCard({ title: 'Inventory Changes', value: fmtN(addedCount + removedCount), sub: '+' + fmtN(addedCount) + ' added · -' + fmtN(removedCount) + ' removed', color: addedCount > removedCount ? 'green' : 'red', tab: 'changes' });
-  html += infoCard({ title: 'NPI Signals', value: fmtN(npiActionableCount), sub: npiAutoResolvable > 0 ? fmtN(npiAutoResolvable) + ' auto-resolved · ' + fmtN(npiActionableCount) + ' need review' : 'need human review', color: 'orange', tab: 'npi' });
+  html += infoCard({ title: 'NPI Signals', value: fmtN(npiDisplayCount),
+    sub: npiLaneOpenCount != null
+      ? fmtN(npiActionableCount) + ' raw signals (not all actionable)'
+      : (npiAutoResolvable > 0 ? fmtN(npiAutoResolvable) + ' auto-resolved · ' + fmtN(npiActionableCount) + ' need review (raw)' : 'need human review (raw — lane count unavailable)'),
+    color: 'orange', tab: 'npi' });
   const _diaAsOfMover = _diaPatientAsOfLabel();
   const _diaHasMovers = (diaData.moversUp && diaData.moversUp.length) || (diaData.moversDown && diaData.moversDown.length);
   html += infoCard({ title: 'Top Mover', value: diaData.moversUp?.[0] ? '+' + fmtN(diaData.moversUp[0].delta_patients) : '—', sub: diaData.moversUp?.[0] ? norm(diaData.moversUp[0].facility_name && diaData.moversUp[0].facility_name !== 'null' ? diaData.moversUp[0].facility_name : diaData.moversUp[0].clinic_name || diaData.moversUp[0].address || 'Unknown Clinic').substring(0,30) : ('no new CMS period' + (_diaAsOfMover ? ' since ' + _diaAsOfMover : '')), color: 'green', tab: 'changes' });
@@ -2484,7 +2576,7 @@ function renderDiaOverview() {
   html += sectionHeader('Research Pipeline', '🔬', 'research');
   html += '<div class="dia-grid dia-grid-4">';
   html += infoCard({ title: 'Property Queue', value: fmtN(propQueueLen), sub: 'pending review', color: 'yellow', tab: 'research' });
-  html += infoCard({ title: 'Lease Backfill', value: fmtN(leaseBackfillExact), sub: 'missing lease data', color: 'orange', tab: 'research' });
+  html += infoCard({ title: 'Lease Backfill', value: fmtN(leaseBackfillExact), sub: 'missing lease data — raw backlog, not ranked/actionable', color: 'orange', tab: 'research' });
   html += infoCard({ title: 'Completed Reviews', value: fmtN(researchDone), sub: 'outcomes logged', color: 'green', tab: 'research' });
   const reconStatus = diaData.reconciliation?.run_status || 'unknown';
   const reconDate = diaData.reconciliation?.started_at ? new Date(diaData.reconciliation.started_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—';
