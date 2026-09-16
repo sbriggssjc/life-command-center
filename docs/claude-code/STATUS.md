@@ -33,7 +33,7 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **Market briefs (MB/EB)** | MB1d, MB2a, MB3, MB4, MB5, MB6, MB7, EB1b, P18 | 2026-09-12 | **LIVE**: `MARKET_BRIEF_PSQL` + `MARKET_BRIEF_RENDER` on; the daily email carries the Lane Briefs block (cap-rate bands, on-market, honest CMS staleness gaps, link to `#/briefs/dialysis`), the tab serves live facts, first `market_brief_issues` row frozen. Next: MB2a (the 3 new dialysis RSS URLs all fail 403/404), MB5 P-WEB (blocked on EB1b Anthropic credit), MB6 weekly long-form, MB7 MCP recall |
 | **Operator funnel (OC / HP1)** | HP1, HP1-P1a, HP1-P1a-fix, HP1-P1a-dup | 2026-09-12 | HP1-P1a-fix CLOSED live (608 rows UPDATED, first-ever Salesforce UPDATE to `bd_opportunities`); HP1 P0 (Today 500 badge) fixed+deployed+verified |
 | **Ownership (OWN/RO)** | OWN-T0a–T0j, RO3, B1b, AC2/AC3/AC6–AC11 | 2026-09-12 | OWN-T0j verified end-to-end live; RO3 field-mapping design drafted; OWN-T0a/B1b/AC-series propagation work still open |
-| **CoStar sidebar / public records (PR5/PRI)** | PR5d, PR-scanner-3, PRI2–PRI6, HCRIS-TIMEOUT, HCRIS-TRACKER-BLIND, HCRIS-QIP-DEFICIENCY-TIMEOUT-PATTERN | 2026-09-16 | PR-scanner-3 shipped (`county_records_needed` action); `PRI6` closed ✅ 2026-09-14, both sides confirmed merged — checking on it live is what surfaced `HCRIS-TIMEOUT` (a separate, months-old defect, not a `PRI6` regression). `HCRIS-TIMEOUT` is now **four rounds deep, root cause finally isolated 2026-09-16**: two independent structural bugs, neither HCRIS-specific — `ingestion_tracker.start_run()` silently discards its own run id on every call (a `Prefer` header mismatch, repo-wide, also orphans every ingestion lock), and `aux_cms_tables` (step 3 of ~15) swallows its own step-timeout so the pipeline never reaches HCRIS (step ~8) at all. Fix not yet written — this round was deliberately triage-only. One flagged, unbuilt follow-up still queued: `qip_scores_ingestor.py`/`cms_deficiency_ingestor.py` share HCRIS's old bare-timeout bug, still correctly out of scope until the pipeline actually reaches that far. |
+| **CoStar sidebar / public records (PR5/PRI)** | PR5d, PR-scanner-3, PRI2–PRI6, HCRIS-TIMEOUT, HCRIS-TRACKER-BLIND, HCRIS-QIP-DEFICIENCY-TIMEOUT-PATTERN | 2026-09-16 | PR-scanner-3 shipped (`county_records_needed` action); `PRI6` closed ✅ 2026-09-14, both sides confirmed merged — checking on it live is what surfaced `HCRIS-TIMEOUT` (a separate, months-old defect, not a `PRI6` regression). `HCRIS-TIMEOUT` is now **five rounds deep**: root cause isolated 2026-09-16 (`HCRIS-TIMEOUT-4`, two structural bugs, neither HCRIS-specific), both **fixed and pushed same day** (`HCRIS-TIMEOUT-5`, `Dialysis` PR #7413, commit `226f7e3` — merge status unconfirmed, asked Scott directly, same recurring ambiguity as `PRI6`/`HCRIS-TIMEOUT-3`). **No live proof yet either way** — re-checked live: as of 14:05 UTC no run has started since the same pre-fix run this session already knew about, so even a merged+deployed fix has nothing to prove itself against yet. `HCRIS-TIMEOUT` stays 🔴. One flagged, unbuilt follow-up still queued: `qip_scores_ingestor.py`/`cms_deficiency_ingestor.py` share HCRIS's old bare-timeout bug, still correctly out of scope until the pipeline actually reaches that far. |
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k decided: attested-only widening**, prompted; gov exposes `true_owner_attested` first, then LCC widens the gate for attested rows only (≈858), ledgered + reversible |
 | **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT | 2026-09-16 | **Arc complete through GOVDEED5b** (gov PRs #400–#405, all live; `latest_deed_*` deed-only, one writer); open: GOVDEED3 (accept gate, prompted), sale-party conflicts 1,290 are a review queue; dia clean |
 | **CoStar sidebar / public records (PR5/PRI)** | PR5d, PR-scanner-3, PRI2–PRI6, HCRIS-TIMEOUT, HCRIS-TRACKER-BLIND, HCRIS-QIP-DEFICIENCY-TIMEOUT-PATTERN | 2026-09-15 | PR-scanner-3 shipped (`county_records_needed` action); `PRI6` (the connection-retry/ingestion-lock reliability sweep that started with `PRI1`'s dropped-connection crash) closed ✅ 2026-09-14, both sides confirmed merged — checking on it live is what surfaced `HCRIS-TIMEOUT` (a separate, months-old defect, not a `PRI6` regression). `HCRIS-TIMEOUT` is now three rounds deep: the original fix was correct, the real blocker was the tracker/heartbeat mechanism itself being blind (`HCRIS-TRACKER-BLIND`, fixed same round) — **awaiting live proof from a run Scott triggered 2026-09-15 (post-PR-#7411)**. One flagged, unbuilt follow-up already identified for whenever this closes: `qip_scores_ingestor.py`/`cms_deficiency_ingestor.py` share HCRIS's old bare-timeout bug. |
@@ -110,6 +110,40 @@ stale by 22 rows and one counts a different thing: 45 "operators" vs 21 distinct
 Every screenshot number was checked against the database before it became a row.
 
 ---
+
+## 2026-09-16 — `HCRIS-TIMEOUT-5`: both structural bugs fixed and pushed same day; no live proof possible yet, and PR merge status needs Scott's confirmation
+
+Fifth round, first fix round since `HCRIS-TIMEOUT-4` isolated the two structural bugs. CC fixed both same day:
+
+- **Discarded run id**: `start_run()` now builds an actual query-builder object and passes it (with
+  `return_representation=True`) into `safe_execute()`, instead of a bare lambda with `.execute()` already
+  baked in — the fix the prior round called for. All named call sites (`main.py:3177`, `run_cms_ingestion.py:
+  852/1786/1833`, `acquire_ingestion_lock()`) route through `start_run()` directly, so **one fix repairs all
+  of them**, confirming the "fix once, fixes everywhere" framing from the `-5` prompt.
+- **Swallowed timeout**: CC reports the loop-vs-hang question this round was specifically asked to resolve
+  **couldn't be settled from the error-log evidence alone** (the ledger only flushes between steps, not
+  per-row) — disclosed plainly rather than guessed. Found independent structural evidence instead: `aux_cms_
+  tables`'s direct `psycopg` calls carry no `statement_timeout`/keepalive tuning (every other DB call in the
+  codebase does), and `SIGALRM` can't interrupt a blocked native socket read. Fixed both angles: `TimeoutError`
+  now re-raised before the per-row `except Exception:`, plus a 60s statement timeout + keepalives on the
+  direct connections.
+
+10 new regression tests, full suite 3,280 passed / 1 pre-existing unrelated failure (confirmed by CC to also
+fail on unmodified `main`). **Live verification explicitly not attempted** — no DB credentials/egress from
+that sandbox, disclosed rather than claimed. Pushed to `claude/compassionate-hamilton-geof1p`, commit
+`226f7e3`, **`Dialysis` PR #7413 opened**.
+
+**This session independently re-checked live state and it confirms CC's own disclosed gap, not a new
+problem**: as of DB time 2026-09-16 14:05:49 UTC, the most recent `ingestion_tracker` rows are still the same
+pre-fix run 2 (`1fb8af07…`/`64e34e14…`, started 06:03:13/06:03:24 UTC, still `run_status='started'`, ~8 hours
+in) — **no new run has started since**, so there's nothing yet that could prove the fix either way, merged or
+not. Scott's message said "this PR is merged" without naming which — the `life-command-center` docs PR
+(`docs/hcris-timeout-4-5-triage-and-fix-prompt`, #2509) is already confirmed merged (this session re-synced to
+it), but whether `Dialysis` PR #7413 is *also* merged and redeployed is unconfirmed. **Asked Scott directly**
+— same recurring ambiguity this arc has hit before (`PRI6`, `HCRIS-TIMEOUT-3`).
+
+`HCRIS-TIMEOUT` stays 🔴 either way — not yet proven live. Full writeup:
+`docs/claude-code/responses/done/HCRIS-TIMEOUT-5-fix-the-two-structural-bugs-start-run-header-and-aux-cms-timeout-swallow.response.md`.
 
 ## 2026-09-16 — `HCRIS-TIMEOUT-4`: root cause finally isolated — two structural bugs, neither one HCRIS-specific, and this round deliberately did not fix them
 
