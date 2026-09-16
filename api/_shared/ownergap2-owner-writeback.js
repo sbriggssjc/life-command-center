@@ -284,8 +284,20 @@ export async function applyOwnerResolution(property, plan, batchTag, opts = {}, 
     return result;
   }
 
-  result.wrote = true;
-  await ledgerWrite(q, {
+  // ⚠️ THE LEDGER WRITE IS PART OF THIS TRANSACTION, NOT AN AFTERTHOUGHT.
+  // OWNERGAP2-ledger-order (2026-09-16): a property was resolved and its
+  // `recorded_owner_id` written while the ledger insert failed silently
+  // underneath it (a reused `batch_tag` collided with an already-open
+  // `unresolved` attempt for the same property under
+  // `uq_dia_ownergap2_open_attempt`), so `wrote: 1` was reported with zero
+  // matching ledger rows -- a curated write with no citation on record. The
+  // provenance contract this module exists to enforce ("A row that cannot
+  // cite its source does not get written") is only as strong as this
+  // ordering: if the ledger cannot record the write, THE WRITE DOES NOT
+  // STAND. Roll the property back to NULL (re-asserting we still own the
+  // value we just set, so we never clobber a write that raced in after us)
+  // and report the failure rather than the success.
+  const ledgered = await ledgerWrite(q, {
     batch_tag: batchTag,
     property_id: property.property_id,
     jurisdiction: opts.jurisdiction || null,
@@ -296,6 +308,21 @@ export async function applyOwnerResolution(property, plan, batchTag, opts = {}, 
     recorded_owner_created: !!owner.created,
     citation: plan.citation,
   });
+  if (!ledgered.ok) {
+    await q('dialysis', 'PATCH',
+      `properties?property_id=eq.${encodeURIComponent(property.property_id)}`
+      + `&recorded_owner_id=eq.${encodeURIComponent(owner.recordedOwnerId)}`,
+      { recorded_owner_id: null });
+    result.wrote = false;
+    result.action = 'refuse';
+    result.reason = `ledger_write_failed:${ledgered.status}`;
+    // Note the `recorded_owners` row itself is left in place, exactly as a
+    // reversal leaves it (REVERSAL RUNBOOK, `dia_ownergap2_unresolve`) -- it
+    // is a real, source-cited party and the next attempt under a
+    // non-colliding batch tag will find and reuse it via `upsertRecordedOwner`.
+    return result;
+  }
+  result.wrote = true;
   return result;
 }
 

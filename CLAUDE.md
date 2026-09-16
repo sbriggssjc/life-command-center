@@ -384,7 +384,7 @@ any DB object, read its **deployed** definition and know which repo owns it (inv
 | database | owning repo | note |
 |---|---|---|
 | government | **`government-lease`** | LCC's `supabase/migrations/government/*` (213 files) is historical — **188 of the 194 objects they define are live right now**, so re-applying one overwrites a running object |
-| Dialysis_DB | **`life-command-center`** | where the work happens: operator registry, aliases, write guards, comps engine, market-brief producers. The Dialysis repo owns its CMS/NPI **ingestion** (rows, not schema) — if it needs a schema change, it lands here |
+| Dialysis_DB | **`life-command-center`** | where the work happens: operator registry, aliases, write guards, comps engine, market-brief producers. The Dialysis repo owns its CMS/NPI **ingestion** (rows, not schema) — if it needs a schema change, it lands here. This applies identically to a Claude Code / Cowork session with live Supabase MCP access — apply the migration from a session working in this repo, or not at all; ID3d-reconcile (2026-09-16) is the second time a session with MCP access applied a Dialysis_DB schema object live and then committed the record to `Dialysis` instead (DEED1-reconcile-2 was the first, hours earlier) |
 | LCC Opps | **`life-command-center`** | this repo is the app |
 any DB object, read its **deployed** definition and know which repo owns it (invariant I16).
 
