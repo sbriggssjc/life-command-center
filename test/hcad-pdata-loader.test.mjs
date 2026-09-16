@@ -3,8 +3,22 @@
 // scripts/hcad-pdata-load.mjs. No zip/network I/O here (that path is smoke-
 // tested manually with a real download); this pins the pure logic: the
 // upsert call shape (which IS the idempotency mechanism -- the unique index
-// on (acct, file_year) plus merge-duplicates) and that a re-run of the same
-// rows sends the SAME upsert shape rather than accumulating state.
+// on (acct, file_year) plus merge-duplicates AND an explicit on_conflict=
+// since OWNERGAP2-harris-c) and that a re-run of the same rows sends the
+// SAME upsert shape rather than accumulating state.
+//
+// OWNERGAP2-harris-c changed two things these tests must reflect:
+//   - `upsertRows` returns `{written, errors}`, never `{ok, status}` -- every
+//     `upsert` stub below returns that real shape now.
+//   - `streamLoadRealAcct` no longer flushes a batch every UPSERT_BATCH_SIZE
+//     rows AS IT STREAMS the (already-filtered, small) staged-row set -- it
+//     buffers all staged rows (never the raw file text -- that stays
+//     line-by-line, unbuffered) and hands them to `upsert()` ONCE at the end,
+//     so it can refuse the whole write if any staged row is missing an
+//     owner_name (Problem 3) before anything is sent. The per-1000-row HTTP
+//     batching this used to do inline now lives in `upsertRows` itself (see
+//     "the loader batches at UPSERT_BATCH_SIZE" below, which calls the REAL
+//     upsertRows rather than a counting stub).
 // ============================================================================
 
 import { test } from 'node:test';
@@ -25,7 +39,13 @@ function stubDomainQuery(calls) {
   };
 }
 
-test('upsertRows sends Prefer: resolution=merge-duplicates -- the idempotency mechanism', async () => {
+/** A stub for streamLoadRealAcct's `upsert` param -- the REAL shape
+ * (`{written, errors}`), never the old `{ok, status}`. */
+function okUpsert(calls) {
+  return async (rows) => { calls.push(rows.length); return { written: rows.length, errors: [] }; };
+}
+
+test('upsertRows sends Prefer: resolution=merge-duplicates + an explicit on_conflict= -- the idempotency mechanism', async () => {
   const calls = [];
   const rows = [{ acct: '1', file_year: 2026, owner_name: 'A' }];
   const { written, errors } = await upsertRows(rows, { domainQuery: stubDomainQuery(calls) });
@@ -33,7 +53,11 @@ test('upsertRows sends Prefer: resolution=merge-duplicates -- the idempotency me
   assert.equal(written, 1);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].domain, 'dialysis');
-  assert.equal(calls[0].path, 'hcad_real_acct_stage');
+  // OWNERGAP2-harris-c: on_conflict= must be explicit -- PostgREST infers an
+  // arbiter WITHOUT it only from the table's PRIMARY KEY (the bigserial `id`,
+  // which never collides), never from another unique index even a
+  // plain-column one like (acct, file_year).
+  assert.equal(calls[0].path, 'hcad_real_acct_stage?on_conflict=acct,file_year');
   assert.match(calls[0].headers.Prefer, /resolution=merge-duplicates/);
 });
 
@@ -55,13 +79,13 @@ test('re-running the loader on the SAME parsed rows issues the SAME upsert shape
   );
 });
 
-test('a chunk that fails is reported, never silently dropped', async () => {
+test('a chunk that fails is reported, never silently dropped -- and carries the DB code/message, not just the status', async () => {
   const failing = async () => ({ ok: false, status: 500, data: 'boom' });
   const rows = [{ acct: '1', file_year: 2026 }];
   const { written, errors } = await upsertRows(rows, { domainQuery: failing });
   assert.equal(written, 0);
   assert.equal(errors.length, 1);
-  assert.match(errors[0], /failed:500/);
+  assert.match(errors[0], /status=500/);
 });
 
 test('the loader batches at UPSERT_BATCH_SIZE (1000, OWNERGAP2-harris-b) so one PostgREST call '
@@ -81,26 +105,35 @@ test('the loader batches at UPSERT_BATCH_SIZE (1000, OWNERGAP2-harris-b) so one 
 // string and JSZip's `.async('string')` both throw `RangeError: Invalid
 // string length` on Scott's machine. These tests feed streamLoadRealAcct a
 // real Node Readable (never a pre-buffered string) so the STREAMING contract
-// itself is pinned, not just the per-line parse.
+// itself is pinned, not just the per-line parse. OWNERGAP2-harris-c: the
+// per-1000-row HTTP batching moved into `upsertRows` (pinned above); what
+// streamLoadRealAcct itself guarantees now is that the DECOMPRESSED TEXT is
+// read line-by-line and only the already-FILTERED staged rows are held in
+// memory before one `upsert()` call.
 
-test('streamLoadRealAcct never materializes more than one batch -- fed a stream, never a string', async () => {
+test('streamLoadRealAcct reads the file line-by-line and hands the real upsertRows the full staged set -- '
+  + 'which is what actually chunks the HTTP calls at 1000 rows', async () => {
   const header = 'acct\tname\tmailto\tstr_num\tstr\tstr_sfx\tstate_class';
   const rows = [];
   for (let i = 1; i <= 2500; i += 1) {
     rows.push(`${i}\tOwner ${i} LLC\tOwner ${i} LLC\t${i}\tMAIN\tST\tF1`);
   }
   const stream = linesToStream([header, ...rows]);
-  const calls = [];
+  const httpCalls = [];
   const result = await streamLoadRealAcct(stream, {
     fileYear: 2026, sourceFile: 'real_acct.txt', apply: true, limit: null, includeAll: false,
     ownersByAcct: new Map(),
-    upsert: async (batch) => { calls.push(batch.length); return { ok: true, status: 200 }; },
+    // The REAL upsertRows -- not a counting stub -- so its own 1000-row
+    // chunking is what gets exercised end to end.
+    upsert: (batch) => upsertRows(batch, { domainQuery: stubDomainQuery(httpCalls) }),
   });
   assert.equal(result.totalLines, 2500);
   assert.equal(result.staged, 2500);
   assert.equal(result.written, 2500);
-  // 1000-row batches -> 3 upsert calls, never one 2500-row call.
-  assert.deepEqual(calls, [1000, 1000, 500]);
+  assert.equal(result.missingOwnerName, 0);
+  // 1000-row HTTP batches -> 3 POSTs, never one 2500-row call.
+  assert.equal(httpCalls.length, 3);
+  assert.deepEqual(httpCalls.map((c) => c.body.length), [1000, 1000, 500]);
 });
 
 test('streamLoadRealAcct filters to F1/F2 WHILE STREAMING, unless --include-all', async () => {
@@ -115,14 +148,14 @@ test('streamLoadRealAcct filters to F1/F2 WHILE STREAMING, unless --include-all'
   ];
   const filtered = await streamLoadRealAcct(linesToStream(lines), {
     fileYear: 2026, sourceFile: 'real_acct.txt', apply: false, limit: null, includeAll: false,
-    ownersByAcct: new Map(), upsert: async () => ({ ok: true, status: 200 }),
+    ownersByAcct: new Map(), upsert: okUpsert([]),
   });
   assert.equal(filtered.staged, 2); // F1 + F2 only
   assert.equal(filtered.classSkipped, 3); // L1, A1, C1
 
   const all = await streamLoadRealAcct(linesToStream(lines), {
     fileYear: 2026, sourceFile: 'real_acct.txt', apply: false, limit: null, includeAll: true,
-    ownersByAcct: new Map(), upsert: async () => ({ ok: true, status: 200 }),
+    ownersByAcct: new Map(), upsert: okUpsert([]),
   });
   assert.equal(all.staged, 5);
   assert.equal(all.classSkipped, 0);
@@ -139,7 +172,7 @@ test('streamLoadRealAcct --limit stops after the first N F1/F2 rows, not the fir
   ];
   const r = await streamLoadRealAcct(linesToStream(lines), {
     fileYear: 2026, sourceFile: 'real_acct.txt', apply: false, limit: 2, includeAll: false,
-    ownersByAcct: new Map(), upsert: async () => ({ ok: true, status: 200 }),
+    ownersByAcct: new Map(), upsert: okUpsert([]),
   });
   assert.equal(r.staged, 2);
 });
@@ -161,7 +194,7 @@ test('streamLoadRealAcct folds owners.txt\'s second owner into owner_name_2 ONLY
   await streamLoadRealAcct(linesToStream(lines), {
     fileYear: 2026, sourceFile: 'real_acct.txt', apply: true, limit: null, includeAll: false,
     ownersByAcct,
-    upsert: async (batch) => { sent = sent.concat(batch); return { ok: true, status: 200 }; },
+    upsert: async (batch) => { sent = sent.concat(batch); return { written: batch.length, errors: [] }; },
   });
   const byAcct = Object.fromEntries(sent.map((r) => [r.acct, r]));
   assert.equal(byAcct['1'].owner_name_2, 'Owner One LLC C/O SOMEONE'); // untouched
@@ -173,7 +206,7 @@ test('streamLoadRealAcct refuses (never guesses) when the header lacks the requi
   await assert.rejects(
     () => streamLoadRealAcct(linesToStream(lines), {
       fileYear: 2026, sourceFile: 'real_acct.txt', apply: false, limit: null, includeAll: false,
-      ownersByAcct: new Map(), upsert: async () => ({ ok: true, status: 200 }),
+      ownersByAcct: new Map(), upsert: okUpsert([]),
     }),
     /missing_required_columns/,
   );
