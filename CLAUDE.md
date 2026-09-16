@@ -393,16 +393,21 @@ any DB object, read its **deployed** definition and know which repo owns it (inv
 | database | ref | owning repo | evidence | migration count in owning repo | migration count in non-owning repos | newest file |
 |---|---|---|---|---:|---|---|
 | **government** | `scknotsqkcheojiaewwh` | **`government-lease`** (settled by Scott) | `government-lease` is the canonical repo per its own CLAUDE.md §1; carries `sql/*.sql`; ID3a-c's live fix (PR #398) shipped there | 294 (`sql/*.sql`) | `life-command-center` **213** (`supabase/migrations/government/*.sql`) — **retired, historical, this round** | both repos: 2026-09-12 (the same-day ID3a-c work) |
-| **Dialysis_DB** | `zqzrriwuavgrquhisnoa` | **`Dialysis`** — 👤 not formally confirmed by Scott, but the evidence is one-sided: this is the repo's own database (its CLAUDE.md documents dozens of migrations against it directly), it carries by far the largest and most actively-maintained migration set, and its own CLAUDE.md never defers to another repo | `Dialysis` carries `supabase/migrations/*.sql` (+ `sql/migrations/`, `migrations/`) | 555 files across all migration dirs in `Dialysis` | `life-command-center` **277** (`supabase/migrations/dialysis/*.sql`) — **not yet retired; same treatment as government is the obvious next step, filed below** | `Dialysis`: 2026-09-11 (`dia_pdr14a_property_redirects`); `life-command-center`'s dia copy: same window |
+| **Dialysis_DB** | `zqzrriwuavgrquhisnoa` | ⚠️ **THIS ROW IS NOT AN OWNERSHIP VERDICT — READ THE DOCTRINE TABLE ABOVE + `supabase/migrations/dialysis/README.md` FOR THAT.** This row is a **migration-FILE-LOCATION census only**, and it was wrongly read as settling ownership once already (DEED1-reconcile-2, 2026-09-16: a reconciliation migration for a `Dialysis_DB` view/function/table was committed to the `Dialysis` repo on the strength of this line, when the doctrine table above — and the dia README, unambiguous since 2026-09-16 — already name `life-command-center` as owner). `Dialysis` carries by far the larger migration-FILE set and does its own CMS/NPI ingestion migrations there (see the doctrine table's carve-out); that is a fact about where files sit, not about which repo's ownership claim wins a conflict. Two repos apply schema to this database today. | `Dialysis` carries `supabase/migrations/*.sql` (+ `sql/migrations/`, `migrations/`) | 555 files across all migration dirs in `Dialysis` | `life-command-center` **277+** (`supabase/migrations/dialysis/*.sql`) — **not retired; this directory is where NEW dia schema work lands per the README, so its count is expected to keep growing, unlike the retired `government/` directory** | `Dialysis`: 2026-09-11 (`dia_pdr14a_property_redirects`); `life-command-center`'s dia copy: same window |
 | **LCC Opps** | `xengecqvemvfknjvbvrq` | **`life-command-center`** (this repo — the entities/BD-spine/priority-queue/decisions/cadence/provenance-registry app IS this repo) | This repo's own CLAUDE.md names LCC Opps as "the brain: entities, BD spine, priority queue, decisions, cadence, provenance registry, health alerts, auth (GoTrue), most crons" and every `lcc_*` function/table in this file is defined by this repo's root-level `supabase/migrations/*.sql` | 865 (root `supabase/migrations/*.sql`, excluding the `dialysis/` and `government/` subdirectories) | none found — no other repo in this session's scope carries LCC-Opps-targeted migrations | this repo, 2026-09-12 |
 
-**Not retired here (out of scope for ID3a-d, filed as a follow-up):** `life-command-center`'s
-`supabase/migrations/dialysis/*` (277 files) is the same shape of duplicate as the government
-directory was — a second repo's migrations sitting in a non-owning repo — but Scott has not been
-asked to confirm `Dialysis` as the formal owner (👤 above), and the dia directory has not (yet)
-been shown to carry a stale, dangerous copy of a live fix the way the gov directory did. Retiring
-it the same way (README + header stamp) is the natural next unit once Scott confirms ownership;
-see `docs/os/PLANNED-BACKLOG.md` §P0d **ID3a-d-dia**.
+**⚠️ `life-command-center`'s `supabase/migrations/dialysis/*` is NOT the government-directory shape,
+and must not be retired the same way.** The government directory was retired because
+`government-lease` is the sole owner and the LCC copy was a stale, dangerous historical duplicate.
+Dialysis_DB is different: the doctrine table above (Scott, 2026-09-12) already names
+`life-command-center` as the owner of **schema** here, with `Dialysis` owning its own CMS/NPI
+**ingestion**; `supabase/migrations/dialysis/README.md` (2026-09-16) confirms new dia schema work
+lands and is applied FROM here. So `life-command-center`'s dia directory is the live schema-of-record,
+not historical residue — do not stamp it retired, and do not treat the `Dialysis` repo's larger
+file count (above) as evidence to the contrary. See `docs/os/PLANNED-BACKLOG.md` §P0d **ID3a-d-dia**
+for the follow-up this row originally filed, which needs re-scoping to "reconcile the two
+migration sets" rather than "retire one" — DEED1-reconcile-2 (2026-09-16) is a worked example of
+what goes wrong when this row's file-location count is read as an ownership call.
 
 **I16 drift detector:** designed, documented, ready to run, **not yet executed** (no Supabase
 network access from this sandbox) — `scripts/db-drift/gov-deployed-vs-committed-drift.sql` +
