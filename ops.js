@@ -2893,6 +2893,24 @@ function _pqBandColor(band) {
   if (b === 'P8') return 'var(--green)';
   return 'var(--text3)';
 }
+// PRI1 (2026-09-16): plain-English band labels for the badge only — predicates,
+// colors and CTA state are unchanged. Keyed 1:1 with _pqBandColor's band set.
+function _pqBandLabel(band) {
+  var b = String(band || '').toUpperCase();
+  var map = {
+    'P0.4': 'Resolve ownership',
+    'P0.5': 'Needs BD opportunity',
+    'P-BUYER': 'Repeat buyer',
+    'P-CONTACT': 'No reachable contact',
+    'P1': 'Lease ending, 24mo',
+    'P2': 'Firm term ending, 24mo',
+    'P3': '10-yr lease milestone',
+    'P4': 'Sale-leaseback signal',
+    'P5': 'Owner has sold before',
+    'P8': 'New listing activity'
+  };
+  return map[b] || (band || '—');
+}
 function _pqReason(reason) {
   var r = String(reason || '');
   var m = r.match(/^agency_active_solicitations:(\d+)$/);
@@ -3195,7 +3213,7 @@ async function renderPriorityQueuePage(band) {
     }
     _rowChunks.push('<div class="' + _itemCls + '" data-q-id="' + esc(_qid) + '">' + _heroFlag
       + '<div class="q-item-header">'
-      + '<span class="pq-band" style="background:' + _pqBandColor(it.priority_band) + '">' + esc(it.priority_band || '\u2014') + '</span>'
+      + '<span class="pq-band" title="' + esc(it.priority_band || '') + '" style="background:' + _pqBandColor(it.priority_band) + '">' + esc(_pqBandLabel(it.priority_band)) + '</span>'
       + '<span class="q-item-title">' + esc(it.name || 'Owner') + '</span>'
       + '<div class="q-item-badges"><span class="q-badge">' + esc(_pqReason(it.reason)) + '</span></div></div>'
       + (ctx.length ? '<div class="q-item-meta">' + esc(ctx.join(' \u00b7 ')) + '</div>' : '')
