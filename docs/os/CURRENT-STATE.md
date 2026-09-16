@@ -15,6 +15,44 @@
 
 ---
 
+## 2026-09-16 — Research lanes closed, domain truth competes, gov deed semantics split (five rounds, all live)
+
+**Salesforce research lanes are gone (C1C, both arms).** `true_owner_needs_salesforce` (dia, 839) and
+`owner_needs_salesforce` (gov, 1,851) were retired via `lcc_c1c_retire_sf_lanes` — ledgered per batch
+(`c1c-dia-20260916`, `c1c-gov-20260916`), reversible with `lcc_c1c_unretire(batch)`, watch view
+`v_lcc_c1c_retired_watch`. The gov gate that was supposed to stop the mint had been on the **wrong arm**
+for a week (C1B-GOV-GATE; `v_ownership_gaps` was live-only with no committed source — now gov PR #403).
+Fixing it sealed `owner_needs_salesforce` (0 passing) and **unsealed `owner_needs_sos` (2,019 passing)**,
+so LCC now carries **1,346 open `owner_needs_sos` tasks with no consumer**. That consumer is
+**OWNERGAP2** (free-source owner matching, prompt written 2026-09-15) — the next build, not a someday.
+§"Salesforce research lanes" below is the *why*; this paragraph is the *state*.
+
+**Domain truth now competes where a registry backs it (C2k, LCC PR #2506).** The gov/dia `true_owner`
+(evidence weight 5.0) used to enter `lcc_property_owner_evidence` only on unresolved assets — a
+gap-filler, never a competitor. Now `v_lcc_domain_owner_candidates` (and
+`v_lcc_owner_supersession_candidates`) also admit `candidate_kind='supersede'`: an asset resolved at a
+tier below `domain_true_owner` (never `manual`) whose facts row carries `true_owner_attested` — gov's
+SOS/SAM manager on the SPE names the true owner (856 gov; dia has no registry data, 0). Batch
+`c2k_20260916`: 218 supersessions, 40/43 C2g sponsor pairs now resolve to the sponsor, 16/16
+no-evidence controls untouched, `lcc_c2k_unsupersede(batch)` round-trips 218/218. Unattested domain
+rows remain fill-only. "Sponsor as a first-class edge" is future work, not built.
+
+**Gov deed columns mean what they say — mostly (GOVDEED2 → 4 → 478 → 5, gov PRs #400–#404).**
+`deed_records.recording_date` is a real date only: model-guessed day-01 dates live in
+`recording_date_approx` + `date_confidence` (676 demoted); undated/no-instrument recall rows are
+`evidence_status='rejected_placeholder'` (4,995, kept for GOVDEED3, ignored by every decision surface).
+`properties.latest_transfer_{date,party,source,ref}` is the evidenced latest transfer with its source
+(`deed` | `sale`); `latest_deed_*` is meant to be deed-only. ⚠️ **Not yet true:** three sale
+propagators the split missed (`propagate_sales_recompute` on the 03:30 UTC cron, two triggers) re-plant
+sale dates into `latest_deed_date` — 3,310 properties within 20 minutes of the split. **GOVDEED5b**
+(gov) fixes it; until it lands, read `latest_transfer_*`, never `latest_deed_*`, on gov. Every write
+above is snapshotted in a `_gov_govdeed*_20260916` table with a reversal statement in the migration.
+
+**Doctrine earned this week:** *the live catalog is the inventory.* Two rounds inventoried the `sql/`
+tree and missed live objects (a live-only view; three of six `latest_deed_date` writers). Before
+changing a column's semantics, enumerate its writers from `pg_proc` + `cron.job` + `pg_trigger` on the
+live project, and put that list in the migration header with a test that fails when it grows.
+
 ## 2026-09-14 OWNERGAP1 — fabricated owner-name quarantine (Dialysis_DB)
 
 **LIVE.** Migration `20260914150000_dia_ownergap1_fabricated_owner_quarantine.sql`, applied to
@@ -228,6 +266,7 @@ docs (docx/xlsx) never go to OCR (byte-sniffed, extracted in-process).
 `entities` + `external_identities` + `lcc_property_owner*` + the priority queue / Decision Center;
 field-level provenance (`field_provenance`, `field_source_priority`, `lcc_merge_field`); the
 Ownership Resolution Engine; supersession tiers; the gov ownership-transition feeder.
+Since 2026-09-16 the domain feeder also **supersedes** lower-tier resolutions where gov attests the true owner (C2k) — see the top section.
 → `CLAUDE.md` §"BD spine", `docs/architecture/property-owner-subsystem.md`,
 `government-lease/docs/OWNERSHIP_RESOLUTION_ENGINE.md`
 
@@ -429,6 +468,7 @@ phantom work.**
 Power Automate proxy** (no Connected App; no `sobjects` call anywhere).
 **Recommendation: automate 27 · retire 945 · gate 1,702 · repair 1,292 — build no consumer.**
 → backlog **C1a–C1e**; `docs/audits/C1_SALESFORCE_LANES_CONSUMER_OR_RETIRE_2026-08-27.md`
+✅ **Outcome (2026-09-16):** both lanes retired (C1C, 839 + 1,851, reversible); the gov gate fixed (C1B-GOV-GATE). See the 2026-09-16 section at the top for the state and the `owner_needs_sos` consequence.
 
 ### Research-task producer — correct and value-gated (A5a + A5c, 2026-08-27)
 The generator read a 29,643-row feed through a call **PostgREST caps at 1,000** and auto-closed
