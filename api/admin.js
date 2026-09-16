@@ -134,6 +134,7 @@ import { handleBroker1AssignTick } from './_handlers/broker1-assign-tick.js';
 import { handleAmbiguousEntityAutomergeTick } from './_handlers/ambiguous-entity-automerge-tick.js';
 import { handleBenchRankTick } from './_handlers/bench-rank-tick.js';
 import { handleBriefingAnalystTakeTick } from './_handlers/briefing-analyst-take-tick.js';
+import { handleOwnerGap2ResolveTick } from './_handlers/ownergap2-owner-resolve-tick.js';
 import { runDownstreamPipeline } from './_handlers/intake-extractor.js';
 import { createPropertyFromIntake } from './_handlers/intake-create-property.js';
 import {
@@ -284,6 +285,10 @@ export default withErrorHandler(async function handler(req, res) {
     case 'agency-risk-consume':        return handleAgencyRiskConsume(req, res);
     case 'npi-consume':                return handleNpiConsume(req, res);
     case 'outlook-name-backfill':      return handleOutlookNameBackfill(req, res);
+    // OWNERGAP2 — resolve owner-unknown dia properties from free public
+    // assessor sources. GET is a dry run (the default); POST writes, ledgered
+    // and reversible by batch tag. Two jurisdictions only, by design.
+    case 'ownergap2-owner-resolve-tick': return handleOwnerGap2ResolveTick(req, res);
     default:
       return res.status(400).json({ error: 'Unknown admin route' });
   }

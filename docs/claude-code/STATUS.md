@@ -36,7 +36,7 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **CoStar sidebar / public records (PR5/PRI)** | PR5d, PR-scanner-3, PRI2–PRI6, HCRIS-TIMEOUT, HCRIS-TRACKER-BLIND, HCRIS-QIP-DEFICIENCY-TIMEOUT-PATTERN | 2026-09-15 | PR-scanner-3 shipped (`county_records_needed` action); `PRI6` (the connection-retry/ingestion-lock reliability sweep that started with `PRI1`'s dropped-connection crash) closed ✅ 2026-09-14, both sides confirmed merged — checking on it live is what surfaced `HCRIS-TIMEOUT` (a separate, months-old defect, not a `PRI6` regression). `HCRIS-TIMEOUT` is now three rounds deep: the original fix was correct, the real blocker was the tracker/heartbeat mechanism itself being blind (`HCRIS-TRACKER-BLIND`, fixed same round) — **awaiting live proof from a run Scott triggered 2026-09-15 (post-PR-#7411)**. One flagged, unbuilt follow-up already identified for whenever this closes: `qip_scores_ingestor.py`/`cms_deficiency_ingestor.py` share HCRIS's old bare-timeout bug. |
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k LIVE** (LCC PR #2506): 218 attested supersessions, 40/43 pairs to sponsor, 16/16 controls untouched, reversible; sponsor-as-edge = future work |
 | **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT | 2026-09-16 | GOVDEED4 + GOVDEED-478 live; GOVDEED5 split landed but a nightly cron re-planted 3,310 sale dates 20 min later → **GOVDEED5b** (👤 gov, six writers not three); GOVDEED3 prompted; dia clean |
-| **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, C1C-UNAPPLIED, OWNERGAP1, OWNERGAP2 | 2026-09-16 | **C1C closed both arms** (839 dia + 1,851 gov retired, reversible); gov gate fixed (SF sealed, SOS unsealed → **1,346 open `owner_needs_sos` with no consumer**); **OWNERGAP2 is the next build** (prompt written 2026-09-15, two adapters) |
+| **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, C1C-UNAPPLIED, OWNERGAP1, OWNERGAP2 | 2026-09-16 | **C1C closed both arms** (839 dia + 1,851 gov retired, reversible); gov gate fixed (SF sealed, SOS unsealed → **1,346 open `owner_needs_sos` with no consumer**); **OWNERGAP2 BUILT 2026-09-16** — Philadelphia verified against the live API at **20/26 (76.9%)**, Harris parser-only (HCAD is Cloudflare-gated), provenance CHECK-enforced; 👤 **nothing applied yet** (0 ledger rows, `recorded_owners` 7,585 / 0 ownergap2), awaiting the Railway redeploy + an operator POST |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
 | **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
 | **Broker identity (BR) / BROKER1** | BR1, BR2, BROKER1, BROKER1-sf | 2026-09-11 | BROKER1 prospect-assignment applied live (1,303 assigned) with a real bug found+fixed in production; BROKER1-sf (Salesforce write-back) correctly left unbuilt — no write path exists |
@@ -50,6 +50,83 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
 
 ---
+
+## 2026-09-16 — OWNERGAP2: the first BUILD in the owner arc; verified against the live Philadelphia API; nothing applied (Claude Code)
+
+Two adapters, as scoped. Built, tested, migration applied live, **zero owner rows written anywhere.**
+
+**Verified against the real API, not only against tests.** The sandbox has no direct egress to
+`phl.carto.com` (proxy 403), so the production matcher was run over the production query's real
+responses fetched through `pg_net` from Dialysis_DB, across the WHOLE Philadelphia population:
+**20 of 26 resolved = 76.9%**, above the 68% §8 measured by hand. 19 of the 25 that fired, plus
+property 36738 (a duplicate address of 28606, which resolved). Recovered owners include
+UNIV CITY ASSOCIATES (OPA 882000790), EPISCOPAL HOSPITAL (777012002), 3020 MARKET OPERATING LP,
+PHILA SUBURBAN, RS REALTY PARTNERS L P. **Three refusals were correct** — `3300 Henry Ave` carries
+5 distinct owning LPs, and two Walnut St properties sit inside a range holding 3–4 owners.
+
+⚠️ **THE PRESCRIBED FIX WAS INSUFFICIENT AND THE MEASUREMENT IS WHAT SHOWED IT.** §8 said the
+Philadelphia misses were *"fixed by prefix matching"*; implemented, **prefix-only resolves 16 of
+26**. It cannot see a range **containment** row (`3823 Market St` ⊂ `3817-39 MARKET ST`). Prefix +
+containment + **odd/even parity** gives 20 — and parity is load-bearing, not tidiness: `3823` falls
+inside both `3817-39` (odd) and `3816-40` (even), so without it the property returns two owners and
+a **FALSE `needs_parcel_discriminator`, which reads exactly like the safety rule working.**
+
+⚠️ **A leading directional was being eaten by the house-number regex, costing 5 of 26 as silent
+"no record".** `^(\d+)\s*(?:-\s*\d+)?\s*([A-Z])?\b` captured the `E` of `100 E. Lehigh Ave`
+as a sub-parcel letter, leaving street `LEHIGH AVE`. No error, no null — the instrument answered
+confidently. Fixed by requiring the letter be attached (`2910R`) and exempting directionals.
+
+⚠️ **THE FIRST QUERY WOULD HAVE SHIPPED A SILENT TRUNCATION.** It fetched the whole street at
+`LIMIT 100`; MARKET ST holds **1,218** parcels and WALNUT ST **1,923**. It survived a first
+verification only because that run happened to narrow to `38%MARKET ST`. Shipped: a numeric band on
+the house number, `ORDER BY … DESC` so the containing range is reachable, and an explicit
+`truncated` flag → `source_response_truncated`. Four live requests hit the 250 cap; all four still
+resolved.
+
+**Harris is `fetches: false`, decided by measurement per §2 of the prompt.** Probed live via
+`pg_net`: `search.hcad.org` → **403 Cloudflare managed challenge**, `hcad.org` → **521**,
+`public.hcad.org/records/quicksearch.asp` → **404**, `download.hcad.org` → 200 but a shell page
+with no file index. No reachable free API or enumerable bulk path, and §6 forbids automating a
+bot-protected portal. Harris therefore ships as a **parser + `Personal`/`Commercial` account-type
+discriminator over an operator-supplied payload** — never a fetcher. §9's 86% stands as a rate; it
+was never evidence the fetch is automatable.
+
+⚠️ **THE CITY OF PHILADELPHIA RECORDS `ABC INC` AS A REAL OWNER, AND THE OWNERGAP1 GUARD FLAGS
+IT.** `dia_is_fabricated_placeholder_owner('ABC INC')` → true. **The guard was NOT weakened** — one
+real name is worth less than the containment. The writer pre-checks and refuses with
+`blocked_by_fabrication_guard`, keeping the name and its citation in the ledger, surfaced on
+`v_dia_ownergap2_fabrication_guard_collisions`. Guard positive-controlled both directions the same
+day: `XYZ Dialysis Centers LLC`/`unknown` → true; `UNIV CITY ASSOCIATES`/`RALSTON MERCY-DOUGLASS
+HO` → false.
+
+⚠️ **`county ilike '%harris%'` RETURNS 52 AND TWO ARE HARRISON COUNTY** (Marshall, TX — a different
+appraisal district ~200 miles away). Harris proper is **50**, matching §9. The adapter keys on
+equality and a guard pins it.
+
+**Provenance is CHECK-enforced, and the constraints were positive-controlled in both directions.**
+`chk_ownergap2_resolved_must_cite` refused all four malformed shapes (no citation / empty
+`source_record_ids` / no `source_query` / unresolved with no cause) and **accepted** both
+well-formed shapes, inside a self-rolling-back transaction — **0 residue** afterwards. A constraint
+that only ever refuses is indistinguishable from a broken one.
+
+👤 **NOTHING IS APPLIED, AND THAT IS THE STATE TO CARRY.** GET is a dry run; no POST was issued.
+Measured at close: `dia_ownergap2_resolution_log` **0 rows** · `recorded_owners` **7,585, 0 of them
+`ownergap2*`-sourced** · properties with a `recorded_owner_id` **5,473** · `true_owner_id`
+untouched (10,308). The JS half needs the Railway redeploy before the tick exists in production
+(the migration shipped instantly — the documented half-applied-deploy split).
+
+⚠️ **Population drift, stated not reconciled:** owner-unknown is **4,014** (OWNERGAP1 said 4,021),
+`recorded_owners` **7,585** (said 7,487), owned properties **5,473** (said 5,467).
+
+Files: `api/_shared/ownergap2-{address-match,sources,owner-writeback}.js`,
+`api/_handlers/ownergap2-owner-resolve-tick.js`, migration
+`supabase/migrations/dialysis/20261010120000_dia_ownergap2_owner_resolution_ledger.sql` (applied
+live), fixtures `test/fixtures/ownergap2-live-samples.json`, guard
+`test/ownergap2-owner-resolution.test.mjs` (**55 tests, 33 mutations verified RED**). Audit §10;
+backlog `OWNERGAP2`, `OWNERGAP1-decision`.
+
+---
+
 
 ## 2026-09-16 — All four rounds landed; C1C closed on both arms; GOVDEED5 was undone by a nightly cron twenty minutes after it applied (Cowork)
 
