@@ -34,14 +34,11 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **Operator funnel (OC / HP1)** | HP1, HP1-P1a, HP1-P1a-fix, HP1-P1a-dup | 2026-09-12 | HP1-P1a-fix CLOSED live (608 rows UPDATED, first-ever Salesforce UPDATE to `bd_opportunities`); HP1 P0 (Today 500 badge) fixed+deployed+verified |
 | **Ownership (OWN/RO)** | OWN-T0a–T0j, RO3, B1b, AC2/AC3/AC6–AC11 | 2026-09-12 | OWN-T0j verified end-to-end live; RO3 field-mapping design drafted; OWN-T0a/B1b/AC-series propagation work still open |
 | **CoStar sidebar / public records (PR5/PRI)** | PR5d, PR-scanner-3, PRI2–PRI6, HCRIS-TIMEOUT, HCRIS-TRACKER-BLIND, HCRIS-QIP-DEFICIENCY-TIMEOUT-PATTERN | 2026-09-16 | PR-scanner-3 shipped (`county_records_needed` action); `PRI6` closed ✅ 2026-09-14, both sides confirmed merged — checking on it live is what surfaced `HCRIS-TIMEOUT` (a separate, months-old defect, not a `PRI6` regression). `HCRIS-TIMEOUT` is now **four rounds deep, root cause finally isolated 2026-09-16**: two independent structural bugs, neither HCRIS-specific — `ingestion_tracker.start_run()` silently discards its own run id on every call (a `Prefer` header mismatch, repo-wide, also orphans every ingestion lock), and `aux_cms_tables` (step 3 of ~15) swallows its own step-timeout so the pipeline never reaches HCRIS (step ~8) at all. Fix not yet written — this round was deliberately triage-only. One flagged, unbuilt follow-up still queued: `qip_scores_ingestor.py`/`cms_deficiency_ingestor.py` share HCRIS's old bare-timeout bug, still correctly out of scope until the pipeline actually reaches that far. |
-| **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k decided: attested-only widening**, prompted; gov exposes `true_owner_attested` first, then LCC widens the gate for attested rows only (≈858), ledgered + reversible |
 | **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT | 2026-09-16 | **Arc complete through GOVDEED5b** (gov PRs #400–#405, all live; `latest_deed_*` deed-only, one writer); open: GOVDEED3 (accept gate, prompted), sale-party conflicts 1,290 are a review queue; dia clean |
-| **CoStar sidebar / public records (PR5/PRI)** | PR5d, PR-scanner-3, PRI2–PRI6, HCRIS-TIMEOUT, HCRIS-TRACKER-BLIND, HCRIS-QIP-DEFICIENCY-TIMEOUT-PATTERN | 2026-09-15 | PR-scanner-3 shipped (`county_records_needed` action); `PRI6` (the connection-retry/ingestion-lock reliability sweep that started with `PRI1`'s dropped-connection crash) closed ✅ 2026-09-14, both sides confirmed merged — checking on it live is what surfaced `HCRIS-TIMEOUT` (a separate, months-old defect, not a `PRI6` regression). `HCRIS-TIMEOUT` is now three rounds deep: the original fix was correct, the real blocker was the tracker/heartbeat mechanism itself being blind (`HCRIS-TRACKER-BLIND`, fixed same round) — **awaiting live proof from a run Scott triggered 2026-09-15 (post-PR-#7411)**. One flagged, unbuilt follow-up already identified for whenever this closes: `qip_scores_ingestor.py`/`cms_deficiency_ingestor.py` share HCRIS's old bare-timeout bug. |
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k LIVE** (LCC PR #2506): 218 attested supersessions, 40/43 pairs to sponsor, 16/16 controls untouched, reversible; sponsor-as-edge = future work |
-| **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT | 2026-09-16 | **Arc complete through GOVDEED5b** (gov PRs #400–#405, all live; `latest_deed_*` deed-only, one writer); open: GOVDEED3 (accept gate, prompted), sale-party conflicts 1,290 are a review queue; dia clean |
-| **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, OWNERGAP2-harris-b, MCP1 | 2026-09-16 | 20 Philadelphia owners live; MCP1 live; **Harris stage seeded (37 rows), matcher queries the wrong street shape → harris-b**; 1,346 `owner_needs_sos` still the feed |
+| **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, OWNERGAP2-harris-b, MCP1 | 2026-09-16 | **39 assessor-sourced owners live** (Philadelphia 20 + Harris 19, batch `ownergap2_harris_tx_20260916`); harris-b merged (PR #2531); 41 Harris still open → **H6 full-roll load**; MCP1 live; 1,346 `owner_needs_sos` still the feed |
 | **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS1-order, FLOWS1-path, FLOWS-consolidate, HOME1, HOME2, PRI1, PRI2, DIA1, DIA1b, DIA1b-operators, ID3a-drift | 2026-09-16 | **FLOWS1-artifact live**, F1c verified; **FLOWS1-order refuted** (the race is two flows on one trigger → `FLOWS-consolidate`, Scott's call); PRI2 flag OFF → side-by-side; FLOWS1-path open |
-| **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–4, INVENTORY1, INVENTORY1b, INVENTORY-process, REMEDIATION-2026-05, FLAGS-geocode, REGISTRY-contacts-hub, REPO1 | 2026-09-16 | **INVENTORY1b done (3 rounds, DB-verified)**: 9 flags → 7 deliberate + 2 for Scott; Phase 2.3–2.6 was a stale doc (fixed); May TODOs now a backlog row; "132 untraced prompts" was an under-scoped search; loop changes applied |
+| **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–4, INVENTORY1, INVENTORY1b, INVENTORY-process, REMEDIATION-2026-05, FLAGS-geocode, REGISTRY-contacts-hub, REPO1, ROADMAP | 2026-09-16 | INVENTORY1b done (DB-verified); **backlog regrouped by category (P19 ownership evidence / P20 app & flows / P21 inventory & process)** and `docs/os/ROADMAP.md` added as the category-level live/partial/open view; CLAUDE.md pass 2 with Scott still ahead |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
 | **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
 | **Broker identity (BR) / BROKER1** | BR1, BR2, BROKER1, BROKER1-sf | 2026-09-11 | BROKER1 prospect-assignment applied live (1,303 assigned) with a real bug found+fixed in production; BROKER1-sf (Salesforce write-back) correctly left unbuilt — no write path exists |
@@ -55,6 +52,50 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
 
 ---
+
+## 2026-09-16 — Harris owners applied (19) via HCAD bulk PDATA; backlog regrouped by category; ROADMAP.md added (Cowork)
+
+**OWNERGAP2-harris-b reconciled (PR #2531, `6c97c86a`; Railway at `ac96fd45` = main).** The round did
+what the prompt asked — `harrisPdataStreetKeys()` queries HCAD's bare `str` plus `str_num` with alias
+expansion, the suffix is optional when LCC has none — and found two more real bugs on the way:
+`stageRowToLocation` was concatenating `site_addr_2/3` (city/zip) into the street text, and
+`normalizeAddress` collapsed `Northwest Fwy` to `FWY`. Against the 37 real staged rows: 24 of 25 named
+targets resolve; Little York 2711 correctly refuses (`needs_parcel_discriminator`). Crawford and Kirby
+resolved rather than refused because their non-F1/F2 accounts are excluded as untyped — that is the
+rule working, but Kirby 9001 (three accounts) is worth Scott's spot-check. Loader rewritten to stream
+(`JSZip.nodeStream()` + `readline`), `owner_name` from `owners.txt`, `mailto` → `owner_name_2`, `--dsn`
+accepted; verified on a synthetic 50k-row zip through the real decompression path — the production zip
+is still unloaded (→ H6). 19 new tests; suite 6,452/0.
+
+**Live (Cowork, Scott's go):** second dry run `jurisdiction=harris_tx`, population 50 → **19 resolved /
+31 refused** (streets outside the subset, plus real refusals — `18003 Longenbaugh Dr` refused on a
+suffix conflict because LCC holds that site as both `Rd` and `Dr`: a dia duplicate to fold). POST,
+batch `ownergap2_harris_tx_20260916` → **wrote 19**. Re-measured on Dialysis_DB: properties with a
+`recorded_owner_id` **5,494 → 5,517**; ledger 76 rows (harris 19/31, philadelphia 20/6); every Harris
+source cites its HCAD account; TX `true_owner_id` fingerprint `8810c66e…` unchanged. **39 assessor-
+sourced owners now live; 41 Harris targets wait on the full-roll load (checklist H6).**
+
+**Scott's question — "have the inventory prompts and responses been integrated into our to-do lists
+by category?"** Honest answer: the *rows* were — every INVENTORY1/1b finding is a backlog row or a
+loop change (INVENTORY-process, REMEDIATION-2026-05, FLAGS-geocode, REGISTRY-contacts-hub) — but they
+were filed **by adjacency, not by category**: DEED/GOVDEED/C1B/C1C rows sat under §P18 *Executive
+briefs*, OWNERGAP rows under §P17 *Donna TX walkthrough*, SBN/FLOWS/INVENTORY rows under §P17 too.
+Nothing above the row level said "here is the ownership-evidence lane, here is app & flow health,
+here is process." Fixed this round: three new backlog sections — **P19 Ownership evidence** (deeds,
+owner-source conflicts, research lanes, the owner gap: 30 rows), **P20 App observations & flow
+health** (17), **P21 Inventory, process & consolidation** (7) — rows moved verbatim (747 table lines
+before and after, IDs unchanged), each with an intro that names the arc, its state, and what is
+still open. And the missing layer above the backlog: **`docs/os/ROADMAP.md`** — one screen per
+category (live / partial / open / next unit / Scott's decision), pointing at the rows. It is the
+file to read when the question is "what is the next unit of work in lane X?"; the backlog stays
+the row-level truth; CURRENT-STATE stays the measured state.
+
+**Also:** Open-threads table de-duplicated (CoStar, C2g and Deed rows each appeared twice after the
+09-15/09-16 merges; the newer line kept). CURRENT-STATE's OWNERGAP2 paragraph rewritten (it still
+said "zero rows written" and "Harris ships fetches:false"). OPERATOR-CHECKLIST: H5 ✅, H6 added
+(exact command, both credential options). `OWNERGAP2-harris-b` prompt + response → done/.
+**Next:** H6 (Scott) → third Harris dry run → apply; decisions S1–S4; PRI2 side-by-side (S1 input);
+GOVDEED3 handoff; CLAUDE.md pass 2.
 
 ## 2026-09-16 — FLOWS1-artifact live; FLOWS1-order refuted by the round — the race is two flows on one trigger, not LCC; F1c verified from the export (Cowork)
 
