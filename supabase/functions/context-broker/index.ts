@@ -16,9 +16,31 @@
 
 import { handleCors, jsonResponse, errorResponse } from "../_shared/cors.ts";
 import { opsQuery, rawQuery, pgFilterVal } from "../_shared/supabase-client.ts";
-import { authenticateUser, primaryWorkspaceId } from "../_shared/auth.ts";
+import { authenticateUser, authenticateWebhook, primaryWorkspaceId } from "../_shared/auth.ts";
 import { writeSignal, writePacketSignal } from "../_shared/signals.ts";
 import { queryParams, parseBody, isoNow, isoFuture, estimateTokens, toArray } from "../_shared/utils.ts";
+import { parseKnownIps, uaClass, ipClass, requestIp } from "../_shared/caller-class.ts";
+
+// ── EDGE-GATES1 ──────────────────────────────────────────────────────────────
+// This function's ONLY existing credential check is `authenticateUser()`, and
+// that call ALWAYS resolves a user (via `resolveFirstOwner()`) whether or not a
+// valid X-LCC-Key/Authorization header was supplied — it is a transitional
+// user-identity lookup, not a gate. So every POST route here (assemble,
+// invalidate, preassemble-nightly, weekly-intelligence-report — all writers via
+// opsQuery POST/PATCH) has been reachable with no real credential of any kind.
+// This adds the SAME log-only door COPILOT-OPEN-gate/SFENRICH-gate put on
+// ai-copilot/salesforce-enrichment: X-PA-Webhook-Secret via
+// ../_shared/auth.ts::authenticateWebhook(), reusing the shared UA/IP
+// classifier so this does not grow a third copy of it.
+//
+// CONTEXT_BROKER_AUTH_MODE:
+//   "log"     (default) — an unauthenticated write is logged as DENY-WOULD and
+//             allowed through unchanged (this ships in this mode).
+//   "enforce" — the same request gets a 401 instead of reaching a handler.
+const CONTEXT_BROKER_AUTH_MODE = (Deno.env.get("CONTEXT_BROKER_AUTH_MODE") || "log").toLowerCase();
+const CONTEXT_BROKER_KNOWN_IPS = parseKnownIps(
+  Deno.env.get("CONTEXT_BROKER_KNOWN_IPS") ?? Deno.env.get("COPILOT_KNOWN_IPS"),
+);
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -58,6 +80,16 @@ Deno.serve(async (req: Request) => {
 
   if (req.method !== "POST") {
     return errorResponse(req, `Method ${req.method} not allowed. Context broker accepts POST only.`, 405);
+  }
+
+  // EDGE-GATES1 gate — runs before every write dispatch, log-only by default.
+  if (!authenticateWebhook(req)) {
+    const ua = uaClass(req.headers.get("user-agent") || "");
+    const ip = ipClass(requestIp(req), CONTEXT_BROKER_KNOWN_IPS);
+    console.log(`[context-broker-auth] DENY-WOULD ${req.method} ${new URL(req.url).pathname} ${ua} ${ip}`);
+    if (CONTEXT_BROKER_AUTH_MODE === "enforce") {
+      return errorResponse(req, "unauthorized", 401);
+    }
   }
 
   // Authenticate

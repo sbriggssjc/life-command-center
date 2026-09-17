@@ -13,8 +13,19 @@
 
 import { handleCors, jsonResponse, errorResponse } from "../_shared/cors.ts";
 import { opsQuery, pgFilterVal } from "../_shared/supabase-client.ts";
-import { authenticateUser, primaryWorkspaceId } from "../_shared/auth.ts";
+import { authenticateUser, authenticateWebhook, primaryWorkspaceId } from "../_shared/auth.ts";
 import { queryParams, parseBody, isoNow, toArray } from "../_shared/utils.ts";
+import { parseKnownIps, uaClass, ipClass, requestIp } from "../_shared/caller-class.ts";
+
+// ── EDGE-GATES1 ──────────────────────────────────────────────────────────────
+// `authenticateUser()` always resolves a transitional user regardless of the
+// credential supplied (same finding as context-broker/template-service), so
+// `outlook-message` (inserts inbox_items) had no real gate. Log-only door,
+// same pattern as the rest of this arc.
+const INTAKE_RECEIVER_AUTH_MODE = (Deno.env.get("INTAKE_RECEIVER_AUTH_MODE") || "log").toLowerCase();
+const INTAKE_RECEIVER_KNOWN_IPS = parseKnownIps(
+  Deno.env.get("INTAKE_RECEIVER_KNOWN_IPS") ?? Deno.env.get("COPILOT_KNOWN_IPS"),
+);
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -98,6 +109,16 @@ Deno.serve(async (req: Request) => {
 
   if (req.method !== "POST") {
     return errorResponse(req, `Method ${req.method} not allowed`, 405);
+  }
+
+  // EDGE-GATES1 gate — runs before every POST dispatch, log-only by default.
+  if (!authenticateWebhook(req)) {
+    const ua = uaClass(req.headers.get("user-agent") || "");
+    const ip = ipClass(requestIp(req), INTAKE_RECEIVER_KNOWN_IPS);
+    console.log(`[intake-receiver-auth] DENY-WOULD ${req.method} ${new URL(req.url).pathname} ${ua} ${ip}`);
+    if (INTAKE_RECEIVER_AUTH_MODE === "enforce") {
+      return errorResponse(req, "unauthorized", 401);
+    }
   }
 
   const user = await authenticateUser(req);
