@@ -5,7 +5,7 @@ systems the repo cannot reach (Power Automate, Salesforce), payloads only a huma
 decisions that are Scott's. Cowork adds a row when a round ends on one of these; Scott ticks it; Cowork
 verifies and removes it in the next turn. Done rows are struck through and dropped after one turn.
 
-Updated 2026-09-16 (late): all three prompts merged and running; open for Scott: **D3** (merge Dialysis PR #7416), **V1** (where the gov ingest runs), decisions **S1–S5** below. Railway auto-deploys `main` (web app at `ac96fd45`); the standalone MCP
+Updated 2026-09-16 (late): S1–S5 answered (`responses/done/S1-S5 Decisions…docx`) and turned into F8, D4, three prompts and the PRI2 read; V1 answered (gov deed ingest = GitHub Actions weekly/daily, verify Mon 09-21); D3 reported done. Open for Scott: **F8**, **D4**, **R1**, and sending `DIA1c`, `FLAGS-geocode-on`, `OWNERGAP2-harris-d`. Railway auto-deploys `main` (web app at `ac96fd45`); the standalone MCP
 service has no `/version` route — Cowork verifies it by calling a tool.
 
 ## Deploys
@@ -14,8 +14,9 @@ service has no `/version` route — Cowork verifies it by calling a tool.
 |---|---|---|---|---|
 | ~~D1~~ | ✅ `daily-briefing` v26 (2026-09-16) | | | behavioural check: next briefing lists The Villages under Dialysis |
 | ~~D2~~ | ✅ INVENTORY1 branch merged | | | |
-| **D3** | 👤 Merge **Dialysis PR #7416** (removes the ID3d migration + pytest guard from the `Dialysis` repo; the LCC copy landed in #2539) | the doctrine: Dialysis_DB schema is recorded here, not there | GitHub → sbriggssjc/Dialysis → PR #7416 → merge | Cowork checks the file is gone from `Dialysis` main |
-| **V1** | 👤 **Where does `public_record_ingest.py` run?** GOVDEED3 (gov PR #406) changed `save_deed_record`'s accept gate; it is merged, but the gov ingestion is a Python process — if it runs on your machine or a scheduled task from a checked-out copy, pull `government-lease` main there; if it runs on a Railway/other service, redeploy it. | tell Cowork where it runs, or pull/redeploy | Cowork checks the next ingest's rejected-row log for `placeholder` reasons and that `deed_records` dateless count stops growing (5,671 on 2026-09-16) |
+| ~~D3~~ | ✅ Dialysis PR #7416 merged (Scott, 2026-09-16) | | | |
+| **D4** | 👤 **`GEOCODIO_API_KEY` into Railway** → project `handsome-luck` → `tranquil-delight` → Variables → New Variable `GEOCODIO_API_KEY` = the key (free plan at geocod.io; the gov repo's CI lists the same secret name — reuse that account if it exists). Railway redeploys on save. Do the same on the standalone MCP service only if Cowork says the geocode cron hits it (it will check). | S3: free tier, capped in code by `FLAGS-geocode-on` | Cowork runs the tick and reports `patched_geocodio` |
+| ~~V1~~ | ✅ **Answered 2026-09-16.** The Railway `public-record-ingest` service is the *Dialysis* repo's module; the gov deed writer runs from GitHub Actions (`ci.yml` daily 08:00 / weekly Mon 06:00 UTC) and checks out `main` each run — GOVDEED3 is live from the next run. Cowork verifies Mon 2026-09-21 (dateless `deed_records` inserts that day = 0). | | |
 
 ## Power Automate
 
@@ -25,6 +26,7 @@ from the exported definitions** (`SB notes/done/*.zip`, 2026-09-16). One addendu
 | # | flow | edit | why |
 |---|---|---|---|
 | ~~F1c~~ | ✅ **Done and verified from the export 2026-09-16** (`Http-Getfile(LCCGetArtifact)_20260916163609.zip`): metadata first, Size condition, content fetch in the True branch, bytes Response as specified. Test passed. | |
+| **F8** | **FLOWS-consolidate (S4 = one flow owns the lifecycle)** — click-path in `docs/setup/FLOWS-CONSOLIDATE-2026-09-16.md`: pre-check for a *Move Queue Executor* flow, copy four actions from the Hardened flow into *LCC Flagged Email Intake*'s success branch, delete its own `Move email (V2)`, re-point three expressions, test with one flagged email, turn the Hardened flow off, export into `SB notes/`. | the message is moved by two movers today (the Flagged flow and the Move Message flow) — the FLOWS1 404/PreconditionFailed class |
 
 **All seven applied and verified.** Forward the next Saturday digest into `SB notes/`; Cowork closes the counts.
 
@@ -39,13 +41,15 @@ from the exported definitions** (`SB notes/done/*.zip`, 2026-09-16). One addendu
 
 ## Decisions (Scott's)
 
+**S1–S5 answered 2026-09-16** (`responses/done/S1-S5 Decisions desktop response.docx`); each row now says what it became. One read is still open (R1).
+
 | # | decision | options | where it lands |
 |---|---|---|---|
-| **S1** | **PRI2 side-by-side** — is the new Priority list (`priority_tab_v2`) the one you would work first? | Cowork produces `docs/audits/PRI2_SIDE_BY_SIDE_2026-09.md` (top 20 of V1 vs V2 for one real day) next turn; you mark which rows you would actually work; flag ON/OFF follows your read. | backlog `PRI2` |
-| **S2** | **Operators tile** — show 21 canonical operators, 45 raw names, or "21 (+878 properties with an unresolved operator name)"? | recommended: the third — it makes ID1's fragmentation visible | backlog `DIA1b-operators` |
-| **S4** | **Two flows on one trigger** — *Flagged Email Intake* and *Outlook Intake to Teams* both fire on "email flagged" and race on the same message (the FLOWS1 404s). Keep both with F2/F3 ordering, fold the Teams card into the intake flow, or make one the only trigger? | recommended: (b) one flow owns the message lifecycle — a later Power Automate edit, not urgent now that F2/F3 hold | backlog `FLOWS-consolidate` |
-| **S3** | **Geocoding flags** — `GEOCODIO_API_KEY` / `GOOGLE_MAPS_API_KEY` are OFF with no reason recorded | turn one on with a monthly cap, or record "off by decision" | backlog `FLAGS-geocode` |
-| **S5** | **HCAD class C2 accounts** — two open Harris clinics sit on accounts HCAD classes **C2** (Texas PTAD "vacant commercial lot"): `380 E Little York Rd` → `380 LITTLE YORK LLC`, `10311 S Post Oak Rd` → `LUEL PARTNERSHIP LTD`. The load and matcher are F1/F2 only by the OWNERGAP2-harris prompt's rule. | (a) allow C2 when the situs matches exactly (the owner LLC is named for the address in one case), or (b) keep F1/F2 and leave them for a parcel-discriminator pass | harris-c built the switch on the loader and matcher; **if (a):** one small prompt wires an `include_classes` parameter on the tick and Cowork re-stages with `--include-classes C2` and runs the dry run; **if (b):** nothing more to build |
+| ~~S1~~ → **R1** | 📄 **The side-by-side exists now: `docs/audits/PRI2_SIDE_BY_SIDE_2026-09-16.md`.** Mark each of the 40 rows work / skip / ?, then say one of: ON as is · ON with reason-first order · stay OFF. | your read, in chat or in the file | backlog `PRI2` (→ `PRI2-order` / `PRI2-on`) |
+| ~~S2~~ | ✅ **One operator identity everywhere**; canonical count is the only number; the 878 unresolved are the work | → `prompts/DIA1c-…md` (send) | backlog `DIA1c` |
+| ~~S4~~ | ✅ **(b) one flow owns the lifecycle** | → **F8** above (your edit, step by step) | backlog `FLOWS-consolidate` |
+| ~~S3~~ | ✅ **Free tier on** (Geocodio 2,500/day, capped in code; Google stays off) | → **D4** above + `prompts/FLAGS-geocode-on-…md` (send) | backlog `FLAGS-geocode-on` |
+| ~~S5~~ | ✅ **(a) with an exact-situs rule** — C2 accounts staged (98,804 rows now) | → `prompts/OWNERGAP2-harris-d-…md` (send); Cowork runs the C2 dry run after merge | backlog `OWNERGAP2-harris-d` |
 
 ## Housekeeping
 

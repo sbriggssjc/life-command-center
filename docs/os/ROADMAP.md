@@ -25,8 +25,8 @@
 - ✅ **Live:** gov `latest_deed_*` split to deed-only with one writer (GOVDEED4/5/5b, gov PRs #400–#405); the deed accept gate conjunctive on placeholders (GOVDEED3, gov PR #406 — runtime check V1); DEED1-reconcile-2 done; the 478 manufactured conflicts dispositioned (GOVDEED-478); Salesforce research lanes retired on both databases (C1C, ledgered, reversible); the gov gate on the right arm (C1B-GOV-GATE); **39 assessor-sourced owners written** — Philadelphia 20 (city open API), Harris 19 (HCAD bulk PDATA) — every one citing its source record (OWNERGAP2, -harris, -harris-b); `get_property_context` shows dia-only properties (MCP1).
 - 🟡 **Partial:** Harris — the full HCAD roll is staged (71,282 F1/F2 accounts, 2026-09-16); **20 of 50 applied**, 2 sit on C2-class accounts (S5), **27 are house numbers HCAD does not carry as situs** — a property-identity gap (§P10a), not a matcher gap. Both defects found on the real file/apply are fixed and running (OWNERGAP2-harris-c, -ledger-order; PRs #2541, #2540).
 - 🔴 **Open:** DEED1-emptycompare, DEED1-rentrank, CANON-OWNERSHIP1 (👤 proposal ready), the `18003 Longenbaugh` Rd/Dr duplicate property surfaced by the Harris apply; 1,346 `owner_needs_sos` tasks still the feed with no other consumer.
-- ⏭️ **Next unit:** S5 (then, if (a), the tick parameter + a C2 re-stage); then the next free-bulk jurisdiction from OWNERGAP1-decision's list, same contract. The 27 situs-gap properties are the first concrete case for §P10a.
-- 👤 **Decisions:** S5 (may a C2-class HCAD account resolve on an exact situs match?); CANON-OWNERSHIP1 (who owns Dialysis_DB's schema in `CLAUDE.md`).
+- ⏭️ **Next unit:** OWNERGAP2-harris-d (S5 = (a): the tick parameter; C2 already staged) → the C2 dry run and apply; then the next free-bulk jurisdiction from OWNERGAP1-decision's list, same contract. The 27 situs-gap properties are the first concrete case for §P10a.
+- 👤 **Decisions:** CANON-OWNERSHIP1 (who owns Dialysis_DB's schema in `CLAUDE.md`).
 
 ## 2. Entity identity at the source of record (ID-series) — backlog §P0d, Open-threads *Identity / operator canonicalization* and *gov agency canonicalization*
 
@@ -52,17 +52,17 @@
 
 - ✅ **Live:** `daily-briefing` edge fn v26 (HOME1-deploy); DIA1/DIA1b (tiles verified, NPI tile → lane count, "as of"); PRI1 (bands explained); the SB-notes intake loop (`docs/claude-code/SB notes/`, `TRIAGE.md` SBN-1…11) — Scott's in-app observations become rows within a turn.
 - 🟡 **Partial:** PRI2 (Priority recomposed on `v_lcc_seller_prospect_queue`) built, **flag OFF** pending S1; HOME1 (§C fix live, §B three-lane spec unbuilt); ASC50 review workbench built and locally verified, publication pending.
-- 🔴 **Open:** HOME2 (three-lane Home, after PRI2), ID3a-drift, DIA1b-operators (S2).
-- ⏭️ **Next unit:** the PRI2 side-by-side (`docs/audits/PRI2_SIDE_BY_SIDE_2026-09.md`) so S1 can be decided on evidence; then HOME2.
-- 👤 **Decisions:** S1 PRI2 flag ON; S2 what "Operators tracked" shows (45 names vs 21 ids).
+- 🔴 **Open:** HOME2 (three-lane Home, after PRI2), ID3a-drift, **DIA1c** (one operator identity everywhere — S2 decided, prompted).
+- ⏭️ **Next unit:** Scott's read of `docs/audits/PRI2_SIDE_BY_SIDE_2026-09-16.md` (R1) → flag ON / order change; DIA1c; then HOME2.
+- 👤 **Decisions:** R1 (the PRI2 read). S2 decided: one operator identity everywhere.
 
 ## 6. Flows, intake and artifact health (Power Automate ↔ LCC) — backlog §P20, `docs/setup/POWER-AUTOMATE-FLOW-FIXES-2026-09-16.md`
 
 - ✅ **Live:** F1–F7 applied by Scott and verified from his exports; F1c (Get Artifact: metadata first, size condition, bytes for small files) verified; LCC accepts both Get-Artifact shapes and treats `too_large` as a named terminal reason with a 30-day ceiling instead of ~48 retries (FLOWS1-artifact); FLOWS1-order **refuted** — LCC does not relay the move.
 - 🟡 **Partial:** the digest has not yet cycled since the fixes — the Saturday "N flows have failed" mail into `SB notes/` is the verification.
 - 🔴 **Open:** FLOWS1-path (stale SharePoint deal-folder path writer), FLOWS1-artifact-b (size-aware skip at discovery, real backoff — low), F6 durable async version (needs an LCC callback route).
-- ⏭️ **Next unit:** triage the next digest against F1–F7; then S4.
-- 👤 **Decisions:** S4 FLOWS-consolidate — two flows on one "email flagged" trigger (which one owns the move).
+- ⏭️ **Next unit:** F8 — Scott consolidates onto *LCC Flagged Email Intake* per `docs/setup/FLOWS-CONSOLIDATE-2026-09-16.md` (S4 decided: one flow owns the lifecycle); then triage the next digest against F1–F8.
+- 👤 **Decisions:** none open; the F8 pre-check (does a Move Queue Executor flow exist?) is a fact to report, not a decision.
 
 ## 7. Market briefs & executive briefs — backlog §P18, Open-threads *Market briefs (MB/EB)*
 
@@ -108,7 +108,7 @@
 ## 14. Security & hygiene — backlog §P0s, §P9
 
 - 👤 **Decided:** credential rotation deferred until a second user is added (recorded risk acceptance with a trigger, 2026-08-29).
-- 🔴 **Open:** §P9 rows, by design at the end; FLAGS-geocode (S3 — two geocoding keys OFF with no recorded reason).
+- 🔴 **Open:** §P9 rows, by design at the end; FLAGS-geocode-on (S3 decided: Geocodio free tier on, capped; Google off by decision — prompted; D4 = the key into Railway).
 
 ## 15. Process, documentation & consolidation — backlog §P21, `docs/os/BUILD-TURN-PROTOCOL.md`, `docs/claude-code/README.md`
 

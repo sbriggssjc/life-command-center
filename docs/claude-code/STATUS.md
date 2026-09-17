@@ -35,9 +35,11 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **Ownership (OWN/RO)** | OWN-T0a–T0j, RO3, B1b, AC2/AC3/AC6–AC11 | 2026-09-12 | OWN-T0j verified end-to-end live; RO3 field-mapping design drafted; OWN-T0a/B1b/AC-series propagation work still open |
 | **CoStar sidebar / public records (PR5/PRI)** | PR5d, PR-scanner-3, PRI2–PRI6, HCRIS-TIMEOUT, HCRIS-TRACKER-BLIND, HCRIS-QIP-DEFICIENCY-TIMEOUT-PATTERN | 2026-09-16 | PR-scanner-3 shipped (`county_records_needed` action); `PRI6` closed ✅ 2026-09-14, both sides confirmed merged — checking on it live is what surfaced `HCRIS-TIMEOUT` (a separate, months-old defect, not a `PRI6` regression). `HCRIS-TIMEOUT` is now **six rounds deep**: root cause isolated 2026-09-16 (`HCRIS-TIMEOUT-4`, two structural bugs, neither HCRIS-specific), both **fixed and pushed same day** (`HCRIS-TIMEOUT-5`, `Dialysis` PR #7413, commit `226f7e3` — confirmed merged and redeployed by Scott). **A fresh post-fix run was triggered and, live-monitored to its actual stop, turned out not to be a hang at all**: `cms-ingestion` spent its full ~4h18m runtime doing real, continuous work — 6,879 properties written via a slow, unbatched `propagate_financials()`→`properties` step — then stopped within a minute of finishing that step, without ever reaching `hcris_cost_reports` or `finish_run()`. (An earlier same-day read of this as a "genuine hang" was wrong, corrected same-day.) **`HCRIS-TIMEOUT-6` (also same day) confirmed the mechanism against the deployed code**: `propagate_financials()` had the identical swallowed-`StepTimeout` bug as `aux_cms_tables` (now closed ✅, confirmed genuinely fixed by this very evidence) plus a real N+1 pattern; fixed, pushed, `Dialysis` PR #7417 — **merge status not yet confirmed by Scott**. `HCRIS-TIMEOUT` stays 🔴, six-plus rounds in, now with a fast/cheap live test available (watch the next run die at ~15 min with a real `StepTimeout` logged, instead of running for hours). ⚠️ Separately: a parallel Cowork session's merge (`8cda70b9`, "round8" STATUS/PLANNED-BACKLOG archive) silently reverted this section's `HCRIS-TIMEOUT-5` update back to its round-4 state — restored here; see the dated entry below for the recovery note. One flagged, unbuilt follow-up still queued: `qip_scores_ingestor.py`/`cms_deficiency_ingestor.py` share HCRIS's old bare-timeout bug, still correctly out of scope until the pipeline actually reaches that far. |
 | **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-reconcile-2, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT, CANON-OWNERSHIP1 | 2026-09-16 | **Arc complete through GOVDEED3** (gov PRs #400–#406; V1 = confirm the ingest runtime carries the new gate); DEED1-reconcile-2 done (LCC #2535, Dialysis #7414); CANON-OWNERSHIP1 text fixed, 👤 confirmation open; sale-party conflicts 1,290 are a review queue |
+| **CoStar sidebar / public records (PR5/PRI)** | PR5d, PR-scanner-3, PRI2–PRI6, HCRIS-TIMEOUT, HCRIS-TRACKER-BLIND, HCRIS-QIP-DEFICIENCY-TIMEOUT-PATTERN | 2026-09-16 | PR-scanner-3 shipped (`county_records_needed` action); `PRI6` closed ✅ 2026-09-14, both sides confirmed merged — checking on it live is what surfaced `HCRIS-TIMEOUT` (a separate, months-old defect, not a `PRI6` regression). `HCRIS-TIMEOUT` is now **six rounds deep**: root cause isolated 2026-09-16 (`HCRIS-TIMEOUT-4`, two structural bugs, neither HCRIS-specific), both **fixed and pushed same day** (`HCRIS-TIMEOUT-5`, `Dialysis` PR #7413, commit `226f7e3` — confirmed merged and redeployed by Scott). **A fresh post-fix run was triggered and, live-monitored to its actual stop, turned out not to be a hang at all**: `cms-ingestion` spent its full ~4h18m runtime doing real, continuous work — 6,879 properties written via a slow, likely-unbatched `facility_patient_counts`→`properties` propagation step — then stopped within a minute of finishing that step, without ever reaching `hcris_cost_reports` or `finish_run()` (tracker row still `run_status='started'`, `notes='{}'`). (An earlier same-day read of this as a "genuine hang" was wrong and is corrected in the entry below, not deleted.) `HCRIS-TIMEOUT` stays 🔴, now with a much narrower target for round 6: is that propagation step unbatched and fixable the same way `hcris_propagation` already was, and what stops execution right after it finishes. ⚠️ Separately: a parallel Cowork session's merge (`8cda70b9`, "round8" STATUS/PLANNED-BACKLOG archive) silently reverted this section's `HCRIS-TIMEOUT-5` update back to its round-4 state — restored here; see the dated entry below for the recovery note. One flagged, unbuilt follow-up still queued: `qip_scores_ingestor.py`/`cms_deficiency_ingestor.py` share HCRIS's old bare-timeout bug, still correctly out of scope until the pipeline actually reaches that far. |
+| **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-reconcile-2, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT, CANON-OWNERSHIP1 | 2026-09-16 | Arc complete through GOVDEED3 (gov #406); **the gov deed writer runs from GitHub Actions (weekly Mon 06:00 UTC) — verify 09-21 dateless = 0**; CANON-OWNERSHIP1 👤 confirmation open; sale-party conflicts 1,290 a review queue |
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k LIVE** (LCC PR #2506): 218 attested supersessions, 40/43 pairs to sponsor, 16/16 controls untouched, reversible; sponsor-as-edge = future work |
-| **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, -harris-b, -harris-c, -ledger-order, MCP1 | 2026-09-16 | **40 assessor-sourced owners live** (Philadelphia 20, Harris 20); loader + ledger-order fixes merged and running (`4fc03bbd`); Harris rest: 2 → S5 (the C2 dry run needs a tick parameter once decided), 27 situs gap (§P10a) |
-| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS1-order, FLOWS1-path, FLOWS-consolidate, HOME1, HOME2, PRI1, PRI2, DIA1, DIA1b, DIA1b-operators, ID3a-drift | 2026-09-16 | **FLOWS1-artifact live**, F1c verified; **FLOWS1-order refuted** (the race is two flows on one trigger → `FLOWS-consolidate`, Scott's call); PRI2 flag OFF → side-by-side; FLOWS1-path open |
+| **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, -harris-b/-c/-d, -ledger-order, MCP1 | 2026-09-16 | **40 assessor-sourced owners live**; S5 = (a) exact-situs; C2 staged (98,804 rows); `harris-d` prompted for the tick parameter; 27 situs gap (§P10a) |
+| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, DIA1, DIA1b, DIA1c, ID3a-drift | 2026-09-16 | **S1–S5 answered**: PRI2 side-by-side produced (Scott's read = R1); S2 → `DIA1c` (one operator identity); S4 → F8 click-path (one flow owns the lifecycle); FLOWS1-path open; Saturday digest still the F1–F7 verification |
 | **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–4, INVENTORY1, INVENTORY1b, INVENTORY-process, REMEDIATION-2026-05, FLAGS-geocode, REGISTRY-contacts-hub, REPO1, ROADMAP, PROCESS-CC-DOCS, PROCESS-MERGE-CLOBBER | 2026-09-16 | Backlog regrouped + `ROADMAP.md`; rule ⑤-CC for CC rounds; **Cowork's whole-file bundle commits clobbered a parallel merge (found by PR #2537) → commits are 3-way patches from round 17**; CLAUDE.md pass 2 with Scott ahead |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
 | **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
@@ -52,6 +54,59 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
 
 ---
+
+## 2026-09-16 — S1–S5 answered and turned into work; V1 answered from the screenshot and the gov repo; C2 accounts staged; PRI2 side-by-side produced (Cowork)
+
+**S1 — PRI2.** Scott could not find the side-by-side because it did not exist; it does now:
+`docs/audits/PRI2_SIDE_BY_SIDE_2026-09-16.md`, measured live. V1's top 20 is the oldest overdue P1 rows
+(all gov, all `lease_expiry_24mo`, next touch 668–729 days ago — a two-year-old to-do). V2's top 20 is
+the twenty most valuable in-band assets ($19.9M–$24.9M), 15 with no linked person, 8 in band only on
+value + lease (`reason_to_sell_unmeasured`); one owner overlaps. The read is Scott's; the likely
+follow-up if he says "reason first" is a one-line order change inside PRI2's no-new-score rule.
+
+**S2 — Operators.** Decision is neither 45 nor 21: **one operator identity everywhere** (US Renal =
+U.S. Renal Care), the canonical count is the only number, and the 878 unresolved operator names are
+the work, shown as such. → `DIA1c` prompt (fold onto the registry fill-blanks, evidence-backed aliases
+only, one count view consumed everywhere).
+
+**S3 — Geocoding.** "If it's free, get it working." Measured: the backfill *is* working on the keyless
+Census tier; dia 1,707 + gov 1,760 = **3,467** properties still have no lat/lng; Geocodio's free tier is
+2,500/day and the handler already calls it. → `FLAGS-geocode-on` prompt (key in Railway = D4, a hard
+daily cap in code, Google stays off by decision, registry reasons recorded).
+
+**S4 — Flows.** Option (b), one flow owns the lifecycle. Read from the two exports: both flows post
+the message to LCC (idempotent), only the Hardened one posts the card, and the message is **moved by
+two movers** (the Flagged flow's own `Move email (V2)` and the Move Message flow LCC calls after the
+card) — P120's "two movers on one transition" verbatim. Click-path written:
+`docs/setup/FLOWS-CONSOLIDATE-2026-09-16.md` (F8): copy four actions from the Hardened flow into the
+Flagged flow's success branch, delete its own move, re-point three `body('HTTP_PostIntakeMessage')`
+references, turn the Hardened flow off, export. Pre-check first: does a *Move Queue Executor* flow
+exist (P120's puller)? If so the steps change.
+
+**S5 — C2 accounts.** Scott: go with the recommendation, and the parcel must be the county's parcel.
+Recommendation recorded as **(a) with an exact-situs rule** for admitted classes. Done now: the merged
+loader re-run from the VM with `--include-classes C2` → stage **98,804** rows (F1 68,811 + F2 2,465 + C2
+27,528), 0 without an owner — and the harris-c loader worked first time on the real file, honest
+accounting and all. Still needed: the tick has no `include_classes` parameter → `OWNERGAP2-harris-d`
+prompt (parameter + exact-arm-only for C2 + `state_class` in the citation).
+
+**V1 — where the gov deed ingest runs.** The Railway service in Scott's screenshot
+(`public-record-ingest`, project `handsome-luck`) builds from **`sbriggssjc/Dialysis`** — that repo has
+its own `src/public_record_ingest.py` (no `save_deed_record`); it is the dialysis-side ingest, not the
+gov one. The gov deed writer (`save_deed_record`, GOVDEED3) runs from **GitHub Actions**
+(`.github/workflows/ci.yml`: daily 08:00 UTC `pipeline_runner --daily`, weekly Monday 06:00 UTC), which
+checks out `main` every run — so GOVDEED3 is live from its next scheduled run. Live evidence: gov
+`deed_records` inserts on 09-07 (11, 10 dateless) and 09-14 (9, 9 dateless) — Mondays, the weekly
+job — so the manufacturing was still happening pre-GOVDEED3. **Verify Monday 2026-09-21:** dateless
+inserts that day must be 0. ⚠️ The gov repo's own note says compute crons belong on Railway, not GH
+Actions (free-plan failures); the deed ingest is on GH Actions today — recorded, not changed.
+
+**D3.** Scott reports Dialysis PR #7416 merged (the removal); not verifiable from here (no GitHub
+fetch) — accepted as reported, ID3d-reconcile closed.
+
+**Next:** Scott — F8 pre-check + click-path; D4 (Geocodio key); the PRI2 read; send `DIA1c`,
+`FLAGS-geocode-on`, `OWNERGAP2-harris-d`. Cowork — after harris-d merges, the C2 dry run; Monday, the
+GOVDEED3 verification; Saturday, the digest.
 
 ## 2026-09-16 — harris-c, ledger-order and ID3d-reconcile merged and running; the C2 switch stops one step short of the tick; my own round-8 merge clobbered another session's entry — commits move to patches (Cowork)
 
