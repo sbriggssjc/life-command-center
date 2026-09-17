@@ -5,7 +5,7 @@ systems the repo cannot reach (Power Automate, Salesforce), payloads only a huma
 decisions that are Scott's. Cowork adds a row when a round ends on one of these; Scott ticks it; Cowork
 verifies and removes it in the next turn. Done rows are struck through and dropped after one turn.
 
-Updated 2026-09-16 (late): S1–S5 answered (`responses/done/S1-S5 Decisions…docx`) and turned into F8, D4, three prompts and the PRI2 read; V1 answered (gov deed ingest = GitHub Actions weekly/daily, verify Mon 09-21); D3 reported done. All three prompts merged and running (`0304aa8b`); D4 done. Open for Scott: **H8** (say "apply"), **R1** (the PRI2 read), **F8** (the flow consolidation). Railway auto-deploys `main` (web app at `ac96fd45`); the standalone MCP
+Updated 2026-09-16 (late): S1–S5 answered (`responses/done/S1-S5 Decisions…docx`) and turned into F8, D4, three prompts and the PRI2 read; V1 answered (gov deed ingest = GitHub Actions weekly/daily, verify Mon 09-21); D3 reported done. All three prompts merged and running (`0304aa8b`); D4 done. H8 applied, R1 delegated. Open for Scott: **F8** (the flow consolidation — `docs/setup/FLOWS-CONSOLIDATE-2026-09-16.md`) and sending `PRI2-on`. Railway auto-deploys `main` (web app at `ac96fd45`); the standalone MCP
 service has no `/version` route — Cowork verifies it by calling a tool.
 
 ## Deploys
@@ -16,7 +16,7 @@ service has no `/version` route — Cowork verifies it by calling a tool.
 | ~~D2~~ | ✅ INVENTORY1 branch merged | | | |
 | ~~D3~~ | ✅ Dialysis PR #7416 merged (Scott, 2026-09-16) | | | |
 | ~~D4~~ | ✅ `GEOCODIO_API_KEY` set on `tranquil-delight` (Scott, 2026-09-17); cap ledger migration applied by Cowork; first tick 120/120 by Geocodio. | | | |
-| **H8** | 👤 **Apply the C2 one** — `10311 South Post Oak` → `LUEL PARTNERSHIP LTD 2-03` (HCAD acct 0440360000028, class C2, exact situs; the other C2 candidate, 380 Little York, was refused because HCAD's account is on the *East* side). Say "apply" and Cowork POSTs with `include_classes=C2`. | reply in chat | ledger +1; properties with an owner 5,519 → 5,520 |
+| ~~H8~~ | ✅ Applied 2026-09-17 — LUEL PARTNERSHIP LTD 2-03 for `10311 S Post Oak`, ledgered (`state_class=C2`). Harris 21 of 50. | | |
 | ~~V1~~ | ✅ **Answered 2026-09-16.** The Railway `public-record-ingest` service is the *Dialysis* repo's module; the gov deed writer runs from GitHub Actions (`ci.yml` daily 08:00 / weekly Mon 06:00 UTC) and checks out `main` each run — GOVDEED3 is live from the next run. Cowork verifies Mon 2026-09-21 (dateless `deed_records` inserts that day = 0). | | |
 
 ## Power Automate
@@ -46,7 +46,7 @@ from the exported definitions** (`SB notes/done/*.zip`, 2026-09-16). One addendu
 
 | # | decision | options | where it lands |
 |---|---|---|---|
-| ~~S1~~ → **R1** | 📄 **The side-by-side exists now: `docs/audits/PRI2_SIDE_BY_SIDE_2026-09-16.md`.** Mark each of the 40 rows work / skip / ?, then say one of: ON as is · ON with reason-first order · stay OFF. | your read, in chat or in the file | backlog `PRI2` (→ `PRI2-order` / `PRI2-on`) |
+| ~~S1~~ ~~R1~~ | ✅ Delegated to Cowork 2026-09-17 → recommendation ON with reason-first order + one card per property → `prompts/PRI2-on-…md` (**send it**). | | backlog `PRI2-on` |
 | ~~S2~~ | ✅ **One operator identity everywhere**; canonical count is the only number; the 878 unresolved are the work | → `prompts/DIA1c-…md` (send) | backlog `DIA1c` |
 | ~~S4~~ | ✅ **(b) one flow owns the lifecycle** | → **F8** above (your edit, step by step) | backlog `FLOWS-consolidate` |
 | ~~S3~~ | ✅ **Free tier on** (Geocodio 2,500/day, capped in code; Google stays off) | → **D4** above + `prompts/FLAGS-geocode-on-…md` (send) | backlog `FLAGS-geocode-on` |

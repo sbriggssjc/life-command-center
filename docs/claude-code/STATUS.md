@@ -38,8 +38,8 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **CoStar sidebar / public records (PR5/PRI)** | PR5d, PR-scanner-3, PRI2–PRI6, HCRIS-TIMEOUT, HCRIS-TRACKER-BLIND, HCRIS-QIP-DEFICIENCY-TIMEOUT-PATTERN | 2026-09-16 | PR-scanner-3 shipped (`county_records_needed` action); `PRI6` closed ✅ 2026-09-14, both sides confirmed merged — checking on it live is what surfaced `HCRIS-TIMEOUT` (a separate, months-old defect, not a `PRI6` regression). `HCRIS-TIMEOUT` is now **six rounds deep**: root cause isolated 2026-09-16 (`HCRIS-TIMEOUT-4`, two structural bugs, neither HCRIS-specific), both **fixed and pushed same day** (`HCRIS-TIMEOUT-5`, `Dialysis` PR #7413, commit `226f7e3` — confirmed merged and redeployed by Scott). **A fresh post-fix run was triggered and, live-monitored to its actual stop, turned out not to be a hang at all**: `cms-ingestion` spent its full ~4h18m runtime doing real, continuous work — 6,879 properties written via a slow, likely-unbatched `facility_patient_counts`→`properties` propagation step — then stopped within a minute of finishing that step, without ever reaching `hcris_cost_reports` or `finish_run()` (tracker row still `run_status='started'`, `notes='{}'`). (An earlier same-day read of this as a "genuine hang" was wrong and is corrected in the entry below, not deleted.) `HCRIS-TIMEOUT` stays 🔴, now with a much narrower target for round 6: is that propagation step unbatched and fixable the same way `hcris_propagation` already was, and what stops execution right after it finishes. ⚠️ Separately: a parallel Cowork session's merge (`8cda70b9`, "round8" STATUS/PLANNED-BACKLOG archive) silently reverted this section's `HCRIS-TIMEOUT-5` update back to its round-4 state — restored here; see the dated entry below for the recovery note. One flagged, unbuilt follow-up still queued: `qip_scores_ingestor.py`/`cms_deficiency_ingestor.py` share HCRIS's old bare-timeout bug, still correctly out of scope until the pipeline actually reaches that far. |
 | **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-reconcile-2, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT, CANON-OWNERSHIP1 | 2026-09-16 | Arc complete through GOVDEED3 (gov #406); **the gov deed writer runs from GitHub Actions (weekly Mon 06:00 UTC) — verify 09-21 dateless = 0**; CANON-OWNERSHIP1 👤 confirmation open; sale-party conflicts 1,290 a review queue |
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k LIVE** (LCC PR #2506): 218 attested supersessions, 40/43 pairs to sponsor, 16/16 controls untouched, reversible; sponsor-as-edge = future work |
-| **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, -harris-b/-c/-d, -ledger-order, MCP1 | 2026-09-17 | **40 assessor-sourced owners live**; harris-d live, C2 dry run 1/29 (H8 = apply `10311 S Post Oak`; `380 W Little York` correctly refused — HCAD's is 380 E); 27 situs gap → §P10a is the next real unit for Harris |
-| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, DIA1, DIA1b, DIA1c, ID3a-drift | 2026-09-17 | **DIA1c live** (33 canonical operators, US Renal Care unified, 0 unresolved); PRI2 side-by-side awaits R1; F8 (flow consolidation) awaits Scott; FLOWS1-path open; Saturday digest = F1–F7 verification |
+| **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, -harris-b/-c/-d, -ledger-order, MCP1 | 2026-09-17 | **41 assessor-sourced owners live** (Philadelphia 20, Harris 21 of 50); Harris is done except the 27 situs-gap properties → §P10a is the lane's next unit; next free-bulk jurisdiction after that |
+| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift | 2026-09-17 | DIA1c live; **PRI2-on prompted** (R1 delegated: ON, reason-first order, one card per property); F8 (flow consolidation) awaits Scott; Saturday digest = F1–F7 verification |
 | **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–4, INVENTORY1, INVENTORY1b, INVENTORY-process, REMEDIATION-2026-05, FLAGS-geocode(-on), REGISTRY-contacts-hub, REPO1, ROADMAP, PROCESS-CC-DOCS, PROCESS-MERGE-CLOBBER, DEPLOY2-coverage | 2026-09-17 | **Geocodio live** (cap ledger migration had to be applied by Cowork — second merged-not-applied incident behind DEPLOY2-coverage's pending live run); commits are 3-way patches; CLAUDE.md pass 2 with Scott ahead |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
 | **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
@@ -54,6 +54,25 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
 
 ---
+
+## 2026-09-17 — H8 applied (with its ledger row this time); R1 delegated → `PRI2-on` prompt; F8 walked through (Cowork)
+
+**H8.** `POST …?jurisdiction=harris_tx&include_classes=C2`, no `batch_tag` (the tick derived
+`ownergap2_harris_tx_202609171319`) → `wrote 1`: `10311 South Post Oak` → `LUEL PARTNERSHIP LTD 2-03`,
+source `ownergap2_public_assessor:harris_tx:0440360000028`, citation `state_class = C2`. The ledger
+took the row (id 107 rows total now; harris resolved **21**) — OWNERGAP2-ledger-order's fix, seen
+working. Properties with an owner **5,523**. Harris final shape: **21 of 50 applied**, 27 situs gap
+(§P10a), 1 Longenbaugh Rd/Dr duplicate, 1 refused on a directional conflict (380 W vs E Little York).
+**41 assessor-sourced owners live.**
+
+**R1.** Scott delegated the read. Recommendation, recorded: ON, with two changes that are not a new
+score — order *measured reason before value* (today eight `reason_to_sell_unmeasured` rows sit in the
+top 20 ahead of measured debt/developer reasons) and one card per property (rows 1/17 and 5/6 of the
+side-by-side are the same property twice). → `prompts/PRI2-on-reason-first-and-one-card-per-property.md`.
+
+**F8.** Scott asked for the walk-through; it is `docs/setup/FLOWS-CONSOLIDATE-2026-09-16.md` (merged
+in round 18), nine steps, restated in chat this turn. The pre-check (a *Move Queue Executor* flow?)
+comes first.
 
 ## 2026-09-17 — DIA1c, FLAGS-geocode-on and harris-d reconciled; Geocodio live (after Cowork applied the cap migration the round had only merged); the C2 dry run resolved one and refused one for the right reason (Cowork)
 
