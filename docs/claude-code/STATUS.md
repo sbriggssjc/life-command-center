@@ -53,6 +53,50 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-17 — Round 30 (Cowork): **RECON2 unit 1 shipped — lease expiration now needs CONFIRMED evidence, never date alone; RECON1-b closes the Banning loose ends (deed task, sentinel-string fix, listing-status swap, spec trace table)**
+
+Both prompted from Round 29. Dialysis_DB (`zqzrriwuavgrquhisnoa`), applied live via Supabase MCP from
+this repo (doctrine: this repo owns Dialysis_DB schema).
+
+**RECON2 unit 1 — `20260917220000_dia_recon2_lease_expiration_confirmation_model.sql`.** Replaces
+RECON1's disabled date-only guard with a confirmed-expiration model: new `leases.expiration_state`
+(`in_term`/`expired_unconfirmed`/`expired_confirmed`/`holdover_confirmed`/`renewed_confirmed`),
+`expiration_evidence` jsonb, `expiration_state_at`. The automatic trigger
+(`dia_recon2_lease_expiration_state_guard`) sets `expired_unconfirmed` on any past-due lease and
+**never touches `is_active`**. Only `dia_recon2_confirm_lease_expired(lease_id, new_state,
+evidence_type, source, …)` may flip `is_active`, and it raises without a stated evidence_type/source.
+Backfilled all 12,839 leases: 7,632 `in_term`, 5,207 `expired_unconfirmed`, `is_active` untouched.
+Dry-run classifier `dia_recon2_classify_expired_leases()` (fan-out bug found + fixed live — a property
+can carry multiple candidate successors/CMS rows, aggregated with `min()`+`group by`) proposes a state
+per row over the 2,454 `is_active=true`-past-expiration population, verified matching that count
+exactly: **1,489 `expired_confirmed`/cms_closure, 4 `expired_confirmed`/termination_record, 1
+`expired_confirmed`/successor_lease, 960 `expired_unconfirmed`** (no holdover/renewed signal
+implemented this round — stated gap). **No fleet write of these proposals** — a 25-row sample was
+pulled for Scott to review; a fleet apply is a separate future unit.
+`dia_recon2_enqueue_expired_unconfirmed_research(false, 1000)` run for real: the top 1,000
+`expired_unconfirmed` leases by `annual_rent` now carry an `open` `pending_updates` research task
+(deliberately capped at 1,000 of 5,207, not the whole population — value-gate-the-producer doctrine).
+
+**RECON1-b.** `20260917223000_dia_recon1b_no_sentinel_party_names.sql`: R3 amendment — RECON1's own
+migration stamped `sales_transactions.buyer_name`/`seller_name = 'Not on file (pending deed)'` for
+sale 15042, a sentinel string inside a party-name column. Fixed: both NULL, new
+`buyer_name_pending_deed`/`seller_name_pending_deed boolean`, and a `CHECK` constraint that refuses
+the pattern fleet-wide — which caught a SECOND, pre-existing, unrelated violation (sale 5974,
+`'TBD (buyer unknown)'`), fixed the same way. Data fixes (not migrations, per RECON1's own
+convention): the deed-pull `pending_updates` task for sale 15042
+(`update_id=f4aa9e70-1252-40e2-800d-d0dced72b223`, `status='open'` — `'pending'` is not in
+`pending_updates_status_check`'s vocabulary, which is why RECON1's own task insert silently failed);
+listing 14798 (the listing that actually recorded the 2026-09-14 sale) → `sold`, listing 12350
+(the shell) → `superseded` — they were backwards. `docs/architecture/reconcile-property-spec.md`
+gained the Part 1 trace table RECON1's own task spec asked for and never shipped, an R3/R5 amendment
+each, and a Part 5 close-out. **Not done, deliberately:** the OM lease-abstract extraction for intake
+`e26e414f…` needs the live `intake-extractor.js`/`lease-extractor.js` service + API credentials,
+neither reachable from a SQL-only MCP session; `ownership_history` row 1275 stays orphaned pending
+the deed task above, as instructed. Branch:
+`claude/recon2-lease-expiration-confirmation-round30` (no PR opened — not asked).
+
+---
+
 ## 2026-09-17 — Round 29 (Cowork): **the app Scott uses every day is a stale Vercel build — Vercel was never retired** (`VERCEL-LIVE1`); Scott's lease rule — inactive only on *confirmed* expiration — recorded, RECON1's date-only trigger disabled live, `RECON2` unit 1 prompted; the three PA flows carry the header
 
 **Round 28 merged** (PR #2569, `44928976`). Nothing new in `responses/` or `SB notes/`.
