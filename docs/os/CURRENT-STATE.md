@@ -44,6 +44,8 @@ ledger **76 rows**, `recorded_owners` ownergap2-sourced 36 distinct, properties 
 **5,517**. Audit §10; backlog `OWNERGAP2`, `OWNERGAP2-harris`, `OWNERGAP2-harris-b`. ⚠️ Re-measure
 before quoting the old denominators: owner-unknown was **4,014** before the applies, not 4,021.
 
+**Operators are one identity everywhere (DIA1c, 2026-09-17, live on Dialysis_DB):** 33 canonical operators, `US Renal Care` one row (465 properties), 807 category/payer rows deliberately unlinked, 0 unresolved names; every operator count reads the canonical view. **Geocoding** runs Census → Geocodio (free tier, capped 2,400/UTC-day in `geocode_tier_usage`), Google off by decision; ~3,300 unplaced properties draining.
+
 **Registries repaired the same day (2026-09-16, all live on Dialysis_DB):** `broker_companies` 131 → 75 with the `;` composites collapsed and a write guard (BR1/BR3, LCC PR #2534; 661 unmatched broker firm strings queued for BR4); `leases.guarantor_id` 1 → 628 of 715 with subsidiaries kept distinct from DaVita/Fresenius and a real FK (ID3d — applied from a CC session; the migration record is now in this repo, PR #2539, with the Dialysis copy removed by #7416). On the gov side the deed accept gate is conjunctive on placeholders (GOVDEED3, gov PR #406 — the gov deed writer runs from GitHub Actions, weekly Mon 06:00 UTC / daily 08:00, so it is live from the next run; verify 09-21). The HCAD stage now also carries the C2 class (98,804 rows) for S5. On LCC Opps `email_fanout` now recovers team-roster mailboxes (MISPARSE1, PR #2533, Railway `affc5d84`).
 
 **Domain truth now competes where a registry backs it (C2k, LCC PR #2506).** The gov/dia `true_owner`

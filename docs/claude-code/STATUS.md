@@ -38,9 +38,9 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **CoStar sidebar / public records (PR5/PRI)** | PR5d, PR-scanner-3, PRI2–PRI6, HCRIS-TIMEOUT, HCRIS-TRACKER-BLIND, HCRIS-QIP-DEFICIENCY-TIMEOUT-PATTERN | 2026-09-16 | PR-scanner-3 shipped (`county_records_needed` action); `PRI6` closed ✅ 2026-09-14, both sides confirmed merged — checking on it live is what surfaced `HCRIS-TIMEOUT` (a separate, months-old defect, not a `PRI6` regression). `HCRIS-TIMEOUT` is now **six rounds deep**: root cause isolated 2026-09-16 (`HCRIS-TIMEOUT-4`, two structural bugs, neither HCRIS-specific), both **fixed and pushed same day** (`HCRIS-TIMEOUT-5`, `Dialysis` PR #7413, commit `226f7e3` — confirmed merged and redeployed by Scott). **A fresh post-fix run was triggered and, live-monitored to its actual stop, turned out not to be a hang at all**: `cms-ingestion` spent its full ~4h18m runtime doing real, continuous work — 6,879 properties written via a slow, likely-unbatched `facility_patient_counts`→`properties` propagation step — then stopped within a minute of finishing that step, without ever reaching `hcris_cost_reports` or `finish_run()` (tracker row still `run_status='started'`, `notes='{}'`). (An earlier same-day read of this as a "genuine hang" was wrong and is corrected in the entry below, not deleted.) `HCRIS-TIMEOUT` stays 🔴, now with a much narrower target for round 6: is that propagation step unbatched and fixable the same way `hcris_propagation` already was, and what stops execution right after it finishes. ⚠️ Separately: a parallel Cowork session's merge (`8cda70b9`, "round8" STATUS/PLANNED-BACKLOG archive) silently reverted this section's `HCRIS-TIMEOUT-5` update back to its round-4 state — restored here; see the dated entry below for the recovery note. One flagged, unbuilt follow-up still queued: `qip_scores_ingestor.py`/`cms_deficiency_ingestor.py` share HCRIS's old bare-timeout bug, still correctly out of scope until the pipeline actually reaches that far. |
 | **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-reconcile-2, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT, CANON-OWNERSHIP1 | 2026-09-16 | Arc complete through GOVDEED3 (gov #406); **the gov deed writer runs from GitHub Actions (weekly Mon 06:00 UTC) — verify 09-21 dateless = 0**; CANON-OWNERSHIP1 👤 confirmation open; sale-party conflicts 1,290 a review queue |
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k LIVE** (LCC PR #2506): 218 attested supersessions, 40/43 pairs to sponsor, 16/16 controls untouched, reversible; sponsor-as-edge = future work |
-| **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, -harris-b/-c/-d, -ledger-order, MCP1 | 2026-09-16 | **40 assessor-sourced owners live**; S5 = (a) exact-situs; C2 staged (98,804 rows); `harris-d` prompted for the tick parameter; 27 situs gap (§P10a) |
-| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, DIA1, DIA1b, DIA1c, ID3a-drift | 2026-09-16 | **S1–S5 answered**: PRI2 side-by-side produced (Scott's read = R1); S2 → `DIA1c` (one operator identity); S4 → F8 click-path (one flow owns the lifecycle); FLOWS1-path open; Saturday digest still the F1–F7 verification |
-| **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–4, INVENTORY1, INVENTORY1b, INVENTORY-process, REMEDIATION-2026-05, FLAGS-geocode, REGISTRY-contacts-hub, REPO1, ROADMAP, PROCESS-CC-DOCS, PROCESS-MERGE-CLOBBER | 2026-09-16 | Backlog regrouped + `ROADMAP.md`; rule ⑤-CC for CC rounds; **Cowork's whole-file bundle commits clobbered a parallel merge (found by PR #2537) → commits are 3-way patches from round 17**; CLAUDE.md pass 2 with Scott ahead |
+| **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, -harris-b/-c/-d, -ledger-order, MCP1 | 2026-09-17 | **40 assessor-sourced owners live**; harris-d live, C2 dry run 1/29 (H8 = apply `10311 S Post Oak`; `380 W Little York` correctly refused — HCAD's is 380 E); 27 situs gap → §P10a is the next real unit for Harris |
+| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, DIA1, DIA1b, DIA1c, ID3a-drift | 2026-09-17 | **DIA1c live** (33 canonical operators, US Renal Care unified, 0 unresolved); PRI2 side-by-side awaits R1; F8 (flow consolidation) awaits Scott; FLOWS1-path open; Saturday digest = F1–F7 verification |
+| **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–4, INVENTORY1, INVENTORY1b, INVENTORY-process, REMEDIATION-2026-05, FLAGS-geocode(-on), REGISTRY-contacts-hub, REPO1, ROADMAP, PROCESS-CC-DOCS, PROCESS-MERGE-CLOBBER, DEPLOY2-coverage | 2026-09-17 | **Geocodio live** (cap ledger migration had to be applied by Cowork — second merged-not-applied incident behind DEPLOY2-coverage's pending live run); commits are 3-way patches; CLAUDE.md pass 2 with Scott ahead |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
 | **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
 | **Broker identity (BR) / BROKER1** | BR1, BR2, BR3, BR4, BR5, BR1-misparse-handoff, BROKER1, BROKER1-sf | 2026-09-16 | **BR1/BR3 live** (Dialysis_DB: `broker_companies` 131 → 75, 10 ambiguous composites in review, `broker_company_id` 7.2% → 14.4%); **661 unmatched `brokers.company` strings queued = BR4's input**; BR5 display unit unbuilt; BROKER1 applied live (1,303); BROKER1-sf correctly unbuilt |
@@ -54,6 +54,59 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
 
 ---
+
+## 2026-09-17 — DIA1c, FLAGS-geocode-on and harris-d reconciled; Geocodio live (after Cowork applied the cap migration the round had only merged); the C2 dry run resolved one and refused one for the right reason (Cowork)
+
+**DIA1c (PR #2547, running on `0304aa8b`) — verified live on Dialysis_DB.** The 878 were mostly not a
+duplicate-operator problem: 807 carry `operator_class` category/payer/non_operator (Independent 683,
+Other 84, State Owned 17, Kaiser 20…) and are `operator_id = NULL` **by design** — folding them would
+count categories as companies, the opposite of S2. The real residue was 71 properties on 13 names
+that were never in the registry (Intermountain Healthcare, UPMC, Veterans Administration…) — the round
+registered them as operators rather than the review list the prompt asked for; they are health
+systems, not spelling variants, so the call is defensible and is recorded here as a deviation. The
+split Scott named was real and older than the tile: ID2a had merged the duplicate `Us Renal Care Inc`
+rows but never repointed `properties`/`tenants`/`leases`/`medicare_clinics.operator_id` onto the
+survivor. Fixed. Live now: **33 canonical operators**, `US Renal Care` one row with **465** properties
+(was three rows), `DaVita at Home` folded into DaVita, `v_dia_operator_unresolved_review` **0**, no
+property points at a merged operator. Migration in `supabase/migrations/dialysis/` here ✓ (applied live
+from the session, committed the same round — the doctrine sentence held). The tile reads the canonical
+count with an `operators_unresolved` sub-label; the DIA1b guard that pinned the old caption was
+re-pointed at the new contract.
+
+**FLAGS-geocode-on (PR #2549) + D4 — live, but not by itself.** The code shipped a per-UTC-day
+Geocodio ledger (`geocode_tier_usage`, cap 2,400, Census continues past it) and the registry
+update; the migration `20261102210000_lcc_flags_geocode_on_geocodio_daily_cap.sql` was **merged and
+not applied** — the handler reads a missing table as "0 used" (fails open toward Geocodio, by design),
+so with Scott's key in Railway the 10-minute cron had been calling Geocodio uncounted since the key
+landed. Cowork applied the migration to LCC Opps at 12:33 UTC (its own file, verbatim, from this
+repo). Then one live tick: **120 scanned / 120 patched, all by Geocodio** (Census 0 — these are the
+Census-miss long tail), `geocodio_usage_after_tick` 120. Unplaced properties so far: dia 1,707 →
+**1,639**, gov 1,760 → **1,701**; the cron will spend the rest of today's cap in ~3 hours and go
+Census-only until 00:00 UTC. ⚠️ Second incident of the class DEPLOY2 exists for, and the detector's
+live run is still "pending" (`DEPLOY2-coverage`) — noted on that row.
+
+**OWNERGAP2-harris-d (PR #2548) — the C2 dry run.** `include_classes=C2` validated against a closed
+allow-list, threaded to the matcher, echoed in the response; an admitted class resolves on the exact
+arm only (`class_admitted_requires_exact_situs`); `state_class` in the citation; 45 tests; suite
+6,510/0. Live: population 30 → **1 resolved / 29 refused**. Resolved: `10311 South Post Oak` →
+**`LUEL PARTNERSHIP LTD 2-03`** (acct `0440360000028`, C2, exact). Refused, and correctly: `380 W
+Little York` — HCAD's C2 account `380 LITTLE YORK LLC` sits at **380 E Little York Rd**, a different
+address on the other side of the freeway; the exact-situs rule Scott asked for is what kept a
+plausible-looking wrong owner out. The remaining 27 are the situs gap. **H8:** apply the one on
+Scott's go.
+
+**Also — a defect in my own tooling, found while writing this.** Since round 16 the helper that appends a
+round's outcome to a backlog row wrote the text into the State cell and then overwrote that cell with the
+new state: 20 rows on `main` (GOVDEED3, DEED1-reconcile-2, ID3d, ID3d-reconcile, the harris-c/ledger-order
+rows, the S1–S5 decision rows…) have read ✅ with **no supporting narrative** since PR #2538. The
+narratives are restored in this round from the scripts that produced them, the helper is fixed, and
+`PROCESS-ROW-CELLS` records it with a guard idea (a State change without an Item change is suspicious).
+Railway `0304aa8b` = main (all three rounds running). The HCRIS-TIMEOUT session's PR #2550
+(round 6 live proof failed overnight) landed in the same window — theirs, untouched.
+
+**Next:** H8 (say "apply"); R1 (the PRI2 read); F8 (the flow consolidation); Saturday's digest;
+Monday's GOVDEED3 check; the DEPLOY2 live run so the next unapplied migration is caught by a tool, not
+by a tick that happened to be watched.
 
 ## 2026-09-16 — S1–S5 answered and turned into work; V1 answered from the screenshot and the gov repo; C2 accounts staged; PRI2 side-by-side produced (Cowork)
 

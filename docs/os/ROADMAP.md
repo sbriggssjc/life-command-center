@@ -25,7 +25,7 @@
 - ✅ **Live:** gov `latest_deed_*` split to deed-only with one writer (GOVDEED4/5/5b, gov PRs #400–#405); the deed accept gate conjunctive on placeholders (GOVDEED3, gov PR #406 — runtime check V1); DEED1-reconcile-2 done; the 478 manufactured conflicts dispositioned (GOVDEED-478); Salesforce research lanes retired on both databases (C1C, ledgered, reversible); the gov gate on the right arm (C1B-GOV-GATE); **39 assessor-sourced owners written** — Philadelphia 20 (city open API), Harris 19 (HCAD bulk PDATA) — every one citing its source record (OWNERGAP2, -harris, -harris-b); `get_property_context` shows dia-only properties (MCP1).
 - 🟡 **Partial:** Harris — the full HCAD roll is staged (71,282 F1/F2 accounts, 2026-09-16); **20 of 50 applied**, 2 sit on C2-class accounts (S5), **27 are house numbers HCAD does not carry as situs** — a property-identity gap (§P10a), not a matcher gap. Both defects found on the real file/apply are fixed and running (OWNERGAP2-harris-c, -ledger-order; PRs #2541, #2540).
 - 🔴 **Open:** DEED1-emptycompare, DEED1-rentrank, CANON-OWNERSHIP1 (👤 proposal ready), the `18003 Longenbaugh` Rd/Dr duplicate property surfaced by the Harris apply; 1,346 `owner_needs_sos` tasks still the feed with no other consumer.
-- ⏭️ **Next unit:** OWNERGAP2-harris-d (S5 = (a): the tick parameter; C2 already staged) → the C2 dry run and apply; then the next free-bulk jurisdiction from OWNERGAP1-decision's list, same contract. The 27 situs-gap properties are the first concrete case for §P10a.
+- ⏭️ **Next unit:** H8 (apply the one C2 owner); then the 27 situs-gap properties as the first §P10a case (parcel discriminator), or the next free-bulk jurisdiction from OWNERGAP1-decision's list, same contract. The 27 situs-gap properties are the first concrete case for §P10a.
 - 👤 **Decisions:** CANON-OWNERSHIP1 (who owns Dialysis_DB's schema in `CLAUDE.md`).
 
 ## 2. Entity identity at the source of record (ID-series) — backlog §P0d, Open-threads *Identity / operator canonicalization* and *gov agency canonicalization*
@@ -52,8 +52,9 @@
 
 - ✅ **Live:** `daily-briefing` edge fn v26 (HOME1-deploy); DIA1/DIA1b (tiles verified, NPI tile → lane count, "as of"); PRI1 (bands explained); the SB-notes intake loop (`docs/claude-code/SB notes/`, `TRIAGE.md` SBN-1…11) — Scott's in-app observations become rows within a turn.
 - 🟡 **Partial:** PRI2 (Priority recomposed on `v_lcc_seller_prospect_queue`) built, **flag OFF** pending S1; HOME1 (§C fix live, §B three-lane spec unbuilt); ASC50 review workbench built and locally verified, publication pending.
-- 🔴 **Open:** HOME2 (three-lane Home, after PRI2), ID3a-drift, **DIA1c** (one operator identity everywhere — S2 decided, prompted).
-- ⏭️ **Next unit:** Scott's read of `docs/audits/PRI2_SIDE_BY_SIDE_2026-09-16.md` (R1) → flag ON / order change; DIA1c; then HOME2.
+- ✅ **Live (new):** DIA1c — 33 canonical operators, one `US Renal Care`, 0 unresolved; the Operators tile reads the canonical count.
+- 🔴 **Open:** HOME2 (three-lane Home, after PRI2), ID3a-drift.
+- ⏭️ **Next unit:** Scott's read of `docs/audits/PRI2_SIDE_BY_SIDE_2026-09-16.md` (R1) → flag ON / order change; then HOME2.
 - 👤 **Decisions:** R1 (the PRI2 read). S2 decided: one operator identity everywhere.
 
 ## 6. Flows, intake and artifact health (Power Automate ↔ LCC) — backlog §P20, `docs/setup/POWER-AUTOMATE-FLOW-FIXES-2026-09-16.md`
@@ -94,7 +95,7 @@
 
 ## 12. Data coherence & known defects — backlog §P0d, §P10, §P10a, §P14, §P21
 
-- ✅ **Live:** the DEPLOY2 unapplied-migration detector (its first real catch was C1C-UNAPPLIED); doc guards in CI (STATUS header/line budget, backlog ID uniqueness, table shape).
+- ✅ **Live:** the DEPLOY2 unapplied-migration detector (its first real catch was C1C-UNAPPLIED — but its coverage fix has not had a live run, and it missed the geocode cap migration on 2026-09-17); doc guards in CI (STATUS header/line budget, backlog ID uniqueness, table shape).
 - ✅ **Live (new):** MISPARSE1 — `email_fanout` split by mailbox genericness, 4 → 9 of 12 real brokers recovered on the live fixture.
 - 🔴 **Open:** REMEDIATION-2026-05 (the May TODOs, now rows, DB-verified); §P10 sized unfixed defects; BR1-misparse-handoff / titleparse / fp (the rest of the contact-guard family); the Longenbaugh duplicate (lane 1); **the 27 Harris situs-gap properties are the first concrete §P10a case**.
 - 📐 **Designed:** cross-lane property identity / address resolution (§P10a) — the Harris street-shape bugs are the same class, solved lane-locally again.
@@ -108,7 +109,8 @@
 ## 14. Security & hygiene — backlog §P0s, §P9
 
 - 👤 **Decided:** credential rotation deferred until a second user is added (recorded risk acceptance with a trigger, 2026-08-29).
-- 🔴 **Open:** §P9 rows, by design at the end; FLAGS-geocode-on (S3 decided: Geocodio free tier on, capped; Google off by decision — prompted; D4 = the key into Railway).
+- ✅ **Live (new):** Geocodio tier on, capped 2,400/day in a ledger; Google off by decision; ~3,300 unplaced properties draining at ~120 per 10-minute tick.
+- 🔴 **Open:** §P9 rows, by design at the end.
 
 ## 15. Process, documentation & consolidation — backlog §P21, `docs/os/BUILD-TURN-PROTOCOL.md`, `docs/claude-code/README.md`
 
