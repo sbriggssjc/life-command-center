@@ -100,9 +100,9 @@
 
 - ✅ **Live:** the DEPLOY2 unapplied-migration detector (first real catch C1C-UNAPPLIED; its coverage fix has not had a live run, and it missed the geocode-cap and PRI2-on migrations on 2026-09-17 — the loop now checks migrations by hand until it does — `DEPLOY2-live` ran 2026-09-17: 149 objects / 0 unapplied, and a CI job now runs on every merge); doc guards in CI (STATUS header/line budget, backlog ID uniqueness, table shape).
 - ✅ **Live (new):** MISPARSE1 — `email_fanout` split by mailbox genericness, 4 → 9 of 12 real brokers recovered on the live fixture.
-- 🔴 **Open:** **RECON1** (prompted 2026-09-17 — one clinic as three `properties` rows with listings, sales, leases and owners that never reconcile; the post-ingest `reconcile_property()` is §P10a's first build); REMEDIATION-2026-05 (the May TODOs, now rows, DB-verified); §P10 sized unfixed defects; BR1-misparse-handoff / titleparse / fp (the rest of the contact-guard family); the Longenbaugh duplicate (lane 1); the 27 Harris situs-gap properties (same class as RECON1).
+- 🔴 **Open:** **RECON2** (the fleet `reconcile_property()` build from RECON1's merged spec — 2,454 expired-but-active leases, 235 unattributed Northmarq sales, ~75 duplicate-address candidates; waits on Scott's holdover rule) and **RECON1-b** (Banning residue: deed task never created, sentinel party name, listing status swap, trace table, lease abstract); RECON1 itself merged + reconciled 2026-09-17 (was: prompted 2026-09-17 — one clinic as three `properties` rows with listings, sales, leases and owners that never reconcile; the post-ingest `reconcile_property()` is §P10a's first build); REMEDIATION-2026-05 (the May TODOs, now rows, DB-verified); §P10 sized unfixed defects; BR1-misparse-handoff / titleparse / fp (the rest of the contact-guard family); the Longenbaugh duplicate (lane 1); the 27 Harris situs-gap properties (same class as RECON1).
 - 📐 **Designed:** cross-lane property identity / address resolution (§P10a) — the Harris street-shape bugs are the same class, solved lane-locally again.
-- ⏭️ **Next unit:** RECON1 (Scott's "one accurate view" ask, with the deterministic reconciler first and a local model only for the fuzzy tail); then BR1-misparse-handoff.
+- ⏭️ **Next unit:** RECON2 + RECON1-b as one prompt once the holdover rule is answered (was RECON1 — Scott's "one accurate view" ask, with the deterministic reconciler first and a local model only for the fuzzy tail); then BR1-misparse-handoff.
 
 ## 13. Consumption layer & multi-party ownership — backlog §P1a, §P1b, §P1c
 
@@ -113,14 +113,14 @@
 
 - 👤 **Decided:** credential rotation deferred until a second user is added (recorded risk acceptance with a trigger, 2026-08-29).
 - ✅ **Live (new):** Geocodio tier on, capped 2,400/day in a ledger; Google off by decision; ~3,300 unplaced properties draining at ~120 per 10-minute tick.
-- ✅ **Live (new):** EDGE-GATES1 — eight more Dialysis_DB edge functions log-gated with the shared helper (16 of 16 ungated-or-gated now reviewed); Q1 fixed (second calendar flow), `ai-copilot` enforce clock runs to 2026-09-20.
+- ✅ **Live (new):** EDGE-GATES1 — eight more Dialysis_DB edge functions log-gated with the shared helper (16 of 16 ungated-or-gated now reviewed); Q1 fixed (second calendar flow), `ai-copilot` enforce clock: restarted round 28 — `/sync/activities` still `DENY-WOULD` (20:01 UTC 09-17); three flows need the header; PL-14 caller derived = the retired Vercel project.
 - 🔴 **Open:** EDGE-GATES1-b (calendar shim drift, four zero-traffic callers, caldav-push destructive routes, `/calendar-ics-sync` and `POST /chat node other` callers unnamed); §P9 rows, by design at the end.
 - ⏭️ **Next unit:** the `ai-copilot` enforce flip on 2026-09-20 if the log stays clean and PL-14 is named; then EDGE-GATES1-b.
 
 ## 15. Process, documentation & consolidation — backlog §P21, `docs/os/BUILD-TURN-PROTOCOL.md`, `docs/claude-code/README.md`
 
 - ✅ **Live:** the prompt → response → reconcile loop with STATUS/backlog/CURRENT-STATE kept current each turn; SB-notes intake (④); leak-class rules (⑤); INVENTORY1/1b done; CLAUDE.md pass 1 (5,503 → 3,268 lines, rounds archived verbatim); backlog regrouped by category (P19/P20/P21); this file; rule ⑤-CC (a CC round appends and updates its own row, never restates); Cowork commits as 3-way patches, not whole-file copies (PROCESS-MERGE-CLOBBER).
-- 🔴 **Open:** **GUARD-CLOBBER1** (prompted 2026-09-17 after PR #2563 silently reverted STATUS + the backlog to a week-old snapshot — the second clobber; restored by hand, the CI guard from round 17 was never built); the **Scott's queue** (checklist Q1–Q28 — 67 backlog rows that were waiting on him and were mirrored nowhere; tiers A–B are the ones to clear first); INVENTORY2 (ghosts, root-report internals, history prose); CLAUDE.md pass 2 (with Scott: which doctrines merge); INVENTORY-process items not yet exercised by a full cycle.
+- 🔴 **Open:** ~~GUARD-CLOBBER1~~ ✅ live on `main` 2026-09-17 (PR #2566) (was: prompted 2026-09-17 after PR #2563 silently reverted STATUS + the backlog to a week-old snapshot — the second clobber; restored by hand, the CI guard from round 17 was never built); the **Scott's queue** (checklist Q1–Q28 — 67 backlog rows that were waiting on him and were mirrored nowhere; tiers A–B are the ones to clear first); INVENTORY2 (ghosts, root-report internals, history prose); CLAUDE.md pass 2 (with Scott: which doctrines merge); INVENTORY-process items not yet exercised by a full cycle.
 - ⏭️ **Next unit:** CLAUDE.md pass 2 in chat; re-cut this file after each lane closes a unit.
 
 ## 16. Not on the roadmap by decision — backlog §P11 (new verticals, design-only), §P12 (excluded), §P13 (decision forks)

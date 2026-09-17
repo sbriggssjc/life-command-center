@@ -37,8 +37,8 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-reconcile-2, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT, CANON-OWNERSHIP1 | 2026-09-16 | Arc complete through GOVDEED3 (gov #406); **the gov deed writer runs from GitHub Actions (weekly Mon 06:00 UTC) — verify 09-21 dateless = 0**; CANON-OWNERSHIP1 👤 confirmation open; sale-party conflicts 1,290 a review queue |
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k LIVE** (LCC PR #2506): 218 attested supersessions, 40/43 pairs to sponsor, 16/16 controls untouched, reversible; sponsor-as-edge = future work |
 | **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, -harris-b/-c/-d, -ledger-order, MCP1 | 2026-09-17 | **41 assessor-sourced owners live** (Philadelphia 20, Harris 21 of 50); Harris is done except the 27 situs-gap properties → §P10a is the lane's next unit; next free-bulk jurisdiction after that |
-| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS-consolidate-lcc, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift, RECON1 | 2026-09-17 | PRI2-on live; HOME2 built, flag OFF → HOME2-on; F8/F8-b done; DIA1c live; **SBN-12 (Banning clinic as three properties) → `RECON1` prompted — the post-ingest reconciler**; Saturday digest verifies F1–F8 |
-| **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–4, INVENTORY1, INVENTORY1b, INVENTORY2, INVENTORY-process, REMEDIATION-2026-05, REPO1, ROADMAP, PROCESS-CC-DOCS, PROCESS-MERGE-CLOBBER, GUARD-CLOBBER1, PROCESS-ROW-CELLS, PROCESS-PARKING-LOT, DEPLOY2-coverage, DEPLOY2-stale-body | 2026-09-17 | **PR #2563 reverted STATUS + backlog to a week-old snapshot (7 entries / 11 rows lost) — restored round 26; `GUARD-CLOBBER1` prompted**; DEPLOY2 live + CI; parking lot triaged; EDGE-GATES1 live |
+| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS-consolidate-lcc, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift, RECON1, RECON1-b, RECON2 | 2026-09-17 | PRI2-on live; HOME2 built, flag OFF → HOME2-on; F8/F8-b done; DIA1c live; **SBN-12 (Banning clinic) → `RECON1` merged + reconciled: one property, off Available; residue `RECON1-b` (deed task never created, sentinel party name); fleet reconciler = `RECON2`, waiting on Scott's holdover rule**; Saturday digest verifies F1–F8 |
+| **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–4, INVENTORY1, INVENTORY1b, INVENTORY2, INVENTORY-process, REMEDIATION-2026-05, REPO1, ROADMAP, PROCESS-CC-DOCS, PROCESS-MERGE-CLOBBER, GUARD-CLOBBER1, PROCESS-ROW-CELLS, PROCESS-PARKING-LOT, DEPLOY2-coverage, DEPLOY2-stale-body | 2026-09-17 | **PR #2563 reverted STATUS + backlog to a week-old snapshot (7 entries / 11 rows lost) — restored round 26; `GUARD-CLOBBER1` live on `main` (PR #2566), manual per-turn diff retired round 28**; DEPLOY2 live + CI; parking lot triaged; EDGE-GATES1 live |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
 | **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
 | **Broker identity (BR) / BROKER1** | BR1, BR2, BR3, BR4, BR4-b, BR5, BR1-misparse-handoff, BROKER1, BROKER1-sf | 2026-09-17 | **BR4 live**: 3 true duplicates merged, 52 firms minted with evidence, `broker_company_id` 14.4% → **25.0%** (641/2,566); residue → BR4-b (123 firm-shaped broker rows, 468 review); BR5 display next |
@@ -52,6 +52,63 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
 
 ---
+
+## 2026-09-17 — Round 28 (Cowork): `RECON1` + `GUARD-CLOBBER1` reconciled against live state — Banning is one property and off *Available*, but the deed task was never created and "Not on file" was stored as a party name (`RECON1-b`); fleet reconciler filed (`RECON2`); Q1 clock restarts — `/sync/activities` still `DENY-WOULD`; PL-14 caller traced to AWS Ashburn (derived: the retired Vercel project)
+
+**Clobber check first (the last manual one).** `STATUS.md` `## ` headings and backlog row ids at the round-27
+merge (`20dd3ae0`) vs `origin/main` (`a5ae7d17`): identical. The only change since is PR #2567 (3 files: spec,
+migration, test). `GUARD-CLOBBER1` is on `main`, in `test-suite.yml` on both paths and in the commit script, so
+the per-turn manual diff is retired.
+
+**`GUARD-CLOBBER1` (PR #2566, merged `cef6e0c4`) — reconciled ✅.** `test/doc-clobber-guard.test.mjs` exists
+on `main`; workflow lines 57/146; the round wrote its own STATUS entry and row (below). No `Parked:` section.
+
+**`RECON1` (PR #2567, merged `a5ae7d17`) — reconciled 🟡.** Step 4a: the migration's objects exist live on
+Dialysis_DB (`dia_recon1_run_log`, `dia_recon1_reconcile_banning_clinic`, the lease guard function + trigger,
+enabled); ledger batch `recon1_banning_apply1` = 7 rows. Measured after-state: properties 35786 and 51228 are
+gone into **29894** (reversible, backups 594/595); the clinic has **0 active listings** (12350 / 14798 / 15146
+off-market 2026-09-14 → sale 15042; 9499 `withdrawn`, was a false `sold`); lease 23211 inactive; sale 15042
+carries `listing_broker_id = 1373`. Spec merged: `docs/architecture/reconcile-property-spec.md`, R1–R7 with
+existing-vs-new per rule. Blast radius re-measured: leases active past expiration **2,454** (round said 2,455),
+Northmarq sales with no broker id **235** (same), same-property active-listing-after-sale **0** (the spec says
+why that zero is structural: the twin rows hide it until R1 runs), range/suffix duplicate candidates ~75
+(round's figure, not re-measured).
+
+**What the summary did not say (found in the ledger and the rows):**
+1. **The deed task does not exist.** The summary says "plus a task to pull the deed"; the ledger says
+   `task_insert_failed` — `pending_updates_status_check`. Nothing is asking anyone to pull the Banning deed.
+2. **"Not on file (pending deed)" was written into `buyer_name` and `seller_name`** on sale 15042. The standing
+   rule is that an empty value *renders* as "Not on file"; stored, it is a string every reader of those columns
+   can take for a party. Measured: 1 sale, 0 owners minted from it yet.
+3. After the fold, **Scott's own listing 14798 reads `superseded` and the OM shell listing 12350 reads `sold`.**
+4. The part-1 **trace table was not delivered** (not in the response, not in the spec).
+5. The OM's lease abstract is still not a lease on the property (declared by the round — no model in a
+   migration); 29894 now shows **no active lease** behind a 3.70% cap sale.
+6. The lease trigger is **fleet-wide and unledgered**: it will flip `is_active` on any of the 2,454 rows the
+   next time a writer touches one. Correct direction, silent mechanism, and a dialysis lease past expiration is
+   often a real holdover — 0 rows are flagged `holdover` today.
+7. Process: the round wrote **no STATUS entry and no row edit** (⑤-CC) and no `Parked:` section. No clobber.
+→ rows **`RECON1-b`** (1–5, filed) and **`RECON2`** (the fleet build; 6 is its first decision). Nothing was
+hand-fixed from Cowork: each is a write through owned machinery.
+
+**Q1 (`ai-copilot` enforce) — the log is not clean.** 24 h re-read at 20:30 UTC: `/sync/calendar-events`
+last `DENY-WOULD` 18:26, the 19:27 slot silent ✓. But `/sync/activities` fired `DENY-WOULD` at **20:01 UTC**;
+`/sync/sf-tasks` (last 15:00) and `/sync/flagged-emails` (11:32) have not fired since the fix, and nothing
+suggests they carry the header. The three-day clock runs from the last `DENY-WOULD` on any route, so
+**2026-09-20 evening no longer holds** until those three flows send the header → checklist Q1.
+**PL-14:** `POST /chat node other` again at 19:19:39 UTC. Edge log for that request: UA `node`, network Amazon
+Ashburn, **400**. Railway shows as org `Railway`/Santa Clara in the same log — not Railway. **Derived:** the
+Vercel project retired 2026-07-20 is still deployed (`.vercel/project.json`, Node 24; Vercel = AWS us-east-1;
+Node fetch UA = `node`) and something still calls it. Confirmation is Scott's (Vercel dashboard) → checklist Q1.
+
+**HOME2-on:** flag still ON; Scott's description of the three-lane Home not received this turn — row unchanged.
+
+**Parking lot:** +PL-17…20, all triaged on entry (Q1/EDGE-GATES1-b, RECON1-b, RECON2, a process note). No open
+lines; none older than seven days. Next free: PL-21.
+
+**Open for Scott:** (1) the header on the three remaining flows; (2) is Vercel still up; (3) RECON2's holdover
+rule — expired-but-active dialysis lease = inactive, or `holdover` when CMS still shows the clinic operating
+there; (4) what the three-lane Home looks like.
 
 ## 2026-09-17 — Round 27 (Cowork, short): Q29 answered; `home_three_lanes` turned ON for the look; no Settings panel for flags exists (SETTINGS-FLAGS1)
 
