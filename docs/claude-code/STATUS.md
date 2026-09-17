@@ -37,7 +37,7 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-reconcile-2, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT, CANON-OWNERSHIP1 | 2026-09-16 | Arc complete through GOVDEED3 (gov #406); **the gov deed writer runs from GitHub Actions (weekly Mon 06:00 UTC) — verify 09-21 dateless = 0**; CANON-OWNERSHIP1 👤 confirmation open; sale-party conflicts 1,290 a review queue |
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k LIVE** (LCC PR #2506): 218 attested supersessions, 40/43 pairs to sponsor, 16/16 controls untouched, reversible; sponsor-as-edge = future work |
 | **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, -harris-b/-c/-d, -ledger-order, MCP1 | 2026-09-17 | **41 assessor-sourced owners live** (Philadelphia 20, Harris 21 of 50); Harris is done except the 27 situs-gap properties → §P10a is the lane's next unit; next free-bulk jurisdiction after that |
-| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS-consolidate-lcc, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift, RECON1, RECON1-b, RECON2, VERCEL-LIVE1 | 2026-09-17 | PRI2-on live; HOME2 built, flag OFF → HOME2-on; F8/F8-b done; DIA1c live; **SBN-12 (Banning clinic) → `RECON1` merged + reconciled: one property, off Available; residue `RECON1-b` (deed task never created, sentinel party name); `RECON2` unit 1 prompted on Scott's rule (inactive only on confirmed expiration); **Scott's app window is a stale Vercel build → `VERCEL-LIVE1`, HOME2 look waits on it**; Saturday digest verifies F1–F8 |
+| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS-consolidate-lcc, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift, RECON1, RECON1-b, RECON2, RECON2-b, RECON2-render, HOME2-fix, VERCEL-LIVE1 | 2026-09-17 | PRI2-on live; HOME2 built, flag OFF → HOME2-on; F8/F8-b done; DIA1c live; **SBN-12 (Banning clinic) → `RECON1` merged + reconciled: one property, off Available; residue `RECON1-b` (deed task never created, sentinel party name); `RECON2` unit 1 prompted on Scott's rule (inactive only on confirmed expiration); **Scott's app window is a stale Vercel build → `VERCEL-LIVE1`, HOME2 look waits on it**; Saturday digest verifies F1–F8 |
 | **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–4, INVENTORY1, INVENTORY1b, INVENTORY2, INVENTORY-process, REMEDIATION-2026-05, REPO1, ROADMAP, PROCESS-CC-DOCS, PROCESS-MERGE-CLOBBER, GUARD-CLOBBER1, PROCESS-ROW-CELLS, PROCESS-PARKING-LOT, DEPLOY2-coverage, DEPLOY2-stale-body | 2026-09-17 | **PR #2563 reverted STATUS + backlog to a week-old snapshot (7 entries / 11 rows lost) — restored round 26; `GUARD-CLOBBER1` live on `main` (PR #2566), manual per-turn diff retired round 28**; DEPLOY2 live + CI; parking lot triaged; EDGE-GATES1 live |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
 | **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
@@ -52,6 +52,42 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
 
 ---
+
+## 2026-09-17 — Round 31 (Cowork): `RECON2` unit 1 reconciled — live and correct on the model, **but its "confirmed" class is wrong: 1,481 of 1,489 "CMS closure" leases sit on clinics marked operating** (no fleet write; `RECON2-b` prompted); Scott is on Railway and the three-lane Home shows nothing because **`index.html` has no `home3*` elements** (`HOME2-fix` prompted)
+
+*(Numbering: the entry below is Claude Code's RECON2 round; it titled itself "Round 30 (Cowork)". Headings are
+append-only, so it stays; this is Cowork's next round, 31.)*
+
+**RECON2 unit 1 (PR #2571, `7d83c56e`) — step 4a ✅, model ✅, classifier ❌.** Live on Dialysis_DB: columns
+`expiration_state` / `expiration_evidence` / `expiration_state_at`; four `dia_recon2_*` functions; the new
+guard trigger enabled and never touching `is_active`; RECON1's date-only trigger and function dropped.
+`is_active` past expiration = 2,454, unchanged ✓. Backfill: 7,632 `in_term`, 5,207 `expired_unconfirmed`.
+**What the reconcile found:**
+1. `cms_closure` = any clinic row on the property with `status in (removed, closed, relocated)`. `removed` is
+   **90% of `medicare_clinics`** (7,690 / 8,547). Of the 1,489 leases it "confirms", **1,481 are on a property
+   whose clinic has `is_operating = true`**, 215 with `last_seen_date` in 2026. Top by rent: lease 13217, DaVita,
+   $2.40M, expired 2026-07-31 — clinic operating. The fleet write would have been the exact harm Scott's rule
+   forbids. Nothing was written. Which of `status` / `is_operating` is right is itself **Conflict** — not
+   settled here.
+2. NULL `lease_expiration` → `in_term` (3,801 rows, 2,334 active). Unknown is not in-term.
+3. The research enqueue ran live: 1,000 open tasks, **563 on leases already inactive** (no `is_active` filter).
+4. The 25-row sample was not in the response; Cowork pulled it from the live function (rows in the RECON2-b
+   prompt's measured block).
+5. `RECON2-render` (the honest label in rent roll / comps / exhibits) not shipped — declared, row filed by CC.
+**RECON1-b verified live:** sale 15042 parties NULL + `*_pending_deed`; sentinel CHECK live (also caught sale
+5974); deed task open; 14798 `sold` / 12350 `superseded`. Open: the OM lease abstract (e).
+
+**HOME2 — Scott's look.** Railway `/version` = `main`, flag true, old Home on screen in both windows.
+`renderHomeThreeLanes()` writes to four `home3*` ids; `index.html` has none (`7d30f90e` touched only
+cache-bust strings); each renderer returns on a missing element; the tests never look at the HTML. The flag's
+one live effect is suppressing the My-Priorities fallback. Flag left ON for the second look → `HOME2-fix`.
+
+**VERCEL-LIVE1:** Scott is on Railway in Chrome and in the reinstalled desktop app. Teardown waits on the
+Vercel env-var names. **Q1:** no new `DENY-WOULD` from a flow since 20:01 UTC at this read.
+
+**Parking lot:** +PL-24…26, triaged. Next free: PL-27. Prompt + response for RECON2 moved to `done/`.
+
+**Open for Scott:** send **`RECON2-b`** and **`HOME2-fix`**; Vercel env-var names.
 
 ## 2026-09-17 — Round 30 (Cowork): **RECON2 unit 1 shipped — lease expiration now needs CONFIRMED evidence, never date alone; RECON1-b closes the Banning loose ends (deed task, sentinel-string fix, listing-status swap, spec trace table)**
 
