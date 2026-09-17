@@ -49,7 +49,8 @@ story; the backlog is the state; `docs/os/CURRENT-STATE.md` is the one-page "whe
    handoff prompt when the fix belongs to another repo (`government-lease`, `DialysisProject`) —
    handoffs say so in their header and nothing in them is applied from here.
 7. Run the doc guards (`test/status-header-integrity`, `status-line-budget`, `backlog-id-uniqueness`,
-   `backlog-table-shape`) before committing. Branch → PR → CI → merge; never push to `main`.
+   `backlog-table-shape`, `doc-clobber-guard`) before committing. Branch → PR → CI → merge; never
+   push to `main`.
 
 ## Rules that do not bend
 

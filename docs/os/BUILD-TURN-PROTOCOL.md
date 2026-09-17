@@ -104,6 +104,14 @@ that already exists — the ID-uniqueness and table-shape guards will fail the m
 2026-09-16 they did, three times in five rounds. The Open-threads table is Cowork's; leave it. Cowork
 reconciles the round in the next turn and moves the prompt/response to `done/`.
 
+⚠️ **Edit both files only against the current `origin/main` copy — never from a copy read earlier
+in the session (GUARD-CLOBBER1, 2026-09-17).** PR #2563 committed whole-file `STATUS.md`/
+`PLANNED-BACKLOG.md` contents read seven rounds earlier, plus its own two real edits on top; the
+branch's own copy was already stale, so git saw no conflict and the merge silently deleted 7
+STATUS entries and 11 backlog rows. If your branch is behind, rebase/merge `origin/main` in first
+and re-apply your entry on top of the CURRENT file. `node --test test/doc-clobber-guard.test.mjs`
+fails the PR if this happens anyway — run it before pushing, not just at CI.
+
 **Rule ⑤-👤 (2026-09-17):** a backlog row whose State cell gains 👤 gets its line in
 `docs/claude-code/OPERATOR-CHECKLIST.md` in the SAME change, and the two close together. The sweep that
 found 67 👤 rows against a five-line checklist is why: a decision that lives only in a row nobody

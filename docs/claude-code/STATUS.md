@@ -53,6 +53,23 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-17 — `GUARD-CLOBBER1` shipped (CC): a CI test that fails a PR which silently deletes STATUS entries or backlog rows
+
+`test/doc-clobber-guard.test.mjs`, wired into `.github/workflows/test-suite.yml` on both the
+docs-only-skip path and the full-suite path (a clobber is a doc-only diff by construction, so a
+guard that only ran inside the full suite would never see it). It diffs `STATUS.md` and
+`PLANNED-BACKLOG.md` at HEAD against the PR's real base sha (`GUARD_CLOBBER_BASE_SHA` =
+`github.event.pull_request.base.sha`, piped in as a workflow `env`) and fails if any `## ` STATUS
+heading, Open-threads row, or backlog row id present at the base is missing at HEAD (unless a
+heading was moved verbatim into a `docs/history/STATUS_claude-code_*.md` archive in the same
+commit), or if a backlog row's Item text became a strict prefix of what it was at the base (the
+signature of an older snapshot landing on a newer one, since the append-only loop never shortens
+a row). Verified against real history before shipping: run against base=round25/head=the pre-fix
+`70ae2e82` it goes RED with the exact 7 headings / 11 rows PR #2563 deleted; run against
+base=`70ae2e82`/head=round26's restore commit it is green. Added the same discipline note to
+`docs/os/BUILD-TURN-PROTOCOL.md` §⑤-CC and `docs/claude-code/README.md` step 7: edit both files
+only against the CURRENT `origin/main` copy, never a copy read earlier in the session.
+
 ## 2026-09-17 — Round 26 (Cowork): **PR #2563 had silently reverted STATUS and the backlog to a week-old snapshot — restored**; `EDGE-GATES1` reconciled and verified live (8 functions log-gated); Q1's second calendar flow fixed — `/sync/calendar-events` clean since 18:30 UTC; the Banning clinic note (SBN-12) traced on Dialysis_DB → `RECON1` prompted; parking lot +3
 
 **⚠️ Second doc clobber, this time from a Claude Code round — found and repaired this round.**
