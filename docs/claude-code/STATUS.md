@@ -53,6 +53,46 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-17 — Round 27 (Cowork, short): Q29 answered; `home_three_lanes` turned ON for the look; no Settings panel for flags exists (SETTINGS-FLAGS1)
+
+**Q29 (Scott):** all three `brokers` rows named Scott Briggs are him — 1373 (Northmarq; 26 available
+listings, 55 `sale_brokers` rows, one company-history row), 2076 (bare; 2 `sales_transactions`; shares
+1373's `contact_id`), 2437 (Stan Johnson Company; 4 listings, 4 sale-broker rows; own `contact_id`).
+Decision: **keep the firm attribution distinct by date** — one person, `broker_company_history` rows
+(Stan Johnson → Northmarq), so each sale attributes to the firm at the time; not a flat merge. Found on
+the way: firm **126 is named `scott briggs`** — BR4 minted a firm from his name; it belongs to Northmarq.
+Both recorded on `BR4-b`, and the same rule (same person + different firm → history row) is the rule
+for BR4-b's 120 one-linked-one-blank groups.
+
+**HOME2-on:** Scott looked for "Settings → workspace feature flags" and it does not exist — the app's
+own empty-state copy points to a panel nobody built; the only writers of
+`workspaces.config.feature_flags` are `POST /api/flags` (manager) and the database → `SETTINGS-FLAGS1`.
+Cowork set `home_three_lanes: true` on the one workspace (`a0000000-…0001`, LCC Opps, SQL `jsonb_set`;
+previous: absent → default false; `queue_v2_enabled`, `ops_pages_enabled`, `more_drawer_enabled`
+untouched). Scott's look is the next step; the flag flips back the same way if the Home is worse.
+
+**GUARD-CLOBBER1 merged meanwhile (PR #2566, `de480723`)** — `test/doc-clobber-guard.test.mjs` in `test-suite.yml`, verified red on the #2563 pair and green on the restore; its docx response is still to be filed and reconciled (row already marked shipped by the round).
+
+**Handoff:** this thread closes here; the next chat starts from the prompt in the round-27 reply
+(main `d3fa1ce2` + this round; RECON1 and GUARD-CLOBBER1 responses pending; clobber check each turn).
+
+## 2026-09-17 — `GUARD-CLOBBER1` shipped (CC): a CI test that fails a PR which silently deletes STATUS entries or backlog rows
+
+`test/doc-clobber-guard.test.mjs`, wired into `.github/workflows/test-suite.yml` on both the
+docs-only-skip path and the full-suite path (a clobber is a doc-only diff by construction, so a
+guard that only ran inside the full suite would never see it). It diffs `STATUS.md` and
+`PLANNED-BACKLOG.md` at HEAD against the PR's real base sha (`GUARD_CLOBBER_BASE_SHA` =
+`github.event.pull_request.base.sha`, piped in as a workflow `env`) and fails if any `## ` STATUS
+heading, Open-threads row, or backlog row id present at the base is missing at HEAD (unless a
+heading was moved verbatim into a `docs/history/STATUS_claude-code_*.md` archive in the same
+commit), or if a backlog row's Item text became a strict prefix of what it was at the base (the
+signature of an older snapshot landing on a newer one, since the append-only loop never shortens
+a row). Verified against real history before shipping: run against base=round25/head=the pre-fix
+`70ae2e82` it goes RED with the exact 7 headings / 11 rows PR #2563 deleted; run against
+base=`70ae2e82`/head=round26's restore commit it is green. Added the same discipline note to
+`docs/os/BUILD-TURN-PROTOCOL.md` §⑤-CC and `docs/claude-code/README.md` step 7: edit both files
+only against the CURRENT `origin/main` copy, never a copy read earlier in the session.
+
 ## 2026-09-17 — Round 26 (Cowork): **PR #2563 had silently reverted STATUS and the backlog to a week-old snapshot — restored**; `EDGE-GATES1` reconciled and verified live (8 functions log-gated); Q1's second calendar flow fixed — `/sync/calendar-events` clean since 18:30 UTC; the Banning clinic note (SBN-12) traced on Dialysis_DB → `RECON1` prompted; parking lot +3
 
 **⚠️ Second doc clobber, this time from a Claude Code round — found and repaired this round.**

@@ -53,6 +53,12 @@ on:
   push:
     branches: [main]
 
+env:
+  # Piped straight to the doc-clobber guard (GUARD-CLOBBER1) so it diffs against the PR's real
+  # base rather than guessing at merge-base from a shallow checkout. Empty on a push to main —
+  # the guard falls back to merge-base/HEAD~1 there, which is fine (main only ever fast-forwards).
+  GUARD_CLOBBER_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+
 concurrency:
   group: test-suite-${{ github.ref }}
   cancel-in-progress: true
@@ -131,6 +137,13 @@ jobs:
       - name: Conflict-marker guard (runs even when the suite is skipped)
         if: steps.scope.outputs.needs_tests != 'true'
         run: node --test test/no-conflict-markers.test.mjs
+
+      # ⚠️ SAME REASON AS THE CONFLICT-MARKER GUARD ABOVE, AND MORE SO — a STATUS.md /
+      #   PLANNED-BACKLOG.md clobber (GUARD-CLOBBER1) is a doc-only change by construction, so a
+      #   guard that only ran inside the full suite would never see the exact PRs it exists for.
+      - name: Doc-clobber guard (runs even when the suite is skipped)
+        if: steps.scope.outputs.needs_tests != 'true'
+        run: node --test test/doc-clobber-guard.test.mjs
 
       - uses: actions/setup-node@v4
         if: steps.scope.outputs.needs_tests == 'true'
