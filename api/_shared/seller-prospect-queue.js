@@ -33,16 +33,27 @@ export function resolveChip(key) {
 }
 
 /**
- * The ranked order the doctrine asks for: CLIENT VALUE first, then lease recency
+ * PRI2-on (2026-09-17) — REASON first, then client value, then lease recency
  * (years into the term ASC — the newest lease leads its value tier).
  *
- * ⚠️ `nullslast` on BOTH keys is load-bearing, and for two different reasons.
- * `rank_value` is NULL when the asset cannot be priced (P180 — never 0), and
+ * The side-by-side (docs/audits/PRI2_SIDE_BY_SIDE_2026-09-16.md) showed value-alone
+ * ordering putting 8 of the top 20 `reason_to_sell_unmeasured` rows ahead of measured
+ * debt/developer rows — big and unreasoned beating smaller and reasoned. Cowork's read
+ * on Scott's delegation: reason before value. This is a re-ORDER, not a re-score — no
+ * predicate changed, no new weight; `reason_measured` is a plain boolean column on
+ * `v_lcc_seller_prospect_queue` (PostgREST `order=` only takes real columns, not a
+ * CASE/boolean expression, so the boolean lives on the view — see the PRI2-on migration).
+ *
+ * ⚠️ `nullslast` on `rank_value`/`years_into_term` is load-bearing, and for two different
+ * reasons. `rank_value` is NULL when the asset cannot be priced (P180 — never 0), and
  * `years_into_term` is NULL when there is no commencement to measure from. Without
  * nullslast Postgres sorts NULLs FIRST on a DESC key, so the unpriced rows would head
- * the queue — the exact inversion of "ranked by client value".
+ * the queue — the exact inversion of "ranked by client value". `reason_measured` is
+ * boolean NOT NULL by construction (`reason_to_sell` always resolves, including to the
+ * explicit `reason_to_sell_unmeasured` state), so it carries no nulls to order around.
  */
-export const SELLER_QUEUE_ORDER = 'rank_value.desc.nullslast,years_into_term.asc.nullslast';
+export const SELLER_QUEUE_ORDER =
+  'reason_measured.desc.nullslast,rank_value.desc.nullslast,years_into_term.asc.nullslast';
 
 /** Canonical short-form domain, or null for "no filter". Accepts both spellings. */
 export function normalizeDomain(raw) {

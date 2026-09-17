@@ -41,13 +41,20 @@ test('the comment stripper actually removes prose (positive control)', () => {
 });
 
 // ── Layer 1: the surface rules, exercised ────────────────────────────────────
-test('order is client value first, then lease recency, nullslast on BOTH keys', () => {
+// PRI2-on (2026-09-17) reordered this to reason-first (Cowork's read on Scott's
+// delegation, docs/audits/PRI2_SIDE_BY_SIDE_2026-09-16.md): a measured reason to
+// sell outranks value alone. Superseded assertion, updated in place rather than
+// silently dropped.
+test('order is reason to sell first, then client value, then lease recency, nullslast on the value/years keys', () => {
   // nullslast on rank_value: an unpriced row is NULL (P180), and Postgres sorts NULLs
   // FIRST on a DESC key -- without it the queue would be headed by the rows nobody can
-  // price, the exact inversion of "ranked by client value".
-  assert.equal(SELLER_QUEUE_ORDER, 'rank_value.desc.nullslast,years_into_term.asc.nullslast');
+  // price, the exact inversion of "ranked by client value". reason_measured is boolean
+  // NOT NULL by construction (reason_to_sell always resolves, including to the explicit
+  // reason_to_sell_unmeasured state), so it carries no nulls to order around.
+  assert.equal(SELLER_QUEUE_ORDER,
+    'reason_measured.desc.nullslast,rank_value.desc.nullslast,years_into_term.asc.nullslast');
   const path = buildQueuePath({ chipKey: 'all', domain: null, limit: 50, offset: 0 });
-  assert.ok(path.includes('order=rank_value.desc.nullslast,years_into_term.asc.nullslast'));
+  assert.ok(path.includes('order=reason_measured.desc.nullslast,rank_value.desc.nullslast,years_into_term.asc.nullslast'));
 });
 
 test('a chip filters SERVER-side, and its count query carries the SAME predicate', () => {
