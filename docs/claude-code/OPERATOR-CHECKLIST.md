@@ -5,7 +5,7 @@ systems the repo cannot reach (Power Automate, Salesforce), payloads only a huma
 decisions that are Scott's. Cowork adds a row when a round ends on one of these; Scott ticks it; Cowork
 verifies and removes it in the next turn. Done rows are struck through and dropped after one turn.
 
-Updated 2026-09-16 (late): S1–S5 answered (`responses/done/S1-S5 Decisions…docx`) and turned into F8, D4, three prompts and the PRI2 read; V1 answered (gov deed ingest = GitHub Actions weekly/daily, verify Mon 09-21); D3 reported done. All three prompts merged and running (`0304aa8b`); D4 done. H8 applied, R1 delegated. Open for Scott: **F8** (the flow consolidation — `docs/setup/FLOWS-CONSOLIDATE-2026-09-16.md`) and sending `PRI2-on`. Railway auto-deploys `main` (web app at `ac96fd45`); the standalone MCP
+Updated 2026-09-16 (late): S1–S5 answered (`responses/done/S1-S5 Decisions…docx`) and turned into F8, D4, three prompts and the PRI2 read; V1 answered (gov deed ingest = GitHub Actions weekly/daily, verify Mon 09-21); D3 reported done. All three prompts merged and running (`0304aa8b`); D4 done. F8 done; PRI2-on live (Cowork applied its migration — the tab had been 502). Open for Scott: **F8-b** (30 s). Saturday: forward the flow digest into `SB notes/`. Monday: Cowork checks GOVDEED3. Railway auto-deploys `main` (web app at `ac96fd45`); the standalone MCP
 service has no `/version` route — Cowork verifies it by calling a tool.
 
 ## Deploys
@@ -27,7 +27,8 @@ from the exported definitions** (`SB notes/done/*.zip`, 2026-09-16). One addendu
 | # | flow | edit | why |
 |---|---|---|---|
 | ~~F1c~~ | ✅ **Done and verified from the export 2026-09-16** (`Http-Getfile(LCCGetArtifact)_20260916163609.zip`): metadata first, Size condition, content fetch in the True branch, bytes Response as specified. Test passed. | |
-| **F8** | **FLOWS-consolidate (S4 = one flow owns the lifecycle) — REVISED 2026-09-17 after the pre-check (the Move Queue Executor exists and is the mover).** Click-path in `docs/setup/FLOWS-CONSOLIDATE-2026-09-16.md`: copy **three** actions from the Hardened flow into *LCC Flagged Email Intake*'s success branch (web link, intake summary, card — not the Condition), delete its `Move email (V2)` **and** `Flag email (V2)`, re-point one expression, test (the Executor moves it within 15 min), turn **two** flows off (Hardened + Processing Complete → Move Message), export into `SB notes/`. | three movers on one message today (Flagged's own move, the Move Message flow via LCC's relay, the Executor); the Executor is P120's single owner |
+| ~~F8~~ | ✅ **Done and verified from the export 2026-09-17** (`LCCFlaggedEmailIntake_20260917152101.zip`): three actions pasted, own Move/Flag/Terminate removed, expression re-pointed, retry set; Hardened + Processing Complete → Move Message off. | |
+| **F8-b** | 30 seconds: *LCC Flagged Email Intake* → Edit → `HTTP GetIntakeSummary` → ⋯ → Configure run after → tick **has failed** as well as *is successful* on `HTTP GetEmailWebLink` → Save. | a web link that fails all three retries must not skip the Teams card |
 
 **All seven applied and verified.** Forward the next Saturday digest into `SB notes/`; Cowork closes the counts.
 

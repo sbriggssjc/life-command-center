@@ -51,10 +51,11 @@
 ## 5. App surfaces — Home, Priority, Dialysis Overview, review workbench — backlog §P20, §P16, §HP1, Open-threads *App feedback intake (SBN)* and *App / UX*
 
 - ✅ **Live:** `daily-briefing` edge fn v26 (HOME1-deploy); DIA1/DIA1b (tiles verified, NPI tile → lane count, "as of"); PRI1 (bands explained); the SB-notes intake loop (`docs/claude-code/SB notes/`, `TRIAGE.md` SBN-1…11) — Scott's in-app observations become rows within a turn.
-- 🟡 **Partial:** PRI2 (Priority recomposed on `v_lcc_seller_prospect_queue`) built, **flag OFF** pending S1; HOME1 (§C fix live, §B three-lane spec unbuilt); ASC50 review workbench built and locally verified, publication pending.
+- 🟡 **Partial:** HOME1 (§C fix live, §B three-lane spec unbuilt); ASC50 review workbench built and locally verified, publication pending.
 - ✅ **Live (new):** DIA1c — 33 canonical operators, one `US Renal Care`, 0 unresolved; the Operators tile reads the canonical count.
 - 🔴 **Open:** HOME2 (three-lane Home, after PRI2), ID3a-drift.
-- ⏭️ **Next unit:** PRI2-on (flag ON, reason-first order, one card per property — prompted); then HOME2.
+- ✅ **Live (new):** PRI2-on — the Priority tab is one ranked list, reason-first, one card per property (flag ON 2026-09-17).
+- ⏭️ **Next unit:** HOME2 (the three-lane Home from HOME1 §B).
 - 👤 **Decisions:** none open (R1 delegated; S2 decided).
 
 ## 6. Flows, intake and artifact health (Power Automate ↔ LCC) — backlog §P20, `docs/setup/POWER-AUTOMATE-FLOW-FIXES-2026-09-16.md`
@@ -62,7 +63,8 @@
 - ✅ **Live:** F1–F7 applied by Scott and verified from his exports; F1c (Get Artifact: metadata first, size condition, bytes for small files) verified; LCC accepts both Get-Artifact shapes and treats `too_large` as a named terminal reason with a 30-day ceiling instead of ~48 retries (FLOWS1-artifact); FLOWS1-order **refuted** — LCC does not relay the move.
 - 🟡 **Partial:** the digest has not yet cycled since the fixes — the Saturday "N flows have failed" mail into `SB notes/` is the verification.
 - 🔴 **Open:** FLOWS1-path (stale SharePoint deal-folder path writer), FLOWS1-artifact-b (size-aware skip at discovery, real backoff — low), F6 durable async version (needs an LCC callback route).
-- ⏭️ **Next unit:** F8 (revised 2026-09-17: the Move Queue Executor is the single mover; the Flagged flow stops moving and clearing the flag; two flows go off); then triage the next digest against F1–F8; then FLOWS-consolidate-lcc.
+- ✅ **Live (new):** F8 — one intake flow (*LCC Flagged Email Intake*) does attachments, intake, web link and card; the Move Queue Executor is the only mover; the Hardened and Move-Message flows are off.
+- ⏭️ **Next unit:** Saturday's digest against F1–F8 (and `already_out` staying at 2); then FLOWS-consolidate-lcc.
 - 👤 **Decisions:** none open; the F8 pre-check (does a Move Queue Executor flow exist?) is a fact to report, not a decision.
 
 ## 7. Market briefs & executive briefs — backlog §P18, Open-threads *Market briefs (MB/EB)*
@@ -95,7 +97,7 @@
 
 ## 12. Data coherence & known defects — backlog §P0d, §P10, §P10a, §P14, §P21
 
-- ✅ **Live:** the DEPLOY2 unapplied-migration detector (its first real catch was C1C-UNAPPLIED — but its coverage fix has not had a live run, and it missed the geocode cap migration on 2026-09-17); doc guards in CI (STATUS header/line budget, backlog ID uniqueness, table shape).
+- ✅ **Live:** the DEPLOY2 unapplied-migration detector (first real catch C1C-UNAPPLIED; its coverage fix has not had a live run, and it missed the geocode-cap and PRI2-on migrations on 2026-09-17 — the loop now checks migrations by hand until it does); doc guards in CI (STATUS header/line budget, backlog ID uniqueness, table shape).
 - ✅ **Live (new):** MISPARSE1 — `email_fanout` split by mailbox genericness, 4 → 9 of 12 real brokers recovered on the live fixture.
 - 🔴 **Open:** REMEDIATION-2026-05 (the May TODOs, now rows, DB-verified); §P10 sized unfixed defects; BR1-misparse-handoff / titleparse / fp (the rest of the contact-guard family); the Longenbaugh duplicate (lane 1); **the 27 Harris situs-gap properties are the first concrete §P10a case**.
 - 📐 **Designed:** cross-lane property identity / address resolution (§P10a) — the Harris street-shape bugs are the same class, solved lane-locally again.

@@ -78,8 +78,10 @@ side-by-side read to Cowork (`docs/audits/PRI2_SIDE_BY_SIDE_2026-09-16.md`); the
 two changes the read called for, neither a new score: server order is now reason-to-sell FIRST
 (`reason_measured DESC`), then value, then lease recency (`v_lcc_seller_prospect_universe` gained
 an appended `reason_measured` boolean column so PostgREST can order on it — the predicate is
-byte-identical); and rows sharing a property (756 properties carry >1 current owner) collapse to
-one card listing every owner's own why-now/reach instead of two cards for one building. Dialysis Overview: the Market
+byte-identical — the migration was merged unapplied and the tab returned 502 until Cowork applied it
+2026-09-17, fingerprint-verified); and rows sharing a property (756 properties carry >1 current owner) collapse to
+one card listing every owner's own why-now/reach instead of two cards for one building. Live after the flip:
+508 rows / 458 properties, 277 with a measured reason; the top 20 is all debt/developer. Dialysis Overview: the Market
 Economics Exhibit works again (the deployed `data-query` edge function was v41 from July; now v43);
 tiles read one MV with an "as of" stamp; NPI shows the gated lane (81) not the raw diff; Operators
 Tracked's caption says what it counts (45 raw names / 21 canonical ids / 878 unresolved). MCP:
