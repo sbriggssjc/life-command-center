@@ -39,11 +39,11 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-reconcile-2, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT, CANON-OWNERSHIP1 | 2026-09-16 | Arc complete through GOVDEED3 (gov #406); **the gov deed writer runs from GitHub Actions (weekly Mon 06:00 UTC) — verify 09-21 dateless = 0**; CANON-OWNERSHIP1 👤 confirmation open; sale-party conflicts 1,290 a review queue |
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k LIVE** (LCC PR #2506): 218 attested supersessions, 40/43 pairs to sponsor, 16/16 controls untouched, reversible; sponsor-as-edge = future work |
 | **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, -harris-b/-c/-d, -ledger-order, MCP1 | 2026-09-17 | **41 assessor-sourced owners live** (Philadelphia 20, Harris 21 of 50); Harris is done except the 27 situs-gap properties → §P10a is the lane's next unit; next free-bulk jurisdiction after that |
-| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS-consolidate-lcc, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift | 2026-09-17 | **PRI2-on live** (flag ON, reason-first, one card per property — migration had to be applied by Cowork; the tab was 502); **F8 done** (one intake flow, Executor the only mover; F8-b nit); DIA1c live; Saturday digest verifies F1–F8; HOME2 next |
-| **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–4, INVENTORY1, INVENTORY1b, INVENTORY2, INVENTORY-process, REMEDIATION-2026-05, REPO1, ROADMAP, PROCESS-CC-DOCS, PROCESS-MERGE-CLOBBER, PROCESS-ROW-CELLS, PROCESS-PARKING-LOT, DEPLOY2-coverage | 2026-09-17 | Scott's queue Q1–Q28 built from 67 buried 👤 rows; **parking lot live** (PL-1: eight ungated edge functions); **DEPLOY2-live prompted** (three merged-not-applied incidents this week); commits are 3-way patches; CLAUDE.md pass 2 ahead |
+| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS-consolidate-lcc, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift | 2026-09-17 | PRI2-on live; **HOME2 built, flag OFF → HOME2-on is Scott's look**; F8 done + F8-b; DIA1c live; Saturday digest verifies F1–F8 |
+| **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–4, INVENTORY1, INVENTORY1b, INVENTORY2, INVENTORY-process, REMEDIATION-2026-05, REPO1, ROADMAP, PROCESS-CC-DOCS, PROCESS-MERGE-CLOBBER, PROCESS-ROW-CELLS, PROCESS-PARKING-LOT, DEPLOY2-coverage, DEPLOY2-stale-body | 2026-09-17 | **DEPLOY2 live + CI on every merge** (149 objects / 0 unapplied); parking lot triaged (13 lines → rows/prompts/checklist); EDGE-GATES1 prompted; CLAUDE.md pass 2 ahead |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
 | **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
-| **Broker identity (BR) / BROKER1** | BR1, BR2, BR3, BR4, BR5, BR1-misparse-handoff, BROKER1, BROKER1-sf | 2026-09-16 | **BR1/BR3 live** (Dialysis_DB: `broker_companies` 131 → 75, 10 ambiguous composites in review, `broker_company_id` 7.2% → 14.4%); **661 unmatched `brokers.company` strings queued = BR4's input**; BR5 display unit unbuilt; BROKER1 applied live (1,303); BROKER1-sf correctly unbuilt |
+| **Broker identity (BR) / BROKER1** | BR1, BR2, BR3, BR4, BR4-b, BR5, BR1-misparse-handoff, BROKER1, BROKER1-sf | 2026-09-17 | **BR4 live**: 3 true duplicates merged, 52 firms minted with evidence, `broker_company_id` 14.4% → **25.0%** (641/2,566); residue → BR4-b (123 firm-shaped broker rows, 468 review); BR5 display next |
 | **gov agency canonicalization (ID3a\*)** | ID3a, ID3a-b, ID3a-c, ID3a-d, ID3e, I14, I16 | 2026-09-12 | ID3a-b/c/d/e all shipped and live-verified; repo-ownership hazard (I16) found and closed — `government-lease` owns the gov DB's migrations, LCC's copy retired |
 | **CI / producer health (B6d/B6e)** | B6d-cms-*, B6d-assessor-*, B6d-pri-*, B6e-ci-*, B6e-fred-* | archived 2026-09-11 | Suite is a real merge gate (`Run Tests` unmasked, green once on `main`); `pip-audit`/secrets-grep/ruff still masked; full detail in the 2026-08-29→09-11 archive and `docs/architecture/producer-health-and-ci-enforcement.md` |
 
@@ -54,6 +54,52 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
 
 ---
+
+## 2026-09-17 — DEPLOY2-live, BR4 and HOME2 reconciled; Q1's calendar flow is still calling without the header; parking lot triaged, EDGE-GATES1 drafted (Cowork)
+
+**DEPLOY2-live (PR #2559, running on `7611e966`).** The window fixes were already in code from the
+09-16 coverage round; the round ran the detector **live over LCC Opps and Dialysis_DB — 149 objects,
+0 unapplied** — with the three known incidents (Geocodio cap, PRI2-on, C1C) confirmed applied and
+caught; added `.github/workflows/deploy2-unapplied-check.yml` (every push to `main`, fails the job with
+a commit-comment table); built a **stale-body comparator but did not wire it** (needs a migration on both
+projects) → `DEPLOY2-stale-body`, low. Caveats it disclosed: its probe used a shallow clone (CI's
+`fetch-depth: 0` sees the full add-date window), and it caught its own hand-typed object list mid-round.
+👤 Scott: confirm the job ran green on the merges since (`Actions` → *deploy2-unapplied-check*).
+
+**BR4 (PR #2558) — applied live, verified.** 146 duplicate-name groups: **3** true duplicates merged
+(13 FK constraints across 11 tables repointed, ledgered in `dia_br4_broker_merge_log`), 120
+one-linked-one-blank and 20 both-blank groups correctly left (filling from a sibling would be an
+identity guess), 3 different-firm. **52 firms minted** from BR1's 661 queued strings, gated on ≥3 brokers
+sharing the token AND ≥2 sharing an email domain, evidence in `dia_br4_firm_mint_evidence`;
+`broker_company_id` **366 → 641 of 2,566 (25.0%)**; `broker_companies` 127. 123 firm-shaped rows in
+`brokers` flagged, not touched; 468 review rows open. Migration objects all present live (step 4a).
+Parked by the round: PL-11 (the 123 firm-shaped rows), PL-12 (the 468), PL-13 (Scott's own name ×3 in
+`brokers`).
+
+**HOME2 (PR #2560) — built behind `home_three_lanes`, OFF.** Research = the nbaSnapshot gaps feed
+(§A predicate); BD = `/api/seller-prospect-queue` top 5, labelled; Inbox = the briefing's inbox
+summary, new before triaged (no due-date field exists — PL-7); the silent `_dbFillMyPrioritiesFromQueue`
+fallback disabled under the flag; 21 tests. The round had no DB access, so the live render and the
+"how often was `today_top_5` empty" measurement are still owed — **HOME2-on** is Scott's look at the
+flag ON in his own session, then the flip.
+
+**Q1 — not done yet, and the log says which one.** Scott reports the four header edits; the log shows
+**`POST /sync/calendar-events` still logging `DENY-WOULD` at 18:26 UTC** (hourly, unchanged). The other
+three run less often and cannot be judged yet. Most likely: the edited flow is not the hourly calendar
+caller (four workflow ids in `ai-copilot-sync-callers.md`; the calendar one is `4eb7c46f…`), or the
+header name/value differs (`X-PA-Webhook-Secret`, the Object Sync flow's value). Cowork re-reads the
+log tomorrow; the three-day clock starts at the last `DENY-WOULD`.
+
+**Parking lot, first triage.** PL-1 → **`EDGE-GATES1`** prompt (the 18 unreviewed `verify_jwt:false`
+functions: measure writers/callers/drift from the deployed bodies, gate writers log-only, the
+COPILOT-OPEN pattern); PL-2 folded into it; PL-3 → Q2; PL-4 → `DIA-DUP1` (Longenbaugh Rd/Dr); PL-5
+recorded on GOVDEED3, no action; PL-6 → `OWNER-WRITERS1` (which writer set three `recorded_owner_id`s
+during H7); PL-7/9/10 → HOME2 row; PL-8 → HOME2-on gate; PL-11/12 → `BR4-b`; PL-13 → checklist Q29
+(a 30-second look). BR4's and HOME2's rounds both numbered their lines PL-7…9 — renumbered; the
+`Parked:` convention now says "next free PL number, check the file".
+
+**Next:** Scott — re-check the calendar flow (Q1), glance at Q29, send `EDGE-GATES1`, confirm the
+DEPLOY2 job is green; then HOME2-on. Cowork — Saturday digest, Monday GOVDEED3, the Q1 log.
 
 ## 2026-09-17 — Working the queue programmatically: a parking lot for what we notice on the way, three independent CC rounds drafted, and Q1/Q2 measured live (Cowork)
 
