@@ -56,7 +56,7 @@
 - ✅ **Live (new):** DIA1c — 33 canonical operators, one `US Renal Care`, 0 unresolved; the Operators tile reads the canonical count.
 - 🔴 **Open:** HOME2 (three-lane Home, after PRI2), ID3a-drift.
 - ✅ **Live (new):** PRI2-on — the Priority tab is one ranked list, reason-first, one card per property (flag ON 2026-09-17).
-- ⏭️ **Next unit:** HOME2-on (Scott's look with the flag on, then the flip); then ID3a-drift.
+- ⏭️ **Next unit:** HOME2-on (flag ON 2026-09-17, Scott's look pending — keep or fix round); SETTINGS-FLAGS1 (no flags panel exists though the app points to one); then ID3a-drift.
 - 👤 **Decisions:** none open (R1 delegated; S2 decided).
 
 ## 6. Flows, intake and artifact health (Power Automate ↔ LCC) — backlog §P20, `docs/setup/POWER-AUTOMATE-FLOW-FIXES-2026-09-16.md`
