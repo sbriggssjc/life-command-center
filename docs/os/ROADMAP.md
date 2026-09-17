@@ -117,7 +117,7 @@
 ## 15. Process, documentation & consolidation — backlog §P21, `docs/os/BUILD-TURN-PROTOCOL.md`, `docs/claude-code/README.md`
 
 - ✅ **Live:** the prompt → response → reconcile loop with STATUS/backlog/CURRENT-STATE kept current each turn; SB-notes intake (④); leak-class rules (⑤); INVENTORY1/1b done; CLAUDE.md pass 1 (5,503 → 3,268 lines, rounds archived verbatim); backlog regrouped by category (P19/P20/P21); this file; rule ⑤-CC (a CC round appends and updates its own row, never restates); Cowork commits as 3-way patches, not whole-file copies (PROCESS-MERGE-CLOBBER).
-- 🔴 **Open:** CLAUDE.md pass 2 (with Scott: which doctrines merge); INVENTORY-process items not yet exercised by a full cycle.
+- 🔴 **Open:** the **Scott's queue** (checklist Q1–Q28 — 67 backlog rows that were waiting on him and were mirrored nowhere; tiers A–B are the ones to clear first); INVENTORY2 (ghosts, root-report internals, history prose); CLAUDE.md pass 2 (with Scott: which doctrines merge); INVENTORY-process items not yet exercised by a full cycle.
 - ⏭️ **Next unit:** CLAUDE.md pass 2 in chat; re-cut this file after each lane closes a unit.
 
 ## 16. Not on the roadmap by decision — backlog §P11 (new verticals, design-only), §P12 (excluded), §P13 (decision forks)

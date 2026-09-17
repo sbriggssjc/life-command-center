@@ -104,6 +104,11 @@ that already exists — the ID-uniqueness and table-shape guards will fail the m
 2026-09-16 they did, three times in five rounds. The Open-threads table is Cowork's; leave it. Cowork
 reconciles the round in the next turn and moves the prompt/response to `done/`.
 
+**Rule ⑤-👤 (2026-09-17):** a backlog row whose State cell gains 👤 gets its line in
+`docs/claude-code/OPERATOR-CHECKLIST.md` in the SAME change, and the two close together. The sweep that
+found 67 👤 rows against a five-line checklist is why: a decision that lives only in a row nobody
+re-reads is not a pending decision, it is a buried one.
+
 ### ⑥ CORRECT what is now false — in place, never silently
 
 Supersede with a banner that names the old claim, the new truth, and the measurement. **Retain the
