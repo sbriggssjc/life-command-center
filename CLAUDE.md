@@ -39,6 +39,12 @@
 
 ## ⚠️ PRODUCTION RUNS ON RAILWAY (Vercel retired 2026-07-20)
 
+> 🚨 **Measured 2026-09-17 (Cowork round 29): Vercel is NOT gone.** `life-command-center-nine.vercel.app` still
+> serves a **stale build** in production (functions in iad1) and was the window Scott used daily; it calls
+> `ai-copilot` from the browser and from Node. "Retired" meant *we stopped deploying to it*, not *it stopped
+> answering*. Until backlog `VERCEL-LIVE1` closes, treat any observation from the app as "which host?" first,
+> and never assume a retired host is a dead one — measure it (the same lesson as the "dormant" Railway service).
+
 The live app is the **Railway Express server**: `server.js` mounts the `/api/*` handlers directly
 (e.g. `app.all('/api/capital-markets', capitalMarketsHandler)`); build config in `nixpacks.toml` +
 `railway.json` (healthcheck `/health`). **`server.js` is the SINGLE source of truth for `/api/*` routing** —
