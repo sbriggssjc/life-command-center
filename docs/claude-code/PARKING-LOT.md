@@ -42,3 +42,6 @@ Sibling ledgers: `SB notes/TRIAGE.md` (Scott's in-app observations — richer in
 | PL-11 | 2026-09-17 | → backlog `BR4-b` — *123 `brokers.broker_name` rows are firm/operator-shaped, not people (flagged into `dia_broker_company_composit…* |
 | PL-12 | 2026-09-17 | → backlog `BR4-b` — *`dia_broker_company_composite_review` still holds 468 open rows: 120 same-name-one-linked-one-blank groups (ne…* |
 | PL-13 | 2026-09-17 | → checklist Q29 (Scott, 30 s) — *Own name ("Scott Briggs") appears 3x in `brokers` (ids 1373/2076/2437), one linked to `broker_company_id=126`,…* |
+| PL-14 | 2026-09-17 | → noted on `COPILOT-OPEN` + `EDGE-GATES1-b` — *`ai-copilot` logs `DENY-WOULD` for `POST /chat` with caller class `node other` (not browser, not Railway) — an unnamed chat caller that breaks on the enforce flip; seen by Cowork in the 24 h log 2026-09-17…* |
+| PL-15 | 2026-09-17 | → backlog `EDGE-GATES1-b` (e) — *`calendar-ics-sync` v21 logs `DENY-WOULD` from a caller of unknown class within hours of the gate landing — a real caller nobody has named…* |
+| PL-16 | 2026-09-17 | → design input on backlog `RECON1` (no separate row) — *Scott 2026-09-17: "maybe deploy an Ollama local model on a regular cleaning and connecting task" — source of truth and accuracy lacking, many gaps to close…* |
