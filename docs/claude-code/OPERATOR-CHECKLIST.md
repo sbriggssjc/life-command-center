@@ -5,7 +5,7 @@ systems the repo cannot reach (Power Automate, Salesforce), payloads only a huma
 decisions that are Scott's. Cowork adds a row when a round ends on one of these; Scott ticks it; Cowork
 verifies and removes it in the next turn. Done rows are struck through and dropped after one turn.
 
-Updated 2026-09-16 (late): S1–S5 answered (`responses/done/S1-S5 Decisions…docx`) and turned into F8, D4, three prompts and the PRI2 read; V1 answered (gov deed ingest = GitHub Actions weekly/daily, verify Mon 09-21); D3 reported done. All three prompts merged and running (`0304aa8b`); D4 done. F8 done; PRI2-on live (Cowork applied its migration — the tab had been 502). Open for Scott: **F8-b** (30 s). Saturday: forward the flow digest into `SB notes/`. Monday: Cowork checks GOVDEED3. Railway auto-deploys `main` (web app at `ac96fd45`); the standalone MCP
+Updated 2026-09-16 (late): S1–S5 answered (`responses/done/S1-S5 Decisions…docx`) and turned into F8, D4, three prompts and the PRI2 read; V1 answered (gov deed ingest = GitHub Actions weekly/daily, verify Mon 09-21); D3 reported done. All three prompts merged and running (`0304aa8b`); D4 done. F8 done; PRI2-on live. Open for Scott: **F8-b** (30 s) and the new **Scott's queue** below (Q1–Q28 — the 67 backlog rows that were waiting on you, tiered). Saturday: forward the flow digest into `SB notes/`. Monday: Cowork checks GOVDEED3. Railway auto-deploys `main` (web app at `ac96fd45`); the standalone MCP
 service has no `/version` route — Cowork verifies it by calling a tool.
 
 ## Deploys
@@ -52,6 +52,51 @@ from the exported definitions** (`SB notes/done/*.zip`, 2026-09-16). One addendu
 | ~~S4~~ | ✅ **(b) one flow owns the lifecycle** | → **F8** above (your edit, step by step) | backlog `FLOWS-consolidate` |
 | ~~S3~~ | ✅ **Free tier on** (Geocodio 2,500/day, capped in code; Google stays off) | → **D4** above + `prompts/FLAGS-geocode-on-…md` (send) | backlog `FLAGS-geocode-on` |
 | ~~S5~~ | ✅ **(a) with an exact-situs rule** — C2 accounts staged (98,804 rows now) | → `prompts/OWNERGAP2-harris-d-…md` (send); Cowork runs the C2 dry run after merge | backlog `OWNERGAP2-harris-d` |
+
+## Scott's queue — everything the backlog is waiting on you for (swept 2026-09-17)
+
+> **Why this exists.** Reviewing the INVENTORY1/1b work against the to-do lists (2026-09-17) found the
+> real gap was not in the inventory: **67 backlog rows carry a 👤 state, and this checklist held five of
+> them.** The rest were scattered across nineteen sections, some since August. Every one is here now,
+> tiered by what it costs you and what it unblocks; the source row has the full evidence. Nine rows
+> were already done and only their state was stale — fixed in the backlog, not listed here. When you
+> clear a line, tell Cowork; the row and this line close together.
+>
+> **Tiers:** **A** exposure or breakage, do soon · **B** ten-minute admin steps · **C** decisions that
+> unblock building (reply in chat) · **D** rollout chores in your tenant, batch when convenient ·
+> **E** waiting on a real run or a re-run, not on a decision · **F** design-only, parked on purpose.
+
+| # | tier | what you do | why / unblocks | row |
+|---|---|---|---|---|
+| Q1 | **A** | `ai-copilot` edge function on Dialysis_DB is open (25 routes, service-role client, no auth). Cowork's gate is merged log-only: **deploy it**, then read `[copilot-auth] DENY-WOULD` for the callers listed, fix the header-less ones (To Do Completion Poll's second call + the three unexported PA5 flows), then flip `enforce`. | an unauthenticated writer holding a service-role key | COPILOT-OPEN, RAILWAY-PA-SECRET |
+| Q2 | **A** | `salesforce-enrichment` edge function: same shape — deploy v27 (log-only), read `[sfenrich-auth]` for ≥7 days (a monthly caller needs the window), then `enforce`. | unauthenticated public writer | DRIFT1-sfenrich |
+| Q3 | **A** | Execute `docs/os/RUNBOOK_vercel_teardown.md` in order (repoint the daily-briefing caller, the mobile Shortcut, the extension/Copilot connector hosts, then tear down). The browser extension is **still writing through the retired Vercel build** from at least one profile. | two hosts writing the same tables | J13-teardown, EXT-HOST, J13 |
+| Q4 | **A** | Set `PA_WEBHOOK_SECRET` on `tranquil-delight` and walk the RAILWAY-PA-SECRET steps (register caller IPs, watch `none` lines 3 days, flip `PA_WEBHOOK_AUTH_MODE=enforce`). | every Power Automate → LCC call is currently unauthenticated | RAILWAY-PA-SECRET |
+| Q5 | **B** | Dialysis CI: (1) merge #7397, (2) delete `claude/tmp-red-gate-proof` + `claude/tmp-docs-only-proof` in GitHub, (3) Settings → Branches → `main` → require status check **`Run Tests`**. | until (3), a red Dialysis suite cannot block a merge — three merges have landed mid-run | B6e-ci-required-check |
+| Q6 | **B** | LCC Opps → Auth → enable **leaked password protection** (one toggle). | advisor finding | SEC6 |
+| Q7 | **B** | Dialysis_DB → Postgres upgrade (advisor: vulnerable version). Off-hours; Cowork verifies after. | security advisor | SEC12 |
+| Q8 | **B** | Fund the Anthropic API key with a **hard monthly cap**, or say "no" — the briefing snapshot fn has failed its call daily since July. | MB5 / the cloud fallback; a wasted call a day | EB1b |
+| Q9 | **B** | Hand `GOVDEPLOY1` to the `government-lease` repo (a prompt there; Cowork drafts it on your word) — the gov project has no unapplied-migration detector. | three merged-not-applied migrations in two days here; gov has no detector at all | GOVDEPLOY1 |
+| Q10 | **C** | Confirm in one line: **Dialysis_DB schema is owned by `life-command-center`** (the doctrine table already says so; two rounds went to the wrong repo this week). Then ID3a-d-dia becomes "reconcile the two migration sets", never "retire one". | CANON-OWNERSHIP1, ID3a-d-dia | CANON-OWNERSHIP1 |
+| Q11 | **C** | `docs/audits/FLAG_LONG_DARK_TRIAGE_2026-09-15.md` — five decisions on the 15 long-dark flags (each is "turn on with a cap / record off by decision"). Same shape as S3, which took you one line. | closes 15 registry questions | FLAGDARK1 |
+| Q12 | **C** | Six lanes with zero lifetime completions (`milestone_confirm` 56 open, `confirm_tenant_mismatch` 26, `npi_new_registration` 17, …) and `match_disambiguation` (1 decision in 81 days): per lane, **surface it, or retire it**. | stops ranking queues nobody works | A5-dead, A7 |
+| Q13 | **C** | ~2,044 subjects falsely closed `gap_resolved` by the truncated-feed bug: approve the **re-label first** sequence (Cowork + CC recommend it) or say leave them. | A5b-repair |  A5b-repair |
+| Q14 | **C** | Rule for **banks/trustees as owner-of-record** (Truist, Wells Fargo NA, JPM CMBS trusts): prospect, or exclude as lender/trustee? One rule, measured first, not 15 name picks. | the seller queue's reach lane | N3c |
+| Q15 | **C** | Sponsor confirmations: **FGF ↔ Boyd Watterson** (90 SPEs ride on it — settle the relationship before confirming either), Commonwealth (recommend NO), Carrington/Sequoia, fcp→fcpdc.com, tmg→tmgdc.com. | C2k widened only attested rows; these are the held ones | V8a, V8b, AC1c |
+| Q16 | **C** | `v_lcc_entities_c_review_merge_plan`: 15 person merges, per-row confirm (winner/loser/basis shown; swap before confirming where `ownership_tiers_all_zero`). | 55 blind pairs stay blind until then | PR5c-entities-c-review |
+| Q17 | **C** | dia CMBS arm: flip `track_cmbs_snapshots` on (11,803 rows, snapshot + tenant rows per capture) or leave dia's CMBS lane at zero. | 27 of 121 rungs cannot fire | PR5d-b |
+| Q18 | **C** | dia owner lane: fix two over-capturing `owner_canonical_patterns` (one wrong link already written — `HealthCare Realty Solutions` → `Healthcare Realty Trust`), and decide the **tenant-in-the-owner-slot** rule (395 of 500 lane properties). | the lever that moves dia owner coverage | OWN1, OWN4 |
+| Q19 | **C** | Close DOC14 (the GCS OCR build) — DOC17 proved the cheap route (~$3.30 for nine calls). Say "close". | a stale decision | DOC14 |
+| Q20 | **C** | Grade `OWNERSHIP_CHAIN_ROLE_LABELS` (the endpoint exists; read `summary.providers`, `chains_altered_by_layer2` = 0, then the labels) or leave the flag off. | N2 |  N2 |
+| Q21 | **C** | HP1-P1a-orphan: two demonstrably abandoned Salesforce opps in your open queue — confirm they can be closed; then the rule for the rest. | "My Work is well behind" | HP1-P1a-orphan |
+| Q22 | **C** | Team mailboxes: Kelly, Nate and Sarah have no `email_bodies`; adding their mailboxes is a Power Automate step — do you want them synced? | four-person team, one mailbox | UX13a |
+| Q23 | **D** | External pastes owed from UX0 (operator doctrine into the ChatGPT persona / Northmarq project), plus the P8 rollout chores: S1 persona, S2 surface bundles, S3 the two Copilot specialists, S4 Work IQ config, S5 Office Script + flow, S6 the four `_WORKFLOW` docs, S8 blank BOV templates, S9 Northmarq admin connector, S10 D-drive triage. Batch on a quiet afternoon; Cowork can turn any one into a click-path like F1–F8. | your tenant, not the repo | UX0, S1–S10 |
+| Q24 | **D** | Probe B (2 minutes: `flow-lcc-probe-outlook-contact-write.json`); write the Salesforce allowlist with per-entry sign-off; close WebEx/Teams as "not used for external contacts". | contact reconciliation outbound | CR2, CR5, CR6 |
+| Q25 | **D** | ASC50 human reviews: 50 primary scorecards in `/asc-review.html`, then 22 second-reviewer rows. | the ASC lane's publication gate | ASC50-R1, ASC50-R2 |
+| Q26 | **D** | W3 draft/file/log wiring for the offer-submission flow — needs your Drafts/deal-folder conventions confirmed once. | work products | W3 |
+| Q27 | **E** | Waiting on real runs, nothing for you: CQM1 full-table run; PRI5 fresh run; CFE-RUNAWAY (confirm #7398 merged + service not paused); HCRIS-TIMEOUT (the other session's); V4 (edge fn source), V5 (`PA_OUTLOOK_DRAFT_FLOW` registry vs reality); EXT1/EXT2 floor re-runs on your workstation; OCR1 GPU box. | verification, not decision | CQM1, PRI5, CFE-RUNAWAY, HCRIS-TIMEOUT, V4, V5, EXT1, EXT2, OCR1 |
+| Q28 | **F** | Design-only, parked on purpose: J1 multi-owner edge, N17 fractional ownership, PI6 alias ledger, N13 test-suite prune (measure first), C4a/C4b role questions, SF-DIRECT (no IT ask until there is a product to show), A5g/A5h (egress gates). Nothing to do until a lane needs them. | | J1, N17, PI6, N13, C4a, C4b, SF-DIRECT, A5g, A5h |
+| — | note | **SEC9 / SEC10 (rotate `LCC_API_KEY`, rotate `service_role`)** are governed by the standing P0s decision — rotation deferred until a second user is added — and are listed there, not here. If that decision changes, they move to tier A. | | SEC9, SEC10, P0s |
 
 ## Housekeeping
 

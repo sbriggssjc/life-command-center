@@ -55,6 +55,37 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-17 — Inventory reviewed against the to-do lists: the residue is small; the real gap was 67 backlog rows waiting on Scott that the checklist did not know about (Cowork)
+
+Scott asked for a run at the inventory work versus the to-do lists. The CSV (1,789 intent rows) is
+mostly history: 1,000 rows are "docs & process", 919 come from `docs/history/`, and 15 carry a backlog
+link. Of the 70 rows the inventory itself marked flagged / planned / partial, all but four are section
+headings of findings that were resolved in their own round (checked by hand against the backlog); the
+four that are not (the RCM lead flow → `marketing_leads` = 0, the holistic audit's 63 findings, the
+property-tab design part 3, N15d's unreadable arm) already sit under REMEDIATION-2026-05 or their own
+rows. The inventory's honest residue — ghosts (never measured), the ten root reports past their
+opening sections, 283 forward-looking history statements, 102 prompts never re-checked with the
+widened trace — is one read-only CC round, filed as **INVENTORY2**, held until the queue below moves.
+
+**The gap ran the other way.** A sweep of every backlog row whose State cell carries 👤 found **67**
+— across nineteen sections, some from August — against an operator checklist that held **five**.
+Nine of the 67 were already done with a stale state (UX0, EXT1, EXT2, C4a, OWNERGAP1-decision; and
+CFE-RUNAWAY, PRI5, CQM1, HCRIS-TIMEOUT are waiting on runs, not on Scott) — states fixed. The rest are
+now **`OPERATOR-CHECKLIST.md` § Scott's queue, Q1–Q28**, tiered: **A** exposure (the open `ai-copilot`
+and `salesforce-enrichment` edge functions, the Vercel teardown with the extension still writing
+through the retired build, the PA webhook secret); **B** ten-minute admin (Dialysis CI required
+check — three steps owed since 2026-09-02; leaked-password toggle; Postgres upgrade; Anthropic credits;
+the gov detector handoff); **C** decisions that unblock building (Dialysis_DB owner confirmation, the
+five long-dark-flag decisions, the six zero-completion lanes, the 2,044 false closes, the bank/trustee
+rule, sponsor confirmations, the 15 person merges, CMBS opt-in, the dia tenant-in-owner-slot rule,
+DOC14, N2, the orphan opps, team mailboxes); **D** tenant chores (UX0 pastes, S1–S10, probes, ASC50
+reviews, W3); **E** waiting on runs; **F** parked designs. Every 👤 row now points at its Q line, and
+rule ⑤-👤 in the protocol makes the mirror part of the same change from here on. SEC9/SEC10 (key
+rotation) stay under the P0s decision, not in the queue.
+
+**Next:** Scott clears tier A/B as he can (Q1–Q9; Cowork turns any of them into a click-path on
+request); Saturday's digest; Monday's GOVDEED3 check; INVENTORY2 when the queue is moving.
+
 ## 2026-09-17 — F8 done and verified from the export; PRI2-on merged with its migration unapplied — the Priority tab was returning 502 until Cowork applied it; a migration-apply step joins the loop (Cowork)
 
 **F8 — verified from `LCCFlaggedEmailIntake_20260917152101.zip`.** The success branch now reads
