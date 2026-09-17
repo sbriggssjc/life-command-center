@@ -1572,14 +1572,17 @@ function renderDiaPortfolioGlanceInner() {
   h += infoCard({ title: 'Total SF', value: fmtN(Math.round(n(mv.total_sf) / 1e6)) + 'M', sub: fmtN(n(mv.properties_with_sf)) + ' with size data', color: 'green', tab: 'search' });
   h += infoCard({ title: 'Projected Annual Rent', value: '$' + fmtN(Math.round(n(mv.total_rent) / 1e6)) + 'M', sub: fmtN(n(mv.properties_with_rent)) + ' with lease rent', color: 'cyan', tab: 'sales' });
   h += infoCard({ title: 'Avg Rent / SF', value: mv.avg_rent_psf ? '$' + Number(mv.avg_rent_psf).toFixed(2) : '—', sub: fmtN(n(mv.properties_with_rent)) + ' properties', color: 'purple', tab: 'sales' });
-  // DIA1b: `operators_tracked` counts DISTINCT RAW operator-name STRINGS on
-  // v_property_attributes_portfolio (properties.operator, free text) — it is
-  // NOT the canonical operator count. properties.operator_id (the ID2 registry)
-  // resolves the same portfolio to fewer distinct operators (e.g. "Fresenius"
-  // and "Fresenius Medical Care" are two rows here, one operator there). See
-  // docs/audits/DIA1_TILES_2026-09.md "Operators Tracked" for the measured
-  // gap — flagged for Scott's decision, NOT silently reworded to match either number.
-  h += infoCard({ title: 'Operators Tracked', value: fmtN(n(mv.operators_tracked)), sub: 'distinct operator NAMES (raw text, not canonicalized)', color: 'yellow', tab: 'search' });
+  // DIA1c (Scott's decision S2, 2026-09-17): `operators_tracked` now counts
+  // CANONICAL operators — DISTINCT properties.operator_id, folded through the
+  // operator registry + alias table (dia_operator_survivor()/dia_resolve_operator()).
+  // "US Renal Care" / "Us Renal Care Inc" and every DaVita/DaVita at Home
+  // spelling collapse to one operator identity, everywhere. `operators_unresolved`
+  // is the residual count of properties whose operator name has NOT been
+  // matched to any canonical operator and is not a known category/payer label
+  // (Independent/Other/State Owned/Kaiser/UnitedHealthcare, etc. are
+  // deliberately excluded — they are not operators). It reads 0 today; a
+  // non-zero value here is new capture waiting on registration, not a bug.
+  h += infoCard({ title: 'Operators Tracked', value: fmtN(n(mv.operators_tracked)), sub: n(mv.operators_unresolved) > 0 ? (fmtN(n(mv.operators_unresolved)) + ' unresolved operator name(s)') : 'canonical operators, folded', color: 'yellow', tab: 'search' });
   h += '</div>';
   // Second row mirrors gov's NOI row (Total NOI · Avg NOI/Property · Contacts).
   // dia is NNN so net rent ≈ NOI; the Avg tile is total net rent / active property.

@@ -121,13 +121,37 @@ describe('DIA1b — MV-backed Overview sections carry a visible "as of" freshnes
   });
 });
 
-describe('DIA1b — Operators Tracked is labelled honestly, not silently "corrected"', () => {
-  it('the sub-label says raw text / not canonicalized rather than asserting a canonical count', () => {
+describe('DIA1c — Operators Tracked reads the canonical count and its own honest residue', () => {
+  // DIA1b pinned the OLD caption ("not canonicalized") as a guard against
+  // silently rewording a mislabeled tile without fixing the underlying data.
+  // DIA1c (Scott's decision S2) actually fixed the data layer instead: the
+  // mv_dia_overview_stats.operators_tracked column itself is now
+  // COUNT(DISTINCT properties.operator_id) — folded through the operator
+  // registry + alias table, so "US Renal Care" / "Us Renal Care Inc" collapse
+  // to one operator everywhere. The old wording is now false and must not
+  // reappear; the caption must instead be DRIVEN by the new honest residue
+  // column (mv.operators_unresolved), never a hardcoded claim of cleanliness.
+  it('never re-states the DIA1b "not canonicalized" caveat — the fold is real now', () => {
     const body = sliceFn(dia, 'renderDiaPortfolioGlanceInner');
-    assert.match(body, /Operators Tracked[\s\S]*?not canonicalized/,
-      'operators_tracked counts distinct FREE-TEXT operator strings on ' +
-      'v_property_attributes_portfolio (measured 45), which is a different ' +
-      'population than distinct properties.operator_id (measured 21) — the ' +
-      'caption must say what it counts, never be reworded to match either number');
+    assert.doesNotMatch(body, /not canonicalized/,
+      'DIA1c folded operator identity at the data layer (properties.operator_id, ' +
+      'mv_dia_overview_stats.operators_tracked = COUNT(DISTINCT operator_id)); ' +
+      'the tile must not claim the old raw-text caveat any more');
+  });
+
+  it('the sub-label is driven by mv.operators_unresolved, never a hardcoded "clean" claim', () => {
+    const body = sliceFn(dia, 'renderDiaPortfolioGlanceInner');
+    assert.match(body, /Operators Tracked[\s\S]*?operators_unresolved/,
+      'the caption must read the honest residue column (properties with a raw ' +
+      'operator name that resolved to neither an operator_id nor a known ' +
+      'category/payer/non_operator classification) rather than asserting the ' +
+      'count is canonical without checking whether anything is still unresolved');
+  });
+
+  it('operators_tracked itself is read straight off the view, not re-derived client-side', () => {
+    const body = sliceFn(dia, 'renderDiaPortfolioGlanceInner');
+    assert.match(body, /n\(mv\.operators_tracked\)/,
+      'the canonical count is computed once, in mv_dia_overview_stats (DIA1c), ' +
+      'and the client must not re-count distinct operator strings itself');
   });
 });
