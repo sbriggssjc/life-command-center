@@ -5,7 +5,18 @@
 // calendar_name from the row, and upserts into calendar_events. Add a feed =
 // add a registry row's ics_url. Self-contained (uses injected service key).
 // ============================================================================
+import { authenticateWebhook } from "../_shared/auth.ts";
+import { parseKnownIps, uaClass, ipClass, requestIp } from "../_shared/caller-class.ts";
+
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+
+// ── EDGE-GATES1 ──────────────────────────────────────────────────────────────
+// The ingest branch (any non-GET method) had NO credential check and writes
+// calendar_events. Same log-only door as the rest of this arc.
+const CALENDAR_ICS_SYNC_AUTH_MODE = (Deno.env.get("CALENDAR_ICS_SYNC_AUTH_MODE") || "log").toLowerCase();
+const CALENDAR_ICS_SYNC_KNOWN_IPS = parseKnownIps(
+  Deno.env.get("CALENDAR_ICS_SYNC_KNOWN_IPS") ?? Deno.env.get("COPILOT_KNOWN_IPS"),
+);
 const KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 async function rest(path: string, init?: RequestInit) {
@@ -109,6 +120,15 @@ Deno.serve(async (req: Request) => {
   if (req.method === "GET") {
     const feeds = await rest("calendar_registry?source_type=eq.ics_feed&active=eq.true&select=label,match_pattern,ics_url");
     return Response.json({ service: "calendar-ics-sync", configured_feeds: feeds });
+  }
+  // EDGE-GATES1 gate — log-only by default.
+  if (!authenticateWebhook(req)) {
+    const ua = uaClass(req.headers.get("user-agent") || "");
+    const ip = ipClass(requestIp(req), CALENDAR_ICS_SYNC_KNOWN_IPS);
+    console.log(`[calendar-ics-sync-auth] DENY-WOULD ${req.method} ${new URL(req.url).pathname} ${ua} ${ip}`);
+    if (CALENDAR_ICS_SYNC_AUTH_MODE === "enforce") {
+      return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+    }
   }
   try {
     const feeds = await rest("calendar_registry?source_type=eq.ics_feed&active=eq.true&ics_url=not.is.null&select=label,match_pattern,ics_url");

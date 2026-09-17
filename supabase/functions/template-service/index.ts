@@ -21,9 +21,21 @@
 
 import { handleCors, jsonResponse, errorResponse } from "../_shared/cors.ts";
 import { opsQuery, pgFilterVal } from "../_shared/supabase-client.ts";
-import { authenticateUser, primaryWorkspaceId } from "../_shared/auth.ts";
+import { authenticateUser, authenticateWebhook, primaryWorkspaceId } from "../_shared/auth.ts";
 import { writeSignal } from "../_shared/signals.ts";
 import { queryParams, parseBody, isoNow } from "../_shared/utils.ts";
+import { parseKnownIps, uaClass, ipClass, requestIp } from "../_shared/caller-class.ts";
+
+// ── EDGE-GATES1 ──────────────────────────────────────────────────────────────
+// `authenticateUser()` below always resolves a transitional user regardless of
+// whether a valid credential was supplied (see context-broker for the same
+// finding), so the POST writers here (`record_send` -> template_sends +
+// template_refinements; `health` -> template_flags) had no real gate. Same
+// log-only door as ai-copilot/salesforce-enrichment/context-broker.
+const TEMPLATE_SERVICE_AUTH_MODE = (Deno.env.get("TEMPLATE_SERVICE_AUTH_MODE") || "log").toLowerCase();
+const TEMPLATE_SERVICE_KNOWN_IPS = parseKnownIps(
+  Deno.env.get("TEMPLATE_SERVICE_KNOWN_IPS") ?? Deno.env.get("COPILOT_KNOWN_IPS"),
+);
 
 // ── Template Engine (ported from _shared/templates.js) ─────────────────────
 
@@ -413,6 +425,16 @@ Deno.serve(async (req: Request) => {
 
   if (req.method !== "POST") {
     return errorResponse(req, `Method ${req.method} not allowed`, 405);
+  }
+
+  // EDGE-GATES1 gate — runs before every POST dispatch, log-only by default.
+  if (!authenticateWebhook(req)) {
+    const ua = uaClass(req.headers.get("user-agent") || "");
+    const ip = ipClass(requestIp(req), TEMPLATE_SERVICE_KNOWN_IPS);
+    console.log(`[template-service-auth] DENY-WOULD ${req.method} ${new URL(req.url).pathname} ${ua} ${ip}`);
+    if (TEMPLATE_SERVICE_AUTH_MODE === "enforce") {
+      return errorResponse(req, "unauthorized", 401);
+    }
   }
 
   const body = await parseBody(req) as Record<string, unknown> | null;

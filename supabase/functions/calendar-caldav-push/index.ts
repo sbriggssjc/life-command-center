@@ -14,7 +14,22 @@
 // Secrets:  APPLE_ID, APPLE_APP_PASSWORD, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 // Env opt:  CORTEX_CAL_NAME (default "Cortex"), CORTEX_PUSH_DOMAINS (csv; default all)
 // ============================================================================
+import { authenticateWebhook } from "../_shared/auth.ts";
+import { parseKnownIps, uaClass, ipClass, requestIp } from "../_shared/caller-class.ts";
+
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+
+// ── EDGE-GATES1 ──────────────────────────────────────────────────────────────
+// This function had NO credential check anywhere — including `?retire_force=`
+// and `?retire_empty=1`, which DELETE an iCloud calendar outright, and the
+// main run, which PUTs/DELETEs events. `probe`/`preview` are read-only
+// diagnostics and stay open (mirrors ai-copilot's `/health` exemption); every
+// other route (including `inspect`, which reads calendar contents) is gated.
+// Same log-only door as the rest of this arc.
+const CALENDAR_CALDAV_PUSH_AUTH_MODE = (Deno.env.get("CALENDAR_CALDAV_PUSH_AUTH_MODE") || "log").toLowerCase();
+const CALENDAR_CALDAV_PUSH_KNOWN_IPS = parseKnownIps(
+  Deno.env.get("CALENDAR_CALDAV_PUSH_KNOWN_IPS") ?? Deno.env.get("COPILOT_KNOWN_IPS"),
+);
 const KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const APPLE_ID = Deno.env.get("APPLE_ID") || "";
 const APPLE_PW = Deno.env.get("APPLE_APP_PASSWORD") || "";
@@ -329,6 +344,16 @@ Deno.serve(async (req: Request) => {
       const home = await homeUrl();
       const cals = await listCalendars(home);
       return Response.json({ service: "calendar-caldav-push", domain_calendars: DOMAIN_CALS, existing: cals.map((c) => c.name) });
+    }
+    // EDGE-GATES1 gate — every route below `probe` is gated (log-only by
+    // default); `preview` is read-only and stays open alongside `probe`.
+    if (url.searchParams.get("preview") !== "1" && !authenticateWebhook(req)) {
+      const ua = uaClass(req.headers.get("user-agent") || "");
+      const ip = ipClass(requestIp(req), CALENDAR_CALDAV_PUSH_KNOWN_IPS);
+      console.log(`[calendar-caldav-push-auth] DENY-WOULD ${req.method} ${url.pathname}${url.search} ${ua} ${ip}`);
+      if (CALENDAR_CALDAV_PUSH_AUTH_MODE === "enforce") {
+        return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+      }
     }
     // Admin: preview before/after normalized titles WITHOUT writing.
     if (req.method === "GET" && url.searchParams.get("preview") === "1") {

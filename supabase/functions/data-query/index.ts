@@ -11,8 +11,22 @@
 // ============================================================================
 
 import { handleCors, jsonResponse, errorResponse } from "../_shared/cors.ts";
-import { authenticateUser, requireRole, primaryWorkspaceId } from "../_shared/auth.ts";
+import { authenticateUser, authenticateWebhook, requireRole, primaryWorkspaceId } from "../_shared/auth.ts";
 import { queryParams, parseBody } from "../_shared/utils.ts";
+import { parseKnownIps, uaClass, ipClass, requestIp } from "../_shared/caller-class.ts";
+
+// ── EDGE-GATES1 ──────────────────────────────────────────────────────────────
+// `authenticateUser()` always resolves a transitional user regardless of the
+// credential supplied (same finding across this edge project's other
+// functions), so the `role` gate below is real but the CALLER IDENTITY behind
+// it is not verified by any secret. This adds the same log-only
+// X-PA-Webhook-Secret door as the sibling functions, scoped to the write path
+// (POST/PATCH through the gov/dia table allowlist + the gov-write/gov-evidence
+// proxies) — reads are left alone.
+const DATA_QUERY_AUTH_MODE = (Deno.env.get("DATA_QUERY_AUTH_MODE") || "log").toLowerCase();
+const DATA_QUERY_KNOWN_IPS = parseKnownIps(
+  Deno.env.get("DATA_QUERY_KNOWN_IPS") ?? Deno.env.get("COPILOT_KNOWN_IPS"),
+);
 
 // ── Allowlists (ported from api/_shared/allowlist.js) ──────────────────────
 
@@ -583,6 +597,18 @@ Deno.serve(async (req: Request) => {
   const wsId = primaryWorkspaceId(user);
   if (!wsId || !requireRole(user, "viewer", wsId)) {
     return errorResponse(req, "Insufficient permissions", 403);
+  }
+
+  // EDGE-GATES1 gate — every non-GET request (writes + the gov-write/gov-evidence
+  // proxies' POST actions) runs the shared log-only door before dispatch. GET
+  // reads are left alone.
+  if (req.method !== "GET" && !authenticateWebhook(req)) {
+    const ua = uaClass(req.headers.get("user-agent") || "");
+    const ip = ipClass(requestIp(req), DATA_QUERY_KNOWN_IPS);
+    console.log(`[data-query-auth] DENY-WOULD ${req.method} ${new URL(req.url).pathname} ${ua} ${ip}`);
+    if (DATA_QUERY_AUTH_MODE === "enforce") {
+      return errorResponse(req, "unauthorized", 401);
+    }
   }
 
   // Gov write service sub-handler

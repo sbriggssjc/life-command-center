@@ -6,7 +6,19 @@
 // classifies it) and upserts to calendar_events.
 // Secrets: APPLE_ID, APPLE_APP_PASSWORD (set via `supabase secrets set`).
 // ============================================================================
+import { authenticateWebhook } from "../_shared/auth.ts";
+import { parseKnownIps, uaClass, ipClass, requestIp } from "../_shared/caller-class.ts";
+
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+
+// ── EDGE-GATES1 ──────────────────────────────────────────────────────────────
+// The non-GET (ingest) branch had NO credential check and writes
+// calendar_events for every calendar Scott's Apple id can see. Same log-only
+// door as the rest of this arc.
+const CALENDAR_CALDAV_SYNC_AUTH_MODE = (Deno.env.get("CALENDAR_CALDAV_SYNC_AUTH_MODE") || "log").toLowerCase();
+const CALENDAR_CALDAV_SYNC_KNOWN_IPS = parseKnownIps(
+  Deno.env.get("CALENDAR_CALDAV_SYNC_KNOWN_IPS") ?? Deno.env.get("COPILOT_KNOWN_IPS"),
+);
 const KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const APPLE_ID = Deno.env.get("APPLE_ID") || "";
 const APPLE_PW = Deno.env.get("APPLE_APP_PASSWORD") || "";
@@ -145,6 +157,15 @@ Deno.serve(async (req: Request) => {
     const isWriteTarget = (n: string) => /^cortex\b/i.test(String(n).trim());
     const cals = allCals.filter((c) => !isWriteTarget(c.name));
     if (req.method === "GET") return Response.json({ service: "calendar-caldav-sync", calendars: cals.map((c) => c.name), excluded: allCals.filter((c) => isWriteTarget(c.name)).map((c) => c.name) });
+    // EDGE-GATES1 gate — log-only by default.
+    if (!authenticateWebhook(req)) {
+      const ua = uaClass(req.headers.get("user-agent") || "");
+      const ip = ipClass(requestIp(req), CALENDAR_CALDAV_SYNC_KNOWN_IPS);
+      console.log(`[calendar-caldav-sync-auth] DENY-WOULD ${req.method} ${new URL(req.url).pathname} ${ua} ${ip}`);
+      if (CALENDAR_CALDAV_SYNC_AUTH_MODE === "enforce") {
+        return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+      }
+    }
     const results = [];
     for (const c of cals) { try { results.push(await ingestCalendar(c)); } catch (e) { results.push({ calendar: c.name, error: String((e as Error).message) }); } }
     return Response.json({ ok: true, calendars_found: cals.length, results });

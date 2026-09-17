@@ -11,9 +11,21 @@
 //   start/end: ISO (with Z/offset = trusted) OR naive wall time (assumed tz, default America/Chicago)
 // Secrets: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 // ============================================================================
+import { authenticateWebhook } from "../_shared/auth.ts";
+import { parseKnownIps, uaClass, ipClass, requestIp } from "../_shared/caller-class.ts";
+
 const URL_ = Deno.env.get("SUPABASE_URL")!;
 const KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const DEFAULT_TZ = "America/Chicago";
+
+// ── EDGE-GATES1 ──────────────────────────────────────────────────────────────
+// This function had NO credential check at all — any POST writes a
+// calendar_events row. Same log-only X-PA-Webhook-Secret door as the rest of
+// this arc.
+const CALENDAR_CAPTURE_AUTH_MODE = (Deno.env.get("CALENDAR_CAPTURE_AUTH_MODE") || "log").toLowerCase();
+const CALENDAR_CAPTURE_KNOWN_IPS = parseKnownIps(
+  Deno.env.get("CALENDAR_CAPTURE_KNOWN_IPS") ?? Deno.env.get("COPILOT_KNOWN_IPS"),
+);
 const DOMAINS = ["business", "family", "coaching", "personal", "home", "travel"];
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -67,6 +79,14 @@ function J(body: unknown, status = 200) { return new Response(JSON.stringify(bod
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   if (req.method !== "POST") return J({ ok: false, error: "POST required" }, 405);
+
+  // EDGE-GATES1 gate — log-only by default.
+  if (!authenticateWebhook(req)) {
+    const ua = uaClass(req.headers.get("user-agent") || "");
+    const ip = ipClass(requestIp(req), CALENDAR_CAPTURE_KNOWN_IPS);
+    console.log(`[calendar-capture-auth] DENY-WOULD ${req.method} ${new URL(req.url).pathname} ${ua} ${ip}`);
+    if (CALENDAR_CAPTURE_AUTH_MODE === "enforce") return J({ ok: false, error: "unauthorized" }, 401);
+  }
   let body: Record<string, unknown>;
   try { body = await req.json(); } catch { return J({ ok: false, error: "invalid JSON" }, 400); }
 
