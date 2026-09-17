@@ -28,6 +28,9 @@ Sibling ledgers: `SB notes/TRIAGE.md` (Scott's in-app observations — richer in
 | PL-4 | 2026-09-17 | Harris apply | `18003 Longenbaugh` exists in dia as both `Rd` and `Dr` (property 22269 + another) — a duplicate property to fold; no row yet. | Cowork |
 | PL-5 | 2026-09-17 | gov weekly pipeline | the gov deed ingest runs on GitHub Actions while the gov repo's own note says compute crons belong on Railway — recorded in GOVDEED3's row, not decided. | Cowork |
 | PL-6 | 2026-09-17 | Dialysis_DB `properties` | `properties.updated_at` moved on 3 non-Harris rows during the H7 window (`1325 Hwy 4 East`, `1360 N Shenandoah Ave`, `275 Health Center Dr`) — some other writer set `recorded_owner_id`; which one is not identified. | Cowork |
+| PL-7 | 2026-09-17 | `brokers` (BR4) | 123 `brokers.broker_name` rows are firm/operator-shaped, not people (flagged into `dia_broker_company_composite_review`, never merged/deleted). Likely disposition: split the firm-shaped ones into `broker_companies` via BR1's own classifier, reassign the operator-shaped ones (DaVita/Fresenius) off `brokers` entirely — not built. | Cowork |
+| PL-8 | 2026-09-17 | `brokers` (BR4) | `dia_broker_company_composite_review` still holds 468 open rows: 120 same-name-one-linked-one-blank groups (never auto-filled — filling the blank from the linked sibling would be an identity guess), the 8 firm-string groups that failed either the junk-shape or weak-domain-evidence gate, and residue from earlier BR1 classes. A human pass could raise the mint rate but needs judgment per row. | Cowork |
+| PL-9 | 2026-09-17 | `brokers` (BR4) | Own name ("Scott Briggs") appears 3x in `brokers` (ids 1373/2076/2437), one linked to `broker_company_id=126`, two blank — correctly left untouched by the never-guess rule, but worth a manual look. | Cowork |
 
 ## Triaged
 
