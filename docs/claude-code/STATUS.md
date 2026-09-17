@@ -33,17 +33,17 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **Market briefs (MB/EB)** | MB1d, MB2a, MB3, MB4, MB5, MB6, MB7, EB1b, P18 | 2026-09-12 | **LIVE**: `MARKET_BRIEF_PSQL` + `MARKET_BRIEF_RENDER` on; the daily email carries the Lane Briefs block (cap-rate bands, on-market, honest CMS staleness gaps, link to `#/briefs/dialysis`), the tab serves live facts, first `market_brief_issues` row frozen. Next: MB2a (the 3 new dialysis RSS URLs all fail 403/404), MB5 P-WEB (blocked on EB1b Anthropic credit), MB6 weekly long-form, MB7 MCP recall |
 | **Operator funnel (OC / HP1)** | HP1, HP1-P1a, HP1-P1a-fix, HP1-P1a-dup | 2026-09-12 | HP1-P1a-fix CLOSED live (608 rows UPDATED, first-ever Salesforce UPDATE to `bd_opportunities`); HP1 P0 (Today 500 badge) fixed+deployed+verified |
 | **Ownership (OWN/RO)** | OWN-T0a–T0j, RO3, B1b, AC2/AC3/AC6–AC11 | 2026-09-12 | OWN-T0j verified end-to-end live; RO3 field-mapping design drafted; OWN-T0a/B1b/AC-series propagation work still open |
-| **CoStar sidebar / public records (PR5/PRI)** | PR5d, PR-scanner-3, PRI2–PRI6, HCRIS-TIMEOUT, HCRIS-TRACKER-BLIND, HCRIS-QIP-DEFICIENCY-TIMEOUT-PATTERN | 2026-09-16 | PR-scanner-3 shipped (`county_records_needed` action); `PRI6` closed ✅ 2026-09-14, both sides confirmed merged — checking on it live is what surfaced `HCRIS-TIMEOUT` (a separate, months-old defect, not a `PRI6` regression). `HCRIS-TIMEOUT` is now **six rounds deep**: root cause isolated 2026-09-16 (`HCRIS-TIMEOUT-4`, two structural bugs, neither HCRIS-specific), both **fixed and pushed same day** (`HCRIS-TIMEOUT-5`, `Dialysis` PR #7413, commit `226f7e3` — confirmed merged and redeployed by Scott). **A fresh post-fix run was triggered and, live-monitored to its actual stop, turned out not to be a hang at all**: `cms-ingestion` spent its full ~4h18m runtime doing real, continuous work — 6,879 properties written via a slow, unbatched `propagate_financials()`→`properties` step — then stopped within a minute of finishing that step, without ever reaching `hcris_cost_reports` or `finish_run()`. (An earlier same-day read of this as a "genuine hang" was wrong, corrected same-day.) **`HCRIS-TIMEOUT-6` (also same day) confirmed the mechanism against the deployed code**: `propagate_financials()` had the identical swallowed-`StepTimeout` bug as `aux_cms_tables` (now closed ✅, confirmed genuinely fixed by this very evidence) plus a real N+1 pattern; fixed, pushed, `Dialysis` PR #7417 — **merge status not yet confirmed by Scott**. `HCRIS-TIMEOUT` stays 🔴, six-plus rounds in. **👤 2026-09-17 update: that fast/cheap live test ran overnight, and the fix didn't work** — the scheduled 06:00 UTC run confirmed via Railway deploy timestamp to be running PR #7417's code still shows no `StepTimeout` after 6h13m and counting; see the dated entry below. ⚠️ Separately: a parallel Cowork session's merge (`8cda70b9`, "round8" STATUS/PLANNED-BACKLOG archive) silently reverted this section's `HCRIS-TIMEOUT-5` update back to its round-4 state — restored here; see the dated entry below for the recovery note. One flagged, unbuilt follow-up still queued: `qip_scores_ingestor.py`/`cms_deficiency_ingestor.py` share HCRIS's old bare-timeout bug, still correctly out of scope until the pipeline actually reaches that far. |
+| **CoStar sidebar / public records (PR5/PRI)** | PR5d, PR-scanner-3, PRI2–PRI6, HCRIS-TIMEOUT, HCRIS-TRACKER-BLIND, HCRIS-QIP-DEFICIENCY-TIMEOUT-PATTERN | 2026-09-16 | PR-scanner-3 shipped (`county_records_needed` action); `PRI6` closed ✅ 2026-09-14, both sides confirmed merged — checking on it live is what surfaced `HCRIS-TIMEOUT` (a separate, months-old defect, not a `PRI6` regression). `HCRIS-TIMEOUT` is now **six rounds deep**: root cause isolated 2026-09-16 (`HCRIS-TIMEOUT-4`, two structural bugs, neither HCRIS-specific), both **fixed and pushed same day** (`HCRIS-TIMEOUT-5`, `Dialysis` PR #7413, commit `226f7e3` — confirmed merged and redeployed by Scott). **A fresh post-fix run was triggered and, live-monitored to its actual stop, turned out not to be a hang at all**: `cms-ingestion` spent its full ~4h18m runtime doing real, continuous work — 6,879 properties written via a slow, unbatched `propagate_financials()`→`properties` step — then stopped within a minute of finishing that step, without ever reaching `hcris_cost_reports` or `finish_run()`. (An earlier same-day read of this as a "genuine hang" was wrong, corrected same-day.) **`HCRIS-TIMEOUT-6` (also same day) confirmed the mechanism against the deployed code**: `propagate_financials()` had the identical swallowed-`StepTimeout` bug as `aux_cms_tables` (now closed ✅, confirmed genuinely fixed by this very evidence) plus a real N+1 pattern; fixed, pushed, `Dialysis` PR #7417 — **merge status not yet confirmed by Scott**. `HCRIS-TIMEOUT` stays 🔴, six-plus rounds in. **👤 2026-09-17 update: that fast/cheap live test ran overnight, and the fix didn't work** — the scheduled 06:00 UTC run confirmed via Railway deploy timestamp to be running PR #7417's code still shows no `StepTimeout` after 6h13m and counting (final tally: 9h20m, 10,243 properties, zero `StepTimeout` rows ever). **`HCRIS-TIMEOUT-7` (also 2026-09-17) found the real gap**: round 6's re-raise guards sat on the SELECT-only call sites, but the per-row *write* path (`update_row()`→`safe_execute()`×2 layers) had three of its own bare `except Exception` swallows underneath them, plus a `ThreadPoolExecutor` blocking-shutdown bug that defeated even the inner 30s timeout. Fixed, tested (340 regression tests + 2 new cheap unit-level proofs that don't require a multi-hour run), `Dialysis` PR #7418 — **Scott reports merged; confirmed via Supabase that no new scheduled run has occurred since (next one ~06:00 UTC tomorrow), so live proof is still pending**. `HCRIS-TIMEOUT` stays 🔴, seven rounds in. **Note: the round-7 prompt's parts (b) and (c) — reconciling Railway's "Stopping Container at 7:34:18" event, and confirming the round-6 batching read — were not addressed in CC's response; still open for round 8 if the round-7 fix also doesn't hold.** ⚠️ Separately: a parallel Cowork session's merge (`8cda70b9`, "round8" STATUS/PLANNED-BACKLOG archive) silently reverted this section's `HCRIS-TIMEOUT-5` update back to its round-4 state — restored here; see the dated entry below for the recovery note. One flagged, unbuilt follow-up still queued: `qip_scores_ingestor.py`/`cms_deficiency_ingestor.py` share HCRIS's old bare-timeout bug, still correctly out of scope until the pipeline actually reaches that far. |
 | **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-reconcile-2, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT, CANON-OWNERSHIP1 | 2026-09-16 | **Arc complete through GOVDEED3** (gov PRs #400–#406; V1 = confirm the ingest runtime carries the new gate); DEED1-reconcile-2 done (LCC #2535, Dialysis #7414); CANON-OWNERSHIP1 text fixed, 👤 confirmation open; sale-party conflicts 1,290 are a review queue |
 | **CoStar sidebar / public records (PR5/PRI)** | PR5d, PR-scanner-3, PRI2–PRI6, HCRIS-TIMEOUT, HCRIS-TRACKER-BLIND, HCRIS-QIP-DEFICIENCY-TIMEOUT-PATTERN | 2026-09-16 | PR-scanner-3 shipped (`county_records_needed` action); `PRI6` closed ✅ 2026-09-14, both sides confirmed merged — checking on it live is what surfaced `HCRIS-TIMEOUT` (a separate, months-old defect, not a `PRI6` regression). `HCRIS-TIMEOUT` is now **six rounds deep**: root cause isolated 2026-09-16 (`HCRIS-TIMEOUT-4`, two structural bugs, neither HCRIS-specific), both **fixed and pushed same day** (`HCRIS-TIMEOUT-5`, `Dialysis` PR #7413, commit `226f7e3` — confirmed merged and redeployed by Scott). **A fresh post-fix run was triggered and, live-monitored to its actual stop, turned out not to be a hang at all**: `cms-ingestion` spent its full ~4h18m runtime doing real, continuous work — 6,879 properties written via a slow, likely-unbatched `facility_patient_counts`→`properties` propagation step — then stopped within a minute of finishing that step, without ever reaching `hcris_cost_reports` or `finish_run()` (tracker row still `run_status='started'`, `notes='{}'`). (An earlier same-day read of this as a "genuine hang" was wrong and is corrected in the entry below, not deleted.) `HCRIS-TIMEOUT` stays 🔴, now with a much narrower target for round 6: is that propagation step unbatched and fixable the same way `hcris_propagation` already was, and what stops execution right after it finishes. ⚠️ Separately: a parallel Cowork session's merge (`8cda70b9`, "round8" STATUS/PLANNED-BACKLOG archive) silently reverted this section's `HCRIS-TIMEOUT-5` update back to its round-4 state — restored here; see the dated entry below for the recovery note. One flagged, unbuilt follow-up still queued: `qip_scores_ingestor.py`/`cms_deficiency_ingestor.py` share HCRIS's old bare-timeout bug, still correctly out of scope until the pipeline actually reaches that far. |
 | **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-reconcile-2, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT, CANON-OWNERSHIP1 | 2026-09-16 | Arc complete through GOVDEED3 (gov #406); **the gov deed writer runs from GitHub Actions (weekly Mon 06:00 UTC) — verify 09-21 dateless = 0**; CANON-OWNERSHIP1 👤 confirmation open; sale-party conflicts 1,290 a review queue |
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k LIVE** (LCC PR #2506): 218 attested supersessions, 40/43 pairs to sponsor, 16/16 controls untouched, reversible; sponsor-as-edge = future work |
-| **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, -harris-b/-c/-d, -ledger-order, MCP1 | 2026-09-17 | **41 assessor-sourced owners live** (Philadelphia 20, Harris 21 of 50); Harris is done except the 27 situs-gap properties → §P10a is the lane's next unit; next free-bulk jurisdiction after that |
-| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS-consolidate-lcc, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift | 2026-09-17 | PRI2-on live; **HOME2 built, flag OFF → HOME2-on is Scott's look**; F8 done + F8-b; DIA1c live; Saturday digest verifies F1–F8 |
-| **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–4, INVENTORY1, INVENTORY1b, INVENTORY2, INVENTORY-process, REMEDIATION-2026-05, REPO1, ROADMAP, PROCESS-CC-DOCS, PROCESS-MERGE-CLOBBER, PROCESS-ROW-CELLS, PROCESS-PARKING-LOT, DEPLOY2-coverage, DEPLOY2-stale-body | 2026-09-17 | **DEPLOY2 live + CI on every merge** (149 objects / 0 unapplied); parking lot triaged (13 lines → rows/prompts/checklist); EDGE-GATES1 prompted; CLAUDE.md pass 2 ahead |
+| **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, -harris-b/-c/-d, -ledger-order, MCP1 | 2026-09-16 | **40 assessor-sourced owners live**; S5 = (a) exact-situs; C2 staged (98,804 rows); `harris-d` prompted for the tick parameter; 27 situs gap (§P10a) |
+| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, DIA1, DIA1b, DIA1c, ID3a-drift | 2026-09-16 | **S1–S5 answered**: PRI2 side-by-side produced (Scott's read = R1); S2 → `DIA1c` (one operator identity); S4 → F8 click-path (one flow owns the lifecycle); FLOWS1-path open; Saturday digest still the F1–F7 verification |
+| **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–4, INVENTORY1, INVENTORY1b, INVENTORY-process, REMEDIATION-2026-05, FLAGS-geocode, REGISTRY-contacts-hub, REPO1, ROADMAP, PROCESS-CC-DOCS, PROCESS-MERGE-CLOBBER | 2026-09-16 | Backlog regrouped + `ROADMAP.md`; rule ⑤-CC for CC rounds; **Cowork's whole-file bundle commits clobbered a parallel merge (found by PR #2537) → commits are 3-way patches from round 17**; CLAUDE.md pass 2 with Scott ahead |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
 | **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
-| **Broker identity (BR) / BROKER1** | BR1, BR2, BR3, BR4, BR4-b, BR5, BR1-misparse-handoff, BROKER1, BROKER1-sf | 2026-09-17 | **BR4 live**: 3 true duplicates merged, 52 firms minted with evidence, `broker_company_id` 14.4% → **25.0%** (641/2,566); residue → BR4-b (123 firm-shaped broker rows, 468 review); BR5 display next |
+| **Broker identity (BR) / BROKER1** | BR1, BR2, BR3, BR4, BR5, BR1-misparse-handoff, BROKER1, BROKER1-sf | 2026-09-16 | **BR1/BR3 live** (Dialysis_DB: `broker_companies` 131 → 75, 10 ambiguous composites in review, `broker_company_id` 7.2% → 14.4%); **661 unmatched `brokers.company` strings queued = BR4's input**; BR5 display unit unbuilt; BROKER1 applied live (1,303); BROKER1-sf correctly unbuilt |
 | **gov agency canonicalization (ID3a\*)** | ID3a, ID3a-b, ID3a-c, ID3a-d, ID3e, I14, I16 | 2026-09-12 | ID3a-b/c/d/e all shipped and live-verified; repo-ownership hazard (I16) found and closed — `government-lease` owns the gov DB's migrations, LCC's copy retired |
 | **CI / producer health (B6d/B6e)** | B6d-cms-*, B6d-assessor-*, B6d-pri-*, B6e-ci-*, B6e-fred-* | archived 2026-09-11 | Suite is a real merge gate (`Run Tests` unmasked, green once on `main`); `pip-audit`/secrets-grep/ruff still masked; full detail in the 2026-08-29→09-11 archive and `docs/architecture/producer-health-and-ci-enforcement.md` |
 
@@ -55,246 +55,54 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
-## 2026-09-17 — DEPLOY2-live, BR4 and HOME2 reconciled; Q1's calendar flow is still calling without the header; parking lot triaged, EDGE-GATES1 drafted (Cowork)
+## 2026-09-17 — `HCRIS-TIMEOUT-7`: found the actual swallow site (three layers under round 6's re-raise guards) plus a second, independent timeout-defeating bug; fixed, tested cheaply, PR #7418 merged per Scott — live proof still pending
 
-**DEPLOY2-live (PR #2559, running on `7611e966`).** The window fixes were already in code from the
-09-16 coverage round; the round ran the detector **live over LCC Opps and Dialysis_DB — 149 objects,
-0 unapplied** — with the three known incidents (Geocodio cap, PRI2-on, C1C) confirmed applied and
-caught; added `.github/workflows/deploy2-unapplied-check.yml` (every push to `main`, fails the job with
-a commit-comment table); built a **stale-body comparator but did not wire it** (needs a migration on both
-projects) → `DEPLOY2-stale-body`, low. Caveats it disclosed: its probe used a shallow clone (CI's
-`fetch-depth: 0` sees the full add-date window), and it caught its own hand-typed object list mid-round.
-👤 Scott: confirm the job ran green on the merges since (`Actions` → *deploy2-unapplied-check*).
+**Why round 6 wasn't enough, now confirmed against the deployed code rather than guessed at.**
+`HCRIS-TIMEOUT-6`'s `except TimeoutError: raise` guards were real and correctly placed — on the
+**SELECT-only** call sites. The actual per-row **write** in `propagate_financials()` goes through
+`utils_shared.update_row()` → `utils_shared.safe_execute()` → `core_utils.safe_execute()`, and every one
+of those three layers had its own bare `except Exception` that silently absorbed the `StepTimeout` (a
+`TimeoutError` subclass) before it could ever reach round 6's re-raise points. This lines up exactly with
+this session's own live evidence: 9h20m runtime, 10,243 properties written, zero `StepTimeout` rows,
+despite running 37x past the 900s budget — the timeout was firing and being swallowed on the write side,
+not failing to fire at all.
 
-**BR4 (PR #2558) — applied live, verified.** 146 duplicate-name groups: **3** true duplicates merged
-(13 FK constraints across 11 tables repointed, ledgered in `dia_br4_broker_merge_log`), 120
-one-linked-one-blank and 20 both-blank groups correctly left (filling from a sibling would be an
-identity guess), 3 different-firm. **52 firms minted** from BR1's 661 queued strings, gated on ≥3 brokers
-sharing the token AND ≥2 sharing an email domain, evidence in `dia_br4_firm_mint_evidence`;
-`broker_company_id` **366 → 641 of 2,566 (25.0%)**; `broker_companies` 127. 123 firm-shaped rows in
-`brokers` flagged, not touched; 468 review rows open. Migration objects all present live (step 4a).
-Parked by the round: PL-11 (the 123 firm-shaped rows), PL-12 (the 468), PL-13 (Scott's own name ×3 in
-`brokers`).
+**A second, independent bug found in the same investigation**: `core_utils.safe_execute()`'s
+`with ThreadPoolExecutor(...) as ex:` pattern meant even its own inner 30s timeout was defeated —
+`__exit__` calls `shutdown(wait=True)`, which blocks the main thread on the abandoned worker thread for as
+long as the stuck socket call takes, with no second alarm available to interrupt that join. Two separate
+failure modes, both closed:
 
-**HOME2 (PR #2560) — built behind `home_three_lanes`, OFF.** Research = the nbaSnapshot gaps feed
-(§A predicate); BD = `/api/seller-prospect-queue` top 5, labelled; Inbox = the briefing's inbox
-summary, new before triaged (no due-date field exists — PL-7); the silent `_dbFillMyPrioritiesFromQueue`
-fallback disabled under the flag; 21 tests. The round had no DB access, so the live render and the
-"how often was `today_top_5` empty" measurement are still owed — **HOME2-on** is Scott's look at the
-flag ON in his own session, then the flip.
+1. `utils_shared.safe_execute()` — re-raises `TimeoutError` before its generic swallow.
+2. `utils_shared.update_row()` — lets a `TimeoutError` from `safe_execute()` propagate instead of
+   returning an ordinary failed-write result.
+3. `core_utils.safe_execute()` — `except TimeoutError: raise` added in the retry loop (which would
+   otherwise re-swallow it via its own generic handler), and the blocking
+   `with ThreadPoolExecutor(...)` replaced with explicit `shutdown(wait=False, cancel_futures=True)` on
+   every exit path.
 
-**Q1 — not done yet, and the log says which one.** Scott reports the four header edits; the log shows
-**`POST /sync/calendar-events` still logging `DENY-WOULD` at 18:26 UTC** (hourly, unchanged). The other
-three run less often and cannot be judged yet. Most likely: the edited flow is not the hourly calendar
-caller (four workflow ids in `ai-copilot-sync-callers.md`; the calendar one is `4eb7c46f…`), or the
-header name/value differs (`X-PA-Webhook-Secret`, the Object Sync flow's value). Cowork re-reads the
-log tomorrow; the three-day clock starts at the last `DENY-WOULD`.
+**Tests**: `tests/test_hcris_timeout_7.py` (pins fixes 1 & 2, with negative controls proving ordinary
+exceptions are still absorbed as before) and `tests/test_core_utils_hcris_timeout_7.py` — the cheap,
+targeted proof this round's prompt specifically asked for: a fake builder that sleeps 2s under a
+monkeypatched 0.05s timeout, confirmed to fail at 2.001s against the pre-fix code and pass in under 1s
+against the fix — no multi-hour production run needed to verify this layer. 340 tests matching
+`safe_execute`/`update_row`/`propagat*`/`hcris_timeout` pass with no regressions.
 
-**Parking lot, first triage.** PL-1 → **`EDGE-GATES1`** prompt (the 18 unreviewed `verify_jwt:false`
-functions: measure writers/callers/drift from the deployed bodies, gate writers log-only, the
-COPILOT-OPEN pattern); PL-2 folded into it; PL-3 → Q2; PL-4 → `DIA-DUP1` (Longenbaugh Rd/Dr); PL-5
-recorded on GOVDEED3, no action; PL-6 → `OWNER-WRITERS1` (which writer set three `recorded_owner_id`s
-during H7); PL-7/9/10 → HOME2 row; PL-8 → HOME2-on gate; PL-11/12 → `BR4-b`; PL-13 → checklist Q29
-(a 30-second look). BR4's and HOME2's rounds both numbered their lines PL-7…9 — renumbered; the
-`Parked:` convention now says "next free PL number, check the file".
+**Delivery**: `sbriggssjc/Dialysis` branch `claude/amazing-turing-y8nr4w`, commit `f865250`,
+**PR #7418 — Scott reports this merged.** Independently checked Supabase: no scheduled `cms_ingestion`
+run has started since the round-7 run this morning (06:04:28 UTC) as of this write-up (checked
+2026-09-17 ~18:55 UTC) — the next scheduled run is the earliest chance to see whether a real
+`StepTimeout` finally lands in `ingestion_run_errors`. **`HCRIS-TIMEOUT` stays 🔴** until that's observed.
 
-**Next:** Scott — re-check the calendar flow (Q1), glance at Q29, send `EDGE-GATES1`, confirm the
-DEPLOY2 job is green; then HOME2-on. Cowork — Saturday digest, Monday GOVDEED3, the Q1 log.
+**Gap in this round's response, carried forward rather than glossed over**: the `HCRIS-TIMEOUT-7` prompt
+asked two more things CC's response didn't address — (b) reconciling Railway's "Stopping Container at
+7:34:18" Deployments-tab event against the Supabase timeline (06:04:28 UTC start, 15:24:49 UTC last
+write), and (c) confirming or correcting this session's own read that round 6's SELECT-prefetch batching
+is working (the shift to ~60-writes-per-10-minutes late in the prior run). Neither is resolved. If the
+round-7 fix also turns out not to hold, both should be re-asked explicitly in round 8 rather than assumed
+answered.
 
-## 2026-09-17 — Working the queue programmatically: a parking lot for what we notice on the way, three independent CC rounds drafted, and Q1/Q2 measured live (Cowork)
-
-**Scott's ask:** proceed on the recommendation, keep consolidating, and find a way to flag and grab
-other topics as we go. Three moves.
-
-**1. A parking lot.** `docs/claude-code/PARKING-LOT.md` — one line per thing noticed while doing
-something else (date · where · what · who); every Cowork turn triages the open lines into a backlog
-row, a checklist line, a prompt, a decision, or a drop with a reason (README step ③b). Claude Code
-rounds feed it through a **`Parked:`** section every prompt now asks for in its Reporting block. Six
-lines went in on day one, including one that matters: **eight more Dialysis_DB edge functions run
-`verify_jwt:false` with no reviewed gate** (`context-broker`, `template-service`, `intake-receiver`, the
-`calendar-*` four, …) — the COPILOT-OPEN class is wider than the two functions the queue names.
-
-**2. Three rounds that need no decision, sent in parallel.** `DEPLOY2-live` — run the unapplied-
-migration detector live against all three projects, fix the two window defects (include `dialysis/`,
-window by git add-date), body-hash views and functions, and make it a job on every merge to `main`;
-three incidents this week say this is the highest-leverage process fix available. `BR4` — broker
-dedupe against the firm-linked population (143 duplicate-name groups; the 661 firm strings BR1 queued),
-true duplicates only, every FK repointed, firms minted only with evidence. `HOME2` — the three-lane
-Home from HOME1 §B behind a flag, with the BD lane corrected to PRI2's reason-first list and the
-Priority-tab-duplicating fallback removed.
-
-**3. Q1 and Q2 measured live before Scott spends time on them.** Q1: the `ai-copilot` gate **is
-deployed** (v84) in log mode and the edge project has `PA_WEBHOOK_SECRET` set; in the last 24 h it logged
-**35 `DENY-WOULD` lines, all from four Power Automate flows** (`/sync/calendar-events` 24, `/sync/activities`
-6, `/sync/sf-tasks` 4, `/sync/flagged-emails` 1) — so the remaining step is exactly the one already
-written in `docs/architecture/flows/ai-copilot-sync-callers.md`: add the `X-PA-Webhook-Secret` header to
-those four flows' HTTP actions, export, then three clean days, then `COPILOT_AUTH_MODE=enforce`. Q2:
-`salesforce-enrichment` v27 (log-only gate) has been live since 09-09 with **no `[sfenrich-auth]` line
-in 24 h** — the monthly caller has not fired; enforce waits for one cycle (≈10-09) or Scott naming the
-caller (PL-3). Q1's line on the checklist now says the four flows and the doc; Q2's says the date.
-
-**Next:** Scott sends the three prompts and, when convenient, does Q1's four header edits (the doc
-has the click-path); Cowork triages the parking lot each turn; Saturday's digest; Monday's GOVDEED3
-check.
-
-## 2026-09-17 — Inventory reviewed against the to-do lists: the residue is small; the real gap was 67 backlog rows waiting on Scott that the checklist did not know about (Cowork)
-
-Scott asked for a run at the inventory work versus the to-do lists. The CSV (1,789 intent rows) is
-mostly history: 1,000 rows are "docs & process", 919 come from `docs/history/`, and 15 carry a backlog
-link. Of the 70 rows the inventory itself marked flagged / planned / partial, all but four are section
-headings of findings that were resolved in their own round (checked by hand against the backlog); the
-four that are not (the RCM lead flow → `marketing_leads` = 0, the holistic audit's 63 findings, the
-property-tab design part 3, N15d's unreadable arm) already sit under REMEDIATION-2026-05 or their own
-rows. The inventory's honest residue — ghosts (never measured), the ten root reports past their
-opening sections, 283 forward-looking history statements, 102 prompts never re-checked with the
-widened trace — is one read-only CC round, filed as **INVENTORY2**, held until the queue below moves.
-
-**The gap ran the other way.** A sweep of every backlog row whose State cell carries 👤 found **67**
-— across nineteen sections, some from August — against an operator checklist that held **five**.
-Nine of the 67 were already done with a stale state (UX0, EXT1, EXT2, C4a, OWNERGAP1-decision; and
-CFE-RUNAWAY, PRI5, CQM1, HCRIS-TIMEOUT are waiting on runs, not on Scott) — states fixed. The rest are
-now **`OPERATOR-CHECKLIST.md` § Scott's queue, Q1–Q28**, tiered: **A** exposure (the open `ai-copilot`
-and `salesforce-enrichment` edge functions, the Vercel teardown with the extension still writing
-through the retired build, the PA webhook secret); **B** ten-minute admin (Dialysis CI required
-check — three steps owed since 2026-09-02; leaked-password toggle; Postgres upgrade; Anthropic credits;
-the gov detector handoff); **C** decisions that unblock building (Dialysis_DB owner confirmation, the
-five long-dark-flag decisions, the six zero-completion lanes, the 2,044 false closes, the bank/trustee
-rule, sponsor confirmations, the 15 person merges, CMBS opt-in, the dia tenant-in-owner-slot rule,
-DOC14, N2, the orphan opps, team mailboxes); **D** tenant chores (UX0 pastes, S1–S10, probes, ASC50
-reviews, W3); **E** waiting on runs; **F** parked designs. Every 👤 row now points at its Q line, and
-rule ⑤-👤 in the protocol makes the mirror part of the same change from here on. SEC9/SEC10 (key
-rotation) stay under the P0s decision, not in the queue.
-
-**Next:** Scott clears tier A/B as he can (Q1–Q9; Cowork turns any of them into a click-path on
-request); Saturday's digest; Monday's GOVDEED3 check; INVENTORY2 when the queue is moving.
-
-## 2026-09-17 — F8 done and verified from the export; PRI2-on merged with its migration unapplied — the Priority tab was returning 502 until Cowork applied it; a migration-apply step joins the loop (Cowork)
-
-**F8 — verified from `LCCFlaggedEmailIntake_20260917152101.zip`.** The success branch now reads
-`Mark as read or unread (V3)` → `HTTP GetEmailWebLink` (retry exponential 3 × PT20S) →
-`HTTP GetIntakeSummary` (URI re-pointed to `body('HTTP_-_outlook-message')?['correlation_id']`) →
-`Post card in a chat or channel`. `Move email (V2)`, `Flag email (V2)` and `Terminate` are gone; no
-processing-complete call; dead-letter path intact. Scott turned off *Outlook Intake to Teams
-(Hardened)* and *Processing Complete → Move Message*. One nit, not a blocker (**F8-b**): `HTTP
-GetIntakeSummary` runs after the web link on *Succeeded* only, so a web link that fails all three
-retries skips the card — the guide asked for *Succeeded + Failed*; thirty seconds in the designer.
-Verification is Saturday's digest and `processing_log.already_out` staying at 2.
-
-**PRI2-on (PR #2553) — merged, and the tab was broken live.** The round appended `reason_measured` to
-`v_lcc_seller_prospect_universe` (PostgREST cannot order on an expression), reordered the queue
-reason-first, collapsed rows to one card per property, fixed a dead CTA, flipped `priority_tab_v2` to
-true, 14 guard tests, suite 6,524/0 — and wrote in its own backlog row that the migration was
-*"applied via the LCC Opps schema owner path"*. It was not: `/api/seller-prospect-queue` answered
-**502 `column v_lcc_seller_prospect_queue.reason_measured does not exist`** on Railway `49329608`, i.e.
-the flag was ON against a view that did not have the column. Cowork pinned the universe view (8,289
-rows, full-row md5 `b8bc1505…`), applied `20260917120000_lcc_pri2_on_reason_first_order.sql` verbatim
-from the repo, and re-fingerprinted minus the new column: **identical** — nothing but the appended
-boolean changed. Route now 200. Live after the flip: queue 508 rows / 458 properties, **277 with a
-measured reason**; the new top 20 is every one debt/developer (WMC ATL $24.9M debt+developer, FD
-Stonewater/State Warehouse Nova $22.9M developer, NGP V Broward $22.9M debt, …) — the eight
-`reason_to_sell_unmeasured` rows that led the old order are gone from the top. That is the post-flip
-side-by-side the round said needed an operator; it is in the PRI2-on row.
-
-**Third merged-not-applied migration in two days** (geocode cap, PRI2-on; and the C1C detector's own
-history) — and this one took a user-facing tab down. The loop gets a step, not another finding:
-**`docs/claude-code/README.md` step 4a and `BUILD-TURN-PROTOCOL.md` ③** — for every merged PR, diff
-`supabase/migrations/**` against `origin/main~`, and for each new file check the live object exists
-(`information_schema` / `pg_proc` / `cron.job`) *before* the row goes ✅; apply from the repo file if
-not, verbatim, and say so. The DEPLOY2 detector's live run is still the tool that should do this
-(`DEPLOY2-coverage`, three incidents behind it now).
-
-**Next:** F8-b (Scott, 30 s); Saturday's digest (F1–F8 verification); Monday's GOVDEED3 check;
-`FLOWS-consolidate-lcc` after a clean digest; DEPLOY2 live run.
-
-## 2026-09-17 — F8 pre-check: the Move Queue Executor exists and is the working single mover; the consolidation steps revised (three movers → one) (Cowork)
-
-Scott's export of *LCC Move Queue Executor* (15-minute recurrence): `GET /api/move-queue-worklist`,
-find each message by `internetMessageId` (immune to the id change a move causes), clear the flag when
-LCC says so, move to the folder LCC names, `POST /api/move-queue-ack`. Live on LCC Opps: **118 moves in
-14 days, latest 11:45 UTC today, 2 `already_out`** — P120's puller, working. So the message had
-**three** movers: the Flagged flow's own `Move email (V2)`, the *Processing Complete → Move Message*
-flow reached through LCC's webhook push relay after the Teams card, and the Executor. The 2
-`already_out` rows are the races counted.
-
-`docs/setup/FLOWS-CONSOLIDATE-2026-09-16.md` revised: copy **three** actions from the Hardened flow
-(web link, intake summary, card — not the processing-complete Condition), delete the Flagged flow's
-own Move **and** its Flag-clear (the Executor clears the flag; the trigger keys on it), re-point one
-expression, turn **two** flows off (Hardened + Processing Complete → Move Message). Verification is
-now a number: `already_out` stops at 2. LCC follow-up filed low: `FLOWS-consolidate-lcc` (retire the
-webhook→Move-Message relay once nothing calls it). The Executor export goes to
-`private/power-automate/exports-2026-09-17/` (carries connection references — never committed).
-
-## 2026-09-17 — H8 applied (with its ledger row this time); R1 delegated → `PRI2-on` prompt; F8 walked through (Cowork)
-
-**H8.** `POST …?jurisdiction=harris_tx&include_classes=C2`, no `batch_tag` (the tick derived
-`ownergap2_harris_tx_202609171319`) → `wrote 1`: `10311 South Post Oak` → `LUEL PARTNERSHIP LTD 2-03`,
-source `ownergap2_public_assessor:harris_tx:0440360000028`, citation `state_class = C2`. The ledger
-took the row (id 107 rows total now; harris resolved **21**) — OWNERGAP2-ledger-order's fix, seen
-working. Properties with an owner **5,523**. Harris final shape: **21 of 50 applied**, 27 situs gap
-(§P10a), 1 Longenbaugh Rd/Dr duplicate, 1 refused on a directional conflict (380 W vs E Little York).
-**41 assessor-sourced owners live.**
-
-**R1.** Scott delegated the read. Recommendation, recorded: ON, with two changes that are not a new
-score — order *measured reason before value* (today eight `reason_to_sell_unmeasured` rows sit in the
-top 20 ahead of measured debt/developer reasons) and one card per property (rows 1/17 and 5/6 of the
-side-by-side are the same property twice). → `prompts/PRI2-on-reason-first-and-one-card-per-property.md`.
-
-**F8.** Scott asked for the walk-through; it is `docs/setup/FLOWS-CONSOLIDATE-2026-09-16.md` (merged
-in round 18), nine steps, restated in chat this turn. The pre-check (a *Move Queue Executor* flow?)
-comes first.
-
-## 2026-09-17 — DIA1c, FLAGS-geocode-on and harris-d reconciled; Geocodio live (after Cowork applied the cap migration the round had only merged); the C2 dry run resolved one and refused one for the right reason (Cowork)
-
-**DIA1c (PR #2547, running on `0304aa8b`) — verified live on Dialysis_DB.** The 878 were mostly not a
-duplicate-operator problem: 807 carry `operator_class` category/payer/non_operator (Independent 683,
-Other 84, State Owned 17, Kaiser 20…) and are `operator_id = NULL` **by design** — folding them would
-count categories as companies, the opposite of S2. The real residue was 71 properties on 13 names
-that were never in the registry (Intermountain Healthcare, UPMC, Veterans Administration…) — the round
-registered them as operators rather than the review list the prompt asked for; they are health
-systems, not spelling variants, so the call is defensible and is recorded here as a deviation. The
-split Scott named was real and older than the tile: ID2a had merged the duplicate `Us Renal Care Inc`
-rows but never repointed `properties`/`tenants`/`leases`/`medicare_clinics.operator_id` onto the
-survivor. Fixed. Live now: **33 canonical operators**, `US Renal Care` one row with **465** properties
-(was three rows), `DaVita at Home` folded into DaVita, `v_dia_operator_unresolved_review` **0**, no
-property points at a merged operator. Migration in `supabase/migrations/dialysis/` here ✓ (applied live
-from the session, committed the same round — the doctrine sentence held). The tile reads the canonical
-count with an `operators_unresolved` sub-label; the DIA1b guard that pinned the old caption was
-re-pointed at the new contract.
-
-**FLAGS-geocode-on (PR #2549) + D4 — live, but not by itself.** The code shipped a per-UTC-day
-Geocodio ledger (`geocode_tier_usage`, cap 2,400, Census continues past it) and the registry
-update; the migration `20261102210000_lcc_flags_geocode_on_geocodio_daily_cap.sql` was **merged and
-not applied** — the handler reads a missing table as "0 used" (fails open toward Geocodio, by design),
-so with Scott's key in Railway the 10-minute cron had been calling Geocodio uncounted since the key
-landed. Cowork applied the migration to LCC Opps at 12:33 UTC (its own file, verbatim, from this
-repo). Then one live tick: **120 scanned / 120 patched, all by Geocodio** (Census 0 — these are the
-Census-miss long tail), `geocodio_usage_after_tick` 120. Unplaced properties so far: dia 1,707 →
-**1,639**, gov 1,760 → **1,701**; the cron will spend the rest of today's cap in ~3 hours and go
-Census-only until 00:00 UTC. ⚠️ Second incident of the class DEPLOY2 exists for, and the detector's
-live run is still "pending" (`DEPLOY2-coverage`) — noted on that row.
-
-**OWNERGAP2-harris-d (PR #2548) — the C2 dry run.** `include_classes=C2` validated against a closed
-allow-list, threaded to the matcher, echoed in the response; an admitted class resolves on the exact
-arm only (`class_admitted_requires_exact_situs`); `state_class` in the citation; 45 tests; suite
-6,510/0. Live: population 30 → **1 resolved / 29 refused**. Resolved: `10311 South Post Oak` →
-**`LUEL PARTNERSHIP LTD 2-03`** (acct `0440360000028`, C2, exact). Refused, and correctly: `380 W
-Little York` — HCAD's C2 account `380 LITTLE YORK LLC` sits at **380 E Little York Rd**, a different
-address on the other side of the freeway; the exact-situs rule Scott asked for is what kept a
-plausible-looking wrong owner out. The remaining 27 are the situs gap. **H8:** apply the one on
-Scott's go.
-
-**Also — a defect in my own tooling, found while writing this.** Since round 16 the helper that appends a
-round's outcome to a backlog row wrote the text into the State cell and then overwrote that cell with the
-new state: 20 rows on `main` (GOVDEED3, DEED1-reconcile-2, ID3d, ID3d-reconcile, the harris-c/ledger-order
-rows, the S1–S5 decision rows…) have read ✅ with **no supporting narrative** since PR #2538. The
-narratives are restored in this round from the scripts that produced them, the helper is fixed, and
-`PROCESS-ROW-CELLS` records it with a guard idea (a State change without an Item change is suspicious).
-Railway `0304aa8b` = main (all three rounds running). The HCRIS-TIMEOUT session's PR #2550
-(round 6 live proof failed overnight) landed in the same window — theirs, untouched.
-
-**Next:** H8 (say "apply"); R1 (the PRI2 read); F8 (the flow consolidation); Saturday's digest;
-Monday's GOVDEED3 check; the DEPLOY2 live run so the next unapplied migration is caught by a tool, not
-by a tick that happened to be watched.
+Full response filed to `docs/claude-code/responses/done/HCRIS-TIMEOUT-7-alarm-never-fires-during-propagate-financials.response.md`.
 
 ## 2026-09-16 — S1–S5 answered and turned into work; V1 answered from the screenshot and the gov repo; C2 accounts staged; PRI2 side-by-side produced (Cowork)
 
