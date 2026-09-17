@@ -21,7 +21,9 @@
 import { authenticate } from '../_shared/auth.js';
 import { domainQuery } from '../_shared/domain-db.js';
 import { PHILADELPHIA, HARRIS, resolveOwnerForProperty } from '../_shared/ownergap2-sources.js';
-import { fetchHarrisPdataForProperty } from '../_shared/ownergap2-harris-pdata-match.js';
+import {
+  fetchHarrisPdataForProperty, parseIncludeClasses, HARRIS_PDATA_INCLUDABLE_CLASSES,
+} from '../_shared/ownergap2-harris-pdata-match.js';
 import {
   planOwnerWrite, applyOwnerResolution, loadOperatorKeys,
 } from '../_shared/ownergap2-owner-writeback.js';
@@ -123,6 +125,19 @@ export async function handleOwnerGap2ResolveTick(req, res) {
   const cfg = JURISDICTIONS[jurisdiction];
   const dryRun = req.method === 'GET';
   const limit = Math.min(parseInt(req.query.limit, 10) || 60, 200);
+
+  // OWNERGAP2-harris-d: `include_classes` widens which HCAD `state_class`
+  // codes admit as real-property commercial IN ADDITION to the default
+  // F1/F2 (S5 = (a)). Default unchanged when omitted. An unknown class name
+  // is refused loudly rather than silently ignored or silently admitted.
+  const includeClassesParam = parseIncludeClasses(req.query.include_classes);
+  if (!includeClassesParam.ok) {
+    return res.status(400).json({
+      error: 'invalid_include_classes',
+      invalid: includeClassesParam.invalid,
+      allowed: [...HARRIS_PDATA_INCLUDABLE_CLASSES],
+    });
+  }
   // OWNERGAP2-ledger-order: a DAY-granularity default let a second run inside
   // the same day silently collide with the FIRST run's own ledger rows
   // (`uq_dia_ownergap2_open_attempt` on (batch_tag, property_id) WHERE
@@ -191,6 +206,7 @@ export async function handleOwnerGap2ResolveTick(req, res) {
     by_cause: {}, wrote: 0, budget_stopped: false,
     fetches_from_source: cfg.fetches,
     operator_keys_loaded: opKeys.count,
+    include_classes: includeClassesParam.classes,
   };
   const sample = [];
 
@@ -209,7 +225,7 @@ export async function handleOwnerGap2ResolveTick(req, res) {
       // path. An operator-supplied payload (the pre-existing manual capture
       // route) remains a FALLBACK for any property the loaded export does not
       // cover, never removed.
-      verdict = await fetchHarrisPdataForProperty(property.address, {});
+      verdict = await fetchHarrisPdataForProperty(property.address, { includeClasses: includeClassesParam.classes });
       if (verdict.status !== 'resolved') {
         const payload = harrisPayloads.get(String(property.property_id));
         if (payload) {
