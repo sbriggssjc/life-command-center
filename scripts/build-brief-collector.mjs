@@ -489,9 +489,74 @@ export function migrationApplicationFinding(fileName, declared, existsByKey, opt
 // migrations, normalize (lowercase + whitespace-collapse) both the file's CREATE FUNCTION body and
 // live `pg_get_functiondef()`, and flag a mismatch as a candidate STALE verdict -- was evaluated
 // against every CREATE OR REPLACE FUNCTION in the live MIGRATION_WINDOW_SIZE window before
-// deciding whether to ship it. It was NOT shipped. Reasoning + the measured false-positive rate
-// are recorded in docs/os/PLANNED-BACKLOG.md under DEPLOY2-unapplied and are not restated here to
-// avoid the two copies drifting (this file's job is to say WHAT ships, not re-derive WHY not).
+// deciding whether to ship it. It was NOT shipped that day, because the measured false-positive
+// cause was Postgres's own canonical type rendering (`timestamptz` -> `timestamp with time zone`)
+// producing an unambiguous false STALE on a function that was demonstrably current. Reasoning +
+// the extraction failure rate are recorded in docs/os/PLANNED-BACKLOG.md under DEPLOY2-unapplied.
+//
+// DEPLOY2-live (2026-09-17): the ONE identified false-positive cause -- type-alias rendering --
+// is closed below with a small canonicalization table, so the comparator is offered as an
+// OPT-IN capability rather than shipped wired into the live probe. It is opt-in on purpose:
+// `lcc_probe_schema_objects` (both the LCC Opps and Dialysis_DB deployments) returns only
+// `{kind, name, exists}` -- it does not return `pg_get_functiondef()`/`pg_get_viewdef()`, so
+// wiring this into the live migration_unapplied rule needs a NEW migration on both projects to
+// extend that RPC, which this change does not apply (per the DEPLOY2-live prompt's "do not apply
+// anything" constraint). Until that RPC extension ships and is applied, `classifyObjectStaleness`
+// is exercised only by its own tests, which is the honest state of "attempted, not wired live" --
+// see `docs/os/PLANNED-BACKLOG.md` DEPLOY2-stale for the extension this unblocks.
+
+/**
+ * A small, closed table of Postgres canonical type renderings that `pg_get_functiondef()` /
+ * `pg_get_viewdef()` use regardless of what the migration file spelled -- e.g. a file that says
+ * `RETURNS TABLE(x timestamptz)` is rendered back as `timestamp with time zone`. This is the
+ * EXACT, sole cause measured in the 2026-09-16 evaluation (`compute_feed_freshness`); it is not a
+ * general fuzzy-matching pass, deliberately -- widening it risks hiding a genuine body change
+ * behind a "just another alias" excuse, which is precisely the noise this check must not add.
+ */
+const SQL_TYPE_ALIASES = Object.freeze([
+  [/\btimestamptz\b/g, 'timestamp with time zone'],
+  [/\btimestamp\s+with\s+time\s+zone\b/g, 'timestamp with time zone'],
+  [/\btimetz\b/g, 'time with time zone'],
+  [/\bint4\b/g, 'integer'],
+  [/\bint8\b/g, 'bigint'],
+  [/\bint2\b/g, 'smallint'],
+  [/\bint\b/g, 'integer'],
+  [/\bbool\b/g, 'boolean'],
+  [/\bvarchar\b/g, 'character varying'],
+  [/\bdecimal\b/g, 'numeric'],
+  [/\bfloat8\b/g, 'double precision'],
+  [/\bfloat4\b/g, 'real'],
+  [/\bserial4\b/g, 'integer'],
+  [/\bserial8\b/g, 'bigint'],
+]);
+
+/**
+ * Normalize a SQL function/view body for a STALE-body comparison: strip comments, lowercase,
+ * canonicalize the closed type-alias set above, collapse whitespace. NOT a general SQL
+ * normalizer -- it exists to make the ONE measured false-positive class comparable, nothing more.
+ */
+export function normalizeSqlBodyForStaleness(sql) {
+  let out = stripSqlComments(String(sql || '')).toLowerCase();
+  for (const [pattern, replacement] of SQL_TYPE_ALIASES) out = out.replace(pattern, replacement);
+  return out.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Compare a migration file's declared body for one object against the LIVE definition
+ * (`pg_get_functiondef()` / `pg_get_viewdef()` output, supplied by the caller -- this function has
+ * no DB access of its own). Returns `'matches'` when the normalized bodies are byte-equal,
+ * `'stale-body'` when they differ, or `null` when there is nothing to compare (no live definition
+ * supplied, e.g. because the probe RPC does not return one yet -- see the header above). `null` is
+ * NEVER folded into `'matches'`: an object this function cannot compare is unproven, not clean,
+ * the same P131/P180 discipline the rest of this rule uses everywhere else.
+ */
+export function classifyObjectStaleness(fileBody, liveDefinition) {
+  if (liveDefinition == null) return null;
+  const a = normalizeSqlBodyForStaleness(fileBody);
+  const b = normalizeSqlBodyForStaleness(liveDefinition);
+  if (!a || !b) return null;
+  return a === b ? 'matches' : 'stale-body';
+}
 
 // ---------------------------------------------------------------------------
 // Repo-side collection (fs + git). Only called from main(), never imported by tests.
@@ -894,6 +959,12 @@ function printFindingsTable(findings) {
 
 async function main() {
   const write = process.argv.includes('--write');
+  // DEPLOY2-live: a dedicated CI job (`.github/workflows/deploy2-unapplied-check.yml`) runs the
+  // collector with this flag on every push to `main` and fails the JOB (never the merge -- this
+  // runs after the fact) when the migration_unapplied rule finds a real UNAPPLIED verdict. It is
+  // additive: `--write` and the default dry-run path are both unaffected, and this never changes
+  // `process.exitCode` unless the caller explicitly asked for it.
+  const failOnUnapplied = process.argv.includes('--fail-on-unapplied');
 
   const repo = collectRepoFindings();
   const db = await collectDbFindings();
@@ -980,6 +1051,22 @@ async function main() {
     };
     const row = await writeSnapshot(url, key, payload);
     console.log(`\nWrote build_brief_snapshots row id=${row?.[0]?.id ?? '?'}`);
+  }
+
+  // DEPLOY2-live: fail the JOB (not the merge -- this always runs after the merge already
+  // happened) on a genuine UNAPPLIED verdict. UNVERIFIABLE never fails the job -- it is a known
+  // instrument gap (a data-only migration this rule cannot probe), not a proven defect, and
+  // failing on it would make the job noisy on every ordinary backfill migration, exactly the
+  // "a monitor nobody trusts is worse than none" trap this file's own header warns about
+  // elsewhere. A skipped project probe (no credentials, RPC unreachable) also never fails the
+  // job on its own -- it already surfaces as an UNVERIFIABLE finding above, which is loud enough.
+  if (failOnUnapplied && migrationAudit.unapplied_count > 0) {
+    console.error(
+      `\n❌ DEPLOY2: ${migrationAudit.unapplied_count} migration(s) merged to main are UNAPPLIED ` +
+        `on their target database. See the table above. Apply the missing objects from the repo ` +
+        `file with a fingerprint, then re-run.`,
+    );
+    process.exitCode = 1;
   }
 }
 

@@ -20,6 +20,8 @@ import {
   migrationTargetDatabase,
   sortMigrationsByAddDate,
   MIGRATION_SCAN_DIRS,
+  normalizeSqlBodyForStaleness,
+  classifyObjectStaleness,
 } from '../scripts/build-brief-collector.mjs';
 
 // ---------------------------------------------------------------------------
@@ -609,4 +611,94 @@ test('DEPLOY2-coverage: MIGRATION-COVERAGE-MAP names all three projects and thei
   }
   assert.match(map, /GOVDEPLOY1/, 'the uncovered project must be attributed, not quietly absent');
   assert.match(map, /government-lease/);
+});
+
+// ---------------------------------------------------------------------------
+// DEPLOY2-live: an OLD-MTIME file that was added to git RECENTLY must be caught by the window
+// (add-date wins over any mtime/filename proxy).
+// ---------------------------------------------------------------------------
+
+test('DEPLOY2-live: a file with an OLD FILESYSTEM MTIME but a RECENT git add-date is in the window', () => {
+  // sortMigrationsByAddDate takes only the add-date map -- it never consults the filesystem, so
+  // this is a direct positive control that mtime (or any other filesystem timestamp) cannot leak
+  // into the ordering. Two files, same low/old-looking synthetic filename timestamp; one was
+  // added to git long ago, one was added yesterday. Only add-date may decide the order.
+  const OLD_LOOKING_BUT_JUST_ADDED = `${MIG}/20260101120000_lcc_fixture_a.sql`;
+  const OLD_LOOKING_AND_OLD = `${MIG}/20260101130000_lcc_fixture_b.sql`;
+  const addDates = new Map([
+    [OLD_LOOKING_AND_OLD, '2026-01-05T00:00:00+00:00'],
+    [OLD_LOOKING_BUT_JUST_ADDED, '2026-09-16T23:00:00+00:00'],
+  ]);
+  const ordered = sortMigrationsByAddDate(
+    [OLD_LOOKING_AND_OLD, OLD_LOOKING_BUT_JUST_ADDED],
+    addDates,
+  );
+  // Newest-added-last, per the ADD-DATE map -- never per any filesystem mtime the caller might
+  // otherwise have been tempted to sort on.
+  assert.deepEqual(ordered, [OLD_LOOKING_AND_OLD, OLD_LOOKING_BUT_JUST_ADDED]);
+  // A window of size 1 keeps the recently-added file and drops the truly-old one -- the exact
+  // property a window has to have for a file that "looks old" (an old synthetic filename
+  // timestamp, or an old filesystem mtime from an untouched checkout) but was genuinely added to
+  // git yesterday.
+  assert.deepEqual(ordered.slice(-1), [OLD_LOOKING_BUT_JUST_ADDED]);
+});
+
+// ---------------------------------------------------------------------------
+// DEPLOY2-live: opt-in staleness comparison (normalizeSqlBodyForStaleness / classifyObjectStaleness)
+// ---------------------------------------------------------------------------
+
+test('classifyObjectStaleness: identical bodies match', () => {
+  const body = 'create or replace function f() returns int as $$ select 1 $$ language sql;';
+  assert.equal(classifyObjectStaleness(body, body), 'matches');
+});
+
+test('classifyObjectStaleness: a genuinely DIFFERENT body is reported stale-body, never applied/matches', () => {
+  const fileBody = 'create or replace function f() returns int as $$ select 1 $$ language sql;';
+  const liveDefinition = 'CREATE OR REPLACE FUNCTION f() RETURNS int AS $$ select 2 $$ LANGUAGE sql;';
+  assert.equal(classifyObjectStaleness(fileBody, liveDefinition), 'stale-body');
+});
+
+test('classifyObjectStaleness: the measured 2026-09-16 false positive (timestamptz canonical rendering) is FIXED — matches, not stale-body', () => {
+  // The exact shape that blocked shipping this check on 2026-09-16 (compute_feed_freshness):
+  // ONE token differs -- the file spells `timestamptz`, live `pg_get_functiondef()` renders the
+  // SAME, otherwise byte-identical function with the canonical spelling `timestamp with time
+  // zone`. Real pg_get_functiondef output also differs in ways unrelated to this bug (schema
+  // qualification, dollar-quote tag naming, keyword layout) -- this fixture isolates the ONE axis
+  // the 2026-09-16 evaluation actually measured, so a failure here means the alias table regressed.
+  const fileBody = `
+    create or replace function compute_feed_freshness()
+    returns table(feed text, latest timestamptz, age_days numeric)
+    as $$
+      select feed, max(observed_at), extract(day from now() - max(observed_at))
+      from feed_observations group by feed
+    $$ language sql;
+  `;
+  const liveDefinition = `
+    create or replace function compute_feed_freshness()
+    returns table(feed text, latest timestamp with time zone, age_days numeric)
+    as $$
+      select feed, max(observed_at), extract(day from now() - max(observed_at))
+      from feed_observations group by feed
+    $$ language sql;
+  `;
+  assert.equal(
+    classifyObjectStaleness(fileBody, liveDefinition),
+    'matches',
+    'a pure type-alias rendering difference must not read as a stale body',
+  );
+});
+
+test('classifyObjectStaleness: with NO live definition supplied, the verdict is null (unproven), never "matches"', () => {
+  const fileBody = 'create or replace function f() returns int as $$ select 1 $$ language sql;';
+  assert.equal(classifyObjectStaleness(fileBody, null), null);
+  assert.equal(classifyObjectStaleness(fileBody, undefined), null);
+});
+
+test('normalizeSqlBodyForStaleness strips comments and collapses whitespace on top of type aliases', () => {
+  const withComment = `
+    -- this is a comment naming timestamptz, which must not leak into the compare
+    create   or  replace function f() returns   int as $$ select  1 $$ language sql;
+  `;
+  const clean = 'create or replace function f() returns integer as $$ select 1 $$ language sql;';
+  assert.equal(normalizeSqlBodyForStaleness(withComment), normalizeSqlBodyForStaleness(clean));
 });
