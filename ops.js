@@ -3069,11 +3069,14 @@ function opsShowMore(key) {
 }
 window.opsShowMore = opsShowMore;
 
-// PRI2 (2026-09-16): behind PRIORITY_TAB_V2, the Priority tab is re-composed
-// onto v_lcc_seller_prospect_queue (the seller doctrine's own ranked list)
-// instead of the P-band worklist. Flag OFF -> byte-identical to the pre-PRI2
-// tab (this delegate is the ONLY change to the v1 path). See
-// docs/audits/PRI2_SIDE_BY_SIDE_<date>.md for the gate before flipping it on.
+// PRI2-on (2026-09-17): the Priority tab is re-composed onto
+// v_lcc_seller_prospect_queue (the seller doctrine's own ranked list) instead
+// of the P-band worklist. ON by default now -- docs/audits/PRI2_SIDE_BY_SIDE_
+// 2026-09-16.md was the gate; Scott delegated the read to Cowork, whose read
+// was ON with two changes: reason-first order (server side, see
+// api/_shared/seller-prospect-queue.js SELLER_QUEUE_ORDER) and one card per
+// property (_pqV2GroupByProperty, below), not a new score. Flag OFF still
+// falls back to the untouched v1 band-queue renderer.
 async function renderPriorityQueuePage(band) {
   if (typeof checkFlag === 'function' && checkFlag('priority_tab_v2')) {
     return renderPriorityQueuePageV2();
@@ -3091,16 +3094,64 @@ function _pqV2WhyNow(r) {
   return bits.length ? bits.join(', ') : 'in the seller-timing window';
 }
 
-// The one CTA per row: open the property if we have one, else open the owner.
+// The one CTA per row/group: open the property when we have one (the view's own
+// key is source_domain/source_property_id, not domain/property_id), else open
+// the owner.
 function _pqV2Cta(r) {
-  if (r.property_id != null && r.domain) {
-    var dom = r.domain === 'government' ? 'gov' : r.domain === 'dialysis' ? 'dia' : r.domain;
-    return '<button class="q-action primary" onclick="openUnifiedDetail(' + jsStringArg(dom) + ', {property_id: ' + esc(String(r.property_id)) + '}, {}, \'Ownership &amp; CRM\')">Open property →</button>';
+  if (r.source_property_id != null && r.source_domain) {
+    return '<button class="q-action primary" onclick="openUnifiedDetail(' + jsStringArg(String(r.source_domain)) + ', {property_id: ' + esc(String(r.source_property_id)) + '}, {}, \'Ownership &amp; CRM\')">Open property →</button>';
   }
   if (r.entity_id) {
     return '<button class="q-action primary" onclick="openEntityDetail(' + jsStringArg(String(r.entity_id)) + ')">Open owner →</button>';
   }
   return '';
+}
+
+// PRI2-on (2026-09-17): one card per PROPERTY. The queue's grain is (owner,
+// property) -- 756 properties carry >1 current owner (OWN-T0's sponsor<->SPE
+// class) -- so the raw item list shows the same building twice under two owner
+// entities. Group on the view's own asset key (source_domain, source_property_id);
+// a row that carries no property (owner-only, no linked asset id) keeps its own
+// card, keyed on entity_id, so it is never silently dropped. Server order is
+// preserved -- items already arrive reason-first/value-desc, so a group's
+// position is wherever its FIRST (best-ranked) row appeared.
+function _pqV2GroupByProperty(items) {
+  var groups = [];
+  var byKey = {};
+  items.forEach(function (r) {
+    var key = (r.source_property_id != null && r.source_domain)
+      ? 'p:' + r.source_domain + ':' + r.source_property_id
+      : 'e:' + (r.entity_id != null ? String(r.entity_id) : Math.random());
+    var g = byKey[key];
+    if (!g) {
+      g = { key: key, source_domain: r.source_domain, source_property_id: r.source_property_id,
+            address: r.address, city: r.city, state: r.state, rank_value: r.rank_value, owners: [] };
+      byKey[key] = g;
+      groups.push(g);
+    }
+    g.owners.push(r);
+    if (g.rank_value == null || (r.rank_value != null && r.rank_value > g.rank_value)) g.rank_value = r.rank_value;
+  });
+  return groups;
+}
+
+function _pqV2GroupTitle(g) {
+  if (g.owners.length === 1) return g.owners[0].owner_name || g.owners[0].entity_name || 'Owner';
+  return g.owners.length + ' owners';
+}
+
+// Every distinct why-now + reach pairing across the group's owners, so a
+// multi-owner card states each owner's own reason and reach rather than
+// blending them into one badge that fits neither.
+function _pqV2GroupOwnerLines(g) {
+  return g.owners.map(function (r) {
+    var name = esc(r.owner_name || r.entity_name || 'Owner');
+    var reach = r.reach_state ? esc(String(r.reach_state).replace(/_/g, ' ')) : '';
+    return '<div class="q-item-owner-line">' + name
+      + '<span class="q-badge q-badge-sm">' + esc(_pqV2WhyNow(r)) + '</span>'
+      + (reach ? '<span class="q-badge q-badge-sm q-badge-muted">' + reach + '</span>' : '')
+      + '</div>';
+  }).join('');
 }
 
 async function renderPriorityQueueFooterV2(el) {
@@ -3130,22 +3181,29 @@ async function renderPriorityQueuePageV2() {
   if (!res.ok || !res.data) { el.innerHTML = opsErrorState(res, 'renderPriorityQueuePageV2()', 'Could not load the priority queue'); return; }
   var data = res.data;
   var items = Array.isArray(data.items) ? data.items : [];
+  var groups = _pqV2GroupByProperty(items);
   var html = '<div class="ops-header"><h2>Priority Queue</h2>'
     + '<button class="q-action primary" onclick="renderCadenceDashboard()">Cadence dashboard →</button></div>';
-  html += '<div class="rc-intro">The seller doctrine’s own ranked list — $2.5M–$25M, a newer lease or a reason to sell, an owner nobody has reached. Each row is why-now plus one button.</div>';
-  if (!items.length) {
+  html += '<div class="rc-intro">The seller doctrine’s own ranked list — $2.5M–$25M, a newer lease or a reason to sell, an owner nobody has reached. Ordered by a recorded reason to sell first, then value. One card per property.</div>';
+  if (!groups.length) {
     html += '<div class="ops-empty">Nothing in the seller queue right now. ✓</div>';
   } else {
-    var rows = items.map(function (r) {
-      return '<div class="q-item" data-q-id="' + esc(r.entity_id != null ? String(r.entity_id) : '') + '">'
-        + '<div class="q-item-header"><span class="q-item-title">' + esc(r.owner_name || r.entity_name || 'Owner') + '</span>'
-        + '<div class="q-item-badges"><span class="q-badge">' + esc(_pqV2WhyNow(r)) + '</span></div></div>'
-        + '<div class="q-item-meta">' + esc(_todayMoney ? _todayMoney(r.rank_value) : String(r.rank_value || '')) + '</div>'
-        + '<div class="q-actions">' + _pqV2Cta(r) + '</div>'
+    var rows = groups.map(function (g) {
+      var single = g.owners.length === 1 ? g.owners[0] : null;
+      return '<div class="q-item" data-q-id="' + esc(g.key) + '">'
+        + '<div class="q-item-header"><span class="q-item-title">' + esc(_pqV2GroupTitle(g)) + '</span>'
+        + (single ? '<div class="q-item-badges"><span class="q-badge">' + esc(_pqV2WhyNow(single)) + '</span></div>' : '')
+        + '</div>'
+        + (single ? '' : '<div class="q-item-owners">' + _pqV2GroupOwnerLines(g) + '</div>')
+        + '<div class="q-item-meta">' + esc((g.address ? g.address + (g.city ? ', ' + g.city : '') + (g.state ? ', ' + g.state : '') + ' — ' : '')
+            + (_todayMoney ? _todayMoney(g.rank_value) : String(g.rank_value || '')))
+          + '</div>'
+        + '<div class="q-actions">' + _pqV2Cta(single || g) + '</div>'
         + '</div>';
     });
     html += opsPagedRows('pqv2', rows);
   }
+  html += '<div class="q-item-count-note">' + items.length + ' owner·property row' + (items.length === 1 ? '' : 's') + ' in ' + groups.length + ' propert' + (groups.length === 1 ? 'y' : 'ies') + '.</div>';
   html += '<div id="pqV2Footer" class="pq-v2-footer-wrap"></div>';
   el.innerHTML = html;
   renderPriorityQueueFooterV2(document.getElementById('pqV2Footer'));

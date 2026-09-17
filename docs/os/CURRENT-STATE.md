@@ -72,8 +72,14 @@ above is snapshotted in a `_gov_govdeed*_20260916` table with a reversal stateme
 **App surfaces after the SB-notes rounds (2026-09-16, all on Railway `8ab35ec9`).** Home: the data-gaps
 widget no longer shows cleanup classes (agency/CMS/lease/tenant drift); the daily briefing routes
 highlights by short-form domain (`dia`/`gov`) — edge function v26. Priority: bands carry readable labels;
-**`priority_tab_v2` (flag OFF)** renders one ranked list from `v_lcc_seller_prospect_queue` with the
-code-doable bands counted in a footer, pending Scott's side-by-side. Dialysis Overview: the Market
+**`priority_tab_v2` (flag ON, PRI2-on, 2026-09-17)** renders one ranked list from
+`v_lcc_seller_prospect_queue` with the code-doable bands counted in a footer. Scott delegated the
+side-by-side read to Cowork (`docs/audits/PRI2_SIDE_BY_SIDE_2026-09-16.md`); the flip shipped with
+two changes the read called for, neither a new score: server order is now reason-to-sell FIRST
+(`reason_measured DESC`), then value, then lease recency (`v_lcc_seller_prospect_universe` gained
+an appended `reason_measured` boolean column so PostgREST can order on it — the predicate is
+byte-identical); and rows sharing a property (756 properties carry >1 current owner) collapse to
+one card listing every owner's own why-now/reach instead of two cards for one building. Dialysis Overview: the Market
 Economics Exhibit works again (the deployed `data-query` edge function was v41 from July; now v43);
 tiles read one MV with an "as of" stamp; NPI shows the gated lane (81) not the raw diff; Operators
 Tracked's caption says what it counts (45 raw names / 21 canonical ids / 878 unresolved). MCP:

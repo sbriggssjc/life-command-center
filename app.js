@@ -63,11 +63,12 @@ const LCC_FLAGS = {
   more_drawer_enabled: true,
   freshness_indicators: true,
   unified_merge_modal: true,
-  // PRI2 (2026-09-16): re-composes the Priority tab onto v_lcc_seller_prospect_queue
+  // PRI2-on (2026-09-17): re-composes the Priority tab onto v_lcc_seller_prospect_queue
   // (the seller doctrine's own ranked list) instead of v_priority_queue_enriched's
-  // P-band worklist. OFF by default — flip only after the PRI2 side-by-side gate
-  // (docs/audits/PRI2_SIDE_BY_SIDE_<date>.md) is read. See ops.js renderPriorityQueuePage.
-  priority_tab_v2: false,
+  // P-band worklist. ON — Scott delegated the read; docs/audits/PRI2_SIDE_BY_SIDE_2026-09-16.md
+  // is the gate PRI2-on acted on (reason-first order + one card per property, both
+  // shipped in this change). See ops.js renderPriorityQueuePage.
+  priority_tab_v2: true,
   _loaded: false
 };
 

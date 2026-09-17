@@ -1332,6 +1332,12 @@ body.compact .greeting { font-size: 18px; }
 .q-item-title { font-size: 14px; font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .q-item-badges { display: flex; gap: 4px; flex-shrink: 0; }
 .q-badge { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 6px; white-space: nowrap; }
+/* PRI2-on (2026-09-17) -- one card per property: a multi-owner card lists each owner's own why-now/reach on its own line. */
+.q-item-owners { display: flex; flex-direction: column; gap: 4px; margin: 4px 0 6px; }
+.q-item-owner-line { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.q-badge-sm { font-size: 9px; padding: 1px 6px; }
+.q-badge-muted { background: var(--s2); color: var(--text2); }
+.q-item-count-note { font-size: 11px; color: var(--text2); margin: 6px 0; }
 .q-badge.type { background: var(--s2); color: var(--text2); }
 .q-badge.domain { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
 .q-badge.status-open { background: color-mix(in srgb, var(--green) 15%, transparent); color: var(--green); }
