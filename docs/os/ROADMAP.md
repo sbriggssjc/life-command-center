@@ -25,7 +25,7 @@
 - ✅ **Live:** gov `latest_deed_*` split to deed-only with one writer (GOVDEED4/5/5b, gov PRs #400–#405); the deed accept gate conjunctive on placeholders (GOVDEED3, gov PR #406 — runtime check V1); DEED1-reconcile-2 done; the 478 manufactured conflicts dispositioned (GOVDEED-478); Salesforce research lanes retired on both databases (C1C, ledgered, reversible); the gov gate on the right arm (C1B-GOV-GATE); **39 assessor-sourced owners written** — Philadelphia 20 (city open API), Harris 19 (HCAD bulk PDATA) — every one citing its source record (OWNERGAP2, -harris, -harris-b); `get_property_context` shows dia-only properties (MCP1).
 - 🟡 **Partial:** Harris — the full HCAD roll is staged (71,282 F1/F2 accounts, 2026-09-16); **20 of 50 applied**, 2 sit on C2-class accounts (S5), **27 are house numbers HCAD does not carry as situs** — a property-identity gap (§P10a), not a matcher gap. Both defects found on the real file/apply are fixed and running (OWNERGAP2-harris-c, -ledger-order; PRs #2541, #2540).
 - 🔴 **Open:** DEED1-emptycompare, DEED1-rentrank, CANON-OWNERSHIP1 (👤 proposal ready), the `18003 Longenbaugh` Rd/Dr duplicate property surfaced by the Harris apply; 1,346 `owner_needs_sos` tasks still the feed with no other consumer.
-- ⏭️ **Next unit:** H8 (apply the one C2 owner); then the 27 situs-gap properties as the first §P10a case (parcel discriminator), or the next free-bulk jurisdiction from OWNERGAP1-decision's list, same contract. The 27 situs-gap properties are the first concrete case for §P10a.
+- ⏭️ **Next unit:** the 27 situs-gap properties as the first §P10a case (parcel discriminator), or the next free-bulk jurisdiction from OWNERGAP1-decision's list, same contract. The 27 situs-gap properties are the first concrete case for §P10a.
 - 👤 **Decisions:** CANON-OWNERSHIP1 (who owns Dialysis_DB's schema in `CLAUDE.md`).
 
 ## 2. Entity identity at the source of record (ID-series) — backlog §P0d, Open-threads *Identity / operator canonicalization* and *gov agency canonicalization*
@@ -54,8 +54,8 @@
 - 🟡 **Partial:** PRI2 (Priority recomposed on `v_lcc_seller_prospect_queue`) built, **flag OFF** pending S1; HOME1 (§C fix live, §B three-lane spec unbuilt); ASC50 review workbench built and locally verified, publication pending.
 - ✅ **Live (new):** DIA1c — 33 canonical operators, one `US Renal Care`, 0 unresolved; the Operators tile reads the canonical count.
 - 🔴 **Open:** HOME2 (three-lane Home, after PRI2), ID3a-drift.
-- ⏭️ **Next unit:** Scott's read of `docs/audits/PRI2_SIDE_BY_SIDE_2026-09-16.md` (R1) → flag ON / order change; then HOME2.
-- 👤 **Decisions:** R1 (the PRI2 read). S2 decided: one operator identity everywhere.
+- ⏭️ **Next unit:** PRI2-on (flag ON, reason-first order, one card per property — prompted); then HOME2.
+- 👤 **Decisions:** none open (R1 delegated; S2 decided).
 
 ## 6. Flows, intake and artifact health (Power Automate ↔ LCC) — backlog §P20, `docs/setup/POWER-AUTOMATE-FLOW-FIXES-2026-09-16.md`
 
