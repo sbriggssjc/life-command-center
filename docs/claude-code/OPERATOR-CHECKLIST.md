@@ -5,7 +5,7 @@ systems the repo cannot reach (Power Automate, Salesforce), payloads only a huma
 decisions that are Scott's. Cowork adds a row when a round ends on one of these; Scott ticks it; Cowork
 verifies and removes it in the next turn. Done rows are struck through and dropped after one turn.
 
-Updated 2026-09-16 (late): S1–S5 answered (`responses/done/S1-S5 Decisions…docx`) and turned into F8, D4, three prompts and the PRI2 read; V1 answered (gov deed ingest = GitHub Actions weekly/daily, verify Mon 09-21); D3 reported done. All three prompts merged and running (`0304aa8b`); D4 done. F8 done; PRI2-on live. Open for Scott: **F8-b** (30 s) and the new **Scott's queue** below (Q1–Q28 — the 67 backlog rows that were waiting on you, tiered). Saturday: forward the flow digest into `SB notes/`. Monday: Cowork checks GOVDEED3. Railway auto-deploys `main` (web app at `ac96fd45`); the standalone MCP
+Updated 2026-09-16 (late): S1–S5 answered (`responses/done/S1-S5 Decisions…docx`) and turned into F8, D4, three prompts and the PRI2 read; V1 answered (gov deed ingest = GitHub Actions weekly/daily, verify Mon 09-21); D3 reported done. All three prompts merged and running (`0304aa8b`); D4 done. F8 done; PRI2-on live. Open for Scott: three prompts to send (`DEPLOY2-live`, `BR4`, `HOME2` — independent, no decisions needed) and the **Scott's queue** below (Q1–Q28 — the 67 backlog rows that were waiting on you, tiered). Saturday: forward the flow digest into `SB notes/`. Monday: Cowork checks GOVDEED3. Railway auto-deploys `main` (web app at `ac96fd45`); the standalone MCP
 service has no `/version` route — Cowork verifies it by calling a tool.
 
 ## Deploys
@@ -28,7 +28,7 @@ from the exported definitions** (`SB notes/done/*.zip`, 2026-09-16). One addendu
 |---|---|---|---|
 | ~~F1c~~ | ✅ **Done and verified from the export 2026-09-16** (`Http-Getfile(LCCGetArtifact)_20260916163609.zip`): metadata first, Size condition, content fetch in the True branch, bytes Response as specified. Test passed. | |
 | ~~F8~~ | ✅ **Done and verified from the export 2026-09-17** (`LCCFlaggedEmailIntake_20260917152101.zip`): three actions pasted, own Move/Flag/Terminate removed, expression re-pointed, retry set; Hardened + Processing Complete → Move Message off. | |
-| **F8-b** | 30 seconds: *LCC Flagged Email Intake* → Edit → `HTTP GetIntakeSummary` → ⋯ → Configure run after → tick **has failed** as well as *is successful* on `HTTP GetEmailWebLink` → Save. | a web link that fails all three retries must not skip the Teams card |
+| ~~F8-b~~ | ✅ Done 2026-09-17 (Scott). | |
 
 **All seven applied and verified.** Forward the next Saturday digest into `SB notes/`; Cowork closes the counts.
 
@@ -68,8 +68,8 @@ from the exported definitions** (`SB notes/done/*.zip`, 2026-09-16). One addendu
 
 | # | tier | what you do | why / unblocks | row |
 |---|---|---|---|---|
-| Q1 | **A** | `ai-copilot` edge function on Dialysis_DB is open (25 routes, service-role client, no auth). Cowork's gate is merged log-only: **deploy it**, then read `[copilot-auth] DENY-WOULD` for the callers listed, fix the header-less ones (To Do Completion Poll's second call + the three unexported PA5 flows), then flip `enforce`. | an unauthenticated writer holding a service-role key | COPILOT-OPEN, RAILWAY-PA-SECRET |
-| Q2 | **A** | `salesforce-enrichment` edge function: same shape — deploy v27 (log-only), read `[sfenrich-auth]` for ≥7 days (a monthly caller needs the window), then `enforce`. | unauthenticated public writer | DRIFT1-sfenrich |
+| Q1 | **A** | The `ai-copilot` gate **is deployed** (v84, log mode; the edge secret is set). What is left is **four Power Automate header edits**: the flows that POST to `/sync/calendar-events`, `/sync/activities`, `/sync/sf-tasks`, `/sync/flagged-emails` each get `X-PA-Webhook-Secret: <the value the "SF → LCC: Object Sync" flow already sends>` on their `ai-copilot` HTTP action — click-path and workflow ids in `docs/architecture/flows/ai-copilot-sync-callers.md`. Export each; tell Cowork; after 3 days with zero `DENY-WOULD`, set `COPILOT_AUTH_MODE=enforce` on the Dialysis edge-function secrets. | 35 unauthenticated calls in the last 24 h, all from those four flows | COPILOT-OPEN, RAILWAY-PA-SECRET |
+| Q2 | **A** | `salesforce-enrichment`: v27 (log-only gate) has been live since 09-09; no caller has hit it in the last 24 h. **Nothing to do until ≈2026-10-09** (one monthly cycle) — then Cowork reads the log and you flip `SFENRICH_AUTH_MODE=enforce`; or name the monthly caller now and skip the wait. | unauthenticated public writer, one known monthly caller | DRIFT1-sfenrich, PL-3 |
 | Q3 | **A** | Execute `docs/os/RUNBOOK_vercel_teardown.md` in order (repoint the daily-briefing caller, the mobile Shortcut, the extension/Copilot connector hosts, then tear down). The browser extension is **still writing through the retired Vercel build** from at least one profile. | two hosts writing the same tables | J13-teardown, EXT-HOST, J13 |
 | Q4 | **A** | Set `PA_WEBHOOK_SECRET` on `tranquil-delight` and walk the RAILWAY-PA-SECRET steps (register caller IPs, watch `none` lines 3 days, flip `PA_WEBHOOK_AUTH_MODE=enforce`). | every Power Automate → LCC call is currently unauthenticated | RAILWAY-PA-SECRET |
 | Q5 | **B** | Dialysis CI: (1) merge #7397, (2) delete `claude/tmp-red-gate-proof` + `claude/tmp-docs-only-proof` in GitHub, (3) Settings → Branches → `main` → require status check **`Run Tests`**. | until (3), a red Dialysis suite cannot block a merge — three merges have landed mid-run | B6e-ci-required-check |
