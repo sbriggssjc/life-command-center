@@ -55,6 +55,24 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-17 — F8 pre-check: the Move Queue Executor exists and is the working single mover; the consolidation steps revised (three movers → one) (Cowork)
+
+Scott's export of *LCC Move Queue Executor* (15-minute recurrence): `GET /api/move-queue-worklist`,
+find each message by `internetMessageId` (immune to the id change a move causes), clear the flag when
+LCC says so, move to the folder LCC names, `POST /api/move-queue-ack`. Live on LCC Opps: **118 moves in
+14 days, latest 11:45 UTC today, 2 `already_out`** — P120's puller, working. So the message had
+**three** movers: the Flagged flow's own `Move email (V2)`, the *Processing Complete → Move Message*
+flow reached through LCC's webhook push relay after the Teams card, and the Executor. The 2
+`already_out` rows are the races counted.
+
+`docs/setup/FLOWS-CONSOLIDATE-2026-09-16.md` revised: copy **three** actions from the Hardened flow
+(web link, intake summary, card — not the processing-complete Condition), delete the Flagged flow's
+own Move **and** its Flag-clear (the Executor clears the flag; the trigger keys on it), re-point one
+expression, turn **two** flows off (Hardened + Processing Complete → Move Message). Verification is
+now a number: `already_out` stops at 2. LCC follow-up filed low: `FLOWS-consolidate-lcc` (retire the
+webhook→Move-Message relay once nothing calls it). The Executor export goes to
+`private/power-automate/exports-2026-09-17/` (carries connection references — never committed).
+
 ## 2026-09-17 — H8 applied (with its ledger row this time); R1 delegated → `PRI2-on` prompt; F8 walked through (Cowork)
 
 **H8.** `POST …?jurisdiction=harris_tx&include_classes=C2`, no `batch_tag` (the tick derived

@@ -62,7 +62,7 @@
 - ✅ **Live:** F1–F7 applied by Scott and verified from his exports; F1c (Get Artifact: metadata first, size condition, bytes for small files) verified; LCC accepts both Get-Artifact shapes and treats `too_large` as a named terminal reason with a 30-day ceiling instead of ~48 retries (FLOWS1-artifact); FLOWS1-order **refuted** — LCC does not relay the move.
 - 🟡 **Partial:** the digest has not yet cycled since the fixes — the Saturday "N flows have failed" mail into `SB notes/` is the verification.
 - 🔴 **Open:** FLOWS1-path (stale SharePoint deal-folder path writer), FLOWS1-artifact-b (size-aware skip at discovery, real backoff — low), F6 durable async version (needs an LCC callback route).
-- ⏭️ **Next unit:** F8 — Scott consolidates onto *LCC Flagged Email Intake* per `docs/setup/FLOWS-CONSOLIDATE-2026-09-16.md` (S4 decided: one flow owns the lifecycle); then triage the next digest against F1–F8.
+- ⏭️ **Next unit:** F8 (revised 2026-09-17: the Move Queue Executor is the single mover; the Flagged flow stops moving and clearing the flag; two flows go off); then triage the next digest against F1–F8; then FLOWS-consolidate-lcc.
 - 👤 **Decisions:** none open; the F8 pre-check (does a Move Queue Executor flow exist?) is a fact to report, not a decision.
 
 ## 7. Market briefs & executive briefs — backlog §P18, Open-threads *Market briefs (MB/EB)*

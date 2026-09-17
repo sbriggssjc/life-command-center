@@ -27,7 +27,7 @@ from the exported definitions** (`SB notes/done/*.zip`, 2026-09-16). One addendu
 | # | flow | edit | why |
 |---|---|---|---|
 | ~~F1c~~ | ✅ **Done and verified from the export 2026-09-16** (`Http-Getfile(LCCGetArtifact)_20260916163609.zip`): metadata first, Size condition, content fetch in the True branch, bytes Response as specified. Test passed. | |
-| **F8** | **FLOWS-consolidate (S4 = one flow owns the lifecycle)** — click-path in `docs/setup/FLOWS-CONSOLIDATE-2026-09-16.md`: pre-check for a *Move Queue Executor* flow, copy four actions from the Hardened flow into *LCC Flagged Email Intake*'s success branch, delete its own `Move email (V2)`, re-point three expressions, test with one flagged email, turn the Hardened flow off, export into `SB notes/`. | the message is moved by two movers today (the Flagged flow and the Move Message flow) — the FLOWS1 404/PreconditionFailed class |
+| **F8** | **FLOWS-consolidate (S4 = one flow owns the lifecycle) — REVISED 2026-09-17 after the pre-check (the Move Queue Executor exists and is the mover).** Click-path in `docs/setup/FLOWS-CONSOLIDATE-2026-09-16.md`: copy **three** actions from the Hardened flow into *LCC Flagged Email Intake*'s success branch (web link, intake summary, card — not the Condition), delete its `Move email (V2)` **and** `Flag email (V2)`, re-point one expression, test (the Executor moves it within 15 min), turn **two** flows off (Hardened + Processing Complete → Move Message), export into `SB notes/`. | three movers on one message today (Flagged's own move, the Move Message flow via LCC's relay, the Executor); the Executor is P120's single owner |
 
 **All seven applied and verified.** Forward the next Saturday digest into `SB notes/`; Cowork closes the counts.
 
