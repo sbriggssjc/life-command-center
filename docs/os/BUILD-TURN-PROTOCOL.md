@@ -53,6 +53,15 @@ succeeds and finds nothing** — if that is a negative marker, *that* is the del
 response** — `/api/*` is auth-enforced, so a probe returns `401` and a grep of that body reads as
 *"the field is absent."* A DB migration ships instantly; the JS that reads it does not.
 
+**And a merged migration is not an applied one (2026-09-17, three times in two days).** A Claude Code
+session usually has no database egress, so a `supabase/migrations/**` file it commits is a record of
+intent until someone applies it — and a round's own summary saying "applied" is not evidence (PRI2-on
+said so; the Priority tab answered 502). For every merged PR: `git diff --name-only <base> <merge> --
+supabase/migrations` → for each new file, check the object it creates exists live
+(`information_schema.columns` / `pg_proc` / `cron.job` / `pg_views`); if it does not, apply the repo
+file verbatim from the owning repo's tooling, pin a fingerprint first when it replaces a view, and
+say so in the row. Until the DEPLOY2 detector runs live, this is a hand step in the loop.
+
 ### ④ RECONCILE against parallel work
 
 The other window may have measured this, fixed this, or be mid-flight on it. ***Merged is not

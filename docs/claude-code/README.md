@@ -34,6 +34,10 @@ story; the backlog is the state; `docs/os/CURRENT-STATE.md` is the one-page "whe
    When checking whether a past prompt "left a trace", look in `supabase/migrations/`, `test/`, `api/`,
    `docs/claude-code/responses/` and `docs/os/CURRENT-STATE.md` as well as the docs — INVENTORY1's
    "132 untraced prompts" was a search over four directories; 30 of 30 sampled had shipped.
+4a. **Check the PR's migrations against the live catalog** before any row goes ✅: `git diff
+   --name-only <base> <merge> -- supabase/migrations` → for each new file, does the object exist live?
+   If not, apply the repo file verbatim (fingerprint a replaced view first) and say so. Three merged-
+   not-applied migrations landed on 2026-09-16/17; one took the Priority tab down (PRI2-on).
 5. **Update in the same change**: the backlog row (status + measured outcome), `STATUS.md` (one
    entry, Open-threads row), `CURRENT-STATE.md` when a subsystem's state changed, `CLAUDE.md` when a
    doctrine was earned, the topic page when its topic moved. Move the prompt and response to `done/`.

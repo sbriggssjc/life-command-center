@@ -39,8 +39,8 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-reconcile-2, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT, CANON-OWNERSHIP1 | 2026-09-16 | Arc complete through GOVDEED3 (gov #406); **the gov deed writer runs from GitHub Actions (weekly Mon 06:00 UTC) — verify 09-21 dateless = 0**; CANON-OWNERSHIP1 👤 confirmation open; sale-party conflicts 1,290 a review queue |
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k LIVE** (LCC PR #2506): 218 attested supersessions, 40/43 pairs to sponsor, 16/16 controls untouched, reversible; sponsor-as-edge = future work |
 | **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, -harris-b/-c/-d, -ledger-order, MCP1 | 2026-09-17 | **41 assessor-sourced owners live** (Philadelphia 20, Harris 21 of 50); Harris is done except the 27 situs-gap properties → §P10a is the lane's next unit; next free-bulk jurisdiction after that |
-| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift | 2026-09-17 | DIA1c live; **PRI2-on prompted** (R1 delegated: ON, reason-first order, one card per property); F8 (flow consolidation) awaits Scott; Saturday digest = F1–F7 verification |
-| **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–4, INVENTORY1, INVENTORY1b, INVENTORY-process, REMEDIATION-2026-05, FLAGS-geocode(-on), REGISTRY-contacts-hub, REPO1, ROADMAP, PROCESS-CC-DOCS, PROCESS-MERGE-CLOBBER, DEPLOY2-coverage | 2026-09-17 | **Geocodio live** (cap ledger migration had to be applied by Cowork — second merged-not-applied incident behind DEPLOY2-coverage's pending live run); commits are 3-way patches; CLAUDE.md pass 2 with Scott ahead |
+| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS-consolidate-lcc, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift | 2026-09-17 | **PRI2-on live** (flag ON, reason-first, one card per property — migration had to be applied by Cowork; the tab was 502); **F8 done** (one intake flow, Executor the only mover; F8-b nit); DIA1c live; Saturday digest verifies F1–F8; HOME2 next |
+| **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–4, INVENTORY1, INVENTORY1b, INVENTORY-process, REMEDIATION-2026-05, FLAGS-geocode(-on), REGISTRY-contacts-hub, REPO1, ROADMAP, PROCESS-CC-DOCS, PROCESS-MERGE-CLOBBER, PROCESS-ROW-CELLS, DEPLOY2-coverage | 2026-09-17 | **Three merged-not-applied migrations in two days** (geocode cap, PRI2-on) → loop step 4a: check `supabase/migrations/**` of every merged PR against the live catalog before ✅; DEPLOY2 live run still owed; commits are 3-way patches; CLAUDE.md pass 2 with Scott ahead |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
 | **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
 | **Broker identity (BR) / BROKER1** | BR1, BR2, BR3, BR4, BR5, BR1-misparse-handoff, BROKER1, BROKER1-sf | 2026-09-16 | **BR1/BR3 live** (Dialysis_DB: `broker_companies` 131 → 75, 10 ambiguous composites in review, `broker_company_id` 7.2% → 14.4%); **661 unmatched `brokers.company` strings queued = BR4's input**; BR5 display unit unbuilt; BROKER1 applied live (1,303); BROKER1-sf correctly unbuilt |
@@ -54,6 +54,44 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
 
 ---
+
+## 2026-09-17 — F8 done and verified from the export; PRI2-on merged with its migration unapplied — the Priority tab was returning 502 until Cowork applied it; a migration-apply step joins the loop (Cowork)
+
+**F8 — verified from `LCCFlaggedEmailIntake_20260917152101.zip`.** The success branch now reads
+`Mark as read or unread (V3)` → `HTTP GetEmailWebLink` (retry exponential 3 × PT20S) →
+`HTTP GetIntakeSummary` (URI re-pointed to `body('HTTP_-_outlook-message')?['correlation_id']`) →
+`Post card in a chat or channel`. `Move email (V2)`, `Flag email (V2)` and `Terminate` are gone; no
+processing-complete call; dead-letter path intact. Scott turned off *Outlook Intake to Teams
+(Hardened)* and *Processing Complete → Move Message*. One nit, not a blocker (**F8-b**): `HTTP
+GetIntakeSummary` runs after the web link on *Succeeded* only, so a web link that fails all three
+retries skips the card — the guide asked for *Succeeded + Failed*; thirty seconds in the designer.
+Verification is Saturday's digest and `processing_log.already_out` staying at 2.
+
+**PRI2-on (PR #2553) — merged, and the tab was broken live.** The round appended `reason_measured` to
+`v_lcc_seller_prospect_universe` (PostgREST cannot order on an expression), reordered the queue
+reason-first, collapsed rows to one card per property, fixed a dead CTA, flipped `priority_tab_v2` to
+true, 14 guard tests, suite 6,524/0 — and wrote in its own backlog row that the migration was
+*"applied via the LCC Opps schema owner path"*. It was not: `/api/seller-prospect-queue` answered
+**502 `column v_lcc_seller_prospect_queue.reason_measured does not exist`** on Railway `49329608`, i.e.
+the flag was ON against a view that did not have the column. Cowork pinned the universe view (8,289
+rows, full-row md5 `b8bc1505…`), applied `20260917120000_lcc_pri2_on_reason_first_order.sql` verbatim
+from the repo, and re-fingerprinted minus the new column: **identical** — nothing but the appended
+boolean changed. Route now 200. Live after the flip: queue 508 rows / 458 properties, **277 with a
+measured reason**; the new top 20 is every one debt/developer (WMC ATL $24.9M debt+developer, FD
+Stonewater/State Warehouse Nova $22.9M developer, NGP V Broward $22.9M debt, …) — the eight
+`reason_to_sell_unmeasured` rows that led the old order are gone from the top. That is the post-flip
+side-by-side the round said needed an operator; it is in the PRI2-on row.
+
+**Third merged-not-applied migration in two days** (geocode cap, PRI2-on; and the C1C detector's own
+history) — and this one took a user-facing tab down. The loop gets a step, not another finding:
+**`docs/claude-code/README.md` step 4a and `BUILD-TURN-PROTOCOL.md` ③** — for every merged PR, diff
+`supabase/migrations/**` against `origin/main~`, and for each new file check the live object exists
+(`information_schema` / `pg_proc` / `cron.job`) *before* the row goes ✅; apply from the repo file if
+not, verbatim, and say so. The DEPLOY2 detector's live run is still the tool that should do this
+(`DEPLOY2-coverage`, three incidents behind it now).
+
+**Next:** F8-b (Scott, 30 s); Saturday's digest (F1–F8 verification); Monday's GOVDEED3 check;
+`FLOWS-consolidate-lcc` after a clean digest; DEPLOY2 live run.
 
 ## 2026-09-17 — F8 pre-check: the Move Queue Executor exists and is the working single mover; the consolidation steps revised (three movers → one) (Cowork)
 
