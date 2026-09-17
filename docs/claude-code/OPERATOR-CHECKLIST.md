@@ -5,7 +5,7 @@ systems the repo cannot reach (Power Automate, Salesforce), payloads only a huma
 decisions that are Scott's. Cowork adds a row when a round ends on one of these; Scott ticks it; Cowork
 verifies and removes it in the next turn. Done rows are struck through and dropped after one turn.
 
-Updated 2026-09-16 (late): S1–S5 answered (`responses/done/S1-S5 Decisions…docx`) and turned into F8, D4, three prompts and the PRI2 read; V1 answered (gov deed ingest = GitHub Actions weekly/daily, verify Mon 09-21); D3 reported done. Open for Scott: **F8**, **D4**, **R1**, and sending `DIA1c`, `FLAGS-geocode-on`, `OWNERGAP2-harris-d`. Railway auto-deploys `main` (web app at `ac96fd45`); the standalone MCP
+Updated 2026-09-16 (late): S1–S5 answered (`responses/done/S1-S5 Decisions…docx`) and turned into F8, D4, three prompts and the PRI2 read; V1 answered (gov deed ingest = GitHub Actions weekly/daily, verify Mon 09-21); D3 reported done. All three prompts merged and running (`0304aa8b`); D4 done. Open for Scott: **H8** (say "apply"), **R1** (the PRI2 read), **F8** (the flow consolidation). Railway auto-deploys `main` (web app at `ac96fd45`); the standalone MCP
 service has no `/version` route — Cowork verifies it by calling a tool.
 
 ## Deploys
@@ -15,7 +15,8 @@ service has no `/version` route — Cowork verifies it by calling a tool.
 | ~~D1~~ | ✅ `daily-briefing` v26 (2026-09-16) | | | behavioural check: next briefing lists The Villages under Dialysis |
 | ~~D2~~ | ✅ INVENTORY1 branch merged | | | |
 | ~~D3~~ | ✅ Dialysis PR #7416 merged (Scott, 2026-09-16) | | | |
-| **D4** | 👤 **`GEOCODIO_API_KEY` into Railway** → project `handsome-luck` → `tranquil-delight` → Variables → New Variable `GEOCODIO_API_KEY` = the key (free plan at geocod.io; the gov repo's CI lists the same secret name — reuse that account if it exists). Railway redeploys on save. **Checked (2026-09-16): the geocode cron posts `/api/geocode-tick`, which `server.js` routes to `admin.js` on the main `tranquil-delight` app — the standalone MCP service does NOT need the key.** | S3: free tier, capped in code by `FLAGS-geocode-on` (2,400/day shared ledger `geocode_tier_usage`) | Cowork runs the tick and reports `patched_geocodio` + `geocodio_usage_today`/`geocodio_daily_cap` |
+| ~~D4~~ | ✅ `GEOCODIO_API_KEY` set on `tranquil-delight` (Scott, 2026-09-17); cap ledger migration applied by Cowork; first tick 120/120 by Geocodio. | | | |
+| **H8** | 👤 **Apply the C2 one** — `10311 South Post Oak` → `LUEL PARTNERSHIP LTD 2-03` (HCAD acct 0440360000028, class C2, exact situs; the other C2 candidate, 380 Little York, was refused because HCAD's account is on the *East* side). Say "apply" and Cowork POSTs with `include_classes=C2`. | reply in chat | ledger +1; properties with an owner 5,519 → 5,520 |
 | ~~V1~~ | ✅ **Answered 2026-09-16.** The Railway `public-record-ingest` service is the *Dialysis* repo's module; the gov deed writer runs from GitHub Actions (`ci.yml` daily 08:00 / weekly Mon 06:00 UTC) and checks out `main` each run — GOVDEED3 is live from the next run. Cowork verifies Mon 2026-09-21 (dateless `deed_records` inserts that day = 0). | | |
 
 ## Power Automate
