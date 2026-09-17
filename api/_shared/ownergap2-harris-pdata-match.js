@@ -259,8 +259,27 @@ export function resolveHarrisPdataMatch(norm, candidates, opts = {}) {
   for (const row of rows) {
     const parsed = parseSourceLocation(row.location);
     const verdict = harrisLocationMatches(norm, parsed, jurisdiction);
-    if (verdict.matched) matched.push({ row, parsed, arm: verdict.arm });
-    else out.nearMisses.push({ location: row.location ?? null, owner: row.owner ?? null, reason: verdict.reason });
+    if (!verdict.matched) {
+      out.nearMisses.push({ location: row.location ?? null, owner: row.owner ?? null, reason: verdict.reason });
+      continue;
+    }
+    // OWNERGAP2-harris-d / S5: a class admitted ONLY via `includeClasses`
+    // (e.g. C2 -- a "vacant commercial lot" class, never the default F1/F2)
+    // resolves on the EXACT-situs arm alone -- house number equal, street
+    // equal, suffix agreeing when both present. A range/containment or
+    // alias-mediated match is the mechanism §P10a's 27 refused situs-gap
+    // properties would need "nearest number" reasoning to close, which this
+    // task explicitly prohibits: "the parcel we find must be the parcel at
+    // the county" (Scott, S5). Never widen this to the default classes --
+    // F1/F2 keep every existing arm.
+    if (row.admittedViaIncludeClass && verdict.arm !== 'exact') {
+      out.nearMisses.push({
+        location: row.location ?? null, owner: row.owner ?? null,
+        reason: 'class_admitted_requires_exact_situs',
+      });
+      continue;
+    }
+    matched.push({ row, parsed, arm: verdict.arm });
   }
   if (!matched.length) { out.reason = 'no_matching_record'; return out; }
 
@@ -368,12 +387,16 @@ export function buildHarrisPdataCandidates(address, stagedRows, opts = {}) {
 
   for (const row of rows) {
     let accountType = harrisStateClassToAccountType(row?.state_class);
+    let admittedViaIncludeClass = false;
     // Only widens ADMISSION -- never re-derives 'personal', so a Personal/BPP
     // account named in includeClasses would still be caught by the guard
     // below (it stays excluded, PDR2's discipline intact).
     if (!accountType) {
       const stateClass = normalizeStateClass(row?.state_class);
-      if (stateClass && includeClasses.has(stateClass)) accountType = 'commercial';
+      if (stateClass && includeClasses.has(stateClass)) {
+        accountType = 'commercial';
+        admittedViaIncludeClass = true;
+      }
     }
     const location = stageRowToLocation(row);
     if (!location) { out.untypedAccounts.push({ accountNumber: row?.acct, owner: row?.owner_name }); continue; }
@@ -401,6 +424,13 @@ export function buildHarrisPdataCandidates(address, stagedRows, opts = {}) {
         + `(loaded from ${row?.source_file ?? 'unknown file'})`,
       sourceUrl: 'https://hcad.org/pdata/pdata-property-downloads.html',
       accountType,
+      stateClass: normalizeStateClass(row?.state_class),
+      // OWNERGAP2-harris-d: true only when this row's admission REQUIRED
+      // `includeClasses` (i.e. its own state_class is not F1/F2) -- the
+      // exact-situs-only gate in resolveHarrisPdataMatch keys on this, not
+      // on accountType, because accountType is the same 'commercial' value
+      // for both the default and the widened classes.
+      admittedViaIncludeClass,
       mailingAddress: [row?.mail_addr_1, row?.mail_addr_2, row?.mail_city, row?.mail_state, row?.mail_zip]
         .filter(Boolean).join(', ') || null,
       raw: row,
@@ -449,8 +479,38 @@ export function buildPdataCitation(verdict, bundle) {
     normalized_address: bundle.norm.ok ? `${bundle.norm.house} ${bundle.norm.street}` : null,
     mailing_address: first?.mailingAddress ?? null,
     owner_secondary: first?.ownerSecondary ?? null,
+    // OWNERGAP2-harris-d: the admitted HCAD state_class -- so a ledger row
+    // resolved via an `includeClasses` widening (e.g. C2) is distinguishable
+    // from a default F1/F2 resolution without re-deriving it from raw.
+    state_class: first?.stateClass ?? null,
     fetched_at: new Date().toISOString(),
   };
+}
+
+// ============================================================================
+// OWNERGAP2-harris-d — the ONLY classes a caller may ask to admit beyond the
+// default F1/F2, and the single parser both this module's callers use to
+// validate `include_classes`. A closed allowlist, never an arbitrary string:
+// whether a NEW class should ever be admitted is Scott's call (S5), one class
+// at a time, never a blanket "trust the caller" open door.
+// ============================================================================
+export const HARRIS_PDATA_INCLUDABLE_CLASSES = new Set(['C2']);
+
+/**
+ * Parse a comma-separated `include_classes` string (or array) into a
+ * validated, upper-cased list -- unknown tokens are reported, never silently
+ * dropped or silently admitted.
+ * @returns {{ok:boolean, classes:string[], invalid:string[]}}
+ */
+export function parseIncludeClasses(raw) {
+  const tokens = (Array.isArray(raw) ? raw : String(raw ?? '').split(','))
+    .map((t) => String(t).trim().toUpperCase()).filter(Boolean);
+  const classes = [];
+  const invalid = [];
+  for (const t of tokens) {
+    if (HARRIS_PDATA_INCLUDABLE_CLASSES.has(t)) { if (!classes.includes(t)) classes.push(t); } else invalid.push(t);
+  }
+  return { ok: invalid.length === 0, classes, invalid };
 }
 
 /**

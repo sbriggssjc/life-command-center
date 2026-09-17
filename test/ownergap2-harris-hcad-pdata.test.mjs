@@ -24,7 +24,7 @@ import {
 import {
   buildHarrisPdataCandidates, resolveHarrisFromPdata, resolveHarrisPdataMatch,
   stageRowToLocation, harrisPdataStreetKeys, harrisBareStreetKeys,
-  harrisStreetsMatch, isHcadPlaceholderOwnerName,
+  harrisStreetsMatch, isHcadPlaceholderOwnerName, parseIncludeClasses,
 } from '../api/_shared/ownergap2-harris-pdata-match.js';
 import { assertCitation, planOwnerWrite } from '../api/_shared/ownergap2-owner-writeback.js';
 import { upsertRows, streamLoadRealAcct } from '../scripts/hcad-pdata-load.mjs';
@@ -417,6 +417,57 @@ test('resolveHarrisFromPdata threads includeClasses through to the candidate bui
   const withC2 = resolveHarrisFromPdata('10311 S Post Oak Rd', rows, { includeClasses: ['C2'] });
   assert.equal(withC2.status, 'resolved');
   assert.equal(withC2.owner, 'LUEL PARTNERSHIP LTD');
+});
+
+// ── OWNERGAP2-harris-d: an includeClasses-admitted row resolves on the EXACT
+// situs arm alone -- range/containment is refused even though it is a real
+// match arm for the default F1/F2 classes (S5: "the parcel we find must be
+// the parcel at the county").
+
+test('an includeClasses-admitted C2 row resolves on EXACT house-number match', () => {
+  const rows = [
+    { acct: '1', owner_name: 'LUEL PARTNERSHIP LTD', site_addr_1: '10311 S POST OAK RD', state_class: 'C2' },
+  ];
+  const r = resolveHarrisFromPdata('10311 S Post Oak Rd', rows, { includeClasses: ['C2'] });
+  assert.equal(r.status, 'resolved');
+  assert.equal(r.matchArm, 'exact');
+  assert.equal(r.citation.state_class, 'C2');
+});
+
+test('an includeClasses-admitted C2 row is REFUSED on a range/containment match -- exact only', () => {
+  // The staged row's own house number is a RANGE-START point (a range-shaped
+  // situs field would come from parseSourceLocation on a multi-address
+  // string); simulate that shape directly by handing the resolver a row
+  // whose parsed location covers, but does not equal, the queried house.
+  const rows = [
+    { acct: '1', owner_name: 'LUEL PARTNERSHIP LTD', site_addr_1: '10301-10399 S POST OAK RD', state_class: 'C2' },
+  ];
+  const r = resolveHarrisFromPdata('10311 S Post Oak Rd', rows, { includeClasses: ['C2'] });
+  assert.notEqual(r.status, 'resolved');
+  assert.equal(r.nearMisses?.some((m) => m.reason === 'class_admitted_requires_exact_situs'), true);
+});
+
+test('F1/F2 (default classes) still resolve on a range match -- the exact-only gate is C2-scoped', () => {
+  const rows = [
+    { acct: '1', owner_name: 'DEFAULT CLASS OWNER LLC', site_addr_1: '10301-10399 S POST OAK RD', state_class: 'F1' },
+  ];
+  const r = resolveHarrisFromPdata('10311 S Post Oak Rd', rows);
+  assert.equal(r.status, 'resolved');
+  assert.notEqual(r.matchArm, 'exact');
+});
+
+test('parseIncludeClasses validates against the closed allowlist and upper-cases', () => {
+  const ok = parseIncludeClasses('c2');
+  assert.equal(ok.ok, true);
+  assert.deepEqual(ok.classes, ['C2']);
+
+  const empty = parseIncludeClasses('');
+  assert.equal(empty.ok, true);
+  assert.deepEqual(empty.classes, []);
+
+  const bad = parseIncludeClasses('C2,F9');
+  assert.equal(bad.ok, false);
+  assert.deepEqual(bad.invalid, ['F9']);
 });
 
 // ── loader: on_conflict= is passed explicitly (Problem 1) ───────────────────
