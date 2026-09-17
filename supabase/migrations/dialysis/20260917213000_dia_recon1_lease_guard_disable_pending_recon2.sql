@@ -1,0 +1,18 @@
+-- RECON1 follow-up (Cowork round 29, 2026-09-17). Dialysis_DB (zqzrriwuavgrquhisnoa).
+-- APPLIED LIVE 2026-09-17 via Supabase MCP, this text verbatim.
+--
+-- RECON1 (20260917180000) installed trg_dia_recon1_lease_active_guard, which flips
+-- leases.is_active to false on any insert/update of an expired lease — fleet-wide,
+-- with no ledger row. Scott's rule, given 2026-09-17 when asked about the 2,454
+-- expired-but-active leases: "Let's only allow leases to go inactive once we have
+-- confirmation that the lease expired. We can leave it in an unconfirmed status
+-- until further research or evidence updates it."
+-- An automatic flip on expiration date alone is the opposite of that rule, so the
+-- trigger is DISABLED (not dropped) until RECON2 replaces it with the confirmed /
+-- unconfirmed model. Measured before disabling: 2,454 leases is_active past
+-- lease_expiration; 0 rows flipped by the trigger since it went live.
+-- The Banning fix is untouched (lease 23211 stays inactive; its 2018 expiration is
+-- superseded on the record by the 2015-2025 lease).
+--
+-- Reverse: alter table public.leases enable trigger trg_dia_recon1_lease_active_guard;
+alter table public.leases disable trigger trg_dia_recon1_lease_active_guard;

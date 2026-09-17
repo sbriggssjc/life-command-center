@@ -37,7 +37,7 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-reconcile-2, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT, CANON-OWNERSHIP1 | 2026-09-16 | Arc complete through GOVDEED3 (gov #406); **the gov deed writer runs from GitHub Actions (weekly Mon 06:00 UTC) — verify 09-21 dateless = 0**; CANON-OWNERSHIP1 👤 confirmation open; sale-party conflicts 1,290 a review queue |
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k LIVE** (LCC PR #2506): 218 attested supersessions, 40/43 pairs to sponsor, 16/16 controls untouched, reversible; sponsor-as-edge = future work |
 | **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, -harris-b/-c/-d, -ledger-order, MCP1 | 2026-09-17 | **41 assessor-sourced owners live** (Philadelphia 20, Harris 21 of 50); Harris is done except the 27 situs-gap properties → §P10a is the lane's next unit; next free-bulk jurisdiction after that |
-| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS-consolidate-lcc, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift, RECON1, RECON1-b, RECON2 | 2026-09-17 | PRI2-on live; HOME2 built, flag OFF → HOME2-on; F8/F8-b done; DIA1c live; **SBN-12 (Banning clinic) → `RECON1` merged + reconciled: one property, off Available; residue `RECON1-b` (deed task never created, sentinel party name); fleet reconciler = `RECON2`, waiting on Scott's holdover rule**; Saturday digest verifies F1–F8 |
+| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS-consolidate-lcc, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift, RECON1, RECON1-b, RECON2, VERCEL-LIVE1 | 2026-09-17 | PRI2-on live; HOME2 built, flag OFF → HOME2-on; F8/F8-b done; DIA1c live; **SBN-12 (Banning clinic) → `RECON1` merged + reconciled: one property, off Available; residue `RECON1-b` (deed task never created, sentinel party name); `RECON2` unit 1 prompted on Scott's rule (inactive only on confirmed expiration); **Scott's app window is a stale Vercel build → `VERCEL-LIVE1`, HOME2 look waits on it**; Saturday digest verifies F1–F8 |
 | **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–4, INVENTORY1, INVENTORY1b, INVENTORY2, INVENTORY-process, REMEDIATION-2026-05, REPO1, ROADMAP, PROCESS-CC-DOCS, PROCESS-MERGE-CLOBBER, GUARD-CLOBBER1, PROCESS-ROW-CELLS, PROCESS-PARKING-LOT, DEPLOY2-coverage, DEPLOY2-stale-body | 2026-09-17 | **PR #2563 reverted STATUS + backlog to a week-old snapshot (7 entries / 11 rows lost) — restored round 26; `GUARD-CLOBBER1` live on `main` (PR #2566), manual per-turn diff retired round 28**; DEPLOY2 live + CI; parking lot triaged; EDGE-GATES1 live |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
 | **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
@@ -52,6 +52,40 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
 
 ---
+
+## 2026-09-17 — Round 29 (Cowork): **the app Scott uses every day is a stale Vercel build — Vercel was never retired** (`VERCEL-LIVE1`); Scott's lease rule — inactive only on *confirmed* expiration — recorded, RECON1's date-only trigger disabled live, `RECON2` unit 1 prompted; the three PA flows carry the header
+
+**Round 28 merged** (PR #2569, `44928976`). Nothing new in `responses/` or `SB notes/`.
+
+**Vercel (from Scott's log export, 21:08 UTC, + the Dialysis_DB edge log).** Project `life-command-center` is
+live in production at `life-command-center-nine.vercel.app`, functions in iad1, called by Scott's own Chrome/
+app window. Its client is older than `main`: it issues `bd_worklist&limit=5` (added 2026-09-03, since removed),
+`cadence_dashboard&limit=200` (main: 300), the flag-OFF `/api/priority-queue?limit=5` fallback, and it reads
+`ai-copilot` **from the browser** (`DENY-WOULD GET /sync/calendar-events browser scott`, 21:08:25 UTC) where
+`main` goes through the server. That is why Scott sees no three-lane Home: `home_three_lanes` is ON in the
+workspace config, and the build he runs predates the flag. It is also the best explanation of PL-14 (`POST
+/chat`, UA `node`, AWS Ashburn): same platform, same region — the 19:19 request itself is outside the export.
+`CLAUDE.md`'s "Vercel retired 2026-07-20" is corrected in place. **Open consequence:** SB notes taken from
+that window may describe old code — worth a glance at recent SBN rows once Scott is on Railway. → row
+`VERCEL-LIVE1`, checklist **Q30**.
+
+**Q1.** Scott added `X-PA-Webhook-Secret` to Sync SF Activities, Sync SF Tasks and Sync Flagged Emails. The
+21:00 UTC `/sync/sf-tasks` slot logged no `DENY-WOULD` (first confirmation). Last flow miss 20:01 UTC →
+earliest enforce 2026-09-20 ~20:00 UTC, **and not before Q30**: the Vercel client would break on the flip.
+
+**RECON2 — Scott's rule, verbatim:** *"Let's only allow leases to go inactive once we have confirmation that
+the lease expired. We can leave it in an unconfirmed status until further research or evidence updates it."*
+Option C (25-row sample first). RECON1's trigger did the opposite (flip on date alone, unledgered), so Cowork
+**disabled it live** — `20260917213000_dia_recon1_lease_guard_disable_pending_recon2.sql`, in this PR and
+applied verbatim; verified `tgenabled = D`; it had flipped 0 rows; 2,454 leases remain active past expiration.
+Measured for the prompt: `leases.status` is unconstrained free text (17 status×active combinations), so the
+new state gets its own CHECK-constrained column. **Prompted:** `RECON2-lease-expiration-confirmed-not-assumed-
+and-banning-residue.md` — R5 rewritten, reader labels, dry-run + sample, research worklist, and RECON1-b.
+
+**Parking lot:** +PL-21…23, triaged on entry. Next free: PL-24.
+
+**Open for Scott:** Q30 (open the Railway URL, say what Home looks like, reinstall the app, send Vercel's
+env-var *names*); **send `RECON2`** to Claude Code.
 
 ## 2026-09-17 — Round 28 (Cowork): `RECON1` + `GUARD-CLOBBER1` reconciled against live state — Banning is one property and off *Available*, but the deed task was never created and "Not on file" was stored as a party name (`RECON1-b`); fleet reconciler filed (`RECON2`); Q1 clock restarts — `/sync/activities` still `DENY-WOULD`; PL-14 caller traced to AWS Ashburn (derived: the retired Vercel project)
 
