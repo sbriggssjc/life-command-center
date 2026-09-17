@@ -34,11 +34,72 @@
 
 import { authenticate } from '../_shared/auth.js';
 import { getDomainCredentials, domainQuery } from '../_shared/domain-db.js';
+import { opsQuery } from '../_shared/ops-db.js';
 
 const CENSUS_GEOCODER = 'https://geocoding.geo.census.gov/geocoder/locations/onelineaddress';
 const GEOCODIO_GEOCODER = 'https://api.geocod.io/v1.7/geocode';
 const GOOGLE_GEOCODER = 'https://maps.googleapis.com/maps/api/geocode/json';
 const DOMAIN_KEY_MAP = { dia: 'dialysis', gov: 'government' };
+
+// FLAGS-geocode-on (2026-09-16, decision S3): Geocodio's free tier is
+// 2,500 lookups/UTC-day, shared by BOTH domains against one Geocodio
+// account — so the cap is tracked centrally (LCC Opps `geocode_tier_usage`,
+// one row per UTC day), not per-domain, or a dia tick and a gov tick in the
+// same day could each independently believe they hold the full budget.
+// Capped at 2,400 (not 2,500) to leave headroom below Geocodio's own ceiling
+// for any other caller sharing the account. Census keeps running regardless —
+// this cap only throttles the Geocodio tier.
+const GEOCODIO_DAILY_CAP = 2400;
+
+function utcDateString(d = new Date()) {
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Pure arithmetic for "does this tick still have Geocodio budget?" — split
+ * out so the cap behavior is unit-testable without a live LCC Opps DB.
+ */
+export function geocodioCallsRemaining(usedToday, calledThisTick, cap = GEOCODIO_DAILY_CAP) {
+  return cap - (Number(usedToday) || 0) - (Number(calledThisTick) || 0);
+}
+
+/**
+ * Read today's Geocodio call count from the shared ledger. Returns 0 (fail
+ * open toward Census-only behavior is NOT the goal here — fail open toward
+ * "assume we haven't spent the budget yet" is correct: an unreadable ledger
+ * must not silently disable Geocodio for the day) when the table is missing
+ * or unreadable.
+ */
+async function getGeocodioUsageToday() {
+  const today = utcDateString();
+  const res = await opsQuery(
+    'GET',
+    `geocode_tier_usage?usage_date=eq.${today}&select=calls`
+  );
+  if (res.ok && Array.isArray(res.data) && res.data[0]) {
+    return { date: today, calls: Number(res.data[0].calls) || 0 };
+  }
+  return { date: today, calls: 0 };
+}
+
+/**
+ * Write today's Geocodio call TOTAL (not a delta) via upsert. Callers read
+ * the count once at tick start, add this tick's Geocodio attempts to it in
+ * memory, and write the new total back here at the end of the tick — a
+ * true atomic increment would need a SQL RPC, and the concurrency window
+ * (one geocode-tick cron, ticking every few minutes) doesn't warrant one.
+ * Best-effort — a failure here must not fail the geocode tick itself.
+ */
+async function setGeocodioUsageToday(today, totalCalls) {
+  await opsQuery(
+    'POST',
+    'geocode_tier_usage?on_conflict=usage_date',
+    { usage_date: today, tier: 'geocodio', calls: totalCalls, updated_at: new Date().toISOString() },
+    {
+      Prefer: 'resolution=merge-duplicates,return=minimal',
+    }
+  );
+}
 
 // Logged once per cold start so a missing key surfaces in Railway logs without
 // flooding every tick. The handler still functions correctly — it just falls
@@ -220,6 +281,18 @@ export async function handleGeocodeTick(req, res) {
   }
 
   const targets = domainParam === 'both' ? ['dia', 'gov'] : [domainParam];
+
+  // FLAGS-geocode-on: read today's shared Geocodio usage ONCE per tick (both
+  // domain loops below share this counter — Geocodio's quota is one account,
+  // not one per domain) and track how many MORE calls this tick makes so the
+  // ledger write at the end is a single total, not N racy increments.
+  const geocodioUsage = geocodioKey ? await getGeocodioUsageToday() : null;
+  let geocodioCallsThisTick = 0;
+  const geocodioBudgetRemaining = () =>
+    geocodioUsage
+      ? geocodioCallsRemaining(geocodioUsage.calls, geocodioCallsThisTick, GEOCODIO_DAILY_CAP)
+      : 0;
+
   const out = {
     mode: dryRun ? 'dry_run' : 'apply',
     cascade: [
@@ -229,6 +302,8 @@ export async function handleGeocodeTick(req, res) {
     ].filter(Boolean).join(' -> '),
     geocodio_fallback: geocodioKey ? 'enabled' : 'disabled',
     google_fallback: googleKey ? 'enabled' : 'disabled',
+    geocodio_daily_cap: GEOCODIO_DAILY_CAP,
+    geocodio_usage_today: geocodioUsage ? geocodioUsage.calls : null,
     by_domain: {},
     totals: {
       scanned: 0, patched: 0, patched_census: 0, patched_geocodio: 0, patched_google: 0,
@@ -330,15 +405,19 @@ export async function handleGeocodeTick(req, res) {
         continue;
       }
 
-      // Geocoder cascade: Census (free) → Geocodio (cheap, US-focused,
-      // $0.50/1k) → Google (worldwide, $5/1k, last resort). Each tier
-      // engages only when the prior one misses. We track the source
-      // separately so cron stats expose each tier's contribution.
+      // Geocoder cascade: Census (free) → Geocodio (free tier, capped at
+      // GEOCODIO_DAILY_CAP/day, shared across domains) → Google (paid,
+      // OFF by decision — see FLAGS-geocode-on). Each tier engages only
+      // when the prior one misses. We track the source separately so cron
+      // stats expose each tier's contribution.
       let result = await geocodeAddressCensus(row);
       let source = 'census';
-      if (!result && geocodioKey) {
+      if (!result && geocodioKey && geocodioBudgetRemaining() > 0) {
+        geocodioCallsThisTick += 1;
         result = await geocodeAddressGeocodio(row, geocodioKey);
         if (result) source = 'geocodio';
+      } else if (!result && geocodioKey) {
+        stats.geocodio_cap_reached = true;
       }
       if (!result && googleKey) {
         result = await geocodeAddressGoogle(row, googleKey);
@@ -409,6 +488,17 @@ export async function handleGeocodeTick(req, res) {
     out.totals.skipped += stats.skipped;
     out.totals.errored += stats.errored;
   }
+
+  // FLAGS-geocode-on: persist the new Geocodio total for today, once, after
+  // both domain loops — never on a dry run (a dry run must not spend or
+  // record budget it never actually used).
+  if (geocodioUsage && geocodioCallsThisTick > 0 && !dryRun) {
+    await setGeocodioUsageToday(geocodioUsage.date, geocodioUsage.calls + geocodioCallsThisTick);
+  }
+  out.geocodio_calls_this_tick = geocodioCallsThisTick;
+  out.geocodio_usage_after_tick = geocodioUsage
+    ? geocodioUsage.calls + (dryRun ? 0 : geocodioCallsThisTick)
+    : null;
 
   return res.status(200).json(out);
 }
