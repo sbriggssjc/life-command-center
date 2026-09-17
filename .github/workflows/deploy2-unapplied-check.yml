@@ -1,0 +1,81 @@
+name: DEPLOY2 — merged-migration application check
+
+# DEPLOY2-live (2026-09-17). A dedicated job, separate from build-brief-collector.yml, which
+# deliberately never fails the run on a finding (see that workflow's own header). This one
+# exists specifically to make a merged-but-never-applied migration LOUD: three incidents shipped
+# unapplied in one week (the Geocodio daily-cap migration, the PRI2 reason-first-order migration,
+# both LCC Opps) before this job existed, each found by a human noticing broken behaviour rather
+# than by CI. It runs `scripts/build-brief-collector.mjs --fail-on-unapplied` (no --write — this
+# job reports, it never mutates `build_brief_snapshots`; the daily/on-push collector already owns
+# that write) and fails the JOB, never the merge, because this always runs AFTER the merge already
+# landed — it is the after-the-fact signal Cowork's own build-turn-protocol loop step 4a otherwise
+# supplies by hand.
+#
+# Needs full history for the git-add-date migration window (DEPLOY2-coverage) — same
+# `fetch-depth: 0` requirement as build-brief-collector.yml.
+#
+# Required secrets (Settings → Environments → Production), same as build-brief-collector.yml:
+#   LCC_SUPABASE_URL / LCC_SERVICE_ROLE_KEY           -- LCC Opps
+#   DIA_SUPABASE_URL / DIA_SUPABASE_SERVICE_KEY / DIA_SUPABASE_KEY  -- Dialysis_DB (dia)
+# gov is intentionally uncovered (GOVDEPLOY1 / docs/architecture/MIGRATION-COVERAGE-MAP.md) --
+# `government-lease` owns that database.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check merged migrations were actually applied
+    runs-on: ubuntu-latest
+    environment: Production
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0   # needed for the git-add-date migration window (DEPLOY2-coverage)
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Run the migration-application check
+        id: run
+        env:
+          LCC_SUPABASE_URL: ${{ secrets.LCC_SUPABASE_URL }}
+          LCC_SERVICE_ROLE_KEY: ${{ secrets.LCC_SERVICE_ROLE_KEY }}
+          DIA_SUPABASE_URL: ${{ secrets.DIA_SUPABASE_URL }}
+          DIA_SUPABASE_SERVICE_KEY: ${{ secrets.DIA_SUPABASE_SERVICE_KEY }}
+          DIA_SUPABASE_KEY: ${{ secrets.DIA_SUPABASE_KEY }}
+        run: |
+          set -o pipefail
+          node scripts/build-brief-collector.mjs --fail-on-unapplied 2>&1 | tee deploy2-output.txt
+
+      - name: Post a commit comment with the findings table
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let body = 'DEPLOY2 check output unavailable.';
+            try {
+              const out = fs.readFileSync('deploy2-output.txt', 'utf8');
+              // Commit comments have no hard size limit worth worrying about here, but keep it sane.
+              body = '```\n' + out.slice(-60000) + '\n```';
+            } catch (e) {
+              body = `DEPLOY2 check could not read its own output: ${e.message}`;
+            }
+            const conclusion = '${{ steps.run.outcome }}';
+            const header = conclusion === 'failure'
+              ? '❌ **DEPLOY2 — a migration merged to `main` is UNAPPLIED on its target database.**'
+              : '✅ DEPLOY2 — no unapplied migrations found in this push\'s window.';
+            await github.rest.repos.createCommitComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: context.sha,
+              body: `${header}\n\n${body}`,
+            });
