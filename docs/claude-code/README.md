@@ -15,6 +15,7 @@ actually runs; the previous `NN-slug` / `.response.md` conventions are retired.
 | `responses/` | Claude Code's reply, saved by Scott as `<ID> desktop response.docx` (gitignored — the reconciliation is the durable record) | Scott |
 | `responses/done/` | reconciled responses (plain move, gitignored) | Cowork moves |
 | `SB notes/` | Scott's in-app observations (docx with screenshots, forwarded `.eml`, anything). `README.md` there is the intake protocol; `TRIAGE.md` is the ledger (`SBN-n`). Processed files go to `SB notes/done/` (`.docx` is gitignored; `.eml`/images are tracked). | Scott drops; Cowork triages |
+| `PARKING-LOT.md` | one line per thing noticed on the way (by Cowork, a CC round's `Parked:` section, or Scott); triaged every turn into a row / checklist line / prompt / decision / drop | anyone drops; Cowork triages |
 | `OPERATOR-CHECKLIST.md` | the one list of manual steps only Scott can do (edge-function deploys, Power Automate edits, hand-fetched payloads). Cowork adds; Scott ticks; Cowork verifies and removes. | Cowork |
 | `STATUS.md` | the running narrative, newest-first, with the Open-threads table at the top. Line-budgeted (3,000) and header-guarded by `test/status-*.test.mjs`; archive verbatim to `docs/history/` before you push. | Cowork |
 
@@ -27,6 +28,9 @@ story; the backlog is the state; `docs/os/CURRENT-STATE.md` is the one-page "whe
 1. `git fetch`; note `origin/main`'s head and any PR merged since the last entry.
 2. **Check `responses/`** for files not in `done/`. Read each in full (`pandoc … -t plain`).
 3. **Check `SB notes/`** for files not in `done/`. Triage per `SB notes/README.md` → `TRIAGE.md` rows.
+3b. **Triage `PARKING-LOT.md`**: every open line becomes a backlog row, a checklist line, a prompt, a
+   decision, or a drop with a reason; copy each response's `Parked:` lines in first. A line older than
+   seven days is a process failure — say so in STATUS.
 4. **Reconcile each response against live state, not against its own summary**: run the numbers on the
    database the round touched (`pg_proc`, `cron.job`, counts). Two rounds on 2026-09-16 reported true
    after-states that a cron undid within twenty minutes; the reconciliation caught it, the summary

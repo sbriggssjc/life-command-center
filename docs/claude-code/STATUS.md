@@ -40,7 +40,7 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k LIVE** (LCC PR #2506): 218 attested supersessions, 40/43 pairs to sponsor, 16/16 controls untouched, reversible; sponsor-as-edge = future work |
 | **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, -harris-b/-c/-d, -ledger-order, MCP1 | 2026-09-17 | **41 assessor-sourced owners live** (Philadelphia 20, Harris 21 of 50); Harris is done except the 27 situs-gap properties → §P10a is the lane's next unit; next free-bulk jurisdiction after that |
 | **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS-consolidate-lcc, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift | 2026-09-17 | **PRI2-on live** (flag ON, reason-first, one card per property — migration had to be applied by Cowork; the tab was 502); **F8 done** (one intake flow, Executor the only mover; F8-b nit); DIA1c live; Saturday digest verifies F1–F8; HOME2 next |
-| **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–4, INVENTORY1, INVENTORY1b, INVENTORY-process, REMEDIATION-2026-05, FLAGS-geocode(-on), REGISTRY-contacts-hub, REPO1, ROADMAP, PROCESS-CC-DOCS, PROCESS-MERGE-CLOBBER, PROCESS-ROW-CELLS, DEPLOY2-coverage | 2026-09-17 | **Three merged-not-applied migrations in two days** (geocode cap, PRI2-on) → loop step 4a: check `supabase/migrations/**` of every merged PR against the live catalog before ✅; DEPLOY2 live run still owed; commits are 3-way patches; CLAUDE.md pass 2 with Scott ahead |
+| **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–4, INVENTORY1, INVENTORY1b, INVENTORY2, INVENTORY-process, REMEDIATION-2026-05, REPO1, ROADMAP, PROCESS-CC-DOCS, PROCESS-MERGE-CLOBBER, PROCESS-ROW-CELLS, PROCESS-PARKING-LOT, DEPLOY2-coverage | 2026-09-17 | Scott's queue Q1–Q28 built from 67 buried 👤 rows; **parking lot live** (PL-1: eight ungated edge functions); **DEPLOY2-live prompted** (three merged-not-applied incidents this week); commits are 3-way patches; CLAUDE.md pass 2 ahead |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
 | **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
 | **Broker identity (BR) / BROKER1** | BR1, BR2, BR3, BR4, BR5, BR1-misparse-handoff, BROKER1, BROKER1-sf | 2026-09-16 | **BR1/BR3 live** (Dialysis_DB: `broker_companies` 131 → 75, 10 ambiguous composites in review, `broker_company_id` 7.2% → 14.4%); **661 unmatched `brokers.company` strings queued = BR4's input**; BR5 display unit unbuilt; BROKER1 applied live (1,303); BROKER1-sf correctly unbuilt |
@@ -54,6 +54,42 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
 
 ---
+
+## 2026-09-17 — Working the queue programmatically: a parking lot for what we notice on the way, three independent CC rounds drafted, and Q1/Q2 measured live (Cowork)
+
+**Scott's ask:** proceed on the recommendation, keep consolidating, and find a way to flag and grab
+other topics as we go. Three moves.
+
+**1. A parking lot.** `docs/claude-code/PARKING-LOT.md` — one line per thing noticed while doing
+something else (date · where · what · who); every Cowork turn triages the open lines into a backlog
+row, a checklist line, a prompt, a decision, or a drop with a reason (README step ③b). Claude Code
+rounds feed it through a **`Parked:`** section every prompt now asks for in its Reporting block. Six
+lines went in on day one, including one that matters: **eight more Dialysis_DB edge functions run
+`verify_jwt:false` with no reviewed gate** (`context-broker`, `template-service`, `intake-receiver`, the
+`calendar-*` four, …) — the COPILOT-OPEN class is wider than the two functions the queue names.
+
+**2. Three rounds that need no decision, sent in parallel.** `DEPLOY2-live` — run the unapplied-
+migration detector live against all three projects, fix the two window defects (include `dialysis/`,
+window by git add-date), body-hash views and functions, and make it a job on every merge to `main`;
+three incidents this week say this is the highest-leverage process fix available. `BR4` — broker
+dedupe against the firm-linked population (143 duplicate-name groups; the 661 firm strings BR1 queued),
+true duplicates only, every FK repointed, firms minted only with evidence. `HOME2` — the three-lane
+Home from HOME1 §B behind a flag, with the BD lane corrected to PRI2's reason-first list and the
+Priority-tab-duplicating fallback removed.
+
+**3. Q1 and Q2 measured live before Scott spends time on them.** Q1: the `ai-copilot` gate **is
+deployed** (v84) in log mode and the edge project has `PA_WEBHOOK_SECRET` set; in the last 24 h it logged
+**35 `DENY-WOULD` lines, all from four Power Automate flows** (`/sync/calendar-events` 24, `/sync/activities`
+6, `/sync/sf-tasks` 4, `/sync/flagged-emails` 1) — so the remaining step is exactly the one already
+written in `docs/architecture/flows/ai-copilot-sync-callers.md`: add the `X-PA-Webhook-Secret` header to
+those four flows' HTTP actions, export, then three clean days, then `COPILOT_AUTH_MODE=enforce`. Q2:
+`salesforce-enrichment` v27 (log-only gate) has been live since 09-09 with **no `[sfenrich-auth]` line
+in 24 h** — the monthly caller has not fired; enforce waits for one cycle (≈10-09) or Scott naming the
+caller (PL-3). Q1's line on the checklist now says the four flows and the doc; Q2's says the date.
+
+**Next:** Scott sends the three prompts and, when convenient, does Q1's four header edits (the doc
+has the click-path); Cowork triages the parking lot each turn; Saturday's digest; Monday's GOVDEED3
+check.
 
 ## 2026-09-17 — Inventory reviewed against the to-do lists: the residue is small; the real gap was 67 backlog rows waiting on Scott that the checklist did not know about (Cowork)
 

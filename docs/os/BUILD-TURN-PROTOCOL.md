@@ -124,6 +124,10 @@ reference material is the more expensive mistake.** Full procedure: `DOCUMENTATI
 
 ### ⑧ LEAVE THE NEXT STEP NAMED
 
+And **park what you noticed** that is not the next step: one line in `docs/claude-code/PARKING-LOT.md`
+(a Claude Code round: the `Parked:` section of its response). Not filing it is how a real find becomes
+next month's audit.
+
 A recommendation with its size, its blockers and its sequencing — including *"do not build this"*
 where that is the answer. **Update `NEW-CHAT-KICKOFF.md` if the live thread moved.**
 

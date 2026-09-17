@@ -46,7 +46,7 @@
 - ✅ **Live:** HP1 Today-500 badge; HP1-P1a-fix (608 `bd_opportunities` rows updated in Salesforce — the first LCC→SF UPDATE); BROKER1 prospect assignment (1,303 assigned); **BR1/BR3** — `broker_companies` repaired (131 → 75, `;` composites collapsed, write guard) and `broker_company_id` 7.2% → 14.4%.
 - 🟡 **Partial:** the funnel itself — the 2026-08-28 audit measured 1.1% of gov properties with 2+ historical owner links; the rows in §P0b are the ladder from there.
 - 🔴 **Open:** the §P0b rows (re-measure before acting; the audit is three weeks old); BROKER1-sf (SF write-back) deliberately unbuilt; **BR4** (broker dedupe — its input is now the 661 unmatched `brokers.company` strings BR1 queued) and **BR5** (firm/agent as two fields) unblocked, not prompted.
-- ⏭️ **Next unit:** BR4 against the 661; otherwise this lane advances through lanes 1–3.
+- ⏭️ **Next unit:** BR4 (prompted 2026-09-17); otherwise this lane advances through lanes 1–3.
 
 ## 5. App surfaces — Home, Priority, Dialysis Overview, review workbench — backlog §P20, §P16, §HP1, Open-threads *App feedback intake (SBN)* and *App / UX*
 
@@ -55,7 +55,7 @@
 - ✅ **Live (new):** DIA1c — 33 canonical operators, one `US Renal Care`, 0 unresolved; the Operators tile reads the canonical count.
 - 🔴 **Open:** HOME2 (three-lane Home, after PRI2), ID3a-drift.
 - ✅ **Live (new):** PRI2-on — the Priority tab is one ranked list, reason-first, one card per property (flag ON 2026-09-17).
-- ⏭️ **Next unit:** HOME2 (the three-lane Home from HOME1 §B).
+- ⏭️ **Next unit:** HOME2 (prompted 2026-09-17).
 - 👤 **Decisions:** none open (R1 delegated; S2 decided).
 
 ## 6. Flows, intake and artifact health (Power Automate ↔ LCC) — backlog §P20, `docs/setup/POWER-AUTOMATE-FLOW-FIXES-2026-09-16.md`
@@ -97,7 +97,7 @@
 
 ## 12. Data coherence & known defects — backlog §P0d, §P10, §P10a, §P14, §P21
 
-- ✅ **Live:** the DEPLOY2 unapplied-migration detector (first real catch C1C-UNAPPLIED; its coverage fix has not had a live run, and it missed the geocode-cap and PRI2-on migrations on 2026-09-17 — the loop now checks migrations by hand until it does); doc guards in CI (STATUS header/line budget, backlog ID uniqueness, table shape).
+- ✅ **Live:** the DEPLOY2 unapplied-migration detector (first real catch C1C-UNAPPLIED; its coverage fix has not had a live run, and it missed the geocode-cap and PRI2-on migrations on 2026-09-17 — the loop now checks migrations by hand until it does — `DEPLOY2-live` prompted 2026-09-17); doc guards in CI (STATUS header/line budget, backlog ID uniqueness, table shape).
 - ✅ **Live (new):** MISPARSE1 — `email_fanout` split by mailbox genericness, 4 → 9 of 12 real brokers recovered on the live fixture.
 - 🔴 **Open:** REMEDIATION-2026-05 (the May TODOs, now rows, DB-verified); §P10 sized unfixed defects; BR1-misparse-handoff / titleparse / fp (the rest of the contact-guard family); the Longenbaugh duplicate (lane 1); **the 27 Harris situs-gap properties are the first concrete §P10a case**.
 - 📐 **Designed:** cross-lane property identity / address resolution (§P10a) — the Harris street-shape bugs are the same class, solved lane-locally again.
