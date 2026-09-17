@@ -63,6 +63,10 @@ const LCC_FLAGS = {
   more_drawer_enabled: true,
   freshness_indicators: true,
   unified_merge_modal: true,
+  // HOME2 (2026-09-17): three-lane Home page (Research/BD/Inbox), pure
+  // re-composition behind this flag. OFF — see renderHomeThreeLanes() and
+  // docs/audits/HOME1_HOME_PAGE_AUDIT_2026-09-16.md §B.
+  home_three_lanes: false,
   // PRI2-on (2026-09-17): re-composes the Priority tab onto v_lcc_seller_prospect_queue
   // (the seller doctrine's own ranked list) instead of v_priority_queue_enriched's
   // P-band worklist. ON — Scott delegated the read; docs/audits/PRI2_SIDE_BY_SIDE_2026-09-16.md
@@ -7270,7 +7274,11 @@ function renderDailyBriefingPanel() {
   html += '</div>';
 
   el.innerHTML = html;
-  if (_dbFillPriorities) _dbFillMyPrioritiesFromQueue();
+  // HOME2: under home_three_lanes, the BD lane (item 2 of the spec — the same
+  // seller-prospect queue as the Priority tab, honestly labeled) is the
+  // replacement for this fallback. Firing both would silently duplicate the
+  // Priority tab a second way instead of zero ways.
+  if (_dbFillPriorities && !checkFlag('home_three_lanes')) _dbFillMyPrioritiesFromQueue();
 }
 
 // R4-C §4: fill the briefing's My Priorities section from the live priority
@@ -7891,6 +7899,139 @@ async function loadNextBestActionData(force = false) {
   }
 }
 window.loadNextBestActionData = loadNextBestActionData;
+
+// ============================================================
+// HOME2 — three-lane Home page (flag: home_three_lanes, default OFF)
+// Pure re-composition, per docs/audits/HOME1_HOME_PAGE_AUDIT_2026-09-16.md §B.
+// No new SQL, no new ranking — each lane reads its own EXISTING named source:
+//   Research → the same v_next_best_action feed as the "Top Data Gaps to
+//              Close" widget (nbaSnapshot, already filtered to the
+//              human-actionable predicate in api/admin.js::handleNextBestAction
+//              and already ranked gap_priority_score DESC — this lane is a
+//              read of that same in-memory snapshot, never a second fetch).
+//   BD       → GET /api/seller-prospect-queue — the SAME query the Priority
+//              tab renders (ops.js renderPriorityQueuePage, PRI2-on). Labeled
+//              "same queue as the Priority tab, top 5" so the overlap is
+//              honest instead of the old silent _dbFillMyPrioritiesFromQueue
+//              fallback duplicating it unlabeled.
+//   Inbox    → dailyBriefingSnapshot.inbox_summary.items — already fetched by
+//              loadDailyBriefingData() (daily-briefing/index.ts fetchInboxSummary,
+//              v_inbox_triage). Re-sorted client-side only (new before triaged,
+//              then created_at DESC); v_inbox_triage carries no due_date, so
+//              there is no separate "overdue" state to distinguish from
+//              "triaged" here — see the report for this reading.
+// ============================================================
+let _home3BdData = [];
+let _home3BdLoaded = false;
+
+function _home3TopN(arr, n) {
+  return Array.isArray(arr) ? arr.slice(0, n) : [];
+}
+
+function _home3RankInboxItems(items) {
+  const arr = Array.isArray(items) ? items.slice() : [];
+  arr.sort((a, b) => {
+    const an = (a && a.status === 'new') ? 0 : 1;
+    const bn = (b && b.status === 'new') ? 0 : 1;
+    if (an !== bn) return an - bn;
+    const at = (a && a.created_at) ? new Date(a.created_at).getTime() : 0;
+    const bt = (b && b.created_at) ? new Date(b.created_at).getTime() : 0;
+    return bt - at;
+  });
+  return arr;
+}
+
+// Research lane data = the same nbaSnapshot the gaps widget already loaded —
+// never a second query. Reads only nbaSnapshot.items.
+function _home3ResearchItems() {
+  const items = (typeof nbaSnapshot !== 'undefined' && nbaSnapshot && Array.isArray(nbaSnapshot.items))
+    ? nbaSnapshot.items : [];
+  return _home3TopN(items, 5);
+}
+
+function _home3RenderResearchLane() {
+  const el = document.getElementById('home3ResearchContent');
+  if (!el) return;
+  const items = _home3ResearchItems();
+  if (!items.length) { el.innerHTML = '<div class="nba-empty">No outstanding gaps.</div>'; return; }
+  el.innerHTML = items.map((row) => {
+    const label = String(row.gap_label || '').trim() || ('Property #' + (row.property_id || ''));
+    const action = String(row.suggested_action || '').trim()
+      || (typeof formatNbaGapType === 'function' ? formatNbaGapType(row.gap_type) : String(row.gap_type || ''));
+    const source = row.portal_url
+      ? (' · <a href="' + esc(row.portal_url) + '" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">Look up owner → ' + esc(row.portal_label || 'county recorder') + '</a>')
+      : '';
+    const pid = row.property_id;
+    const clickAttr = pid
+      ? ' onclick="openNbaItem(&quot;' + esc(row.source_domain || '') + '&quot;, ' + Number(pid) + ')" style="cursor:pointer"'
+      : '';
+    return '<div class="nba-item"' + clickAttr + '><div class="nba-item-head"><span class="nba-item-title">' + esc(label) + '</span></div>'
+      + '<div class="nba-item-sub">' + esc(action) + source + '</div></div>';
+  }).join('');
+}
+
+// BD lane data = /api/seller-prospect-queue, the SAME route the Priority tab
+// (ops.js renderPriorityQueuePage / PRI2-on) reads — top 5, reason-first order
+// as the route already returns it. Never v_priority_queue_enriched (superseded
+// by PRI2) and never a second/different query.
+async function _home3LoadBdLane(force) {
+  if (_home3BdLoaded && !force) return _home3BdData;
+  try {
+    const res = await opsApi('/api/seller-prospect-queue?chip=all&limit=5&offset=0');
+    _home3BdData = (res && res.ok && res.data && Array.isArray(res.data.items)) ? res.data.items : [];
+  } catch (e) {
+    _home3BdData = [];
+  }
+  _home3BdLoaded = true;
+  return _home3BdData;
+}
+
+function _home3RenderBdLane() {
+  const el = document.getElementById('home3BdContent');
+  if (!el) return;
+  const items = _home3TopN(_home3BdData, 5);
+  if (!items.length) { el.innerHTML = '<div class="nba-empty">No seller prospects.</div>'; return; }
+  el.innerHTML = items.map((r) => {
+    const clickable = !!r.entity_id;
+    const title = r.owner_name || r.entity_name || '—';
+    const money = (typeof _todayMoney === 'function') ? _todayMoney(r.rank_value) : (r.rank_value || '');
+    const loc = [r.city, r.state].filter(Boolean).join(', ');
+    return '<div class="nba-item' + (clickable ? ' clickable' : '') + '"'
+      + (clickable ? ' onclick=\'openEntityDetail(' + JSON.stringify(String(r.entity_id)) + ')\'' : '')
+      + ' style="cursor:' + (clickable ? 'pointer' : 'default') + '">'
+      + '<div class="nba-item-head"><span class="nba-item-title">' + esc(title) + '</span>'
+      + '<span class="q-badge type">' + esc(r.reach_state || '') + '</span></div>'
+      + '<div class="nba-item-sub">' + esc(money) + (loc ? ' · ' + esc(loc) : '') + '</div></div>';
+  }).join('');
+}
+
+function _home3RenderInboxLane() {
+  const el = document.getElementById('home3InboxContent');
+  if (!el) return;
+  const raw = (typeof dailyBriefingSnapshot !== 'undefined' && dailyBriefingSnapshot
+    && dailyBriefingSnapshot.inbox_summary && Array.isArray(dailyBriefingSnapshot.inbox_summary.items))
+    ? dailyBriefingSnapshot.inbox_summary.items : [];
+  const items = _home3TopN(_home3RankInboxItems(raw), 5);
+  if (!items.length) { el.innerHTML = '<div class="nba-empty">Inbox is clear.</div>'; return; }
+  el.innerHTML = items.map((r) => {
+    return '<div class="nba-item"><div class="nba-item-head"><span class="nba-item-title">' + esc(r.title || 'Item') + '</span>'
+      + '<span class="q-badge type">' + esc(r.status || '') + '</span></div></div>';
+  }).join('');
+}
+
+// Entry point — no-ops entirely (no DOM writes, no fetch) unless the flag is
+// on, so with home_three_lanes OFF this function has zero effect on the
+// rendered page.
+async function renderHomeThreeLanes(force) {
+  if (!checkFlag('home_three_lanes')) return;
+  const wrap = document.getElementById('home3LanesWidget');
+  if (wrap) wrap.style.display = '';
+  _home3RenderResearchLane();
+  await _home3LoadBdLane(force);
+  _home3RenderBdLane();
+  _home3RenderInboxLane();
+}
+window.renderHomeThreeLanes = renderHomeThreeLanes;
 
 // ============================================================
 // TEAM PULSE — manager/owner widget showing team health at a glance
@@ -9388,8 +9529,8 @@ function bootApp() {
       applyFeatureFlags();
       autoConnectCredentials().then(() => {
         Promise.all([loadActivities(), loadEmails(), loadCalendar(), loadHealth(), loadWeather(), loadMarket(), loadPersonalCalendar(), loadPersonalTasks(), loadCanonicalData(), loadDailyBriefingData(), loadNextBestActionData()])
-          .then(() => { updateGreeting(); if (typeof renderTodaySections === 'function') renderTodaySections(); if (checkFlag('auto_sync_on_load')) triggerCanonicalSync(); })
-          .catch(() => { updateGreeting(); if (typeof renderTodaySections === 'function') renderTodaySections(); if (checkFlag('auto_sync_on_load')) triggerCanonicalSync(); });
+          .then(() => { updateGreeting(); if (typeof renderTodaySections === 'function') renderTodaySections(); if (typeof renderHomeThreeLanes === 'function') renderHomeThreeLanes(); if (checkFlag('auto_sync_on_load')) triggerCanonicalSync(); })
+          .catch(() => { updateGreeting(); if (typeof renderTodaySections === 'function') renderTodaySections(); if (typeof renderHomeThreeLanes === 'function') renderHomeThreeLanes(); if (checkFlag('auto_sync_on_load')) triggerCanonicalSync(); });
       });
     });
   });
@@ -9445,6 +9586,7 @@ function startAutoRefresh() {
     loadCanonicalData();
     loadDailyBriefingData(true);
     loadNextBestActionData(true);
+    if (typeof renderHomeThreeLanes === 'function') renderHomeThreeLanes(true);
     updateGreeting();
   }, interval);
 }
@@ -9470,6 +9612,7 @@ document.addEventListener('visibilitychange', () => {
       loadCanonicalData();
       loadDailyBriefingData(true);
       loadNextBestActionData(true);
+      if (typeof renderHomeThreeLanes === 'function') renderHomeThreeLanes(true);
       updateGreeting();
     }
   }

@@ -168,6 +168,13 @@ const DEFAULT_FLAGS = {
   ops_pages_enabled: true,
   more_drawer_enabled: true,
   freshness_indicators: true,
+  // HOME2 (2026-09-17): pure re-composition of Home into three lanes
+  // (Research / BD / Inbox), each reading its EXISTING named source
+  // (v_next_best_action via the Top-Data-Gaps producer, the seller-prospect
+  // queue the Priority tab reads, the daily-briefing's inbox_summary). No
+  // new view, no new ranking. OFF by default — see
+  // docs/audits/HOME1_HOME_PAGE_AUDIT_2026-09-16.md §B.
+  home_three_lanes: false,
 
   // ── Edge Migration Flags (Phase 0–4) ──
   // When enabled, frontend routes requests to Supabase Edge Functions
