@@ -37,7 +37,7 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-reconcile-2, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT, CANON-OWNERSHIP1 | 2026-09-16 | Arc complete through GOVDEED3 (gov #406); **the gov deed writer runs from GitHub Actions (weekly Mon 06:00 UTC) — verify 09-21 dateless = 0**; CANON-OWNERSHIP1 👤 confirmation open; sale-party conflicts 1,290 a review queue |
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k LIVE** (LCC PR #2506): 218 attested supersessions, 40/43 pairs to sponsor, 16/16 controls untouched, reversible; sponsor-as-edge = future work |
 | **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, -harris-b/-c/-d, -ledger-order, MCP1 | 2026-09-17 | **41 assessor-sourced owners live** (Philadelphia 20, Harris 21 of 50); Harris is done except the 27 situs-gap properties → §P10a is the lane's next unit; next free-bulk jurisdiction after that |
-| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS-consolidate-lcc, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift, RECON1, RECON1-b, RECON2, RECON2-b, RECON2-render, HOME2-fix, HOME2-b, HOME2-c, HOME2-d, PERF-SPQ1, PERF-SPQ1-b, PERF-SPQ1-c, PERF-SPQ2, RECON2-c, RECON2-d, RESOLVER1, SIDEBAR-LEASE1, SIDEBAR2, SIDEBAR3, VERCEL-LIVE1 | 2026-09-18 | **Round 43:** `HOME2-d` shipped (PR pending merge) — `home3-grid` class w/ `minmax(0,1fr)` + a container query stacking to one column below ~900px card width, replacing the bare inline `1fr 1fr 1fr` that overflowed the card; screenshot-against-live-Railway proof still owed (👤 next); next: `RECON2-d`, `SIDEBAR3`, `PERF-SPQ2`, `RESOLVER1` |
+| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS-consolidate-lcc, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift, RECON1, RECON1-b, RECON2, RECON2-b, RECON2-render, HOME2-fix, HOME2-b, HOME2-c, HOME2-d, HOME2-e, PERF-SPQ1, PERF-SPQ1-b, PERF-SPQ1-c, PERF-SPQ2, RECON2-c, RECON2-d, RECON2-d-reconcile, RECON2-d-render, RESOLVER1, SIDEBAR-LEASE1, SIDEBAR2, SIDEBAR3, SIDEBAR4, LEASEJUNK1, DIA-PROPAGATOR1, VERCEL-LIVE1 | 2026-09-18 | **Round 44:** 🚨 `DIA-PROPAGATOR1` — the DialysisProject scheduler on Scott's PC re-PATCHes every Dialysis property 4×/hour and logs ~1M junk `learning_logs`/day (Q37 stop/keep); `RECON2-d` live + verified but built in the Dialysis repo → ported, `RECON2-d-reconcile` (Q36); `HOME2-d` merged but loses on CSS specificity → `HOME2-e` prompted; 8 sidebar sends: external_id ✅, twin contact entities → `SIDEBAR4`, 1/8 reached the lease writer |
 | **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–5, INVENTORY1, INVENTORY1b, INVENTORY2, INVENTORY-process, REMEDIATION-2026-05, REPO1, ROADMAP, PROCESS-CC-DOCS, PROCESS-MERGE-CLOBBER, GUARD-CLOBBER1, PROCESS-ROW-CELLS, PROCESS-PARKING-LOT, DEPLOY2-coverage, DEPLOY2-stale-body | 2026-09-18 | **PR #2563 reverted STATUS + backlog to a week-old snapshot (7 entries / 11 rows lost) — restored round 26; `GUARD-CLOBBER1` live on `main` (PR #2566), manual per-turn diff retired round 28**; DEPLOY2 live + CI; parking lot triaged; EDGE-GATES1 live |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
 | **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
@@ -50,6 +50,60 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 > cuts) were moved **verbatim** to
 > [`docs/history/STATUS_claude-code_2026-08-31_to_2026-09-01.md`](../history/STATUS_claude-code_2026-08-31_to_2026-09-01.md).
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
+
+---
+
+## 2026-09-18 — Round 44 (Cowork): a **runaway writer** on Dialysis_DB (the DialysisProject scheduler, ~1M junk rows/day, every property re-PATCHed 4×/hour → `DIA-PROPAGATOR1`, Q37); `RECON2-d` live and verified but built in the **wrong repo** (Dialysis #7420 → ported here, `RECON2-d-reconcile`, Q36); `HOME2-d` merged but **not effective** (specificity → `HOME2-e`); 8 sidebar sends measured — external_id ✅, twin contact entities ✗ (`SIDEBAR4`), 1 of 8 reached the lease writer
+
+Merged: #2593 (round 42 docs), #2594 HOME2-d (`c64413d7`, Railway on it). The entry above this one was written by CC and
+titled "Round 43 (Cowork)" — it is CC's HOME2-d round, mislabelled (PL-57); headings are append-only, so it stays.
+
+**DIA-PROPAGATOR1 — the finding of the day.** While checking whether Scott's sidebar sends had touched `leases`, the
+Dialysis `properties` table showed 7,099 of 11,837 rows with `updated_at` today, rising from ~5/min at 15:00 UTC to ~100/min
+at 20:30. Supabase edge logs (MCP `query_logs`) name the writer: `python-httpx/0.28.1` from Scott's egress IPs
+(152.55.178.28 00:00–11:04 UTC, then 162.220.232.102 13:06 UTC → still writing at 20:33). Today: **998,911 POST
+`learning_logs`** (100% `source = ai_scrubber`, `notes = 'invalid field'`, table `facility_patient_counts`, no property_id —
+payer-mix keys the scrubber's schema_map lacks, dropped and logged once per row per pass), **126k PATCH `properties`**,
+~200k PATCH `facility_patient_counts`, ~200k PATCH+POST `clinic_financial_estimates`. `learning_logs` = 12.27M rows,
+2.2 GB (DB 8.8 GB); every day since 09-02 is 100% `invalid field`. Code: `DialysisProject/src/ai_scrubber.py` ~4500 under
+`src/app_utilities.py` `schedule_tasks()` (full data propagation); `runlogs/pending_updates_fallback.log` on Scott's PC was
+written at 20:56 UTC, so the scheduler is live there now. Two consequences for this repo: `properties.updated_at` is not
+evidence of a sidebar send (`last_ingested_at` is — README step 4b added), and the SIDEBAR-LEASE1 "twin rows updated"
+reading from round 35 must be re-read against `last_ingested_at` (it holds: 37640 and 51243 carry `last_ingested_at` at
+15:49 and 16:01). Not this repo's code; recorded here because it writes to a DB this repo owns. **Q37: stop or keep.**
+
+**RECON2-d — live, verified, wrong repo.** Live Dialysis_DB: CHECK allows `occupied_term_unknown` (not `holdover_confirmed`);
+23259 / 12678 / 13058 renamed, `is_active` untouched; histogram 5,201 expired_unconfirmed · 3,835 in_term · 3,801
+expiration_unknown · 3 occupied_term_unknown · 3 expired_confirmed — CC's "1,201 occupied_term_unknown" was a proposal
+count, nothing bulk-written. CC found a real classifier bug (re-proposing `expired_confirmed` for confirmed rows) and wired
+PL-54 into the guard. But it ran in the **Dialysis repo** (PR #7420, merged 20:28 UTC), wrote a duplicate
+`reconcile-property-spec.md` "from live" and reported that the RECON2 source files "did not exist in the repo" — they are in
+`supabase/migrations/dialysis/` here. Cowork ported the two migrations and the audit verbatim (`20260918140000_dia_recon2d_*`,
+`20260918150000_dia_recon2d_*`, `docs/audits/RECON2-d-…md`) and folded the R5 addendum into this repo's spec.
+`RECON2-d-reconcile` (Dialysis-side removal, Q36) and `RECON2-d-render` (the rent-roll string) filed. `lease_expiration_source_state`
+column: 1 non-NULL row fleet-wide (below).
+
+**HOME2-d — merged, not effective.** Chrome on Railway `c64413d7`, flag ON: computed `grid-template-columns` =
+`115.6px × 4`. `.home3-grid` and its `@container` rule are single-class selectors, same specificity as the later
+`@media (min-width:768px) .widget-grid {repeat(4,1fr)}`, so source order wins: three 116-px lanes and an empty fourth track.
+No overflow, unreadable. Container-type is set correctly. Test asserted rule presence, not the computed result (PL-61).
+`HOME2-e` prompt written (`#home3LanesWidget .home3-grid`; Railway computed-style probe in the response).
+
+**SIDEBAR2 after the deploy — 8 sends 19:09–20:31 UTC** (Fort Worth 32431, Anaheim 37972, Philadelphia 46040 via email OM,
+Valdosta 25076, Ruston 44545, Fayetteville 39279, Tacoma 29671, Grand Rapids 26519; ledger = `properties.last_ingested_at`).
+(c) every `inbox_items` row now carries an `external_id` ✅ — but "John Messer (buyer_broker)" posted twice at 19:52:12
+with **two different contact entities created 26 ms apart**: the double request is still sent and now mints twin contacts
+→ **`SIDEBAR4`**. (a) Grand Rapids reached the lease writer: lease 17699 `costar_sidebar`, `dated`, 2031-12-31 ✅ (the
+column works when the block runs). Tacoma touched inactive `email_intake` lease 18382 with no stamp; Fort Worth / Anaheim /
+Valdosta / Fayetteville each hold a `lease_expiration NULL` lease never touched and no `source_no_date` anywhere — the lease
+block is not reached on 6 of 8 sends. SIDEBAR-LEASE1's root cause stands; SIDEBAR3 needs a capture ledger (PL-59). Tacoma
+also exposed junk `email_intake` leases ("Type", "Shopping Center", "Strip Center", "Avail. Spaces") → `LEASEJUNK1`.
+
+**Housekeeping.** Prompts HOME2-d + RECON2-d → done/; both responses → done/ (script). Q36, Q37 added; PL-57…61; SBN-17;
+CURRENT-STATE §1 "live writers to Dialysis_DB" row + lease-state row; ROADMAP next unit = Q37, Q36, HOME2-e, SIDEBAR4.
+
+**Next:** Scott answers Q37 (**stop** / **keep**) and does Q36; sends `prompts/HOME2-e-…md` to CC; SIDEBAR4 prompt after
+HOME2-e lands. Enforce clock unchanged (≥ 09-21 ~12:00 UTC).
 
 ---
 
