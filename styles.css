@@ -284,6 +284,11 @@ body.compact .nba-subhead { margin: -2px 0 6px; }
 .nba-item-head { display: flex; align-items: center; gap: 8px; }
 .nba-item-title { font-size: 12px; font-weight: 600; color: var(--text1); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nba-item-sub { font-size: 11px; color: var(--text2); margin-top: 2px; }
+/* HOME2-c — the three-lane widget's cards are narrower (equal thirds) than the
+   single-column Today sections, so titles clamp to two lines instead of
+   truncating to one, and the reason line clamps to one. */
+.home3-item .nba-item-title { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.home3-item .nba-item-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 720px) {
   .nba-row { grid-template-columns: 28px 48px 1fr auto; gap: 8px; padding: 7px 8px; }
   .nba-action { font-size: 10px; }
