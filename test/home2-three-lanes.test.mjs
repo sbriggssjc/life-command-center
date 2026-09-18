@@ -304,8 +304,73 @@ describe('HOME2-fix — every home3* mount point app.js looks up must exist in i
   });
 
   it('home3LanesWidget starts hidden (renderHomeThreeLanes unhides it only when the flag is on)', () => {
-    const m = html.match(/<div class="widget" id="home3LanesWidget"([^>]*)>/);
+    const m = html.match(/id="home3LanesWidget"([^>]*)>/);
     assert.ok(m, 'home3LanesWidget opening tag not found');
     assert.match(m[1], /display:\s*none/, 'home3LanesWidget should default to display:none so it is invisible with the flag off');
+  });
+});
+
+// HOME2-c (2026-09-18, docs/os/PLANNED-BACKLOG.md §HOME2-c) — the three-lane
+// widget takes SIGNIFICANT's place at the top of Today; SIGNIFICANT's own
+// block is hidden under the flag (its content IS the BD lane — both read
+// /api/seller-prospect-queue, confirmed duplicate on Scott's 2026-09-18
+// screenshots), and nothing renders twice. Important + Urgent are untouched.
+describe('HOME2-c — the three-lane widget sits inside the TODAY card, where SIGNIFICANT used to be, and SIGNIFICANT is hidden under the flag', () => {
+  const html = readFileSync(indexPath, 'utf8');
+
+  it('home3LanesWidget is inside #todaySectionsWidget, before todaySignificantSection, todayImportantSection and todayUrgentSection', () => {
+    const widgetOpen = html.indexOf('id="todaySectionsWidget"');
+    const laneIdx = html.indexOf('id="home3LanesWidget"');
+    const sigIdx = html.indexOf('id="todaySignificantSection"');
+    const impIdx = html.indexOf('id="todayImportantSection"');
+    const urgIdx = html.indexOf('id="todayUrgentSection"');
+    assert.ok(widgetOpen >= 0 && laneIdx >= 0 && sigIdx >= 0 && impIdx >= 0 && urgIdx >= 0);
+    assert.ok(widgetOpen < laneIdx, 'home3LanesWidget must be inside todaySectionsWidget');
+    assert.ok(laneIdx < sigIdx, 'home3LanesWidget must render before todaySignificantSection (it takes that slot)');
+    assert.ok(sigIdx < impIdx && impIdx < urgIdx, 'Important/Urgent order must be unchanged');
+  });
+
+  it('applyFeatureFlags toggles #todaySignificantSection off when home_three_lanes is on (BD lane duplicates it)', () => {
+    const body = extractFnBody(cleanApp, 'applyFeatureFlags');
+    assert.match(body, /getElementById\('todaySignificantSection'\)/);
+    assert.match(body, /todaySig\.style\.display = checkFlag\('home_three_lanes'\) \? 'none' : ''/);
+  });
+
+  it('#todayImportantSection and #todayUrgentSection are never toggled by applyFeatureFlags (only SIGNIFICANT and the two data-gap widgets move)', () => {
+    const body = extractFnBody(cleanApp, 'applyFeatureFlags');
+    assert.doesNotMatch(body, /getElementById\('todayImportantSection'\)/);
+    assert.doesNotMatch(body, /getElementById\('todayUrgentSection'\)/);
+  });
+});
+
+describe('HOME2-c — each lane links out to its own full page, honestly labeled', () => {
+  it('the Research lane links to pageResearch', () => {
+    const body = extractFnBody(cleanApp, '_home3RenderResearchLane');
+    assert.match(body, /navTo\(\\'pageResearch\\'\)/);
+  });
+
+  it('the BD lane links to pageSellerProspectQueue', () => {
+    const body = extractFnBody(cleanApp, '_home3RenderBdLane');
+    assert.match(body, /navTo\(\\'pageSellerProspectQueue\\'\)/);
+  });
+
+  it('the Inbox lane links to pageInbox', () => {
+    const body = extractFnBody(cleanApp, '_home3RenderInboxLane');
+    assert.match(body, /navTo\(\\'pageInbox\\'\)/);
+  });
+});
+
+describe('HOME2-c — lane cards clamp to a fixed number of lines rather than growing unboundedly', () => {
+  it('styles.css clamps .home3-item titles to 2 lines and subtitles to 1', () => {
+    const css = readFileSync(join(process.cwd(), 'styles.css'), 'utf8');
+    assert.match(css, /\.home3-item \.nba-item-title[^}]*-webkit-line-clamp:\s*2/);
+    assert.match(css, /\.home3-item \.nba-item-sub[^}]*white-space:\s*nowrap/);
+  });
+
+  it('all three lane renderers tag their rows with the home3-item class so the clamp applies', () => {
+    for (const fn of ['_home3RenderResearchLane', '_home3RenderBdLane', '_home3RenderInboxLane']) {
+      const body = extractFnBody(cleanApp, fn);
+      assert.match(body, /home3-item/, `${fn} does not tag its rows with home3-item`);
+    }
   });
 });

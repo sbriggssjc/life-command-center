@@ -37,7 +37,7 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-reconcile-2, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT, CANON-OWNERSHIP1 | 2026-09-16 | Arc complete through GOVDEED3 (gov #406); **the gov deed writer runs from GitHub Actions (weekly Mon 06:00 UTC) — verify 09-21 dateless = 0**; CANON-OWNERSHIP1 👤 confirmation open; sale-party conflicts 1,290 a review queue |
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k LIVE** (LCC PR #2506): 218 attested supersessions, 40/43 pairs to sponsor, 16/16 controls untouched, reversible; sponsor-as-edge = future work |
 | **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, -harris-b/-c/-d, -ledger-order, MCP1 | 2026-09-17 | **41 assessor-sourced owners live** (Philadelphia 20, Harris 21 of 50); Harris is done except the 27 situs-gap properties → §P10a is the lane's next unit; next free-bulk jurisdiction after that |
-| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS-consolidate-lcc, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift, RECON1, RECON1-b, RECON2, RECON2-b, RECON2-render, HOME2-fix, HOME2-b, HOME2-c, PERF-SPQ1, PERF-SPQ1-b, PERF-SPQ1-c, PERF-SPQ2, RECON2-c, RECON2-d, RESOLVER1, SIDEBAR-LEASE1, SIDEBAR2, VERCEL-LIVE1 | 2026-09-18 | Q35: no CoStar dates → `RECON2-d` renames the state (`occupied_term_unknown`); Q32 settled → `HOME2-c` (b) prompted; sidebar double-posts inbox items + no lease landed → `SIDEBAR2` prompted; RECON2-c live (3 confirmed); Vercel gone |
+| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS-consolidate-lcc, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift, RECON1, RECON1-b, RECON2, RECON2-b, RECON2-render, HOME2-fix, HOME2-b, HOME2-c, PERF-SPQ1, PERF-SPQ1-b, PERF-SPQ1-c, PERF-SPQ2, RECON2-c, RECON2-d, RESOLVER1, SIDEBAR-LEASE1, SIDEBAR2, VERCEL-LIVE1 | 2026-09-18 | **`HOME2-c` built round 41** (option b): three lanes take SIGNIFICANT's place at the top of TODAY, SIGNIFICANT hidden under the flag, Important/Urgent unchanged, 39/39 new tests pass — Railway screenshot needs merge+redeploy first; Q35: no CoStar dates → `RECON2-d` renames the state (`occupied_term_unknown`); sidebar double-posts inbox items + no lease landed → `SIDEBAR2` prompted; RECON2-c live (3 confirmed); Vercel gone |
 | **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–5, INVENTORY1, INVENTORY1b, INVENTORY2, INVENTORY-process, REMEDIATION-2026-05, REPO1, ROADMAP, PROCESS-CC-DOCS, PROCESS-MERGE-CLOBBER, GUARD-CLOBBER1, PROCESS-ROW-CELLS, PROCESS-PARKING-LOT, DEPLOY2-coverage, DEPLOY2-stale-body | 2026-09-18 | **PR #2563 reverted STATUS + backlog to a week-old snapshot (7 entries / 11 rows lost) — restored round 26; `GUARD-CLOBBER1` live on `main` (PR #2566), manual per-turn diff retired round 28**; DEPLOY2 live + CI; parking lot triaged; EDGE-GATES1 live |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
 | **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
@@ -50,6 +50,36 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 > cuts) were moved **verbatim** to
 > [`docs/history/STATUS_claude-code_2026-08-31_to_2026-09-01.md`](../history/STATUS_claude-code_2026-08-31_to_2026-09-01.md).
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
+
+---
+
+## 2026-09-18 — Round 41 (CC): `HOME2-c` shipped — the three lanes take SIGNIFICANT's place at the top of TODAY
+
+Built exactly as prompted in round 40's option (b): `#home3LanesWidget` moved inside `#todaySectionsWidget`,
+immediately before `#todaySignificantSection` (which `applyFeatureFlags` now hides under the flag — its content
+IS the BD lane, both read `/api/seller-prospect-queue?limit=5`, confirmed duplicate on Scott's screenshots).
+Important/Urgent untouched, and `applyFeatureFlags` was checked to touch neither of their ids. Equal thirds
+(unchanged `grid-template-columns:1fr 1fr 1fr`) with a `.home3-item` clamp (title 2 lines, reason 1 line) added
+to `styles.css` so the previously-tall Research cards and wide Inbox rows read the same height. Each lane got a
+"See all" link (`pageResearch`, `pageSellerProspectQueue`, `pageInbox`) it did not have before. Flag stays
+`home_three_lanes` (default OFF) — flag-off layout is byte-identical to before this round.
+
+Verified: `test/home2-three-lanes.test.mjs` extended with a `HOME2-c` describe block (source-order assertions
+for the new placement, the `applyFeatureFlags` toggle, the three navTo links, the CSS clamp) — 39/39 pass, full
+suite 6,265/6,267 pass (2 pre-existing failures unrelated, confirmed red on `main` before this change too:
+`test/hermetic-suite.test.mjs` "guard is actually installed" + 1 skip). Browser-verified at first paint with
+the flag forced on (local static serve, no backend — Important/Urgent correctly show their own "unavailable"
+states with no data, which is what a real 404/no-auth response looks like; the point of the screenshot was the
+layout, which matches the spec: lanes at top with loading/empty states, SIGNIFICANT gone, Important/Urgent
+below unchanged). A live Railway screenshot with the flag on needs this branch merged + redeployed first — not
+done in this turn, since Railway serves merged `main` only.
+
+**Not touched, deliberately:** the `INBOX` lane's double-posted `OM: USRC Gaffney…` item (that's `SIDEBAR2`) —
+per round 40, HOME2-c owns placement only, never the dedupe.
+
+**Parked, one line each:** the "See all seller prospects (N)" honest count on the BD lane now cites
+`_home3BdTotal` when known, same pattern as the old SIGNIFICANT section's `total_open`, so the badge stays
+honest under the new placement too.
 
 ---
 
