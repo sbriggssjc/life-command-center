@@ -37,7 +37,7 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-reconcile-2, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT, CANON-OWNERSHIP1 | 2026-09-16 | Arc complete through GOVDEED3 (gov #406); **the gov deed writer runs from GitHub Actions (weekly Mon 06:00 UTC) — verify 09-21 dateless = 0**; CANON-OWNERSHIP1 👤 confirmation open; sale-party conflicts 1,290 a review queue |
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k LIVE** (LCC PR #2506): 218 attested supersessions, 40/43 pairs to sponsor, 16/16 controls untouched, reversible; sponsor-as-edge = future work |
 | **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, -harris-b/-c/-d, -ledger-order, MCP1 | 2026-09-17 | **41 assessor-sourced owners live** (Philadelphia 20, Harris 21 of 50); Harris is done except the 27 situs-gap properties → §P10a is the lane's next unit; next free-bulk jurisdiction after that |
-| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS-consolidate-lcc, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift, RECON1, RECON1-b, RECON2, RECON2-b, RECON2-render, HOME2-fix, HOME2-b, HOME2-c, HOME2-d, HOME2-e, PERF-SPQ1, PERF-SPQ1-b, PERF-SPQ1-c, PERF-SPQ2, RECON2-c, RECON2-d, RECON2-d-reconcile, RECON2-d-render, RESOLVER1, SIDEBAR-LEASE1, SIDEBAR2, SIDEBAR3, SIDEBAR4, LEASEJUNK1, DIA-PROPAGATOR1, VERCEL-LIVE1 | 2026-09-18 | **Round 44:** 🚨 `DIA-PROPAGATOR1` — the DialysisProject scheduler on Scott's PC re-PATCHes every Dialysis property 4×/hour and logs ~1M junk `learning_logs`/day (Q37 stop/keep); `RECON2-d` live + verified but built in the Dialysis repo → ported, `RECON2-d-reconcile` (Q36); `HOME2-d` merged but loses on CSS specificity → `HOME2-e` prompted; 8 sidebar sends: external_id ✅, twin contact entities → `SIDEBAR4`, 1/8 reached the lease writer |
+| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS-consolidate-lcc, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift, RECON1, RECON1-b, RECON2, RECON2-b, RECON2-render, HOME2-fix, HOME2-b, HOME2-c, HOME2-d, HOME2-e, PERF-SPQ1, PERF-SPQ1-b, PERF-SPQ1-c, PERF-SPQ2, RECON2-c, RECON2-d, RECON2-d-reconcile, RECON2-d-render, RESOLVER1, SIDEBAR-LEASE1, SIDEBAR2, SIDEBAR3, SIDEBAR4, LEASEJUNK1, DIA-PROPAGATOR1, VERCEL-LIVE1 | 2026-09-18 | **Round 45:** `HOME2-e` live — the three-lane Home is done (one stacked column in the TODAY card); Q36 script ready for the Dialysis repo; Q37 recommendation = pause the propagation job, keep the scheduler, Dialysis prompt `DIA-PROPAGATOR1` written (writer went quiet 20:33 UTC on its own); PERF-SPQ2 20-s cold request measured; next: `SIDEBAR4` |
 | **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–5, INVENTORY1, INVENTORY1b, INVENTORY2, INVENTORY-process, REMEDIATION-2026-05, REPO1, ROADMAP, PROCESS-CC-DOCS, PROCESS-MERGE-CLOBBER, GUARD-CLOBBER1, PROCESS-ROW-CELLS, PROCESS-PARKING-LOT, DEPLOY2-coverage, DEPLOY2-stale-body | 2026-09-18 | **PR #2563 reverted STATUS + backlog to a week-old snapshot (7 entries / 11 rows lost) — restored round 26; `GUARD-CLOBBER1` live on `main` (PR #2566), manual per-turn diff retired round 28**; DEPLOY2 live + CI; parking lot triaged; EDGE-GATES1 live |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
 | **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
@@ -50,6 +50,44 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 > cuts) were moved **verbatim** to
 > [`docs/history/STATUS_claude-code_2026-08-31_to_2026-09-01.md`](../history/STATUS_claude-code_2026-08-31_to_2026-09-01.md).
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
+
+---
+
+## 2026-09-18 — Round 45 (Cowork): `HOME2-e` live-verified — the three-lane Home is **done** (one stacked column in the 498-px card); Q36 prepared as a run-once script for the Dialysis repo; Q37 recommendation: **pause the propagation job, keep the scheduler**, Dialysis prompt written; the writer went quiet at 20:33 UTC on its own
+
+Merged: #2595 (round 44 docs), #2596 HOME2-e (`0abc89f7`, Railway on it). CC's entry above is titled `Round 44-CC (CC)` — the
+heading rule from PL-55/57 held on the first try.
+
+**HOME2-e — proof.** Chrome on Railway `0abc89f7`, flag ON, 1438-px viewport: `#home3LanesWidget .home3-grid` computes to
+`498.4px` — one track, because the TODAY card (498 px) is under the 900-px container threshold; RESEARCH / BD / INBOX stack at
+y = 274 / 610 / 729, no overflow, See-all links intact, IMPORTANT below. That closes HOME2 → -fix → -b → -c → -d → -e: the
+three-lane Home Scott asked for on 09-16 is live in the shape HOME1 specified. What is left on Home is data, not layout: the BD
+and INBOX lanes spun ~10 s on this cold load behind one ~20 s request while `work_counts` answered in 0.8 s — that is
+`PERF-SPQ2`'s evidence (PL-62).
+
+**Q36 — prepared, not run.** `C:\Users\scott\lcc-worktrees\commit-dialysis-recon2d-reconcile.ps1` + its commit message: a
+worktree off Dialysis `origin/main`, `git rm` of the five RECON2-d files, push, `gh pr create` — the #7416 pattern. Byte-identity
+re-checked first (both migrations hash equal in Dialysis `origin/main` and in `supabase/migrations/dialysis/` here). Scott runs
+it and merges; nothing on Dialysis_DB changes.
+
+**Q37 — the recommendation.** The writer stopped at 20:33 UTC (edge logs empty 20:45–22:40), which tells us its shape: a fleet
+pass of ~8–11 hours (00:00→11:04, 13:06→20:33), re-triggered by the daily 02:45 full-data-propagation job and by scheduler
+restarts — not a tight loop, but a pass that rewrites every derived field on every property and logs every schema miss once per
+row. Cumulative statement shapes include PATCHes of `true_owner_id` on `properties` (≥ 700k calls across variants) — a second,
+unguarded owner writer beside the resolver and the OWNERGAP guards if it still fires (PL-63). Against Scott's guiding principle
+(a functional, accurate source of truth for every tracked field), Cowork recommends **pausing the propagation job only** —
+comment out the `02:45` line in `src/app_utilities.py` and restart `run_scheduler.ps1`; the email fetch, CMS catch-up, lease and
+listing expiration checks stay — and sending `prompts/DIA-PROPAGATOR1-compare-before-write-and-stop-logging-schema-misses.md` to
+CC **in the DialysisProject repo**: compare-before-write so `updated_at` means "an input changed"; schema misses logged once per
+(table, field) per run to `ingestion_run_errors`, never to `learning_logs`; purge the 12.3M `invalid field` rows with a ledger
+count; an owner-of-record list for every column the propagator writes (drop `true_owner_id`); weekly or event-driven cadence.
+Resume after. Unless paused it starts again at the next 02:45 CT.
+
+**Housekeeping.** HOME2-e prompt + response → done/. Rows: HOME2-e ✅, HOME2-d superseded, HOME2 closed, RECON2-d-reconcile 🟡
+script ready, DIA-PROPAGATOR1 recommendation, PERF-SPQ2 evidence. PL-62, PL-63. CURRENT-STATE Home row. ROADMAP next unit.
+
+**Next:** Scott: pause the job, run the Q36 script, send the Dialysis prompt. Cowork next round: `SIDEBAR4` prompt (twin contact
+entities) once Q37 is answered, so the sidebar measurements are taken against a quiet database.
 
 ---
 
