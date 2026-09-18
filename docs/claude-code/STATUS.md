@@ -37,8 +37,8 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-reconcile-2, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT, CANON-OWNERSHIP1 | 2026-09-16 | Arc complete through GOVDEED3 (gov #406); **the gov deed writer runs from GitHub Actions (weekly Mon 06:00 UTC) — verify 09-21 dateless = 0**; CANON-OWNERSHIP1 👤 confirmation open; sale-party conflicts 1,290 a review queue |
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k LIVE** (LCC PR #2506): 218 attested supersessions, 40/43 pairs to sponsor, 16/16 controls untouched, reversible; sponsor-as-edge = future work |
 | **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, -harris-b/-c/-d, -ledger-order, MCP1 | 2026-09-17 | **41 assessor-sourced owners live** (Philadelphia 20, Harris 21 of 50); Harris is done except the 27 situs-gap properties → §P10a is the lane's next unit; next free-bulk jurisdiction after that |
-| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS-consolidate-lcc, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift, RECON1, RECON1-b, RECON2, RECON2-b, RECON2-render, HOME2-fix, HOME2-b, VERCEL-LIVE1 | 2026-09-17 | PRI2-on live; HOME2 built, flag OFF → HOME2-on; F8/F8-b done; DIA1c live; **SBN-12 (Banning clinic) → `RECON1` merged + reconciled: one property, off Available; residue `RECON1-b` (deed task never created, sentinel party name); RECON2-b live (7 confirmed, 2,447 unconfirmed, no fleet write); HOME2-fix live but two lanes wrong → `HOME2-b`; Scott on Railway, Vercel teardown open; Saturday digest verifies F1–F8 |
-| **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–5, INVENTORY1, INVENTORY1b, INVENTORY2, INVENTORY-process, REMEDIATION-2026-05, REPO1, ROADMAP, PROCESS-CC-DOCS, PROCESS-MERGE-CLOBBER, GUARD-CLOBBER1, PROCESS-ROW-CELLS, PROCESS-PARKING-LOT, DEPLOY2-coverage, DEPLOY2-stale-body | 2026-09-17 | **PR #2563 reverted STATUS + backlog to a week-old snapshot (7 entries / 11 rows lost) — restored round 26; `GUARD-CLOBBER1` live on `main` (PR #2566), manual per-turn diff retired round 28**; DEPLOY2 live + CI; parking lot triaged; EDGE-GATES1 live |
+| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS-consolidate-lcc, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift, RECON1, RECON1-b, RECON2, RECON2-b, RECON2-render, HOME2-fix, HOME2-b, HOME2-c, PERF-SPQ1, VERCEL-LIVE1 | 2026-09-17 | PRI2-on live; HOME2 built, flag OFF → HOME2-on; F8/F8-b done; DIA1c live; **SBN-12 (Banning clinic) → `RECON1` merged + reconciled: one property, off Available; residue `RECON1-b` (deed task never created, sentinel party name); HOME2-b live (Inbox fixed, duplicate hidden); BD lane starved by a 14 s route → `PERF-SPQ1`; placement → `HOME2-c` (Scott); 7 confirmed leases in `docs/audits/…review…` for Scott; Vercel env audit done, delete pending Railway check; Saturday digest verifies F1–F8 |
+| **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–5, INVENTORY1, INVENTORY1b, INVENTORY2, INVENTORY-process, REMEDIATION-2026-05, REPO1, ROADMAP, PROCESS-CC-DOCS, PROCESS-MERGE-CLOBBER, GUARD-CLOBBER1, PROCESS-ROW-CELLS, PROCESS-PARKING-LOT, DEPLOY2-coverage, DEPLOY2-stale-body | 2026-09-18 | **PR #2563 reverted STATUS + backlog to a week-old snapshot (7 entries / 11 rows lost) — restored round 26; `GUARD-CLOBBER1` live on `main` (PR #2566), manual per-turn diff retired round 28**; DEPLOY2 live + CI; parking lot triaged; EDGE-GATES1 live |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
 | **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
 | **Broker identity (BR) / BROKER1** | BR1, BR2, BR3, BR4, BR4-b, BR5, BR1-misparse-handoff, BROKER1, BROKER1-sf | 2026-09-17 | **BR4 live**: 3 true duplicates merged, 52 firms minted with evidence, `broker_company_id` 14.4% → **25.0%** (641/2,566); residue → BR4-b (123 firm-shaped broker rows, 468 review); BR5 display next |
@@ -52,6 +52,52 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
 
 ---
+
+## 2026-09-18 — Round 33 (Cowork): `HOME2-b` + `DEPLOY2-drop-aware` reconciled — Inbox lane fixed, duplicate hidden, BD lane honest but starved by a **14-second `/api/seller-prospect-queue`** (`PERF-SPQ1`); the activities flow's header key carries a **trailing newline** (why Q1 never cleared); Vercel env-vars audited; the 7 confirmed-expired leases written up for Scott
+
+**Merged since round 32:** #2577 `HOME2-b` (`6addd692`), `DEPLOY2-drop-aware` (`74f0c4dd`), #2578/#2579 HCRIS-TIMEOUT-8 (its
+own lane). Railway `/version` = `4d932d92` = `main`. Responses read: HOME2-b, DEPLOY2-drop-aware, RECON2-b (re-saved).
+
+**`HOME2-b` — browser look on Railway, flag on.** ✅ Inbox lane shows the real inbox (same source as the INBOX
+panel). ✅ *Top Data Gaps* hidden under the flag — no duplicate. ✅ BD lane no longer caches empty; it says *"Could
+not load."* ❌ …and it says that on every first paint, because the route it calls answers in **14.6 s** (measured
+in the page; the view alone is 0.86 s; the route does seven serial `count=exact` chip requests — the P139 exactness
+rule implemented one trip at a time). → **`PERF-SPQ1`** prompted. ❌ Placement: "after Today" = **1,878 px**, Today
+being ~1,800 px tall → **`HOME2-c`** filed, Scott picks (checklist Q32). The round wrote no STATUS entry (⑤-CC).
+
+**`DEPLOY2-drop-aware`** — code and 8 tests on `main`; proof is the next scheduled run on `main` going green (the
+RECON1 pair should read `retired_by 20260917220000…` at info). Cowork checks the next run / mail.
+
+**Q1 — found in Scott's flow export (SBN-14).** The header key on *Sync SF Activities to Supabase* is
+`X-PA-Webhook-Secret` **plus a line break** — on both its HTTP actions. The gate compares exact header names, so the
+flow has been sending a header nobody reads since 12:36 UTC. Fix is a retype → Q1. Everything else is clean; the
+next `/sync/activities` run is 16:01 UTC.
+
+**`VERCEL-LIVE1` — and a correction.** PR #2580's first run went red on `test/retired-identifiers-guard.test.mjs`:
+the env-var audit was a new live doc naming `life-command-center-nine.vercel.app`. The guard was right, and it
+pointed at what round 29 missed: the repo already carried this thread — **J13 / J13-preflight ✅ (2026-09-09) /
+J13-teardown (checklist Q3) / J13a-guard** and `docs/os/RUNBOOK_vercel_teardown.md`. "Vercel was never retired"
+overstated the surprise; the host was known to answer and a teardown runbook was waiting on Scott. New facts, now
+in the runbook as **Step 3b**: the deployment is not the frozen July build (Vercel still builds from `main`), it
+was Scott's daily window, and it is the `/chat` + `browser scott` caller. The env-var audit (A: must exist on
+Railway; B: dead; C: the Jun 11 → Apr 20 block the screenshots skipped + two `RE…EY` names) lives there too;
+VERCEL-LIVE1 folds into J13-teardown, Q30 into Q3.
+
+**`RECON2-b`** — the 7 confirmed-expired candidates: `docs/audits/RECON2-b-confirmed-expired-leases-review-2026-09-18.md`
+(evidence, clinic facts, active listings, a read per row). Notable: lease 12599 (Orlando Metrowest) is
+*Terminated 2014*, the clinic operates, and the property has an **active listing** — hold; 4 of 7 are termination
+records on operating clinics — the lease ended, the tenant probably did not; the research worklist owns that gap.
+
+**SB notes:** SBN-14 (flow export) triaged → Q1; SBN-15 (three Dialysis-repo CI mails around HCRIS-TIMEOUT-8) →
+handoff to that lane, nothing applied here.
+
+**Consolidation (`CONSOLIDATE5`):** (1) done — `docs/history/README.md` indexes the 27 archived STATUS spans.
+Next: (2) Open-threads refresh, (4) prompts-done index from the backlog.
+
+**Parking lot:** +PL-30…33, triaged. Next free: PL-34.
+
+**Open for Scott:** Q1 (retype the header key, re-export), Q30 (Railway check → delete Vercel), Q31 (read the 7),
+Q32 (where the lanes go: a / b / c); send **`PERF-SPQ1`**.
 
 ## 2026-09-18 — `HCRIS-TIMEOUT-8`: the alarm question is finally settled — `propagate_financials_to_properties()` was wrapped in the timeout mechanism all along; the real bug is a fourth bare-except swallow site that bypasses `safe_execute()` entirely
 

@@ -58,3 +58,7 @@ Sibling ledgers: `SB notes/TRIAGE.md` (Scott's in-app observations — richer in
 | PL-27 | 2026-09-18 | → backlog `HOME2-b` — *HOME2's Inbox lane reads `dailyBriefingSnapshot.inbox_summary`, a key the live snapshot never had; a lane built against an imagined shape (Cowork, browser look)…* |
 | PL-28 | 2026-09-18 | → backlog `DEPLOY2-drop-aware` — *DEPLOY2 treats an object a later migration DROPs as "never applied" (Cowork, from SBN-13)…* |
 | PL-29 | 2026-09-18 | → checklist Q31 — *a response docx saved as 0 bytes with a `~$` lock file beside it; Word had it open when Scott saved (Cowork)…* |
+| PL-30 | 2026-09-18 | → backlog `PERF-SPQ1` — *`/api/seller-prospect-queue` 14.6 s in the browser vs 0.86 s for the view: seven serial `count=exact` chip requests (Cowork, HOME2-b look)…* |
+| PL-31 | 2026-09-18 | → checklist Q1 + `EDGE-GATES1-b` — *a Power Automate header key with a trailing newline (`X-PA-Webhook-Secret\n`) is silently a different header; the dashboard shows nothing (Cowork, flow export)…* |
+| PL-32 | 2026-09-18 | → backlog `HOME2-c` / checklist Q32 — *"place it after Today" put the widget at 1,878 px because Today is 1,800 px tall; placement needs a decision, not another move (Cowork)…* |
+| PL-33 | 2026-09-18 | → noted on STATUS round 33 (process) — *HOME2-b's round wrote no STATUS entry (⑤-CC); DEPLOY2-drop-aware's did, labelled (CC) as asked (Cowork)…* |

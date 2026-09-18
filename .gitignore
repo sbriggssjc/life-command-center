@@ -69,3 +69,8 @@ bakeoff/
 # gitlink points at a commit that doesn't exist in this repo and breaks
 # every git invocation in CI).
 .claude/worktrees/
+
+# Power Automate flow exports Scott drops into the SB-notes intake are read, triaged and never committed
+# (standing rule: never commit PA flow exports). Move them to done/ after triage; git ignores them either way.
+docs/claude-code/SB\ notes/**/*.zip
+docs/claude-code/SB\ notes/*.zip

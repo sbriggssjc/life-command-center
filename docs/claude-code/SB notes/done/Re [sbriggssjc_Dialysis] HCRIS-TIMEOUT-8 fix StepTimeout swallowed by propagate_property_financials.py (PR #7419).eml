@@ -1,0 +1,468 @@
+Received: from CY5PR05MB8962.namprd05.prod.outlook.com (2603:10b6:930:2e::9)
+ by LV3PR05MB10982.namprd05.prod.outlook.com with HTTPS; Fri, 18 Sep 2026
+ 12:25:43 +0000
+ARC-Seal: i=4; a=rsa-sha256; s=arcselector10001; d=microsoft.com; cv=pass;
+ b=YYa5E7cP2Edg4T0nP3vFGUO/VlBthMT4T9GX740QiamX2F7OOF34eM8wO/7QPCuhUsEJoYsQmCQwmS5LkjSibjBpT2Azpy/bKxK72bgAx2Ov2VdFzhZHTV963PO54q4WUC3T9CigdPal2R5aTSahPg8VaJgBW4RvgynpGM+wcYPFFNq8pKV1wv/jrGnyrkYIlVB/QA0zUSx1RaUtX4eHM4i4h0JNTqndNrpvjUgg+fLo2We+CGH3Uf7tNQThHqAM7FpG3zh5ayoFL1qo8d1VOAkaffzQM+I0gUZW6LpEoEb6KzUg7zCt19WIpgJsTs5rZmrkwgz1+7FIFIH6w8DAOw==
+ARC-Message-Signature: i=4; a=rsa-sha256; c=relaxed/relaxed; d=microsoft.com;
+ s=arcselector10001; h=From:Date:Subject:Message-ID:MIME-Version;
+ bh=ZhZmhz6aKdPsN2CPPs69vgm+rGhtp1NfZVJmKCXsDdw=;
+ b=MOOZUAmYTKokiTrPjA1sf0qq/XUo6Ux34P4lP6X7mGQI/mYh8pDzjf594ASLaqXYlPrUEY9x6mRxxwIfFqX4jMSvqluoth0/88201uVA3vU2Z6WtSkAmuttekHkk0bL5Nb+caJhPdJvHkezSTvmw8kLbP+ggvfjbJXIxAyWrYb2SkqFHd54IBg6Qpb85J8mdPd8Y6fyfYiz2+mQ+1pTt3kDwuRDiQLbFWEZdDEp+hClwn49crO780fLzie1wpGDTcpMitqWd9qdMNsitXND4m7cxxdPl5PpUcv3w1dOCEDhrGEo6oaEANfeGV9lLfQit0MGsmHj3ZQA1Gz+vlIW+mg==
+ARC-Authentication-Results: i=4; mx.microsoft.com 1; spf=softfail (sender ip
+ is 170.10.132.61) smtp.rcpttodomain=northmarq.com smtp.mailfrom=gmail.com;
+ dmarc=fail (p=quarantine sp=reject pct=100) action=quarantine
+ header.from=github.com; dkim=fail (body hash did not verify)
+ header.d=github.com; arc=pass (0 oda=0 ltdi=0 93)
+Received: from BN0PR08CA0024.namprd08.prod.outlook.com (2603:10b6:408:142::14)
+ by CY5PR05MB8962.namprd05.prod.outlook.com (2603:10b6:930:2e::9) with
+ Microsoft SMTP Server (version=TLS1_2,
+ cipher=TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384) id 15.21.406.11; Fri, 18 Sep
+ 2026 12:25:33 +0000
+Received: from BN3PEPF00022BDB.namprd03.prod.outlook.com
+ (2603:10b6:408:142:cafe::36) by BN0PR08CA0024.outlook.office365.com
+ (2603:10b6:408:142::14) with Microsoft SMTP Server (version=TLS1_3,
+ cipher=TLS_AES_256_GCM_SHA384) id 15.21.428.13 via Frontend Transport; Fri,
+ 18 Sep 2026 12:25:33 +0000
+Authentication-Results: spf=softfail (sender IP is 170.10.132.61)
+ smtp.mailfrom=gmail.com; dkim=fail (body hash did not verify)
+ header.d=github.com;dmarc=fail action=quarantine
+ header.from=github.com;compauth=none reason=452
+Received-SPF: SoftFail (protection.outlook.com: domain of transitioning
+ gmail.com discourages use of 170.10.132.61 as permitted sender)
+Received: from us-smtp-inbound-delivery-1.mimecast.com (170.10.132.61) by
+ BN3PEPF00022BDB.mail.protection.outlook.com (10.167.248.106) with Microsoft
+ SMTP Server (version=TLS1_3, cipher=TLS_AES_256_GCM_SHA384) id 15.21.451.8
+ via Frontend Transport; Fri, 18 Sep 2026 12:25:33 +0000
+ARC-Authentication-Results: i=3;
+	relay.mimecast.com;
+	dkim=pass header.d=github.com header.s=pf2023 header.b=bmUDC5z6;
+	arc=pass ("google.com:s=arc-20260327:i=2");
+	spf=pass (relay.mimecast.com: domain of "sbriggssjc+caf_=sabriggs=northmarq.com@gmail.com" designates 74.125.228.76 as permitted sender) smtp.mailfrom="sbriggssjc+caf_=sabriggs=northmarq.com@gmail.com";
+	dmarc=pass (policy=quarantine) header.from=github.com
+ARC-Message-Signature: i=3; a=rsa-sha256; c=relaxed/relaxed;
+	d=dkim.mimecast.com; s=201903; t=1789734333;
+	h=from:from:reply-to:reply-to:subject:subject:date:date:
+	 message-id:message-id:to:to:cc:cc:mime-version:mime-version:
+	 content-type:content-type:in-reply-to:in-reply-to:
+	 references:references:list-id:list-unsubscribe:list-unsubscribe-post:
+	 list-post:dkim-signature; bh=ZhZmhz6aKdPsN2CPPs69vgm+rGhtp1NfZVJmKCXsDdw=;
+	b=BTFGsBzbHI/HkAA17XW1JDgV2m2WIYjF9ZWuCd57KRTLE3QGrcLUNhzsFlpfRaKcCkr9/R
+	SR1vS2m4t8seCZGqpK6NZ01Qzdk4GzqecEBpL/wvIXjadYc0FHzQ+AnrqQEI4/DCBcXP5w
+	nmnQv/3q3omWS5kdAXpGBJDy2iB2Oa5t51Hh/N6vHwgJd5tzMKf5n4APsZmoA/UvT9ne6H
+	C0rxls2+XXcfIq9xH63zm9DUEEM/ejmPN/o6xrTXSqNspH3g3DoWjOMJZwyGWVDJEAB7sh
+	ik8IFXW3b//qYOEFlLvKo5sbG39F1Sadotheq1wiHpRy+y61RMSKZ7nhZR3UhA==
+ARC-Seal: i=3; a=rsa-sha256; d=dkim.mimecast.com; s=201903; cv=pass;
+	t=1789734333;
+	b=bBKauc2ycLP4NB0MW+46Vgz42/czAallwPQiPRO8u1EjyA0RfXNmY88TIa4/aQX1lZExlf
+	g1CHSORstPerKBHsTCaj2mEdRY9DfIOpLyHJnnhMRpje6tAp83axsk5r35ayrUoVpKMAqf
+	Z1YwfPGnKPRXXN8hjlXPCr3Vi6xH8/cBDqoMLLbmMY8KWMvN6ZmyPJr59bSm8yYo3p6wHl
+	PtX2KXitk/FP27lYVyZ09Z/LKdKMnR7eiCwPx26VOBJnu0nyn3VCPK65CyZyeDwbyGnTCW
+	+qltEeAzdNyxEfUvu27+bup2ymDrrsbJ8+gC5XxuyRleYpmm1d5blX+mlLMLrg==
+Authentication-Results-Original: relay.mimecast.com;	dkim=pass
+ header.d=github.com header.s=pf2023 header.b=bmUDC5z6;	arc=pass
+ ("google.com:s=arc-20260327:i=2");	spf=pass (relay.mimecast.com: domain of
+ "sbriggssjc+caf_=sabriggs=northmarq.com@gmail.com" designates 74.125.228.76
+ as permitted sender)
+ smtp.mailfrom="sbriggssjc+caf_=sabriggs=northmarq.com@gmail.com";	dmarc=pass
+ (policy=quarantine) header.from=github.com
+Received: from mail-ed2-f12.google.com (mail-ed2-f12.google.com
+ [74.125.228.76]) by relay.mimecast.com with ESMTP with STARTTLS
+ (version=TLSv1.3, cipher=TLS_AES_256_GCM_SHA384) id
+ us-mta-280-YpCvt2kNNui8BK5Px7e1lA-1; Fri, 18 Sep 2026 08:25:30 -0400
+X-MC-Unique: YpCvt2kNNui8BK5Px7e1lA-1
+X-Mimecast-MFC-AGG-ID: YpCvt2kNNui8BK5Px7e1lA_1789734329
+Received: by mail-ed2-f12.google.com with SMTP id 4fb4d7f45d1cf-6a8038a9f10so900513a12.1
+        for <sabriggs@northmarq.com>; Fri, 18 Sep 2026 05:25:30 -0700 (PDT)
+ARC-Seal: i=2; a=rsa-sha256; t=1789734329; cv=pass;
+        d=google.com; s=arc-20260327;
+        b=dQFFehd3LHqdJyNmrWpm74btScpXbGtn3SbdjIg0dqoJ8+ooiZivRCnFYgFwON77Mq
+         QhRJcCqGHfpyO1Cymbr6zEPCG9lF71DbY8/PBPzUkk38UvGTU9LzrtC3S+5GCpxqEVYR
+         AU1drRfCS1QZbCoCLx6vOX44JiOKO/qMP4X0GWHZszTZgfGFy1X6KraS2UfH7jT+4Yyr
+         byK8veZdwzNyolSlFId57wtvvAs2uNBLP+M1vhxEICG4j5B6+suhIg7/ZAgCzhpNZVW2
+         d0mvXp4ZoJ8yGtcvR0bP//sC+AKXBEe6w8XJQgSoO6iTj9sv+Pxycp9GnD2BLVDilKRr
+         Yukg==
+ARC-Message-Signature: i=2; a=rsa-sha256; c=relaxed/relaxed; d=google.com; s=arc-20260327;
+        h=destinations:list-unsubscribe-post:list-unsubscribe:list-post
+         :list-archive:list-id:precedence:content-transfer-encoding
+         :mime-version:subject:references:in-reply-to:message-id:cc:to
+         :reply-to:from:date:dkim-signature:delivered-to;
+        bh=pXKt3Tp8hSloeXZzGnb/CvnjfE39actOxerTJmrXQKg=;
+        fh=p1R2TyYVK5hkwGyDMptLawUwqlndO/krEGYoECHcwCs=;
+        b=ikZaFkavW6anijzwYBuGDNIQV0IWT1lpYo4HinWSssq187HbP1DRyiOln58eMUL6vO
+         rM7UdkuBa7mF1P7mPUbLPcipcU1Dzx93CxL8hAhBEMkKDCEm5gU/jIM3whoj2LnEHUH1
+         1kVelKyuCWjCCGsc0EChIsyFcFzUOtKZ0eep05nYQIZS9EfQd7oZlzrgnP3TOi4T9xwy
+         Si/CBVjW7235YIa+gkfpSDDJRlMpEvzwcfWnKQdEwoBCgk+T1gr75btbJM+7zgy7pEZ4
+         rp+NNJfnWFux93gnOVpLlheRM6WzyKJ291A66OIPsCmht9dvhXyknzeTI1jSZg9wjRWw
+         9vtA==;
+        darn=northmarq.com
+ARC-Authentication-Results: i=2; mx.google.com;
+       dkim=pass header.i=@github.com header.s=pf2023 header.b=bmUDC5z6;
+       spf=pass (google.com: domain of noreply@github.com designates 192.30.252.131 as permitted sender) smtp.mailfrom=noreply@github.com;
+       dmarc=pass (p=QUARANTINE sp=REJECT dis=NONE) header.from=github.com
+X-Google-DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=1e100.net; s=20260707; t=1789734329; x=1790339129;
+        h=destinations:list-unsubscribe-post:list-unsubscribe:list-post
+         :list-archive:list-id:precedence:content-transfer-encoding
+         :content-type:mime-version:subject:references:in-reply-to:message-id
+         :cc:to:reply-to:from:date:dkim-signature:delivered-to
+         :x-forwarded-for:x-forwarded-to:x-gm-message-state:from:to:cc
+         :subject:date:message-id:reply-to:content-type;
+        bh=pXKt3Tp8hSloeXZzGnb/CvnjfE39actOxerTJmrXQKg=;
+        b=RxB2Wjd1JKK53zW+y7Pcm2PrHV02a1NYU5+ZYVr/npag28bYA25sU/1uJVc3xOWk6e
+         c54o9+b7xJB8xvKvxbD6K4iVnb8dhBisGonHcyRYL4QgU1i3RSZGCjAU3455uGrahgwF
+         DSolntYwf1ta+71suc9dFVso8/l6dwi1Kf3eGZXy+H47g3cje6aH0YInLWumA3YwOrw1
+         Baf6gyN7dAglPLgL3r9JIa7AB2XVI24YKtVcYxKPYKW1w0b10FqhLANBcoCievq0OWWF
+         utffGKazYbK+pObcPEPSFksDoVKupPqYtJwyB6/jqstJetQlq4jrvUHvEbQsRVn6J6tm
+         QjBQ==
+X-Forwarded-Encrypted: i=2; AKwUvBxiX4wMW6y7URxRs8MLrSri+uIfBDoVt892oI+CHu4v8um4itcU0R8PGV0Nyh5SPzyDQW6pdIKwMw==@northmarq.com
+X-Gm-Message-State: AFuF++nKelUItuplx0J1h485Sp/uNrpO45SqIoDo0R5uT0UVLukzgesQ
+	rDQljwGTbEM9BpUo8YLW32F+Ql2yhiYcvezw3UJsEx+1bmIHRVEk76MTl6+3M3Miz7iZK9/0/VK
+	PSDAd1XyNG7EtvkT3Qp1DFuO33n9Mk1rnsdrxWwnIiBfcQJsWT/T9b3Sy0OUtHw==
+X-Received: by 2002:a05:6402:a0c9:b0:6a9:948b:5190 with SMTP id 4fb4d7f45d1cf-6aa564b9350mr1243821a12.35.1789734329293;
+        Fri, 18 Sep 2026 05:25:29 -0700 (PDT)
+X-Forwarded-To: sabriggs@northmarq.com
+X-Forwarded-For: sbriggssjc@gmail.com sabriggs@northmarq.com
+Delivered-To: sbriggssjc@gmail.com
+Received: by 2002:a98:db9b:0:b0:274:3792:77d1 with SMTP id w27csp9029446eil;
+        Fri, 18 Sep 2026 05:25:26 -0700 (PDT)
+X-Received: by 2002:a05:6214:62d1:10b0:912:5d56:e6b5 with SMTP id 6a1803df08f44-9125d56eb3bmr4200926d6.3.1789734326105;
+        Fri, 18 Sep 2026 05:25:26 -0700 (PDT)
+ARC-Seal: i=1; a=rsa-sha256; t=1789734326; cv=none;
+        d=google.com; s=arc-20260327;
+        b=QacOyW79tMX/myDnS+Nh616xtZ8mltrj04oA7jcs0G8wfRWZM3G+UCJUs7oRNvxSst
+         dbIWBH2kUjF5sqgQ69DfJ142pkA4Q7jMYXThOkumHzshD6DTYUSMymzHMS1myv8CHhGS
+         D1ceqlA2VFgzuuaMu/o/96i/iEbBjU9ntKwOWFyRDFx434mz/vlGAoxmtnG/dlXPs4S/
+         OjbHPE7SWH6DaXwJok+TRMO+ogMdiftb/u8O9dxodL24pc2SuwGj/iRlYXHAOBk+7viE
+         0v+9XBMIZErrbqkdvHjEaf/Tez1T2a5vJxmG8w5Gw2u6ZhU/U/6cgGuBmHi2wcewNzyV
+         pR0g==
+ARC-Message-Signature: i=1; a=rsa-sha256; c=relaxed/relaxed; d=google.com; s=arc-20260327;
+        h=destinations:list-unsubscribe-post:list-unsubscribe:list-post
+         :list-archive:list-id:precedence:content-transfer-encoding
+         :mime-version:subject:references:in-reply-to:message-id:cc:to
+         :reply-to:from:date:dkim-signature;
+        bh=pXKt3Tp8hSloeXZzGnb/CvnjfE39actOxerTJmrXQKg=;
+        fh=Hr4f/wRjDuKr2sUOIQwTRMriP8SW/dSSqSvp+mEnSkA=;
+        b=nJRcDbHu50GI4VvM+X4Q+NMmNOR/V4V0yEbonWc2r65aIx2aGM3zrGkimTdUxZb8iI
+         ghO55izaHftIf7shv4WyqzdtIikIhj1aIkAULj+h/irFKh470PQSZOta33GAQza8qs/1
+         9OplCrET9cQpJomW9QfW9ztCyAiOxrwezXx1TeVTI6C8r/JU2BXRPRzBnT6Oxl6c/yvz
+         6kwVdPU5JqIBeKJmi05clo4XpXXzWbphPwnlgpgfjzpGvbfDLGhwu5al+h0xgSS3BlzP
+         +BJrz5LK9Kn9SqTllQb6fiDm6GKNrzQQDpemi6Le8JQwiweaIp+xmmDwJ/lc0ZEm6T37
+         iyFA==;
+        dara=google.com
+ARC-Authentication-Results: i=1; mx.google.com;
+       dkim=pass header.i=@github.com header.s=pf2023 header.b=bmUDC5z6;
+       spf=pass (google.com: domain of noreply@github.com designates 192.30.252.131 as permitted sender) smtp.mailfrom=noreply@github.com;
+       dmarc=pass (p=QUARANTINE sp=REJECT dis=NONE) header.from=github.com
+Return-Path: sbriggssjc+caf_=sabriggs=northmarq.com@gmail.com
+Received: from out-32.smtp.github.com (out-32.smtp.github.com. [192.30.252.131])
+        by mx.google.com with ESMTPS id 6a1803df08f44-91257f4e567si16168766d6.51.2026.09.18.05.25.25
+        for <sbriggssjc@gmail.com>
+        (version=TLS1_3 cipher=TLS_AES_256_GCM_SHA384 bits=256/256);
+        Fri, 18 Sep 2026 05:25:26 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=github.com;
+	s=pf2023; t=1789734325;
+	bh=pXKt3Tp8hSloeXZzGnb/CvnjfE39actOxerTJmrXQKg=;
+	h=Date:From:Reply-To:To:Cc:In-Reply-To:References:Subject:List-ID:
+	 List-Archive:List-Post:List-Unsubscribe:List-Unsubscribe-Post:
+	 From;
+	b=bmUDC5z6zuXpyqflxcgGkOmAZA9U//reannhR9nLLu+tsg6i9mE5vM45Xp0oNM7Dr
+	 2hNtXr2ooFfkmPpPLVZ21rvMaej2hZAXcN7RyA99U0Uut7pZAOlyGVL+l2H8H9ZeRj
+	 1H7Rcu+2rShAzFSzN9XdFNmHKJ02eenanUk4hgOk=
+Received: from github.com (hubbernetes-node-39b3980.ac4-iad.github.net [10.52.152.39])
+	by smtp.github.com (Postfix) with ESMTPA id C9342320037
+	for <sbriggssjc@gmail.com>; Fri, 18 Sep 2026 05:25:25 -0700 (PDT)
+Date: Fri, 18 Sep 2026 05:25:25 -0700
+From: "chatgpt-codex-connector[bot]" <notifications@github.com>
+Reply-To: sbriggssjc/Dialysis <reply+BP4ILQLZPNKFQ5JRNAN3E5LLEUTDLEVBNHHQAAAAAFD4W7B7@reply.github.com>
+To: sbriggssjc/Dialysis <Dialysis@noreply.github.com>
+Cc: sbriggssjc <sbriggssjc@gmail.com>, 
+ State change <state_change@noreply.github.com>
+Message-ID: <sbriggssjc/Dialysis/pull/7419/review/5247729313@github.com>
+In-Reply-To: <sbriggssjc/Dialysis/pull/7419@github.com>
+References: <sbriggssjc/Dialysis/pull/7419@github.com>
+Subject: Re: [sbriggssjc/Dialysis] HCRIS-TIMEOUT-8: fix StepTimeout swallowed
+ by propagate_property_financials.py (PR #7419)
+Precedence: list
+X-GitHub-Sender: chatgpt-codex-connector[bot]
+X-GitHub-Recipient: sbriggssjc
+X-GitHub-Reason: state_change
+List-ID: sbriggssjc/Dialysis <Dialysis.sbriggssjc.github.com>
+List-Archive: https://github.com/sbriggssjc/Dialysis
+List-Post: <mailto:reply+BP4ILQLZPNKFQ5JRNAN3E5LLEUTDLEVBNHHQAAAAAFD4W7B7@reply.github.com>
+List-Unsubscribe: <mailto:unsub+BP4ILQLZPNKFQ5JRNAN3E5LLEUTDLEVBNHHQAAAAAFD4W7B7@reply.github.com>,
+ <https://github.com/notifications/unsubscribe/one-click/BP4ILQLWCUCN2SVLB4SXAF35PUSTLAVCNFSNUABFKJSXA33TNF2G64TZHM4TOOJWGQ3TKMZQHNEXG43VMU5TKNBZHE2DQNJSGQ32C5QC>
+List-Unsubscribe-Post: List-Unsubscribe=One-Click
+X-GitHub-Notify-Platform: newsies
+X-Auto-Response-Suppress: All
+destinations: sbriggssjc@gmail.com
+X-GitHub-Recipient-Address: sbriggssjc@gmail.com
+X-Mimecast-Spam-Score: -98
+X-Mimecast-MFC-PROC-ID: 6GM4BNW8tJ3_7Ie442fePjr0ZYX4m3X2iIdr_gm3w3w_1789734329
+Content-Type: multipart/alternative;
+ boundary="--==_mimepart_6aad2db5c6346_b511c84817d5";
+ charset=UTF-8
+X-MS-Exchange-Organization-ExpirationStartTime: 18 Sep 2026 12:25:33.8255
+ (UTC)
+X-MS-Exchange-Organization-ExpirationStartTimeReason: OriginalSubmit
+X-MS-Exchange-Organization-ExpirationInterval: 1:00:00:00.0000000
+X-MS-Exchange-Organization-ExpirationIntervalReason: OriginalSubmit
+X-MS-Exchange-Organization-Network-Message-Id: 2150d048-5dd6-4c5f-166b-08df157fefcf
+X-EOPAttributedMessage: 0
+X-EOPTenantAttributedMessage: fccf69d3-58a4-4c10-a59d-14937a5f5d3f:0
+X-MS-Exchange-Organization-MessageDirectionality: Incoming
+X-MS-PublicTrafficType: Email
+X-MS-TrafficTypeDiagnostic: BN3PEPF00022BDB:EE_|CY5PR05MB8962:EE_|LV3PR05MB10982:EE_
+X-MS-Exchange-Organization-AuthSource: BN3PEPF00022BDB.namprd03.prod.outlook.com
+X-MS-Exchange-Organization-AuthAs: Anonymous
+X-MS-Office365-Filtering-Correlation-Id: 2150d048-5dd6-4c5f-166b-08df157fefcf
+X-MS-Exchange-AtpMessageProperties: SA|SL
+X-MS-Exchange-Organization-SCL: -1
+X-MS-Exchange-Organization-BulkCategory: Promotions
+X-Microsoft-Antispam: BCL:4;ARA:13230040|5082899009|12012899012|5062899012|3092899012|2092899012|3072899012|35002699018|4022899009|1032899013|7093399015|7049299003|82310400026|6062899009|13102899012|3109299003|7149299003|13012899012|4092899012|69100299015|43022699015|55112099003|21082099003|57112099003|18002099003|16102099003|22082099003|13003099007|19002099009|4133799003|10067099003|5063699009|5023799004|11063799006|6133799003|5133699003|3113699003|5113699003|8096899003|4076899003|2066899003;
+X-Forefront-Antispam-Report: CIP:170.10.132.61;CTRY:US;LANG:en;SCL:-1;SRV:;IPV:CAL;SFV:SKN;H:us-smtp-inbound-delivery-1.mimecast.com;PTR:us-smtp-delivery-1.mimecast.com;CAT:NONE;SFS:(13230040)(5082899009)(12012899012)(5062899012)(3092899012)(2092899012)(3072899012)(35002699018)(4022899009)(1032899013)(7093399015)(7049299003)(82310400026)(6062899009)(13102899012)(3109299003)(7149299003)(13012899012)(4092899012)(69100299015)(43022699015)(55112099003)(21082099003)(57112099003)(18002099003)(16102099003)(22082099003)(13003099007)(19002099009)(4133799003)(10067099003)(5063699009)(5023799004)(11063799006)(6133799003)(5133699003)(3113699003)(5113699003)(8096899003)(4076899003)(2066899003);DIR:INB;
+X-MS-Exchange-CrossTenant-OriginalArrivalTime: 18 Sep 2026 12:25:33.7524
+ (UTC)
+X-MS-Exchange-CrossTenant-Network-Message-Id: 2150d048-5dd6-4c5f-166b-08df157fefcf
+X-MS-Exchange-CrossTenant-Id: fccf69d3-58a4-4c10-a59d-14937a5f5d3f
+X-MS-Exchange-CrossTenant-AuthSource: BN3PEPF00022BDB.namprd03.prod.outlook.com
+X-MS-Exchange-CrossTenant-AuthAs: Anonymous
+X-MS-Exchange-CrossTenant-FromEntityHeader: Internet
+X-MS-Exchange-Transport-CrossTenantHeadersStamped: CY5PR05MB8962
+X-MS-Exchange-Transport-EndToEndLatency: 00:00:09.4459454
+X-MS-Exchange-Processed-By-BccFoldering: 15.21.0406.000
+X-Microsoft-Antispam-Mailbox-Delivery:
+	ucf:0;jmr:0;auth:0;dest:I;ENG:(910005)(944490095)(944506478)(944626604)(920097)(930201)(20251009189)(140003);
+X-Microsoft-Antispam-Message-Info:
+	=?utf-8?B?WXdaa3cydktmQm1hVEtTS3JHQ3ozSlZiVGhvUWJ6MFdSSmUrQWlJaSthWXN2?=
+ =?utf-8?B?Y2RpTmtwQTAxNUJHN1ZPUE56WE1WMm45ZHhxR2IzMzhBK3JPUHQ3aDh5ZkJy?=
+ =?utf-8?B?Y2hIY1lhUXJtZGxvZ2NVU3JQbjJZb2p6aXlPRVNSTGY0aHdTWGNHd0tuOFRt?=
+ =?utf-8?B?TDM3aTkySzFPNllwVzdqOFcwaUY2bHZCWjVqRlFYalFtTzZERmM5MXlaMzNu?=
+ =?utf-8?B?QmMrRWdIS1JIVHVURFJuZGJML2d3VDVrYkg5NDZFbEdLaVBYUmlIbjFCWXZZ?=
+ =?utf-8?B?bk1hWnBsNzdWdU9PcTlndmxHZWZLdm1BclZ2WmpFTW95MUdNZS9hOGdqcFpi?=
+ =?utf-8?B?TVErTlJacis2M1N2ME4vbUw5K2x0WWRXakxydzRSS2J4TnJSZFN4K0o3Q0Ru?=
+ =?utf-8?B?SzUxTWt2WFo5Z2lUamtLNEZYWmpjc1JhRkx0UmJxSlg2cGJOQUE3UjlQeTA1?=
+ =?utf-8?B?SzllWkcxNXRkQ0k1eEVQSlJIbFdRWEJGeUxTNUFLUmo1YzYybDV6S1VvSWRq?=
+ =?utf-8?B?VWUyT3VWcWRnTXplcldyM2JXcDVvWktBWlh1Y2lNU3NlRFR6OHpOU2l1bnNr?=
+ =?utf-8?B?VkZuYnNlTEFrc3k5dVQ0WEhiTU1LSzdqUTJJMU10bUxrZkVUVDcyN1g1R3BM?=
+ =?utf-8?B?TGVvZk4zRkJYUTVBRWZ5WVJLWTJTYktualMzeUFRbVROTG1FeVhwUGU4WXZw?=
+ =?utf-8?B?Vk5rUEZrN1JrWGtUcDFERmVKSGNWYVVMZWJlbmEwQWJFeEtuOFR4RS9saGU0?=
+ =?utf-8?B?cmE1SzROQlRSOXpNZ1NrVlBmWmEydEpGUG1tQkVNWnE1NGZYOG1pU3g0NHBC?=
+ =?utf-8?B?MEpCVnN0alZiazM2dmt3SnF6VU5nVXA2bVg0bGpwNG5hSEdKd0luQU1FaTZZ?=
+ =?utf-8?B?RkxqaWgyVmR5czNBVUhNQldHVGhGR1pjZE5DcGRoMlhCSngwenp1cGJia3NK?=
+ =?utf-8?B?VnN3K0tsZXg4TVpyV0YyZUR2ekd3cmo2OTlNSk14YTNZa2xGcmxwblFpOVh0?=
+ =?utf-8?B?NkFPWXRnazI1Q3dDcEZBR0FlWXdGS2QrWGpHazZveEZ5cG1SRGZIZnp6MUtW?=
+ =?utf-8?B?ektKN3pRaEpDUEQzalNkR2RwQjVvbWNnWmprZDZKS3hNTHVvblVjaHdLQ2o5?=
+ =?utf-8?B?QWFPMG9yT2ZpVjQ1VjM1WEFZRkZmZDB5anBDVmtTQTUvUFEyaTd4M3Bpb0Fl?=
+ =?utf-8?B?NlBRTHc0bG84NmJVNVFCeEpxc0dvT3ZoK1ZOeUEyL201bXUwRWwzTnh2M1Z5?=
+ =?utf-8?B?QmlkeWkxd2crWU9oeEo3ZjdpSEIwdktmNjZmRlo2d3FEUVVHRW52V0FNQTRt?=
+ =?utf-8?B?a3dydGx4REwvR1RHU1p6K2theVRESUw0WkpmNHBKUWdtTmgrUG01QUpEakZv?=
+ =?utf-8?B?MlRZVnVzdThyMzB2OGR4L0lmT2ZyanFGSng1ME5odkNUWWxaWCtNZEdDNEMv?=
+ =?utf-8?B?Qy9GejNHcGh6a0lRdHdGd1dVOXNYTENJSUh2TkRrdmZZMTZOdlA3TWlvRXUw?=
+ =?utf-8?B?K0J3ZVoyZVpPVVh4WStsaUtCSGJaUGhWRlEyaWZpcTlRWi96ZEtsL3BENUdU?=
+ =?utf-8?B?L1ZUZmVLY3JzUUZNRE1za3U4SFZTWTR1bHk1L0M2SFVoZm5HWVBzUlYwd3Ux?=
+ =?utf-8?B?STlXelorbVYwbDh2T1RRZ1VJSVJjOENHL3pMQlU1UlQ0dmh4RlliU3N3VkJx?=
+ =?utf-8?B?aXY1eHRGVU1tbjFYbkgycUlucE10SzJuZ1o0ejdxVG11c25pcVBrMzBkaGlM?=
+ =?utf-8?B?MU4yb2hQQ2lKWWtwd25hTEdZUzU3akpGc0duSUFORnFlMGlEdVRlT1hXWHpt?=
+ =?utf-8?B?TkFhV3h2emdodkRNUGtIbDFkNklUZ09mTFd1SU5PblBhOWloRENvWlRBVXVK?=
+ =?utf-8?B?TGlITC82NzlKeGN5a09WYk1PdWo3K1Q0T25laGxHM1dYNGlKQ1dEOEdoR1gw?=
+ =?utf-8?B?NFlIYmdlR0FHVExETHJjWUFtbmdKYk9yWTZHK2hJQlJ0SDlxcHZzV0JoZGtt?=
+ =?utf-8?B?ZDlxSDQ2MFdpdHNwb0N4MU9Wajh0RGJDT1VyWTVYOGIxWGVockltZ1ZTZE9F?=
+ =?utf-8?B?NTNyVlJteS84ZG1EQXNLM01nN1JZNTJoUWszRnJUb3hiOEhyblJYOG5LR1NO?=
+ =?utf-8?B?ZmpPNU1QR3krbjNVNDliZS9OZmRYL3JhRmNNaVFrRVVaTDBvVythaVg1QWsz?=
+ =?utf-8?B?Q1ZkMDJzWkZhUC9SN2dBKzBobE0wRXFZZ05PWEUzVlpyOU5qTmViRm5yZmln?=
+ =?utf-8?B?Q0VsNllBN3BvK21vV3VKVEczemU0MFkzS2ZJZlpwVFowR1BwbHh6Z05kRkQ0?=
+ =?utf-8?B?UEFjR052MEtWRktJRWcxRHdRMFJ6a3VqMktwUmw1MG9hNTZYQ0gzZFNvVTZJ?=
+ =?utf-8?B?d0lHdHIyamxDaGpZN040dUZ6eXZkV3B0amtCY2R4VEh4a1M5bVhzTnRSbHE5?=
+ =?utf-8?B?dDRLTHI4SlU5c0ZxWUwrQmxuZkpVaVJHRS9veWpLUmhFUklMaUJSWG1XQUZJ?=
+ =?utf-8?B?RVNIa280UGowVFduN3VFbW5kYUlqMkFrSG0yMDA2eEJ4WStrdE1wT0dlZFFC?=
+ =?utf-8?B?OHIyUTJON2dHYUJUa3dKTzdWTjEzc1dQN2Z2cXJnd2E2L1kzQWpPQ2I0QlR1?=
+ =?utf-8?B?N0tVNE1ua3QvZlV5SlVobE5IaUZXNE5HeFFObjNrUlU2bWpZbTlETzdnS3g4?=
+ =?utf-8?B?NFNpRTFSRTdTZW9GakxvNTdrcFNMdytwU2tiNzBzb3ZjQ1hxT25tRDF2UjNB?=
+ =?utf-8?B?Y1ZRSkkrL0E2eWJyOGdoODdMRml1czc3WElkZm9CTk5WMGJ3TnB6c2R0UHF0?=
+ =?utf-8?B?Y1JjYmNTRkJ1QVJkQzdzL3ljcE5sbW01bjJ2VlZBYTNrZXpESnVMT2huZXE1?=
+ =?utf-8?B?Q01oSlJ4dHhFQncwSnBSYktjSm54NGpKbmRkc2FTUU9YVURSY1JsTzkybnlM?=
+ =?utf-8?B?UXRYN2R4VjZqb29VUmo0RXBRSDNOcHVRVzdPR0c2ZldZWlk1MmZaVDZYTUN2?=
+ =?utf-8?B?eFk3cmNRYVNWUGtZeGdlUDliejBUU0tNTGI0UmVWUHpRUHJ3MFJVWDRubTBp?=
+ =?utf-8?B?MU5Bd29kei81ay9hbTZYR1FwSm5jUWo5amd5d3RDUFQvampZQkZXS1RHTUtt?=
+ =?utf-8?B?WkdwYUJzNGczZC91T2xjZURjVVRXZjBKdEhEVHJQVzA3ZnFaU2k2dkxRWW9Z?=
+ =?utf-8?B?Z0FYOHU1QTFROWIvMk5BYTlyRmVkZzk4UzlrRTFqVTNqbm0zY0dMZ3ZROUwr?=
+ =?utf-8?B?blZKRUJmdXhSbFhTck5lcVA1bFRhYWtiV0FNN3MxMDFsRWJhMEZYMDZqUjBk?=
+ =?utf-8?B?U2c3UFloMFJpd2wxcE04NlliMUNPcC9mejNwOFJ1NWVnRVRVZ0E1bDJ5Qmcx?=
+ =?utf-8?B?bS9mWS9HajdNVE9mbCtRdGF5OTZ1bHIyaEp3eGllbXNRSTRPTjR3OXd0M29I?=
+ =?utf-8?B?L2lBYzc1U3RmUVRYUEpMcVlVQTNTN2VoVDcwbkNTeTRJZlZSMUNGVUpUS2E5?=
+ =?utf-8?B?TUwyekhjZU5xQk16S3RSZ1FDRmRIN1BjdXVINXg3aDNKZWZtWEtBMkF6UDZG?=
+ =?utf-8?B?cGtjemcxNFhack9UNW9paFRjbjdKWHF1K1Fkd2dzY1orTWtTMDJaM08rcjVR?=
+ =?utf-8?Q?R+NIUY9YYXpdPNeVCcv/pbpkcdoVqyUC2?=
+MIME-Version: 1.0
+
+----==_mimepart_6aad2db5c6346_b511c84817d5
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: quoted-printable
+
+@chatgpt-codex-connector[bot] commented on this pull request.
+
+
+### =F0=9F=92=A1 Codex Review
+
+Here are some automated review suggestions for this pull request.
+
+**Reviewed commit:** `c063a94c5d`
+   =20
+
+<details> <summary>=E2=84=B9=EF=B8=8F About Codex in GitHub</summary>
+<br/>
+
+[Your team has set up Codex to review pull requests in this repo](https://u=
+rl.us.m.mimecastprotect.com/s/nRe5CPNlvRfmrvDOczfllix5_ob?domain=3Dchatgpt.=
+com). Reviews are triggered when you
+- Open a pull request for review
+- Mark a draft as ready
+- Comment "@codex review".
+
+If Codex has suggestions, it will comment; otherwise it will react with =F0=
+=9F=91=8D.
+
+
+
+
+Codex can also answer questions or update the PR. Try commenting "@codex ad=
+dress that feedback".
+           =20
+</details>
+
+> @@ -591,6 +609,17 @@ def propagate_financials_to_properties(
+         try:
+             supa.table("properties").update(update).eq("property_id", pid)=
+.execute()
+             stats["properties_updated"] +=3D 1
++        except TimeoutError:
+
+**<sub><sub>![P1 Badge](https://url.us.m.mimecastprotect.com/s/frhqC1wq85Tm=
+Dnj1cmHppiVUt8x?domain=3Dimg.shields.io)</sub></sub>  Propagate timeouts fr=
+om the census-review write**
+
+When an implausible property reaches `guard_property_census_update()`, `enq=
+ueue_census_review()` performs another `.execute()` before this guarded wri=
+te loop, and `src/census_plausibility.py:175-185` still catches every `Exce=
+ption`, including `StepTimeout`. If the 900-second alarm fires during that =
+review-queue upsert, the helper returns normally and consumes the one-shot =
+alarm, allowing the remaining propagation to run without a timeout; add the=
+ same timeout escape in that helper and cover an implausible-census path in=
+ the regression tests.
+
+Useful? React with =F0=9F=91=8D=C2=A0/ =F0=9F=91=8E.
+
+--=20
+Reply to this email directly or view it on GitHub:
+https://url.us.m.mimecastprotect.com/s/12lDC2kr56IGJKxvIvI33i5zM3n?domain=
+=3Dgithub.com
+You are receiving this because you modified the open/close state.
+
+Message ID: <sbriggssjc/Dialysis/pull/7419/review/5247729313@github.com>
+
+----==_mimepart_6aad2db5c6346_b511c84817d5
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: quoted-printable
+
+<meta http-equiv=3D"Content-Type" content=3D"text/html; charset=3Dutf-8"><p=
+></p>
+<p><b>@chatgpt-codex-connector[bot]</b> commented on this pull request.</p>
+
+<h3 dir=3D"auto">=F0=9F=92=A1 Codex Review</h3>
+<p dir=3D"auto">Here are some automated review suggestions for this pull re=
+quest.</p>
+<p dir=3D"auto"><strong>Reviewed commit:</strong> <code class=3D"notranslat=
+e">c063a94c5d</code></p>
+<details> <summary>=E2=84=B9=EF=B8=8F About Codex in GitHub</summary>
+<br>
+<p dir=3D"auto"><a href=3D"https://url.us.m.mimecastprotect.com/s/nRe5CPNlv=
+RfmrvDOczfllix5_ob?domain=3Dchatgpt.com" rel=3D"nofollow">Your team has set=
+ up Codex to review pull requests in this repo</a>. Reviews are triggered w=
+hen you</p>
+<ul dir=3D"auto">
+<li>Open a pull request for review</li>
+<li>Mark a draft as ready</li>
+<li>Comment &quot;<a class=3D"user-mention notranslate" data-hovercard-type=
+=3D"user" data-hovercard-url=3D"/users/codex/hovercard" data-octo-click=3D"=
+hovercard-link-click" data-octo-dimensions=3D"link_type:self" href=3D"https=
+://url.us.m.mimecastprotect.com/s/Qs9JCQWmwViqEBD8uPh99iGlYpI?domain=3Dgith=
+ub.com">@codex</a> review&quot;.</li>
+</ul>
+<p dir=3D"auto">If Codex has suggestions, it will comment; otherwise it wil=
+l react with =F0=9F=91=8D.</p>
+<p dir=3D"auto">Codex can also answer questions or update the PR. Try comme=
+nting &quot;<a class=3D"user-mention notranslate" data-hovercard-type=3D"us=
+er" data-hovercard-url=3D"/users/codex/hovercard" data-octo-click=3D"hoverc=
+ard-link-click" data-octo-dimensions=3D"link_type:self" href=3D"https://url=
+.us.m.mimecastprotect.com/s/Qs9JCQWmwViqEBD8uPh99iGlYpI?domain=3Dgithub.com=
+">@codex</a> address that feedback&quot;.</p>
+</details><hr>
+
+<p>In <a href=3D"https://url.us.m.mimecastprotect.com/s/14tsCR6nxWSlknKJtPi=
+66i1Xeoz?domain=3Dgithub.com">src/propagate_property_financials.py</a>:</p>
+<pre style=3D"color:#555">&gt; @@ -591,6 +609,17 @@ def propagate_financial=
+s_to_properties(
+         try:
+             supa.table(&quot;properties&quot;).update(update).eq(&quot;pro=
+perty_id&quot;, pid).execute()
+             stats[&quot;properties_updated&quot;] +=3D 1
++        except TimeoutError:
+</pre>
+<p dir=3D"auto"><strong><sub><sub><a target=3D"_blank" rel=3D"noopener nore=
+ferrer nofollow" href=3D"https://url.us.m.mimecastprotect.com/s/1B6jCVOrB1H=
+KL047hJsrriECX3L?domain=3Dcamo.githubusercontent.com"><img src=3D"https://c=
+amo.githubusercontent.com/c595229c0ecb6ee85b9c7804144d495f131a495ec87091fea=
+2b262d954c9a92d/68747470733a2f2f696d672e736869656c64732e696f2f62616467652f5=
+0312d6f72616e67653f7374796c653d666c6174" alt=3D"P1 Badge" data-canonical-sr=
+c=3D"https://img.shields.io/badge/P1-orange?style=3Dflat" style=3D"max-widt=
+h: 100%;"></a></sub></sub>  Propagate timeouts from the census-review write=
+</strong></p>
+<p dir=3D"auto">When an implausible property reaches <code class=3D"notrans=
+late">guard_property_census_update()</code>, <code class=3D"notranslate">en=
+queue_census_review()</code> performs another <code class=3D"notranslate">.=
+execute()</code> before this guarded write loop, and <code class=3D"notrans=
+late">src/census_plausibility.py:175-185</code> still catches every <code c=
+lass=3D"notranslate">Exception</code>, including <code class=3D"notranslate=
+">StepTimeout</code>. If the 900-second alarm fires during that review-queu=
+e upsert, the helper returns normally and consumes the one-shot alarm, allo=
+wing the remaining propagation to run without a timeout; add the same timeo=
+ut escape in that helper and cover an implausible-census path in the regres=
+sion tests.</p>
+<p dir=3D"auto">Useful? React with =F0=9F=91=8D&nbsp;/ =F0=9F=91=8E.</p>
+
+<p style=3D"font-size:small;-webkit-text-size-adjust:none;color:#666;">=E2=
+=80=94<br>Reply to this email directly, <a href=3D"https://url.us.m.mimecas=
+tprotect.com/s/iJ7uCW6vD2SYgzp2cmtkkioeTxf?domain=3Dgithub.com">view it on =
+GitHub</a>, or <a href=3D"https://url.us.m.mimecastprotect.com/s/dPP3CXDwE3=
+HNyB61F9uLLiWxqFF?domain=3Dgithub.com">unsubscribe</a>.<br>You are receivin=
+g this because you modified the open/close state.<img src=3D"https://github=
+.com/notifications/beacon/BP4ILQI7GUZGPHM7IIJ73PD5PUSTLBFCNFSM6AAAAAC7476ML=
+SWGG33NNVSW45C7OR4XAZNRKB2WY3CSMVYXKZLTORJGK5TJMV32UY3PNVWWK3TUL5UWJTYAAAAA=
+COGJ72Q2M4TFMFZW63VMON2GC5DFL5RWQYLOM5SQ.gif" height=3D"1" width=3D"1" alt=
+=3D""><span style=3D"color: transparent; font-size: 0; display: none; visib=
+ility: hidden; overflow: hidden; opacity: 0; width: 0; height: 0; max-width=
+: 0; max-height: 0; mso-hide: all">Message ID: <span>&lt;sbriggssjc/Dialysi=
+s/pull/7419/review/5247729313</span><span>@</span><span>github</span><span>=
+.</span><span>com&gt;</span></span></p>
+<script type=3D"application/ld+json">[
+{
+"@context": "http://schema.org",
+"@type": "EmailMessage",
+"potentialAction": {
+"@type": "ViewAction",
+"target": "https://url.us.m.mimecastprotect.com/s/AdzKCYExG4hZJk0Qu3CJJixg8=
+L7?domain=3Dgithub.com",
+"url": "https://url.us.m.mimecastprotect.com/s/AdzKCYExG4hZJk0Qu3CJJixg8L7?=
+domain=3Dgithub.com",
+"name": "View Pull Request"
+},
+"description": "View this Pull Request on GitHub",
+"publisher": {
+"@type": "Organization",
+"name": "GitHub",
+"url": "https://url.us.m.mimecastprotect.com/s/SHqUCZ6yJ5SRVPmEcNFVViBQ5_V?=
+domain=3Dgithub.com"
+}
+}
+]</script>
+
+----==_mimepart_6aad2db5c6346_b511c84817d5--
