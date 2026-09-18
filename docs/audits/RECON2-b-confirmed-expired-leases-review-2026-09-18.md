@@ -37,7 +37,18 @@ not touch rent, term, tenant, the property, or any other lease.
 | # | lease | Scott's field check | Cowork's re-measure | verdict |
 |---|---|---|---|---|
 | 1 | 23273 Sierra Vista | CoStar: DaVita lease **active**; DaVita locator: **operating** at the address | The clinic row on property 22471 is CCN 32654 *Fresenius Kidney Care Canyon Vista*, `closed`, `dedup_status = demoted_duplicate`. The DaVita clinic (CCN 032520, operating, seen 2026-01-22) is on **property 35849, "629 N Highway 90 Byp, Ste 6"** — an R1 twin of 22471. The "closure" was a different operator's demoted duplicate on a twin row. | **Conflict — hold.** Not a lease expiration; a property-identity defect (RECON1 class) plus a classifier gap (`RECON2-c`). |
-| 2–7 | | pending Scott's two-source check | | |
+| 2 | 23506 Washington DC | DaVita's Eighth Street Dialysis (historically Gambro / Eighth Street) is no longer at 300 8th St NE — relocated to **920 Bladensburg Rd NE, 20002** | CMS row `closed`, none operating — corroborated by the relocation | **Confirm** (relocated). Research: is the Bladensburg clinic on the record as a property? |
+| 3 | 23259 Goldsboro | DaVita operating; possible recent expansion; CoStar sent via sidebar | Successor lease 9519 (exp 2022) is itself inactive; sidebar stamped `data_source = costar_sidebar` on the 2012 row; twin property 39982 (`2604 N Hospital Rd`) carries a Fresenius lease to 2030 | **Confirm the 2012 row as superseded — with a successor.** The current DaVita lease is not on the record; it must be inserted in the same step. |
+| 4 | 6912 Cartersville | No longer a dialysis clinic — a restaurant since 2019; old Google listing "Cartersville Dialysis Clinic" | No clinic row on the property | **Confirm** (vacated). Property use changed — flag for the property record too. |
+| 5 | 12599 Orlando Metrowest | Operating, hours on Google; in a 120k SF centre; **CoStar lease expires Jun 2028**; sent via sidebar | Twin property 37640 (`4550-4666 S Kirkman Rd`, 51 leases) updated 15:54 UTC; its DaVita lease has **NULL expiration**; no Jun-2028 row anywhere | **Confirm-with-successor only**: insert the 2028 lease (parent → 12599), then confirm 12599. Alone, confirming leaves an operating clinic with an active listing and no lease. |
+| 6 | 12678 Dixon | Operating, hours on Google; CoStar lease active; sent via sidebar | Property 25464 updated 16:05 UTC; lease 7307 (exp 2024) inactive; no current row | **Confirm-with-successor only** (as #5). |
+| 7 | 13058 Scranton | Operating, hours on Google; 83k SF centre; CoStar lease active; sent via sidebar | Twin property 51243 (`920-1000 S Washington Ave`) created/updated 16:01 UTC with **0 leases**; 28547 unchanged | **Confirm-with-successor only** (as #5). Also an R1 twin to fold. |
+
+**What the sidebar sends did and did not do (measured 16:05 UTC):** they touched property rows — three of them the
+range-address *twins* of the lease's property — and re-stamped one old lease's source; **none wrote a lease row with
+the CoStar expiration.** That is `SIDEBAR-LEASE1`. Until it is fixed, "confirm-with-successor" for #3/#5/#6/#7 means a
+CC round inserts the successor from the CoStar values Scott read (tenant, expiration, source `costar`,
+`parent_lease_id`) in the same transaction as the confirmation — never confirm first and hope.
 
 **Confirmation bar from here:** two agreeing sources beyond the database — the CoStar lease record and the
 operator's own locator (DaVita / Fresenius) for the address — before any `expired_confirmed` is written. A CMS

@@ -37,7 +37,7 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-reconcile-2, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT, CANON-OWNERSHIP1 | 2026-09-16 | Arc complete through GOVDEED3 (gov #406); **the gov deed writer runs from GitHub Actions (weekly Mon 06:00 UTC) — verify 09-21 dateless = 0**; CANON-OWNERSHIP1 👤 confirmation open; sale-party conflicts 1,290 a review queue |
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k LIVE** (LCC PR #2506): 218 attested supersessions, 40/43 pairs to sponsor, 16/16 controls untouched, reversible; sponsor-as-edge = future work |
 | **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, -harris-b/-c/-d, -ledger-order, MCP1 | 2026-09-17 | **41 assessor-sourced owners live** (Philadelphia 20, Harris 21 of 50); Harris is done except the 27 situs-gap properties → §P10a is the lane's next unit; next free-bulk jurisdiction after that |
-| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS-consolidate-lcc, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift, RECON1, RECON1-b, RECON2, RECON2-b, RECON2-render, HOME2-fix, HOME2-b, HOME2-c, PERF-SPQ1, PERF-SPQ1-b, RECON2-c, VERCEL-LIVE1 | 2026-09-17 | PRI2-on live; HOME2 built, flag OFF → HOME2-on; F8/F8-b done; DIA1c live; **SBN-12 (Banning clinic) → `RECON1` merged + reconciled: one property, off Available; residue `RECON1-b` (deed task never created, sentinel party name); **PERF-SPQ1 regressed `/api/seller-prospect-queue` to 500 — Today dark → `PERF-SPQ1-b` revert first**; RECON2-b row 1 overturned by Scott's field check (demoted-duplicate CCN on a twin row → `RECON2-c`); HOME2-c placement open; Vercel teardown = J13-teardown Q3 ①–④; Saturday digest verifies F1–F8 |
+| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS-consolidate-lcc, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift, RECON1, RECON1-b, RECON2, RECON2-b, RECON2-render, HOME2-fix, HOME2-b, HOME2-c, PERF-SPQ1, PERF-SPQ1-b, PERF-SPQ1-c, RECON2-c, SIDEBAR-LEASE1, VERCEL-LIVE1 | 2026-09-17 | PRI2-on live; HOME2 built, flag OFF → HOME2-on; F8/F8-b done; DIA1c live; **SBN-12 (Banning clinic) → `RECON1` merged + reconciled: one property, off Available; residue `RECON1-b` (deed task never created, sentinel party name); **Today still dark (502/26 s after PERF-SPQ1-b) → `PERF-SPQ1-c` revert both**; leases 2–7 read: 2 confirm, 4 confirm-with-successor; sidebar sends wrote no lease → `SIDEBAR-LEASE1`; Q1 clean (enforce ≥ 09-21); HOME2-c open; J13-teardown Q3 raw names list; Saturday digest verifies F1–F8 |
 | **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–5, INVENTORY1, INVENTORY1b, INVENTORY2, INVENTORY-process, REMEDIATION-2026-05, REPO1, ROADMAP, PROCESS-CC-DOCS, PROCESS-MERGE-CLOBBER, GUARD-CLOBBER1, PROCESS-ROW-CELLS, PROCESS-PARKING-LOT, DEPLOY2-coverage, DEPLOY2-stale-body | 2026-09-18 | **PR #2563 reverted STATUS + backlog to a week-old snapshot (7 entries / 11 rows lost) — restored round 26; `GUARD-CLOBBER1` live on `main` (PR #2566), manual per-turn diff retired round 28**; DEPLOY2 live + CI; parking lot triaged; EDGE-GATES1 live |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
 | **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
@@ -52,6 +52,40 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
 
 ---
+
+## 2026-09-18 — Round 35 (Cowork): Today is **still dark** after `PERF-SPQ1-b` (502 in 26 s — `PERF-SPQ1-c`: revert both); **Q1 is clean** (all four flows carry the header; enforce ≥ 09-21 ~12:00 UTC); Scott's two-source read of leases 2–7 recorded — two confirm, four confirm-with-successor, and the sidebar sends that should have carried the successors wrote no lease (`SIDEBAR-LEASE1`)
+
+**Merged since 34:** #2582 (round 34), #2583 `PERF-SPQ1-b` (`e716b258`). Railway `/version` = `c017ff3f`.
+
+**`PERF-SPQ1-b` — reconciled in the browser: not fixed.** The round added a `.catch` around the items promise and did
+not revert. Same request, signed-in page, 16:08 UTC: **502 in 26.2 s**, `items_query_threw: This operation was
+aborted`. Three builds now: 200/14.6 s → 500/8.3 s → 502/26.2 s. The page read itself starves behind eight parallel
+count passes over the view. → **`PERF-SPQ1-c`**: revert #2581 + #2583, prove 200 from the browser, then the one-pass
+`lcc_seller_prospect_chip_counts()` with a `counts: null` degrade path. The prompt now forbids the merge without a
+browser probe in the response (two rounds said they could not probe from the sandbox and merged anyway).
+
+**Q1 — clean.** *Sync SF Activities to Supabase* ran 16:01:22 UTC (workflow `5706ffc6…`, 200) with no `DENY-WOULD`;
+Scott had retyped the header key (newline + a typo). All four flows carry the header. Last flow miss 12:01 UTC 09-18
+→ earliest `COPILOT_AUTH_MODE=enforce` **2026-09-21 ~12:00 UTC**, after the Vercel delete (J13-teardown Step 4).
+
+**Leases 2–7 (Scott, CoStar + operator locator / Google):** #2 DC relocated to 920 Bladensburg Rd NE → **confirm**;
+#4 Cartersville a restaurant since 2019 → **confirm**; #3 Goldsboro, #5 Orlando (CoStar lease to Jun 2028), #6 Dixon,
+#7 Scranton all **operating with an active CoStar lease** → the old rows are superseded, **confirm only together with
+inserting the successor lease** — never leave an operating clinic with no active lease (Banning again). Recorded in
+`docs/audits/RECON2-b-…review…md` and on `RECON2-b`; `RECON2-c` gains confirm-with-successor and the evidence-row
+shape and is prompt-ready after PERF-SPQ1-c.
+**Measured behind that:** Scott sent the four CoStar pages through the sidebar 15:43–16:05 UTC. The captures touched
+the **range-address twin rows** (Orlando 37640 `4550-4666 S Kirkman Rd`, Scranton 51243 `920-1000 S Washington Ave`,
+Goldsboro 39982) and re-stamped old lease 23259's source — **no lease row with the CoStar expiration landed**
+(37640's DaVita lease has NULL expiration). → **`SIDEBAR-LEASE1`** (sidebar arc). The R1 twin class is now visible
+on five of the seven review rows.
+
+**Vercel / J13-teardown:** Scott's Railway variables copy has the 46 shared names but only the tail of the 79 service
+names → Q3 asks for a Raw-Editor names-only list for both services; also `LCC_DEFAULT_WORKSPACE_ID` (Railway) vs
+`LCC_PRIMARY_WORKSPACE_ID` (Vercel) to resolve before deleting.
+
+**Parking lot:** +PL-37…39, triaged. Next free: PL-40. **Open for Scott:** Q33 (send PERF-SPQ1-c or revert both PRs),
+Q3 (names-only lists), Q32 (a/b/c). Q1 and Q31 close.
 
 ## 2026-09-18 — Round 34 (Cowork): **`PERF-SPQ1` regressed production — `/api/seller-prospect-queue` 500s and Today is dark (revert first, `PERF-SPQ1-b`)**; Scott's field check overturns the "strongest" confirmed lease — a demoted-duplicate Fresenius CCN on a twin property row (`RECON2-c`); the activities header is fixed; the Vercel teardown steps written out plainly for Q3
 
