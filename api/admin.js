@@ -7538,7 +7538,17 @@ async function handleSellerProspectQueue(req, res) {
   // (the producer/consumer honest-counts rule). Soft-fails to null.
   const [itemsR, countResults, summaryR] = await Promise.all([
     opsQuery('GET', buildQueuePath({ chipKey: chip.key, domain, limit, offset }),
-      undefined, { countMode: 'exact' }),
+      undefined, { countMode: 'exact' })
+      // PERF-SPQ1-b: an unhandled rejection here (an abort/timeout upstream) used to reject the
+      // whole Promise.all before the `if (!itemsR.ok)` check below ever ran, surfacing as a bare
+      // 500 "Internal server error" instead of the intended 502 list_failed -- that regression is
+      // what took the Today panel dark. Normalize to the same {ok:false} shape opsQuery itself
+      // returns on a non-OK response, so a network-level failure is handled identically to a
+      // DB-level one.
+      .catch((e) => {
+        console.warn('[seller-prospect-queue] items query threw:', e?.message || e);
+        return { ok: false, status: 0, count: 0, data: { error: 'items_query_threw', message: e?.message || String(e) } };
+      }),
     Promise.all(SELLER_QUEUE_CHIPS.map((c) =>
       opsQuery('GET', buildChipCountPath({ chipKey: c.key, domain }), undefined, { countMode: 'exact' })
         .then((r) => ({ key: c.key, label: c.label, n: r.ok ? r.count : null }))
