@@ -173,6 +173,31 @@ Railway if it was doing something — check its value before deleting).
 
 The scrolled-past block between Jun 11 and Apr 20, and the two `RE…EY` names.
 
+### Step 3b result — definitive, from the Raw-Editor name lists (Cowork round 37, 2026-09-18)
+
+Scott exported names-only lists for **Vercel** (78 names) and all four Railway services: `tranquil-delight` (79,
+of which 42 are `${{shared.*}}` references to the 46 shared variables), `life-command-center` = the standalone MCP
+(71), `pacific-love` = BOV Generator (37), `gracious-radiance` = **the owner resolver** (28 — `RESOLVER_AUTO_LINK`,
+`RESOLVER_AUTO_REJECT`, `RESOLVER_STORAGE_KEY` live here; this fourth service was not in `CURRENT-STATE.md` §1
+until now). Compared against every `process.env.X` the web app reads on `main`:
+
+| finding | names |
+|---|---|
+| Vercel names the web app reads **and `tranquil-delight` already has** | 52 of 58 |
+| Vercel names the web app reads, **missing on `tranquil-delight`** | `TEAMS_INTAKE_WEBHOOK_URL` (read by `api/_handlers/intake-extractor.js`, `api/_shared/cadence-alerts.js`, `api/_shared/teams-alert.js` — Teams alerts from the web app are silently off on Railway; the value exists on the `life-command-center` service, copy it across) · `INTAKE_AUTOCREATE_CAP` (default `10` in code — optional) · `PORT` (Railway injects it) · `LCC_API_BASE` (MCP-only, present there) · `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` (not read by `server.js`/`api/`/`mcp/` — scripts/CI only; the app uses `OPS_SUPABASE_*` / `DIA_SUPABASE_*`) |
+| Vercel names **no current code reads** (safe to lose) | `AI_EXTRACTION_PROVIDER`, `AI_PROVIDER`, `AI_TIMEOUT_S`, `BOV_ALLOW_UNREVIEWED`, `FRED_API_KEY`, `LCC_OPS_SERVICE_KEY`, `LCC_OPS_URL`, `NIXPACKS_PYTHON_VERSION`, `PA_DEALFOLDER_FILE_URL`, `PUBLIC_BASE_URL`, `REGRID_API_KEY`, `RESOLVER_AUTO_LINK`, `RESOLVER_AUTO_REJECT`, `RESOLVER_STORAGE_KEY`, `SF_LIST_IMPORT_URL`, `SOS_PROXY_URL`, `SUPABASE_DB_DSN`, `SUPABASE_KEY`, `TIER0_AUTO_ATTACH`, `W75_ACTION_SUMMARY` — most belong to the BOV / resolver services, where they already exist |
+| Workspace id | `tranquil-delight` carries **both** `LCC_PRIMARY_WORKSPACE_ID` and `LCC_DEFAULT_WORKSPACE_ID`; the code reads both with a fallback — no action |
+| Shared variables shown *ADD* (not attached to `tranquil-delight`) | `OPENAI_API_KEY`, `REGRID_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_URL` — the first is read by the app: confirm `OPENAI_API_KEY` is a **service** variable on `tranquil-delight` (the raw list shows it there) |
+
+**So the only pre-delete action on Railway is one variable:** add `TEAMS_INTAKE_WEBHOOK_URL` to `tranquil-delight`
+(same value as on `life-command-center`). Then Step 3 (rotate the LCC Opps key the Vercel build holds:
+`OPS_SUPABASE_SERVICE_KEY` / `LCC_SERVICE_ROLE_KEY` on Vercel; rotate in Supabase, update on all four Railway services in
+one sitting) → Step 4 (delete) → Step 5.
+
+⚠️ The Railway raw exports Scott saved (`responses/*variable names.docx`) contain **values**, not only names (the
+Raw Editor pastes `KEY=value`). They are gitignored (`*.docx`) and never left his machine, but they should be deleted
+from the responses folder once this step is closed — a synced folder is not a secrets store.
+
 ## Step 4 — Delete the Vercel project (👤 Scott only, Vercel dashboard)
 
 **Proof — and this must distinguish DEPLOYMENT_NOT_FOUND from the CURRENT frozen-build behavior:**

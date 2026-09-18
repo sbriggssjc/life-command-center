@@ -68,3 +68,7 @@ Sibling ledgers: `SB notes/TRIAGE.md` (Scott's in-app observations — richer in
 | PL-37 | 2026-09-18 | → backlog `SIDEBAR-LEASE1` — *four CoStar sidebar sends today updated twin property rows and no lease expiration landed; the capture path drops the field the lease model most needs (Cowork, measured)…* |
 | PL-38 | 2026-09-18 | → backlog `PERF-SPQ1-c` (process) — *two consecutive CC rounds on a perf route merged without a browser probe; each said it could not probe from the sandbox — the prompt now forbids the merge, not the probe (Cowork)…* |
 | PL-39 | 2026-09-18 | → backlog `**J13-teardown**` — *Railway names `LCC_DEFAULT_WORKSPACE_ID`, Vercel `LCC_PRIMARY_WORKSPACE_ID`; which does `main` read? (Cowork, from the variables docx)…* |
+| PL-40 | 2026-09-18 | → backlog `PERF-SPQ1-c` (recorded) — *a merged migration was again not applied live (`lcc_seller_prospect_chip_counts`) — the round said "applied" nowhere and the JS shipped calling an RPC that did not exist; step 4a caught it (Cowork)…* |
+| PL-41 | 2026-09-18 | → backlog `PERF-SPQ2` — *the same route measured 1.5 s alone and 16 s during page load: the bottleneck is the view under concurrency, not the route (Cowork)…* |
+| PL-42 | 2026-09-18 | → runbook Step 3b + checklist Q3 ④ — *Railway Raw-Editor exports carry values; five such docx now sit in a synced folder (gitignored, never committed) (Cowork)…* |
+| PL-43 | 2026-09-18 | → CURRENT-STATE §1 (done) — *a fourth Railway service, `gracious-radiance` (owner resolver), was not in the runtime-truth row (Cowork, from the env export)…* |
