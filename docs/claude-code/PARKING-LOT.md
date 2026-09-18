@@ -62,3 +62,6 @@ Sibling ledgers: `SB notes/TRIAGE.md` (Scott's in-app observations — richer in
 | PL-31 | 2026-09-18 | → checklist Q1 + `EDGE-GATES1-b` — *a Power Automate header key with a trailing newline (`X-PA-Webhook-Secret\n`) is silently a different header; the dashboard shows nothing (Cowork, flow export)…* |
 | PL-32 | 2026-09-18 | → backlog `HOME2-c` / checklist Q32 — *"place it after Today" put the widget at 1,878 px because Today is 1,800 px tall; placement needs a decision, not another move (Cowork)…* |
 | PL-33 | 2026-09-18 | → noted on STATUS round 33 (process) — *HOME2-b's round wrote no STATUS entry (⑤-CC); DEPLOY2-drop-aware's did, labelled (CC) as asked (Cowork)…* |
+| PL-34 | 2026-09-18 | → backlog `PERF-SPQ1-b` + checklist Q33 — *a "perf" round merged with `node --check` only and no browser timing; the route went from slow-200 to fast-500 and Home's Today panel went dark (Cowork probe 14:15 UTC)…* |
+| PL-35 | 2026-09-18 | → backlog `RECON2-c` — *a `demoted_duplicate` CMS row of a different operator, on a twin property row, passed as "closure" evidence; caught by Scott's CoStar + locator check, not by any rule (Cowork)…* |
+| PL-36 | 2026-09-18 | → backlog `RECON1`/`RECON2-c` (R1 example) — *properties 22471 "629 North Hwy 90" and 35849 "629 N Highway 90 Byp, Ste 6" are the same Sierra Vista address as two rows — the Banning class again (Cowork)…* |

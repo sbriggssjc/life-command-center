@@ -31,3 +31,14 @@ clinic) is exactly what the research worklist is for.
 **What confirmation does and does not do.** `is_active → false` on the confirmed row only; `expiration_state →
 expired_confirmed` with the evidence stored in `expiration_evidence`; a ledger row with the prior value. It does
 not touch rent, term, tenant, the property, or any other lease.
+
+## Scott's read — round 34 (2026-09-18)
+
+| # | lease | Scott's field check | Cowork's re-measure | verdict |
+|---|---|---|---|---|
+| 1 | 23273 Sierra Vista | CoStar: DaVita lease **active**; DaVita locator: **operating** at the address | The clinic row on property 22471 is CCN 32654 *Fresenius Kidney Care Canyon Vista*, `closed`, `dedup_status = demoted_duplicate`. The DaVita clinic (CCN 032520, operating, seen 2026-01-22) is on **property 35849, "629 N Highway 90 Byp, Ste 6"** — an R1 twin of 22471. The "closure" was a different operator's demoted duplicate on a twin row. | **Conflict — hold.** Not a lease expiration; a property-identity defect (RECON1 class) plus a classifier gap (`RECON2-c`). |
+| 2–7 | | pending Scott's two-source check | | |
+
+**Confirmation bar from here:** two agreeing sources beyond the database — the CoStar lease record and the
+operator's own locator (DaVita / Fresenius) for the address — before any `expired_confirmed` is written. A CMS
+row alone, even `closed`, is one source, and this case shows it can be the wrong clinic.
