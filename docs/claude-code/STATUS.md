@@ -37,7 +37,7 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-reconcile-2, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT, CANON-OWNERSHIP1 | 2026-09-16 | Arc complete through GOVDEED3 (gov #406); **the gov deed writer runs from GitHub Actions (weekly Mon 06:00 UTC) — verify 09-21 dateless = 0**; CANON-OWNERSHIP1 👤 confirmation open; sale-party conflicts 1,290 a review queue |
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k LIVE** (LCC PR #2506): 218 attested supersessions, 40/43 pairs to sponsor, 16/16 controls untouched, reversible; sponsor-as-edge = future work |
 | **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, -harris-b/-c/-d, -ledger-order, MCP1 | 2026-09-17 | **41 assessor-sourced owners live** (Philadelphia 20, Harris 21 of 50); Harris is done except the 27 situs-gap properties → §P10a is the lane's next unit; next free-bulk jurisdiction after that |
-| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS-consolidate-lcc, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift, RECON1, RECON1-b, RECON2, RECON2-b, RECON2-render, HOME2-fix, HOME2-b, HOME2-c, PERF-SPQ1, PERF-SPQ1-b, PERF-SPQ1-c, PERF-SPQ2, RECON2-c, RECON2-d, RESOLVER1, SIDEBAR-LEASE1, SIDEBAR2, VERCEL-LIVE1 | 2026-09-18 | **`HOME2-c` built round 41** (option b): three lanes take SIGNIFICANT's place at the top of TODAY, SIGNIFICANT hidden under the flag, Important/Urgent unchanged, 39/39 new tests pass — Railway screenshot needs merge+redeploy first; Q35: no CoStar dates → `RECON2-d` renames the state (`occupied_term_unknown`); sidebar double-posts inbox items + no lease landed → `SIDEBAR2` prompted; RECON2-c live (3 confirmed); Vercel gone |
+| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS-consolidate-lcc, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift, RECON1, RECON1-b, RECON2, RECON2-b, RECON2-render, HOME2-fix, HOME2-b, HOME2-c, HOME2-d, PERF-SPQ1, PERF-SPQ1-b, PERF-SPQ1-c, PERF-SPQ2, RECON2-c, RECON2-d, RESOLVER1, SIDEBAR-LEASE1, SIDEBAR2, SIDEBAR3, VERCEL-LIVE1 | 2026-09-18 | **Round 42:** `HOME2-c` live on Railway (lanes replace SIGNIFICANT) but the lanes overflow the TODAY card → `HOME2-d` filed; `SIDEBAR2` (c) double-posts fixed at source, 3 pairs dismissed; (a) `lease_expiration_source_state` column applied by Cowork (merge left it unapplied); (b) guards create only → `SIDEBAR3` (merge the three twins); next: `RECON2-d` + `HOME2-d` prompts, then `SIDEBAR3`, `PERF-SPQ2`, `RESOLVER1` |
 | **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–5, INVENTORY1, INVENTORY1b, INVENTORY2, INVENTORY-process, REMEDIATION-2026-05, REPO1, ROADMAP, PROCESS-CC-DOCS, PROCESS-MERGE-CLOBBER, GUARD-CLOBBER1, PROCESS-ROW-CELLS, PROCESS-PARKING-LOT, DEPLOY2-coverage, DEPLOY2-stale-body | 2026-09-18 | **PR #2563 reverted STATUS + backlog to a week-old snapshot (7 entries / 11 rows lost) — restored round 26; `GUARD-CLOBBER1` live on `main` (PR #2566), manual per-turn diff retired round 28**; DEPLOY2 live + CI; parking lot triaged; EDGE-GATES1 live |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
 | **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
@@ -50,6 +50,47 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 > cuts) were moved **verbatim** to
 > [`docs/history/STATUS_claude-code_2026-08-31_to_2026-09-01.md`](../history/STATUS_claude-code_2026-08-31_to_2026-09-01.md).
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
+
+---
+
+## 2026-09-18 — Round 42 (Cowork): `HOME2-c` live-verified on Railway (lanes at the top of TODAY, SIGNIFICANT gone) but the lanes **overflow the 498-px card** → `HOME2-d`; `SIDEBAR2` reconciled — (c) double-posts fixed at source and today's three pairs dismissed, (a)'s migration **was not applied by the merge** (Cowork applied it), (b) guards only the *create* path so the three real twins go to `SIDEBAR3`
+
+Both PRs merged (#2591 HOME2-c `61475543`, #2592 SIDEBAR2 `5d1b3b7b`), Railway `/version` = `95137d03` at 19:13 UTC.
+CC titled its HOME2-c entry "Round 41 (CC)" and wrote **no entry for SIDEBAR2** (PL-55); Cowork takes 42.
+
+**HOME2-c — browser probe, flag ON, Chrome on Railway.** RESEARCH / BD / INBOX render inside the TODAY card above
+IMPORTANT, `#todaySignificantSection` is `display:none` (its BD list still renders underneath — same feed, one panel),
+three See-all links present, IMPORTANT + URGENT unchanged. Measured defect: the card is 498 px wide; the inline
+`grid-template-columns:1fr 1fr 1fr` with `min-width:auto` children resolves to **342 / 208 / 139 px**, the INBOX lane
+ends at x=1006 while the card ends at 809 — it is drawn under MY WORK and invisible; BD titles wrap three lines.
+Filed **`HOME2-d`** (minmax(0,1fr) floor; container query to one stacked column under ~900 px; flag-off byte-identical;
+Railway probe in the response). Q32 ✅ closed as (b).
+
+**SIDEBAR2 — three parts, three outcomes.**
+- **(c) live.** The three writers now stamp `external_id` and post with `resolution=merge-duplicates`. Live index is
+  `inbox_items_workspace_external_id_unique (workspace_id, external_id) WHERE external_id IS NOT NULL`; CC's comments
+  cite `idx_inbox_items_dedup` with `source_type` from `schema/028` — drift, PL-53 (and PostgREST merges on the PK, so a
+  retry surfaces as 409, not a silent merge — still no second row). The last sidebar item before the 19:07 deploy
+  (19:05, `new_contact_qualify`) has `external_id` NULL as expected; **the first post-deploy send is the proof**.
+  Today's rows: 3 true pairs (Rainwater 13:11, Sasser 16:36, Gaffney OM 17:35, each ~1 s apart) — later row of each
+  set `status=dismissed` with `metadata.dismiss_reason` naming this round, nothing deleted; the 8 "Suspect contacts
+  blocked" rows are 8 distinct properties over 6 hours, not duplicates.
+- **(a) column live by Cowork's hand.** `supabase/migrations/dialysis/20260918120000_dia_sidebar2a_lease_expiration_source_state.sql`
+  merged but `information_schema.columns` had no `lease_expiration_source_state` — README step 4a, applied verbatim
+  (column, CHECK `dated`/`source_no_date`, comment). The writer (`sidebar-pipeline.js` ~11660/11697) stamps it; it does
+  not set `expiration_state`, so "CoStar has no date" is now sayable two ways — PL-54, folded into `RECON2-d`. CC produced
+  no payload evidence for the four sends and attributed the miss to (b).
+- **(b) create-guard only.** `detectRangeAddressCollision` runs only when the pipeline is about to CREATE a property
+  and refuses with `ambiguous_property_match`. Scott's four sends matched the **existing** twins 37640 / 51243 / 39982
+  exactly, which this never sees. Filed **`SIDEBAR3`**: RECON1-style merge/alias of the three twins, then re-send the
+  four pages and show payload → row per send. `SIDEBAR-LEASE1` 🟡 (column live; root cause → SIDEBAR3).
+
+**Housekeeping.** Both prompts → `prompts/done/`; both responses → `responses/done/` (commit script). ROADMAP next unit
+→ `RECON2-d` + `HOME2-d`, then `SIDEBAR3`, `PERF-SPQ2`, `RESOLVER1`. CURRENT-STATE lease-expiration row carries the new
+column. CC's "2 pre-existing failures on main" (`hermetic-suite` guard test) not verified — PL-56.
+
+**Next:** prompts `RECON2-d` and `HOME2-d` written this round (`prompts/`), ready to send in either order; `SIDEBAR3`
+after RECON2-d lands. Enforce clock for `COPILOT_AUTH_MODE` unchanged (≥ 09-21 ~12:00 UTC if the log stays clean).
 
 ---
 
