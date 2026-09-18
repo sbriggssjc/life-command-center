@@ -356,6 +356,53 @@ remaining live population, not a re-count of the seven); 2 `expired_confirmed`/`
 match now resolves but does not clear the operator-match gate (above), and no other row's own
 `expiration_evidence` array currently mixes a positive and negative observation.
 
+### R5 addendum — the state vocabulary after RECON2-d, and the PL-54 rule (2026-09-18)
+
+> Ported verbatim by Cowork (round 44) from the `Dialysis` repo commit `32de98b56` (PR sbriggssjc/Dialysis#7420), where
+> CC wrote it against the live definitions. The migrations it describes are
+> `supabase/migrations/dialysis/20260918140000_dia_recon2d_occupied_term_unknown_rename.sql` and
+> `20260918150000_dia_recon2d_35849_chain_fill_and_followup.sql` (both applied live 2026-09-18 by CC); the audit is
+> `docs/audits/RECON2-d-occupied-term-unknown-rename-2026-09-18.md`. This repo owns Dialysis_DB objects (CLAUDE.md
+> "ONE REPO OWNS EACH DATABASE'S OBJECTS"); the Dialysis-side copies are to be removed (`RECON2-d-reconcile`).
+
+`chk_leases_expiration_state` allows exactly: `in_term`, `expired_unconfirmed`,
+`expired_confirmed`, `occupied_term_unknown`, `renewed_confirmed`, `expiration_unknown`.
+
+`occupied_term_unknown` replaced the retired name `holdover_confirmed`. **The rename was not
+cosmetic — it corrected an over-claim.** `holdover_confirmed` asserted a specific tenancy
+mechanism (a holdover past the lease term, i.e. month-to-month) that the evidence never
+established. The only evidence ever recorded for a lease in this state is: an independent
+occupancy signal (CMS operator match, Google Business hours, or a manual field check) confirming
+the tenant is still in place, plus a CoStar-sourced lease capture showing the lease ACTIVE with NO
+expiration date landed on the record. That evidence supports exactly one claim — **the space is
+occupied and the current lease term is not on file** — and nothing about *how* it continues to be
+occupied (holdover, an unrecorded renewal, or something else). `occupied_term_unknown` states only
+that.
+
+**PL-54 — the two "no date" rules, by which column decides:**
+
+- `leases.expiration_state` answers *what is true about the lease's term* — `in_term` /
+  `occupied_term_unknown` / `expired_unconfirmed` / `expired_confirmed` / `renewed_confirmed` /
+  `expiration_unknown`.
+- `leases.lease_expiration_source_state` (CHECK-enforced `dated` / `source_no_date`) answers *what
+  the most recent CAPTURE carried* — did the source (CoStar, a sidebar send, a manual field check)
+  land a date, or not.
+
+The rule that connects them, enforced in `dia_recon2_lease_expiration_state_guard()`:
+
+1. A capture that stamps `lease_expiration_source_state = 'source_no_date'` on a lease whose
+   RECORDED `lease_expiration` has **already passed**, on a lease that is currently `is_active`,
+   is itself positive evidence of continued occupancy with an unknown term. The guard promotes
+   `expiration_state` to `occupied_term_unknown` directly (never past a state a human has already
+   confirmed — `expired_confirmed` / `renewed_confirmed` are left alone). **No date is invented.**
+2. A lease that has **never had any recorded expiration at all** (`lease_expiration IS NULL`) is a
+   different fact and gets a different, pre-existing state: `expiration_unknown`. This is not "no
+   date this time" — it is "no term has ever been on file for this lease" — and the guard has
+   applied this rule unchanged since before RECON2-d.
+
+Both rules are guard-trigger behaviour, not classifier behaviour, because they describe what a
+single row's own columns already state — no cross-row inference is needed.
+
 ## R6 — Name variants are not conflicts: run alias/normalize check BEFORE raising an owner conflict
 
 **Trigger:** any writer about to flag an `owner_conflict` / `deed_newer_stale`-class discrepancy

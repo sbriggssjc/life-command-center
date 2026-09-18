@@ -42,6 +42,12 @@ story; the backlog is the state; `docs/os/CURRENT-STATE.md` is the one-page "whe
    --name-only <base> <merge> -- supabase/migrations` → for each new file, does the object exist live?
    If not, apply the repo file verbatim (fingerprint a replaced view first) and say so. Three merged-
    not-applied migrations landed on 2026-09-16/17; one took the Priority tab down (PRI2-on).
+4b. **Ask the DB who wrote to it today** (Supabase MCP `query_logs`, ClickHouse): group `edge_logs` by
+   `request.headers.user_agent`, `cf_connecting_ip`, method and path for PATCH/POST/DELETE on `/rest/v1/%`.
+   A writer this repo does not know about invalidates `updated_at`-based evidence (2026-09-18: the
+   DialysisProject scheduler was re-PATCHing every property ~4×/hour — `DIA-PROPAGATOR1`). Also check
+   the PR landed in THIS repo: Dialysis_DB objects live in `supabase/migrations/dialysis/` here, never in
+   the Dialysis repo (RECON2-d landed there — `RECON2-d-reconcile`).
 5. **Update in the same change**: the backlog row (status + measured outcome), `STATUS.md` (one
    entry, Open-threads row), `CURRENT-STATE.md` when a subsystem's state changed, `CLAUDE.md` when a
    doctrine was earned, the topic page when its topic moved. Move the prompt and response to `done/`.
