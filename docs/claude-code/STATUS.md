@@ -73,9 +73,15 @@ RECON1 pair should read `retired_by 20260917220000…` at info). Cowork checks t
 flow has been sending a header nobody reads since 12:36 UTC. Fix is a retype → Q1. Everything else is clean; the
 next `/sync/activities` run is 16:01 UTC.
 
-**`VERCEL-LIVE1`** — five screenshots of env-var names audited against `process.env` reads on `main`:
-`docs/architecture/vercel-teardown-env-audit.md` (A: must exist on Railway; B: dead; C: the Jun 11 → Apr 20 block
-the screenshots skipped + two `RE…EY` names). Delete after the Railway check → Q30.
+**`VERCEL-LIVE1` — and a correction.** PR #2580's first run went red on `test/retired-identifiers-guard.test.mjs`:
+the env-var audit was a new live doc naming `life-command-center-nine.vercel.app`. The guard was right, and it
+pointed at what round 29 missed: the repo already carried this thread — **J13 / J13-preflight ✅ (2026-09-09) /
+J13-teardown (checklist Q3) / J13a-guard** and `docs/os/RUNBOOK_vercel_teardown.md`. "Vercel was never retired"
+overstated the surprise; the host was known to answer and a teardown runbook was waiting on Scott. New facts, now
+in the runbook as **Step 3b**: the deployment is not the frozen July build (Vercel still builds from `main`), it
+was Scott's daily window, and it is the `/chat` + `browser scott` caller. The env-var audit (A: must exist on
+Railway; B: dead; C: the Jun 11 → Apr 20 block the screenshots skipped + two `RE…EY` names) lives there too;
+VERCEL-LIVE1 folds into J13-teardown, Q30 into Q3.
 
 **`RECON2-b`** — the 7 confirmed-expired candidates: `docs/audits/RECON2-b-confirmed-expired-leases-review-2026-09-18.md`
 (evidence, clinic facts, active listings, a read per row). Notable: lease 12599 (Orlando Metrowest) is
