@@ -392,6 +392,88 @@ export function parseDeclaredObjects(sqlText) {
   return out;
 }
 
+// Mirrors OBJECT_KIND_RE for `DROP FUNCTION|TRIGGER|VIEW|TABLE|INDEX|TYPE|POLICY [IF EXISTS] <name>`.
+// `DROP TRIGGER <name> ON <table>` and `DROP INDEX` never take a schema-qualified name ambiguity
+// beyond the same optional `schema.` prefix the CREATE regex already strips.
+const DROPPED_KIND_RE =
+  /drop\s+(function|view|table|trigger|index|type|policy)\s+(?:concurrently\s+)?(?:if\s+exists\s+)?(?:[a-zA-Z_][a-zA-Z0-9_]*\.)?([a-zA-Z_][a-zA-Z0-9_]*)/gi;
+
+/**
+ * Parse a migration file's SQL text for `DROP FUNCTION|VIEW|TABLE|TRIGGER|INDEX|TYPE|POLICY`
+ * statements -- the retirement counterpart to parseDeclaredObjects. Comments stripped first, same
+ * as parseDeclaredObjects. Deliberately permissive about function argument lists (`DROP FUNCTION
+ * foo(uuid)` still captures `foo`) since OBJECT_KIND_RE does the same for CREATE.
+ */
+export function parseDroppedObjects(sqlText) {
+  const clean = stripSqlComments(sqlText);
+  const out = [];
+  const seen = new Set();
+  let m;
+  DROPPED_KIND_RE.lastIndex = 0;
+  while ((m = DROPPED_KIND_RE.exec(clean))) {
+    const kind = m[1].toLowerCase();
+    const name = m[2];
+    const key = `${kind}:${name.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ kind, name });
+  }
+  return out;
+}
+
+/**
+ * DEPLOY2-drop-aware: build a `"kind:name"` -> retiring-filename map for every object whose
+ * LATEST in-window statement (by FILENAME order, never git-add-date -- a migration's own declared
+ * intent about a later migration's timestamp is the only ordering that survives synthetic/
+ * out-of-order add dates) is a DROP rather than a CREATE. An object retired this way is
+ * deliberately superseded (e.g. RECON2 dropping RECON1's guard because the rule it enforced was
+ * refined) and must be reported as `retired_by <file>` at info severity, never probed as
+ * "unapplied" -- the DEPLOY2-unapplied check would otherwise flag RECON1 critical forever, on
+ * every run, for correctly-applied code that a later migration correctly tore down.
+ *
+ * `fileSqlPairs` is `[filename, sqlText][]` in ANY order -- this function does its own filename
+ * sort so caller ordering (e.g. the git-add-date window order) cannot affect the verdict. A CREATE
+ * in a later-filenamed file after an earlier DROP re-arms the object (removes it from the map),
+ * which is exactly the "DROP precedes CREATE" control this rule must not misclassify.
+ */
+export function buildRetirementMap(fileSqlPairs) {
+  const sorted = [...fileSqlPairs].sort((a, b) => a[0].localeCompare(b[0]));
+  const timeline = new Map(); // "kind:name" -> {file, action}[]
+  const push = (key, file, action) => {
+    if (!timeline.has(key)) timeline.set(key, []);
+    timeline.get(key).push({ file, action });
+  };
+  for (const [file, sql] of sorted) {
+    for (const o of parseDeclaredObjects(sql)) push(`${o.kind}:${o.name.toLowerCase()}`, file, 'create');
+    for (const o of parseDroppedObjects(sql)) push(`${o.kind}:${o.name.toLowerCase()}`, file, 'drop');
+  }
+  const retiredBy = new Map();
+  for (const [key, events] of timeline) {
+    const last = events[events.length - 1];
+    if (last.action === 'drop') retiredBy.set(key, last.file);
+  }
+  return retiredBy;
+}
+
+/**
+ * The {rule, severity, subject, measured, detail} finding for a declared object this rule is
+ * SKIPPING because a later migration retires it (see buildRetirementMap). `info` severity -- this
+ * is not a defect, it is the drop-aware check working; it exists so a reader can see WHY an object
+ * that looks declared here was never probed, rather than the object silently vanishing from every
+ * report.
+ */
+export function retiredObjectFinding(fileName, kind, name, retiredByFile) {
+  return {
+    rule: 'migration_object_retired',
+    severity: 'info',
+    subject: fileName,
+    measured: { kind, name, retired_by: retiredByFile },
+    detail:
+      `${fileName} declares ${kind} ${name}, but a later migration (${retiredByFile}) DROPs it -- ` +
+      `treated as deliberately retired, not an unapplied migration (DEPLOY2-drop-aware).`,
+  };
+}
+
 /**
  * Classify one migration's application state from its declared objects + a map of
  * `"kind:name"` -> boolean|null (probe result; null = unknown kind, never treated as absent).
@@ -807,18 +889,39 @@ async function probeProject(url, key, objects) {
 async function collectMigrationApplicationFindings(projects) {
   const { files, windowDegraded, windowDegradedReason, scanned } = listRecentMigrationFiles();
 
+  // Read every file's SQL once, up front -- needed both for declared-object parsing below and for
+  // the drop-aware retirement timeline (DEPLOY2-drop-aware), which must see every file in the
+  // window regardless of which file a given object happens to be declared in.
+  const fileSqlPairs = [];
+  for (const file of files) {
+    try {
+      fileSqlPairs.push([file, fs.readFileSync(path.join(REPO_ROOT, file), 'utf8')]);
+    } catch (_e) {
+      // unreadable file -- skip rather than crash the whole rule
+    }
+  }
+  const retiredBy = buildRetirementMap(fileSqlPairs);
+  const retiredFindings = [];
+
   // Group the window by TARGET DATABASE before probing anything (DEPLOY2-coverage §2b).
   const perFile = new Map(); // relPath -> {declared, target}
   const byTarget = new Map(); // target -> {objects, seen}
-  for (const file of files) {
-    let sql;
-    try {
-      sql = fs.readFileSync(path.join(REPO_ROOT, file), 'utf8');
-    } catch (_e) {
-      continue; // unreadable file -- skip rather than crash the whole rule
-    }
-    const declared = parseDeclaredObjects(sql);
+  for (const [file, sql] of fileSqlPairs) {
+    const allDeclared = parseDeclaredObjects(sql);
     const target = migrationTargetDatabase(file);
+    // Split out any object whose latest in-window statement (by filename order, anywhere in the
+    // window) is a DROP -- it is deliberately retired, not unapplied, and must never be probed as
+    // "unapplied" nor silently disappear (DEPLOY2-drop-aware).
+    const declared = [];
+    for (const o of allDeclared) {
+      const key = `${o.kind}:${o.name.toLowerCase()}`;
+      const retiringFile = retiredBy.get(key);
+      if (retiringFile && retiringFile !== file) {
+        retiredFindings.push(retiredObjectFinding(file, o.kind, o.name, retiringFile));
+      } else {
+        declared.push(o);
+      }
+    }
     perFile.set(file, { declared, target });
     if (!target) continue; // undetermined: never probed anywhere
     if (!byTarget.has(target)) byTarget.set(target, { objects: [], seen: new Set() });
@@ -890,13 +993,14 @@ async function collectMigrationApplicationFindings(projects) {
   }
 
   return {
-    findings,
+    findings: [...findings, ...retiredFindings],
     skipped: false,
     migrations_checked: perFile.size,
     migrations_available: scanned,
     unapplied_count: counts.unapplied,
     unverifiable_count: counts.unverifiable,
     applied_count: counts.applied,
+    retired_count: retiredFindings.length,
     by_target: byTargetCounts,
     project_status: projectStatus,
     window_degraded: windowDegraded,
