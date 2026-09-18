@@ -75,3 +75,7 @@ Sibling ledgers: `SB notes/TRIAGE.md` (Scott's in-app observations — richer in
 | PL-44 | 2026-09-18 | → backlog `**J13-teardown**` (recorded) — *`life-command-center.vercel.app` (no `-nine`) serves a third-party "Command Center" app; 36 repo references point at a stranger's site (Cowork, teardown proof)…* |
 | PL-45 | 2026-09-18 | → backlog `RESOLVER1` — *the resolver's `/extract-parties` (W5.1 channel A) exists while RECON1's sale 15042 has no buyer/seller — R3 never calls it? (Cowork)…* |
 | PL-46 | 2026-09-18 | → checklist Q34 — *`RESOLVER_RETRAIN_LOOP` has read `partial` since W4.4 for want of one edge secret; labels frozen at 335 since 08-14 (Cowork)…* |
+| PL-47 | 2026-09-18 | → backlog `RECON2-d` — *`holdover_confirmed` written where CoStar says an active lease exists; wrong in kind, right on `is_active` (Cowork, RECON2-c reconcile)…* |
+| PL-48 | 2026-09-18 | → backlog `RECON2-d` — *`medicare_clinics.chain_organization` NULL on an operating CCN (35849) blinds operator-match; how many more? (CC round, from its own report)…* |
+| PL-49 | 2026-09-18 | → backlog `RECON1` (R1 population) — *`twin_operating` = 48 leases on properties whose address-twin carries an operating clinic — the first measured size of the Banning class (Cowork)…* |
+| PL-50 | 2026-09-18 | → STATUS round 39 (process) — *third CC round in two days with no STATUS entry; the prompt line "STATUS entry labelled (CC)" is being read as optional (Cowork)…* |
