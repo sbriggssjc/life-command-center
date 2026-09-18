@@ -29,7 +29,7 @@
 <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script defer src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <title>Life Command Center</title>
-<link rel="stylesheet" href="styles.css?v=2026091801">
+<link rel="stylesheet" href="styles.css?v=2026091802">
 <link rel="stylesheet" href="styles-round-76bj.css">
 </head>
 <body>
@@ -145,11 +145,44 @@
               </div>
             </div>
 
+            <!-- Home three-lane widget (HOME2, flag: home_three_lanes, default OFF).
+                 Pure re-composition, docs/audits/HOME1_HOME_PAGE_AUDIT_2026-09-16.md §B —
+                 replaces the Daily Briefing's "My Priorities" fallback (app.js
+                 _dbFillMyPrioritiesFromQueue, suppressed while this flag is on) with three
+                 explicitly source-labeled lanes. Hidden by default; renderHomeThreeLanes()
+                 unhides it and fills all three *Content divs only when the flag is on — see
+                 HOME2-fix (2026-09-17). HOME2-b (2026-09-18): moved to the TOP of the page
+                 (was after Weather/Market/Daily Briefing, ~2,000px down and never seen) —
+                 per §B this REPLACES the My-Priorities block, so it belongs where that block
+                 was reachable, not below the fold. The Research lane reads the same
+                 v_next_best_action feed as "Top Data Gaps to Close" below, so that widget
+                 is hidden while this flag is on (never two panels showing one feed). -->
+            <div class="widget" id="home3LanesWidget" style="display:none">
+              <div class="widget-title">Research / BD / Inbox</div>
+              <div class="nba-subhead">Three lanes, same sources as their own tabs — top 5 each, honestly labeled.</div>
+              <div class="widget-grid" style="grid-template-columns:1fr 1fr 1fr">
+                <div class="today-section">
+                  <div class="today-section-head">Research <span class="today-section-sub">— Top Data Gaps to Close feed</span></div>
+                  <div id="home3ResearchContent"><div class="loading"><span class="spinner"></span></div></div>
+                </div>
+                <div class="today-section">
+                  <div class="today-section-head">BD <span class="today-section-sub">— same queue as the Priority tab, top 5</span></div>
+                  <div id="home3BdContent"><div class="loading"><span class="spinner"></span></div></div>
+                </div>
+                <div class="today-section">
+                  <div class="today-section-head">Inbox <span class="today-section-sub">— new/overdue first</span></div>
+                  <div id="home3InboxContent"><div class="loading"><span class="spinner"></span></div></div>
+                </div>
+              </div>
+            </div>
+
             <!-- Top Data Gaps to Close — cross-domain data-quality gap queue, ranked
                  by property value (R25 Unit 5, 2026-06-15). This is the DATA-GAP
                  cockpit: highest-value records missing ownership/agency data. It is
                  deliberately distinct from the Priority Queue (the BD-action cockpit
-                 — who to pursue). Two tools, two questions; do not converge them. -->
+                 — who to pursue). Two tools, two questions; do not converge them.
+                 Hidden while home_three_lanes is on — its Research lane reads this
+                 SAME feed (HOME2-b), so showing both is a duplicate, not a second lane. -->
             <div class="widget" id="nextBestActionWidget">
               <div class="widget-title">
                 Top Data Gaps to Close
@@ -218,32 +251,6 @@
                 </div>
               </div>
               <div id="dailyBriefingContent"><div class="loading"><span class="spinner"></span></div></div>
-            </div>
-
-            <!-- Home three-lane widget (HOME2, flag: home_three_lanes, default OFF).
-                 Pure re-composition, docs/audits/HOME1_HOME_PAGE_AUDIT_2026-09-16.md §B —
-                 replaces the Daily Briefing's "My Priorities" fallback (app.js
-                 _dbFillMyPrioritiesFromQueue, suppressed while this flag is on) with three
-                 explicitly source-labeled lanes. Hidden by default; renderHomeThreeLanes()
-                 unhides it and fills all three *Content divs only when the flag is on — see
-                 HOME2-fix (2026-09-17): the flag has no effect without these mount points. -->
-            <div class="widget" id="home3LanesWidget" style="display:none">
-              <div class="widget-title">Research / BD / Inbox</div>
-              <div class="nba-subhead">Three lanes, same sources as their own tabs — top 5 each, honestly labeled.</div>
-              <div class="widget-grid" style="grid-template-columns:1fr 1fr 1fr">
-                <div class="today-section">
-                  <div class="today-section-head">Research <span class="today-section-sub">— Top Data Gaps to Close feed</span></div>
-                  <div id="home3ResearchContent"><div class="loading"><span class="spinner"></span></div></div>
-                </div>
-                <div class="today-section">
-                  <div class="today-section-head">BD <span class="today-section-sub">— same queue as the Priority tab, top 5</span></div>
-                  <div id="home3BdContent"><div class="loading"><span class="spinner"></span></div></div>
-                </div>
-                <div class="today-section">
-                  <div class="today-section-head">Inbox <span class="today-section-sub">— new/overdue first</span></div>
-                  <div id="home3InboxContent"><div class="loading"><span class="spinner"></span></div></div>
-                </div>
-              </div>
             </div>
 
             <!-- Market Briefs — MB-b (EXEC-BRIEFS-SPEC.md §2/MB4). Read-only
@@ -982,29 +989,29 @@
 })();
 </script>
 <script src="auth.js?v=2026050802"></script>
-<script src="app-modal.js?v=2026091801"></script>
-<script src="app-treasury-chart.js?v=2026091801"></script>
-<script src="app-export-comps.js?v=2026091801"></script>
-<script src="app-tasks.js?v=2026091801"></script>
-<script src="app.js?v=2026091801"></script>
+<script src="app-modal.js?v=2026091802"></script>
+<script src="app-treasury-chart.js?v=2026091802"></script>
+<script src="app-export-comps.js?v=2026091802"></script>
+<script src="app-tasks.js?v=2026091802"></script>
+<script src="app.js?v=2026091802"></script>
 <script src="gov.js?v=2026061604"></script>
-<script src="dialysis.js?v=2026091801"></script>
+<script src="dialysis.js?v=2026091802"></script>
 <script src="capital-markets.js?v=2026050802"></script>
-<script src="detail-rent.js?v=2026091801"></script>
-<script src="detail-tab-documents.js?v=2026091801"></script>
-<script src="detail-panel-shell.js?v=2026091801"></script>
-<script src="detail-entity-tabs.js?v=2026091801"></script>
-<script src="detail-openers.js?v=2026091801"></script>
-<script src="detail.js?v=2026091801"></script>
+<script src="detail-rent.js?v=2026091802"></script>
+<script src="detail-tab-documents.js?v=2026091802"></script>
+<script src="detail-panel-shell.js?v=2026091802"></script>
+<script src="detail-entity-tabs.js?v=2026091802"></script>
+<script src="detail-openers.js?v=2026091802"></script>
+<script src="detail.js?v=2026091802"></script>
 <script src="operator-note-client.js?v=2026091100"></script>
 <script src="detail-lease-comps-fix.js?v=2026050903"></script>
 <script src="contacts-ui.js?v=2026062402"></script>
-<script src="dc-lanes.js?v=2026091801"></script>
-<script src="ops-perf-dashboard.js?v=2026091801"></script>
-<script src="ops-sync-health.js?v=2026091801"></script>
-<script src="ops-domain-health.js?v=2026091801"></script>
-<script src="ops-metrics.js?v=2026091801"></script>
-<script src="ops.js?v=2026091801"></script>
+<script src="dc-lanes.js?v=2026091802"></script>
+<script src="ops-perf-dashboard.js?v=2026091802"></script>
+<script src="ops-sync-health.js?v=2026091802"></script>
+<script src="ops-domain-health.js?v=2026091802"></script>
+<script src="ops-metrics.js?v=2026091802"></script>
+<script src="ops.js?v=2026091802"></script>
 <script src="marketing.js?v=2026072801"></script>
 <script type="module" src="review-shared.js?v=2026082701"></script>
 </body>

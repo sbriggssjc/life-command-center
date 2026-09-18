@@ -134,13 +134,17 @@ describe('HOME2 — the BD lane\'s rendered rows are exactly the first five item
   });
 });
 
-describe('HOME2 — Inbox lane reads dailyBriefingSnapshot.inbox_summary.items (no new query) and orders new-before-triaged', () => {
+describe('HOME2-b — Inbox lane reads canonicalInbox.items (the same source as the INBOX panel rail), not the nonexistent inbox_summary key', () => {
   const body = extractFnBody(cleanApp, '_home3RenderInboxLane');
 
-  it('reads the existing daily-briefing snapshot, never a new fetch', () => {
-    assert.match(body, /dailyBriefingSnapshot\.inbox_summary\.items/);
+  it('reads canonicalInbox.items, never a new fetch', () => {
+    assert.match(body, /canonicalInbox\.items/);
     assert.doesNotMatch(body, /fetch\(/);
     assert.doesNotMatch(body, /opsApi\(/);
+  });
+
+  it('no longer reads dailyBriefingSnapshot.inbox_summary — that key does not exist on the live snapshot shape', () => {
+    assert.doesNotMatch(body, /inbox_summary/);
   });
 
   it('is capped at 5', () => {
@@ -166,6 +170,65 @@ describe('HOME2 — Inbox lane reads dailyBriefingSnapshot.inbox_summary.items (
     // Within the "triaged" group, newest created_at first.
     assert.equal(ranked[2].title, 'newer-triaged');
     assert.equal(ranked[3].title, 'old-triaged');
+  });
+});
+
+describe('HOME2-b — BD lane never permanently caches an empty result from a failed/non-ok load', () => {
+  const body = extractFnBody(cleanApp, '_home3LoadBdLane');
+
+  it('_home3BdLoaded is only set true inside the success branch, not unconditionally after the try/catch', () => {
+    // The old shape set `_home3BdLoaded = true` as the LAST statement of the
+    // function regardless of outcome, which permanently cached an empty
+    // result from a failed or early call. It must now be set true only where
+    // res.ok && Array.isArray(res.data.items).
+    const successIdx = body.indexOf('Array.isArray(res.data.items)');
+    assert.ok(successIdx >= 0, 'success check not found');
+    const loadedIdx = body.indexOf('_home3BdLoaded = true');
+    assert.ok(loadedIdx >= 0, '_home3BdLoaded = true not found');
+    assert.ok(loadedIdx > successIdx, '_home3BdLoaded must be set inside the success branch');
+    // And it must NOT appear again after the closing of the try/catch as an
+    // unconditional trailer.
+    const afterSuccessBranch = body.slice(loadedIdx + 1);
+    assert.doesNotMatch(afterSuccessBranch, /_home3BdLoaded = true/);
+  });
+
+  it('records the pagination total on success so an honest "could not load" label can cite it', () => {
+    assert.match(body, /_home3BdTotal\s*=\s*\(res\.data\.pagination/);
+  });
+});
+
+describe('HOME2-b — BD lane renders an honest "could not load" label, never "No seller prospects" when the load failed', () => {
+  const body = extractFnBody(cleanApp, '_home3RenderBdLane');
+
+  it('branches on _home3BdLoaded before claiming there are no prospects', () => {
+    assert.match(body, /if \(!_home3BdLoaded\)/);
+    assert.match(body, /Could not load/);
+    assert.match(body, /No seller prospects/);
+  });
+});
+
+describe('HOME2-b — placement: the three-lane widget sits above Top Data Gaps / Weather / Market / Daily Briefing, never below the fold', () => {
+  const html = readFileSync(indexPath, 'utf8');
+
+  it('home3LanesWidget appears before nextBestActionWidget in index.html', () => {
+    const laneIdx = html.indexOf('id="home3LanesWidget"');
+    const nbaIdx = html.indexOf('id="nextBestActionWidget"');
+    assert.ok(laneIdx >= 0 && nbaIdx >= 0, 'both widgets must exist');
+    assert.ok(laneIdx < nbaIdx, 'home3LanesWidget must render before nextBestActionWidget');
+  });
+
+  it('home3LanesWidget appears exactly once (no leftover duplicate mount point)', () => {
+    const matches = html.match(/id="home3LanesWidget"/g) || [];
+    assert.equal(matches.length, 1, 'home3LanesWidget must appear exactly once in index.html');
+  });
+});
+
+describe('HOME2-b — Top Data Gaps to Close is hidden while home_three_lanes is on (its feed duplicates the Research lane)', () => {
+  const body = extractFnBody(cleanApp, 'applyFeatureFlags');
+
+  it('applyFeatureFlags toggles nextBestActionWidget off when home_three_lanes is on', () => {
+    assert.match(body, /getElementById\('nextBestActionWidget'\)/);
+    assert.match(body, /checkFlag\('home_three_lanes'\)\s*\?\s*'none'\s*:\s*''/);
   });
 });
 
