@@ -37,7 +37,7 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-reconcile-2, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT, CANON-OWNERSHIP1 | 2026-09-16 | Arc complete through GOVDEED3 (gov #406); **the gov deed writer runs from GitHub Actions (weekly Mon 06:00 UTC) — verify 09-21 dateless = 0**; CANON-OWNERSHIP1 👤 confirmation open; sale-party conflicts 1,290 a review queue |
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k LIVE** (LCC PR #2506): 218 attested supersessions, 40/43 pairs to sponsor, 16/16 controls untouched, reversible; sponsor-as-edge = future work |
 | **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, -harris-b/-c/-d, -ledger-order, MCP1 | 2026-09-17 | **41 assessor-sourced owners live** (Philadelphia 20, Harris 21 of 50); Harris is done except the 27 situs-gap properties → §P10a is the lane's next unit; next free-bulk jurisdiction after that |
-| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS-consolidate-lcc, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift, RECON1, RECON1-b, RECON2, RECON2-b, RECON2-render, HOME2-fix, HOME2-b, HOME2-c, HOME2-d, PERF-SPQ1, PERF-SPQ1-b, PERF-SPQ1-c, PERF-SPQ2, RECON2-c, RECON2-d, RESOLVER1, SIDEBAR-LEASE1, SIDEBAR2, SIDEBAR3, VERCEL-LIVE1 | 2026-09-18 | **Round 42:** `HOME2-c` live on Railway (lanes replace SIGNIFICANT) but the lanes overflow the TODAY card → `HOME2-d` filed; `SIDEBAR2` (c) double-posts fixed at source, 3 pairs dismissed; (a) `lease_expiration_source_state` column applied by Cowork (merge left it unapplied); (b) guards create only → `SIDEBAR3` (merge the three twins); next: `RECON2-d` + `HOME2-d` prompts, then `SIDEBAR3`, `PERF-SPQ2`, `RESOLVER1` |
+| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS-consolidate-lcc, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift, RECON1, RECON1-b, RECON2, RECON2-b, RECON2-render, HOME2-fix, HOME2-b, HOME2-c, HOME2-d, PERF-SPQ1, PERF-SPQ1-b, PERF-SPQ1-c, PERF-SPQ2, RECON2-c, RECON2-d, RESOLVER1, SIDEBAR-LEASE1, SIDEBAR2, SIDEBAR3, VERCEL-LIVE1 | 2026-09-18 | **Round 43:** `HOME2-d` shipped (PR pending merge) — `home3-grid` class w/ `minmax(0,1fr)` + a container query stacking to one column below ~900px card width, replacing the bare inline `1fr 1fr 1fr` that overflowed the card; screenshot-against-live-Railway proof still owed (👤 next); next: `RECON2-d`, `SIDEBAR3`, `PERF-SPQ2`, `RESOLVER1` |
 | **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–5, INVENTORY1, INVENTORY1b, INVENTORY2, INVENTORY-process, REMEDIATION-2026-05, REPO1, ROADMAP, PROCESS-CC-DOCS, PROCESS-MERGE-CLOBBER, GUARD-CLOBBER1, PROCESS-ROW-CELLS, PROCESS-PARKING-LOT, DEPLOY2-coverage, DEPLOY2-stale-body | 2026-09-18 | **PR #2563 reverted STATUS + backlog to a week-old snapshot (7 entries / 11 rows lost) — restored round 26; `GUARD-CLOBBER1` live on `main` (PR #2566), manual per-turn diff retired round 28**; DEPLOY2 live + CI; parking lot triaged; EDGE-GATES1 live |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
 | **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
@@ -50,6 +50,33 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 > cuts) were moved **verbatim** to
 > [`docs/history/STATUS_claude-code_2026-08-31_to_2026-09-01.md`](../history/STATUS_claude-code_2026-08-31_to_2026-09-01.md).
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
+
+---
+
+## 2026-09-18 — Round 43 (Cowork): `HOME2-d` shipped — the three-lane grid now sizes to its container instead of the content, with a container-query stack below ~900 px of card width
+
+Fix per the round-42 measurement (Chrome on Railway `95137d03`, 1438-px viewport): the inline
+`grid-template-columns:1fr 1fr 1fr` on `#home3LanesWidget`'s `.widget-grid` sized tracks to CONTENT (342/208/139 px
+in a 498-px card), painting the INBOX lane off the card's right edge under MY WORK. `index.html` now gives that div
+`class="widget-grid home3-grid"` with no inline style; `styles.css` adds `.home3-grid { grid-template-columns:
+repeat(3, minmax(0,1fr)); }` + `.home3-grid > div { min-width: 0; }`, a size container on `#todaySectionsWidget`
+(`container-type: inline-size`), and a `@container (max-width: 900px)` rule collapsing to one stacked column in
+markup order (Research → BD → Inbox) — plus an `@supports not (container-type: inline-size)` viewport-media
+fallback for a browser that somehow lacks container queries (none Scott uses does). Cache-buster set bumped
+`2026091803` → `2026091804` (`app.js`/`detail.js`/`ops.js`/`styles.css`/`index.html`'s other refs) per the shared-`?v=`
+rule — this touched `index.html` + `styles.css`, both in the set.
+
+**Tests.** `test/home2-three-lanes.test.mjs` gained a `HOME2-d` describe block (7 tests): no inline
+`grid-template-columns` on the widget-grid div, the `home3-grid` class present, the `minmax(0,1fr)` rule, the
+`min-width:0` child rule, the container-type declaration, the `@container` stack rule, and flag-off still renders
+`home3LanesWidget` as `display:none` (byte-identical outside the touched CSS/markup). Full suite green: 46/46 in
+this file.
+
+**Not done here, by design.** No screenshot proof against a live Railway redeploy — this session has no browser
+and no Railway credentials; per the prompt, that verification is the next step once merged and redeployed (Edge/
+Chrome desktop at laptop width, confirm `getComputedStyle(...).gridTemplateColumns` and that all three headers sit
+inside the card). IMPORTANT/URGENT markup untouched; no dedup/filter of lane contents (that's `SIDEBAR2`/`3`'s
+lineage, unrelated).
 
 ---
 
