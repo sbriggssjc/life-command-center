@@ -192,6 +192,12 @@ function applyFeatureFlags() {
   if (typeof useV2 !== 'undefined') {
     useV2 = checkFlag('queue_v2_enabled');
   }
+
+  // HOME2-b (2026-09-18): the three-lane widget's Research lane reads the SAME
+  // v_next_best_action feed as "Top Data Gaps to Close" (HOME1 §B), so the two
+  // must never render at once — hide the standalone widget while the flag is on.
+  const nbaWidget = document.getElementById('nextBestActionWidget');
+  if (nbaWidget) nbaWidget.style.display = checkFlag('home_three_lanes') ? 'none' : '';
 }
 
 // Weather — uses geolocation with Tulsa fallback
@@ -7914,15 +7920,22 @@ window.loadNextBestActionData = loadNextBestActionData;
 //              "same queue as the Priority tab, top 5" so the overlap is
 //              honest instead of the old silent _dbFillMyPrioritiesFromQueue
 //              fallback duplicating it unlabeled.
-//   Inbox    → dailyBriefingSnapshot.inbox_summary.items — already fetched by
-//              loadDailyBriefingData() (daily-briefing/index.ts fetchInboxSummary,
-//              v_inbox_triage). Re-sorted client-side only (new before triaged,
-//              then created_at DESC); v_inbox_triage carries no due_date, so
-//              there is no separate "overdue" state to distinguish from
-//              "triaged" here — see the report for this reading.
+//   Inbox    → canonicalInbox.items — the SAME /api/queue-v2?view=inbox call
+//              loadCanonicalData() already makes for the INBOX panel's own
+//              "Flagged Emails" rail (HOME2-b, 2026-09-18; was
+//              dailyBriefingSnapshot.inbox_summary.items, a key that does not
+//              exist on the live daily-briefing snapshot — that lane rendered
+//              "Inbox is clear" unconditionally). Re-sorted client-side only
+//              (new before triaged, then created_at DESC).
 // ============================================================
 let _home3BdData = [];
-let _home3BdLoaded = false;
+let _home3BdLoaded = false;   // true only after a SUCCESSFUL load — a failed/
+                               // empty-response call leaves this false so the
+                               // next render retries instead of caching a
+                               // permanent false "no prospects" (HOME2-b).
+let _home3BdTotal = null;     // pagination.total from the last successful load,
+                               // so an honest failure label can be told apart
+                               // from a genuine zero.
 
 function _home3TopN(arr, n) {
   return Array.isArray(arr) ? arr.slice(0, n) : [];
@@ -7978,11 +7991,20 @@ async function _home3LoadBdLane(force) {
   if (_home3BdLoaded && !force) return _home3BdData;
   try {
     const res = await opsApi('/api/seller-prospect-queue?chip=all&limit=5&offset=0');
-    _home3BdData = (res && res.ok && res.data && Array.isArray(res.data.items)) ? res.data.items : [];
+    if (res && res.ok && res.data && Array.isArray(res.data.items)) {
+      _home3BdData = res.data.items;
+      _home3BdTotal = (res.data.pagination && typeof res.data.pagination.total === 'number')
+        ? res.data.pagination.total : null;
+      _home3BdLoaded = true;   // success — safe to cache until the next force-refresh
+    } else {
+      // Non-ok response: leave _home3BdLoaded false so the NEXT render (auto-refresh,
+      // visibility change, or manual refresh) retries instead of permanently showing
+      // an empty lane for what may just be an early/failed call (HOME2-b).
+      _home3BdData = [];
+    }
   } catch (e) {
     _home3BdData = [];
   }
-  _home3BdLoaded = true;
   return _home3BdData;
 }
 
@@ -7990,7 +8012,17 @@ function _home3RenderBdLane() {
   const el = document.getElementById('home3BdContent');
   if (!el) return;
   const items = _home3TopN(_home3BdData, 5);
-  if (!items.length) { el.innerHTML = '<div class="nba-empty">No seller prospects.</div>'; return; }
+  if (!items.length) {
+    if (!_home3BdLoaded) {
+      // The load failed or has not completed yet — never claim "no prospects"
+      // when we don't actually know that (HOME2-b).
+      const known = (typeof _home3BdTotal === 'number') ? (' — ' + _home3BdTotal + ' in Priority') : '';
+      el.innerHTML = '<div class="nba-empty">Could not load' + known + '.</div>';
+    } else {
+      el.innerHTML = '<div class="nba-empty">No seller prospects.</div>';
+    }
+    return;
+  }
   el.innerHTML = items.map((r) => {
     const clickable = !!r.entity_id;
     const title = r.owner_name || r.entity_name || '—';
@@ -8005,12 +8037,15 @@ function _home3RenderBdLane() {
   }).join('');
 }
 
+// Inbox lane data = canonicalInbox.items — the same /api/queue-v2?view=inbox
+// response the INBOX panel's own rail reads (loadCanonicalData(), app.js
+// ~6247). Never a second/different query, and never dailyBriefingSnapshot,
+// which carries no inbox_summary key on the live snapshot shape.
 function _home3RenderInboxLane() {
   const el = document.getElementById('home3InboxContent');
   if (!el) return;
-  const raw = (typeof dailyBriefingSnapshot !== 'undefined' && dailyBriefingSnapshot
-    && dailyBriefingSnapshot.inbox_summary && Array.isArray(dailyBriefingSnapshot.inbox_summary.items))
-    ? dailyBriefingSnapshot.inbox_summary.items : [];
+  const raw = (typeof canonicalInbox !== 'undefined' && canonicalInbox && Array.isArray(canonicalInbox.items))
+    ? canonicalInbox.items : [];
   const items = _home3TopN(_home3RankInboxItems(raw), 5);
   if (!items.length) { el.innerHTML = '<div class="nba-empty">Inbox is clear.</div>'; return; }
   el.innerHTML = items.map((r) => {
