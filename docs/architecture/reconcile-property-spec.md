@@ -179,10 +179,37 @@ change, not a second copy of the mistake.**
 **Trigger:** an INSERT on `leases` with a `parent_lease_id` (supersession, unchanged), OR any
 INSERT/UPDATE setting `is_active`/`lease_expiration`/`status`/`expiration_state`.
 **Inputs:** `lease_expiration`, `is_active`, `status`, `parent_lease_id`, and the new
-**confirmation state** — `leases.expiration_state` (`in_term` | `expired_unconfirmed` |
-`expired_confirmed` | `holdover_confirmed` | `renewed_confirmed`), `leases.expiration_evidence`
-(jsonb: evidence_type/source/reference/observed_date/recorded_by/note),
+**confirmation state** — `leases.expiration_state` (`in_term` | `expiration_unknown` |
+`expired_unconfirmed` | `expired_confirmed` | `holdover_confirmed` | `renewed_confirmed`),
+`leases.expiration_evidence` (jsonb: evidence_type/source/reference/observed_date/recorded_by/note),
 `leases.expiration_state_at`.
+
+**⚠️ SUPERSEDED IN PART 2026-09-18 (RECON2-b), same round it was reconciled.** Two defects found in
+RECON2's own classifier/enqueuer, fixed by `20260918120000_dia_recon2b_lease_expiration_evidence_fix.sql`
+(applied live):
+1. **`cms_closure` evidence was keyed on ANY `medicare_clinics.status IN
+   ('removed','closed','relocated')` row on the property — `status='removed'` is an import/list
+   state, 90% of the table (7,690/8,547), NOT a closure.** Measured: 1,489 of 1,494
+   `expired_confirmed` proposals fired on `cms_closure`, and **1,481 of those sit on a property
+   with an `is_operating=true` clinic row** — leases 13217/10060/12369/6721/8826 (top of the
+   rent-ranked list) among them. `dia_recon2_classify_expired_leases` now requires, for EVERY
+   `medicare_clinics` row on the property, `is_operating IS NOT TRUE AND status IN
+   ('closed','relocated')` — an operating clinic disqualifies `cms_closure` outright and the row
+   proposes `expired_unconfirmed` with `evidence_detail='clinic operating (CMS) — no expiration
+   evidence; holdover or renewal undetermined'` instead of silently carrying no note. Re-measured
+   live post-fix: `cms_closure` proposals **1,489 → 2**.
+2. **`expiration_state='in_term'` was being written for leases with NO `lease_expiration` on
+   file** (`NULL < current_date` is false in SQL, so "unknown" read as "confirmed current") — 3,801
+   rows, 2,334 active, backfilled to a new **`expiration_unknown`** state (added to the CHECK
+   constraint); the guard trigger now branches NULL → `expiration_unknown` before the `< current_date`
+   test.
+3. **The enqueue function had no `is_active` filter** — 563 of its first 1,000
+   `pending_updates` worklist rows sat on leases already `is_active=false` (superseded history).
+   Fixed (added `l.is_active=true`) and the 563 pre-existing rows closed `status='ignored'`,
+   ledgered, reversible. It also now ranks a lease whose property carries an operating CMS clinic
+   first — the cheapest case for an operator to confirm/refute.
+No fleet write to `is_active`/`expired_confirmed` happened at any point in RECON2 or RECON2-b — both
+rounds shipped classifier/worklist fixes only.
 **Write, two separate paths, deliberately:**
 - **The automatic guard** (`dia_recon2_lease_expiration_state_guard()`, trigger
   `trg_dia_recon2_lease_expiration_state_guard`) sets `expiration_state = 'expired_unconfirmed'`
