@@ -53,3 +53,18 @@ CC round inserts the successor from the CoStar values Scott read (tenant, expira
 **Confirmation bar from here:** two agreeing sources beyond the database — the CoStar lease record and the
 operator's own locator (DaVita / Fresenius) for the address — before any `expired_confirmed` is written. A CMS
 row alone, even `closed`, is one source, and this case shows it can be the wrong clinic.
+
+## Outcome — RECON2-c applied live (2026-09-18, verified round 39)
+
+| # | lease | state now | detail |
+|---|---|---|---|
+| 1 | 23273 Sierra Vista | `expired_unconfirmed`, active | untouched; 2 evidence rows (CoStar active, DaVita operating); Conflict held; twin 22471 ↔ 35849 on the R1 list |
+| 2 | 23506 DC | **`expired_confirmed`**, inactive | relocated to 920 Bladensburg Rd NE; 3 evidence rows |
+| 3 | 23259 Goldsboro | `holdover_confirmed`, active | **label to correct** → `renewed_confirmed` + successor once the CoStar date is read (RECON2-d / Q35) |
+| 4 | 6912 Cartersville | **`expired_confirmed`**, inactive | restaurant since 2019; 2 evidence rows |
+| 5 | 12599 Orlando | **`expired_confirmed`**, inactive | **successor 25432**, exp 2028-06-30, `parent_lease_id → 12599`, source `costar_field_check` |
+| 6 | 12678 Dixon | `holdover_confirmed`, active | as #3 |
+| 7 | 13058 Scranton | `holdover_confirmed`, active | as #3 |
+
+Fleet after: `expired_confirmed` 3 · `holdover_confirmed` 3 · `expired_unconfirmed` 2,447 active (48 of them on a
+property whose twin carries an operating clinic — `twin_operating`) · `expiration_unknown` 2,334 active.
