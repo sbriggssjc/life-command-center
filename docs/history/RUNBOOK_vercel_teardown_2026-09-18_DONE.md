@@ -1,4 +1,6 @@
-# Runbook — tearing down the retired Vercel deployment (`life-command-center-nine.vercel.app`)
+# Runbook — tearing down the retired Vercel deployment (`life-command-center-nine.vercel.app`) — ✅ EXECUTED 2026-09-18
+
+> **DONE (J13-teardown, Scott + Cowork, 2026-09-18).** Steps 3b → 3 → 4 executed by Scott (variable added on `tranquil-delight`, LCC Opps `service_role` key rotated on all four Railway services, project deleted); Step 4 proof measured by Cowork 16:50 UTC: `https://life-command-center-nine.vercel.app/` → **404 `DEPLOYMENT_NOT_FOUND`**. Step 5 (this move, the 11 banner rewrites, the fixture note, the rows) = Cowork round 38. ⚠️ `life-command-center.vercel.app` (no `-nine`) answers 200 with an unrelated third-party "Command Center" app — that subdomain was never ours; the 36 repo references to it are historical text. Moved here from `docs/os/` on completion; nothing below was reworded.
 
 > Preflight for this runbook: `docs/audits/J13_TEARDOWN_PREFLIGHT_2026-09-09.md` (backlog **J13-preflight**,
 > ✅ done). This runbook is backlog **J13-teardown**, 👤 Scott. **Do the steps in this order — reversing
