@@ -4,7 +4,8 @@
     "kind": "host",
     "retired": "2026-07-20",
     "replacement": "tranquil-delight-production-633f.up.railway.app (server.js mounts /api/*)",
-    "note": "The Vercel deployment retired when server.js became the single source of /api/* routing. Still live and still holds an LCC Opps service key, so it is a second writer, not just a dead link (P194)."
+    "note": "The Vercel deployment retired when server.js became the single source of /api/* routing. It kept answering (and building from main) and held an LCC Opps service key until Scott deleted the project on 2026-09-18 (J13-teardown; DEPLOYMENT_NOT_FOUND verified 16:50 UTC; key rotated the same day). Note: the bare life-command-center.vercel.app subdomain now serves an unrelated third-party app — it was never ours.",
+    "torn_down": "2026-09-18"
   },
   {
     "id": "docs/os/architecture/",

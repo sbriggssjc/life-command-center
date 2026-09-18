@@ -37,7 +37,7 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-reconcile-2, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT, CANON-OWNERSHIP1 | 2026-09-16 | Arc complete through GOVDEED3 (gov #406); **the gov deed writer runs from GitHub Actions (weekly Mon 06:00 UTC) — verify 09-21 dateless = 0**; CANON-OWNERSHIP1 👤 confirmation open; sale-party conflicts 1,290 a review queue |
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k LIVE** (LCC PR #2506): 218 attested supersessions, 40/43 pairs to sponsor, 16/16 controls untouched, reversible; sponsor-as-edge = future work |
 | **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, -harris-b/-c/-d, -ledger-order, MCP1 | 2026-09-17 | **41 assessor-sourced owners live** (Philadelphia 20, Harris 21 of 50); Harris is done except the 27 situs-gap properties → §P10a is the lane's next unit; next free-bulk jurisdiction after that |
-| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS-consolidate-lcc, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift, RECON1, RECON1-b, RECON2, RECON2-b, RECON2-render, HOME2-fix, HOME2-b, HOME2-c, PERF-SPQ1, PERF-SPQ1-b, PERF-SPQ1-c, PERF-SPQ2, RECON2-c, SIDEBAR-LEASE1, VERCEL-LIVE1 | 2026-09-18 | **Today renders again** — PERF-SPQ1-c's RPC applied by Cowork (merged-not-applied); cold-load race → `PERF-SPQ2`; leases 2–7 read, sidebar wrote no lease → `SIDEBAR-LEASE1`; Q1 clean; HOME2-c open; J13-teardown: one variable, rotate, delete |
+| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS-consolidate-lcc, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift, RECON1, RECON1-b, RECON2, RECON2-b, RECON2-render, HOME2-fix, HOME2-b, HOME2-c, PERF-SPQ1, PERF-SPQ1-b, PERF-SPQ1-c, PERF-SPQ2, RECON2-c, RESOLVER1, SIDEBAR-LEASE1, VERCEL-LIVE1 | 2026-09-18 | Vercel torn down 2026-09-18 (J13-teardown ✅); Today renders; `RECON2-c` prompted (six field-checked leases); resolver measured live → `RESOLVER1`/Q34; HOME2-c, PERF-SPQ2, SIDEBAR-LEASE1 open |
 | **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–5, INVENTORY1, INVENTORY1b, INVENTORY2, INVENTORY-process, REMEDIATION-2026-05, REPO1, ROADMAP, PROCESS-CC-DOCS, PROCESS-MERGE-CLOBBER, GUARD-CLOBBER1, PROCESS-ROW-CELLS, PROCESS-PARKING-LOT, DEPLOY2-coverage, DEPLOY2-stale-body | 2026-09-18 | **PR #2563 reverted STATUS + backlog to a week-old snapshot (7 entries / 11 rows lost) — restored round 26; `GUARD-CLOBBER1` live on `main` (PR #2566), manual per-turn diff retired round 28**; DEPLOY2 live + CI; parking lot triaged; EDGE-GATES1 live |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
 | **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
@@ -52,6 +52,33 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
 
 ---
+
+## 2026-09-18 — Round 38 (Cowork): **Vercel is gone — `DEPLOYMENT_NOT_FOUND` verified, J13-teardown closed, banners rewritten, runbook archived**; the resolver Scott asked about is live and working (3,795 provenance rows, last today) with one dormant loop (`RESOLVER1`, Q34); `RECON2-c` prompted
+
+**J13-teardown / VERCEL-LIVE1 — done.** Scott: `TEAMS_INTAKE_WEBHOOK_URL` added, LCC Opps key rotated on all four
+services, project deleted, value-bearing exports deleted. Cowork 16:50 UTC: `https://life-command-center-nine.vercel.app/`
+→ **404 `DEPLOYMENT_NOT_FOUND`**. Step 5 in this round: runbook → `docs/history/RUNBOOK_vercel_teardown_2026-09-18_DONE.md`
+(allowlist entry repointed), 11 `STALE (DOCMAP…)` banners now read *torn down 2026-09-18 … fails at the first request*,
+fixture note dated, CLAUDE.md banner closed, CURRENT-STATE/backlog/checklist pointers moved. One surprise: the bare
+`life-command-center.vercel.app` answers 200 — an unrelated third-party "Command Center" app; never ours, 36 historical
+references, no caller. Q3 and Q30 close.
+
+**The resolver (`gracious-radiance`) — Scott's question: was it built and connected as designed?** Mostly yes.
+`resolver/README.md` and `ROLLOUT_STATUS.md` W4.1–W4.4 (2026-07-30/31) define it: a stateless FastAPI that scores
+owner↔SF, owner↔owner and contact pairs (Fellegi-Sunter over libpostal-normalised names/addresses, embedding
+blocking), writes nothing, and — W5.1 channel A — extracts parties from sale notes. Measured today: `/health` ok with
+all backends; `ORE_USE_RESOLVER = on`, so it confirms every owner-reconcile merge; `field_provenance` has **3,795
+`splink_*` rows, the newest today**. Two gaps: **`RESOLVER_RETRAIN_LOOP` is `partial`** because `RESOLVER_URL` was
+never set on the Dialysis_DB edge secrets, so `/train` no-ops and the labelled corpus is frozen at 335 rows since
+2026-08-14 (Q34, one secret); and `/extract-parties` exists while RECON1's sale carries no parties — whether R3 ever
+calls channel A is the CC question. Row `RESOLVER1`; CURRENT-STATE §1 already lists the service (round 37).
+
+**Prompted:** `RECON2-c` — the classifier rules from the Sierra Vista failure, Scott's seven field checks as
+evidence rows, two plain confirmations (DC, Cartersville), four confirm-with-successor (Orlando 2028-06-30; the other
+three `expiration_unknown` until Scott reads the CoStar dates), Sierra Vista held as Conflict.
+
+**Open for Scott:** send `RECON2-c`; Q34 (one edge secret); Q32 (lane placement); the CoStar expiration dates for
+Goldsboro, Dixon, Scranton when convenient. **Parking lot:** +PL-44…46, triaged. Next free: PL-47.
 
 ## 2026-09-18 — Round 37 (Cowork): `PERF-SPQ1-c` reconciled — **its RPC was merged but never applied; Cowork applied it and Today renders again** (route 200 in 1.5 s; the cold-load race is `PERF-SPQ2`); the Vercel env audit is finished from the raw lists — **one variable to add, then rotate, delete**; a fourth Railway service (the resolver) added to runtime truth
 

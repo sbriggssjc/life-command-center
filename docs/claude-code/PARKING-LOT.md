@@ -72,3 +72,6 @@ Sibling ledgers: `SB notes/TRIAGE.md` (Scott's in-app observations — richer in
 | PL-41 | 2026-09-18 | → backlog `PERF-SPQ2` — *the same route measured 1.5 s alone and 16 s during page load: the bottleneck is the view under concurrency, not the route (Cowork)…* |
 | PL-42 | 2026-09-18 | → runbook Step 3b + checklist Q3 ④ — *Railway Raw-Editor exports carry values; five such docx now sit in a synced folder (gitignored, never committed) (Cowork)…* |
 | PL-43 | 2026-09-18 | → CURRENT-STATE §1 (done) — *a fourth Railway service, `gracious-radiance` (owner resolver), was not in the runtime-truth row (Cowork, from the env export)…* |
+| PL-44 | 2026-09-18 | → backlog `**J13-teardown**` (recorded) — *`life-command-center.vercel.app` (no `-nine`) serves a third-party "Command Center" app; 36 repo references point at a stranger's site (Cowork, teardown proof)…* |
+| PL-45 | 2026-09-18 | → backlog `RESOLVER1` — *the resolver's `/extract-parties` (W5.1 channel A) exists while RECON1's sale 15042 has no buyer/seller — R3 never calls it? (Cowork)…* |
+| PL-46 | 2026-09-18 | → checklist Q34 — *`RESOLVER_RETRAIN_LOOP` has read `partial` since W4.4 for want of one edge secret; labels frozen at 335 since 08-14 (Cowork)…* |

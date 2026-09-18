@@ -39,7 +39,8 @@
 
 ## ⚠️ PRODUCTION RUNS ON RAILWAY (Vercel retired 2026-07-20)
 
-> 🚨 **Measured 2026-09-17 (Cowork round 29): Vercel is NOT gone.** `life-command-center-nine.vercel.app` still
+> ✅ **Torn down 2026-09-18 (J13-teardown): `life-command-center-nine.vercel.app` → `DEPLOYMENT_NOT_FOUND`, project deleted, LCC Opps key rotated.** The paragraph below is the record of why it mattered; the lesson stands.
+> 🚨 **Measured 2026-09-17 (Cowork round 29): Vercel was NOT gone.** `life-command-center-nine.vercel.app` still
 > serves a **stale build** in production (functions in iad1) and was the window Scott used daily; it calls
 > `ai-copilot` from the browser and from Node. "Retired" meant *we stopped deploying to it*, not *it stopped
 > answering*. Until backlog `VERCEL-LIVE1` closes, treat any observation from the app as "which host?" first,
