@@ -1,0 +1,861 @@
+Received: from DS6PR05MB546734.namprd05.prod.outlook.com (2603:10b6:8:4c1::21)
+ by LV3PR05MB10982.namprd05.prod.outlook.com with HTTPS; Fri, 18 Sep 2026
+ 11:41:35 +0000
+ARC-Seal: i=4; a=rsa-sha256; s=arcselector10001; d=microsoft.com; cv=pass;
+ b=IGUK49J/m6/58k7YMhGUCfu/9EsgjqQfRDtmGncSdSkpK1KFD+ZX/p1koqn4zXolt+zjiejmfzgokrIyCyxkvPT26CQddLe6VgEiY8/x67XHTIpVMwsuaYbh4/mOft3FjWKjEO/Tzxa4cNtEFGzX/TrZk7v+YlzkuyE2YsjYqHIBzJrVCdrs7ZL4xQIVou4O9Hgrl0dxwX7cHojSNgDEH0hi12eHtGU8xwU0SzHSxYa/HhQtAfA78SUDuPosJJq0njCDsbGh7cW6QHqdMsk1aZZyvtlH2cCboM/7K+kdDtM0xT2YDLjUOcQgfrN/4OPhUTU6sK8h5oI/loGncx8HMw==
+ARC-Message-Signature: i=4; a=rsa-sha256; c=relaxed/relaxed; d=microsoft.com;
+ s=arcselector10001; h=From:Date:Subject:Message-ID:MIME-Version;
+ bh=Z8BnfURPNfqHh8Vw4B5MnVHx8AcVhCH1sTDaHvMfeAs=;
+ b=kZzTtDOBaJMKN9S3qnSn8fkzkzrYl4Fmm6iQz7VRVvbEl/Y9jxXb9oRJvb/QVFFlZIZqCHhRdsWe6df0TMamu6/+mK//AIhai0s3x1jlazGNj+m8JaeNCekvq+J6pHv0pRJcUfuftkIMTKpVCRUu/RR17J4T79MeRW53cf8EEmI16lKJpSuAWDzcmMG9xz4PQthKurA6R1HQIvr+Jo2RzmusHhKDVfkJrHrgQ95CD9pkk2fH7NtHsGCSJLmFXAXi0pBbWsP5c8hkFrHrqQI98a0HhStqea8HRNaWnSm1OxZdSwyYLZQOQDuceDve8Oz54jHVgo7+mwYKeeZD3i0zaA==
+ARC-Authentication-Results: i=4; mx.microsoft.com 1; spf=softfail (sender ip
+ is 170.10.128.131) smtp.rcpttodomain=northmarq.com smtp.mailfrom=gmail.com;
+ dmarc=fail (p=quarantine sp=reject pct=100) action=quarantine
+ header.from=github.com; dkim=fail (body hash did not verify)
+ header.d=github.com; arc=pass (0 oda=0 ltdi=0 93)
+Received: from SJ0PR03CA0146.namprd03.prod.outlook.com (2603:10b6:a03:33c::31)
+ by DS6PR05MB546734.namprd05.prod.outlook.com (2603:10b6:8:4c1::21) with
+ Microsoft SMTP Server (version=TLS1_2,
+ cipher=TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384) id 15.21.428.13; Fri, 18 Sep
+ 2026 11:41:31 +0000
+Received: from BY1PEPF000264B4.namprd02.prod.outlook.com
+ (2603:10b6:a03:33c:cafe::87) by SJ0PR03CA0146.outlook.office365.com
+ (2603:10b6:a03:33c::31) with Microsoft SMTP Server (version=TLS1_3,
+ cipher=TLS_AES_256_GCM_SHA384) id 15.21.382.14 via Frontend Transport; Fri,
+ 18 Sep 2026 11:41:31 +0000
+Authentication-Results: spf=softfail (sender IP is 170.10.128.131)
+ smtp.mailfrom=gmail.com; dkim=fail (body hash did not verify)
+ header.d=github.com;dmarc=fail action=quarantine
+ header.from=github.com;compauth=none reason=452
+Received-SPF: SoftFail (protection.outlook.com: domain of transitioning
+ gmail.com discourages use of 170.10.128.131 as permitted sender)
+Received: from us-smtp-inbound-delivery-1.mimecast.com (170.10.128.131) by
+ BY1PEPF000264B4.mail.protection.outlook.com (10.167.242.121) with Microsoft
+ SMTP Server (version=TLS1_3, cipher=TLS_AES_256_GCM_SHA384) id 15.21.451.8
+ via Frontend Transport; Fri, 18 Sep 2026 11:41:30 +0000
+ARC-Authentication-Results: i=3;
+	relay.mimecast.com;
+	dkim=pass header.d=github.com header.s=pf2023 header.b=ZJtTvmGp;
+	arc=pass ("google.com:s=arc-20260327:i=2");
+	spf=pass (relay.mimecast.com: domain of "sbriggssjc+caf_=sabriggs=northmarq.com@gmail.com" designates 74.125.228.99 as permitted sender) smtp.mailfrom="sbriggssjc+caf_=sabriggs=northmarq.com@gmail.com";
+	dmarc=pass (policy=quarantine) header.from=github.com
+ARC-Message-Signature: i=3; a=rsa-sha256; c=relaxed/relaxed;
+	d=dkim.mimecast.com; s=201903; t=1789731690;
+	h=from:from:reply-to:reply-to:subject:subject:date:date:
+	 message-id:message-id:to:to:cc:cc:mime-version:mime-version:
+	 content-type:content-type:list-id:list-post:dkim-signature;
+	bh=Z8BnfURPNfqHh8Vw4B5MnVHx8AcVhCH1sTDaHvMfeAs=;
+	b=b1I6CbOrRNLw6o6n7p7URBIrZVtYBFjTwICkxveS8WKAyWm04eA+OAdOhKB14dJWe01E12
+	4PxDDWP5I9II2SeQZZqNwubUWzREYV/+f+HGAbiQCa9kNSjWQwsyECeKLymeiE47ciVdA9
+	has+rT+xlaeepZ9im4QBxhg0Y/WcBwq3s/Cgaam13Hziukh2dr+3uQUSR9/GFTvWaZ6Hba
+	VxhajoQf4PcOdhbwI0MVJfqJst9yyh8dFbonhqUPcXwgtEaYWbx2bVfglzaNq/hzbnHMNv
+	b2MqTFeawreUnTJ4L/OmTov2HFmGeEDa5JW2r3LxfFCvfyjvSeINMjVMen/IdA==
+ARC-Seal: i=3; a=rsa-sha256; d=dkim.mimecast.com; s=201903; cv=pass;
+	t=1789731690;
+	b=LHsw7KYuczQEOsVCL3+xFI1/6wAv4m9U3Of6kvPRAtq/ExbCcDVxZ6RUlyHke+NrRQzquB
+	wXaYSNb/Nbwr2e+N0YfJ7WSViuk+Ov8YVDju3Ruukjx4tNNFKUY9eWOD/HtdqI1JPeNJil
+	nS3DsqHV4SfWVtLlIV0MZNehw+BE5ivu2DFYODiqKUEV7kI8ifvSxHGdwofhVm6AtO+Y/l
+	wL6df4B6YtyMz8DKc66m5lT0K9j6v5yYwUN0jVOnHeNVwLF3y2rrRQz2/Q/KLgjYA14gjv
+	Xldb3XXpENq3mK2ChMDRWi461EEaNnYYuP4srURRcRJkhgeDf+Iouah/xB4VXQ==
+Authentication-Results-Original: relay.mimecast.com;	dkim=pass
+ header.d=github.com header.s=pf2023 header.b=ZJtTvmGp;	arc=pass
+ ("google.com:s=arc-20260327:i=2");	spf=pass (relay.mimecast.com: domain of
+ "sbriggssjc+caf_=sabriggs=northmarq.com@gmail.com" designates 74.125.228.99
+ as permitted sender)
+ smtp.mailfrom="sbriggssjc+caf_=sabriggs=northmarq.com@gmail.com";	dmarc=pass
+ (policy=quarantine) header.from=github.com
+Received: from mail-ed2-f35.google.com (mail-ed2-f35.google.com
+ [74.125.228.99]) by relay.mimecast.com with ESMTP with STARTTLS
+ (version=TLSv1.3, cipher=TLS_AES_256_GCM_SHA384) id
+ us-mta-665-FgLyGb0HMjKrSM3snK2y0w-1; Fri, 18 Sep 2026 07:41:27 -0400
+X-MC-Unique: FgLyGb0HMjKrSM3snK2y0w-1
+X-Mimecast-MFC-AGG-ID: FgLyGb0HMjKrSM3snK2y0w_1789731686
+Received: by mail-ed2-f35.google.com with SMTP id 4fb4d7f45d1cf-6aa13e194easo981354a12.1
+        for <sabriggs@northmarq.com>; Fri, 18 Sep 2026 04:41:26 -0700 (PDT)
+ARC-Seal: i=2; a=rsa-sha256; t=1789731686; cv=pass;
+        d=google.com; s=arc-20260327;
+        b=hpcNEkg1bogog6KSHlJhYL3zMVPV/Vi1nnB1dz6HTTvt6SEcyeB7qiAKeCn/gPhfL4
+         HXEhq0cCbnnmlpwoqk66JEsRpBzexU55sJR0M27M9AFlwnG7z8Yco0BCUPidGePx8CJb
+         J6pZdwRyF7OX+jPH8/vC3ODfzxLcAVMviekDE1HOT2YJC71I54JJAV80stAft6Dt7L01
+         UkbFMJiOmdBF6sNEtfshdD8lYdkZLqLMT8fDiZYnUZlOllKUlvxdCSkw67j4acFzxIv1
+         lhKLoGI09zDJIneyHV/UEwPU+k1T2E+vWI9/iQwBRSnS0Egffr8OLLvTOtnrwL7wOLvk
+         aiRA==
+ARC-Message-Signature: i=2; a=rsa-sha256; c=relaxed/relaxed; d=google.com; s=arc-20260327;
+        h=mime-version:from:to:cc:subject:message-id:list-archive:list-post
+         :reply-to:precedence:date:list-id:dkim-signature:delivered-to;
+        bh=NWYageIrI0nhuC6vdq3iMWKUcr9BSkW2bVEdjhzQj74=;
+        fh=aCZn9bbQP2zrEdB2FaxUQ+2nFk/5aLCg/V0XrWPX0TU=;
+        b=hm096fMZFkgJw2NoofKWwjYkQsISlvUOLC8/75ZyspHRtRIbpQKskugj5Yk+j7tVjK
+         +BcpUp9YzLRt8/JT1NfNpJvzmWyvB4NF1ZYNM9BJd5oe/d/da20I6rSaNiRnj1EBBMF4
+         cWhc6NqBQgRyhBq24BNivzq4in2eEYyAxnv+HJdDFvXZpNmFbps4J7KZZD445upJjUmU
+         5pHbyWc4Qi1bRMVGtCU3txUwn1WrFQkLITCLAcZIHZMSWcYU498xJaQt9k3Xzb39gDlD
+         Haqbjyo0Jj57CdgNQ3TSCyajrWd8xFJabe2B9BSXUdl8+GIIqjnrCANBhti6buqRZDw0
+         Ad4A==;
+        darn=northmarq.com
+ARC-Authentication-Results: i=2; mx.google.com;
+       dkim=pass header.i=@github.com header.s=pf2023 header.b=ZJtTvmGp;
+       spf=pass (google.com: domain of notifications@github.com designates 192.30.252.196 as permitted sender) smtp.mailfrom=notifications@github.com;
+       dmarc=pass (p=QUARANTINE sp=REJECT dis=NONE) header.from=github.com
+X-Google-DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=1e100.net; s=20260707; t=1789731686; x=1790336486;
+        h=mime-version:from:to:cc:subject:message-id:list-archive:list-post
+         :reply-to:precedence:date:list-id:content-type:dkim-signature
+         :delivered-to:x-forwarded-for:x-forwarded-to:x-gm-message-state:from
+         :to:cc:subject:date:message-id:reply-to:content-type;
+        bh=NWYageIrI0nhuC6vdq3iMWKUcr9BSkW2bVEdjhzQj74=;
+        b=WHfK27rpFX1Cwry06iw8tfZp3UeMh8JwLUN7YFUAslWGl/2V1nC7oMFK43d3iDbo+0
+         Mm7fhgocoTmPOUqwernur8UTknyS2x/QMIlw5AiCr/i2XaVJ6yZCxfETi8NuC62/rcat
+         leBlc0mUDDoQ3eaVgBMysI3gtrg2pJPhrEwurZPS1oEm66MfBF+UfiuMGuzjYwpYACA7
+         x6lIVfK7OWaoXm4VSk9/Rz8AgPn1V637D2iNaF1ex/+PK0FEuc6fyR0XPL+YfwdfE2S5
+         y7DOCcugDaCsVhc4dWJ5Jcj0+yIJ9wveswxO/PdgEU18uvkCVxKiwQASLcXIzv8OPK50
+         AMTA==
+X-Forwarded-Encrypted: i=2; AKwUvBzeUef7BandJDYibJICYx0BfP1zxbKDWIMYSXyAOoRk1lWtXELScm2OqhjSCA8lDLqNRt3Yofc/Ow==@northmarq.com
+X-Gm-Message-State: AFuF++nf0Mg6Qti5Wjkc/3T7iTDlM1Y3aHhdvBLj5n6AF8M/78oPJyf0
+	Pp0LZF9z3EVez4u8xNPWu8XxBpLO/5XasNEMgUkta0BmJbOxNqacsGBhLnPcDOUYfFEApgSGncC
+	HY5C2Z/HA87lyCQqPNleSG6oJucmD3r0G2kd2kmx/UlOLsR+2kx0c3La29y15Lg==
+X-Received: by 2002:a05:6402:3203:b0:6aa:7d3:7cb0 with SMTP id 4fb4d7f45d1cf-6aa5782eb1cmr1229362a12.19.1789731685699;
+        Fri, 18 Sep 2026 04:41:25 -0700 (PDT)
+X-Forwarded-To: sabriggs@northmarq.com
+X-Forwarded-For: sbriggssjc@gmail.com sabriggs@northmarq.com
+Delivered-To: sbriggssjc@gmail.com
+Received: by 2002:a98:db9b:0:b0:274:3792:77d1 with SMTP id w27csp8975170eil;
+        Fri, 18 Sep 2026 04:41:23 -0700 (PDT)
+X-Forwarded-Encrypted: i=2; AKwUvBwx27HuS4FeUqR7GGehOy9axNmWe1O9WVvDt6tgMc0CUTmuEeKE8sfOKHx2SYCo6cL1plm12lTalY6J@gmail.com
+X-Received: by 2002:ac8:58c6:0:b0:530:cbf7:6bb7 with SMTP id d75a77b69052e-5329e4f514fmr36914501cf.49.1789731683498;
+        Fri, 18 Sep 2026 04:41:23 -0700 (PDT)
+ARC-Seal: i=1; a=rsa-sha256; t=1789731683; cv=none;
+        d=google.com; s=arc-20260327;
+        b=HTWCe3cgralkmJr7G78Q2yJf1NMhQG11WtyU5iWwNYMgLPRnV9BDOXpnv1X6vfzrUc
+         FoVBw4zfrZbsCPNfCI/lXZTZKb22Y9Ap8xRv0ryEznfFxzYXLZP0+Wsar3sMZbWNyE6m
+         W5Ejmxns1v1wupRpt9arIXMLTApAPP14rynx06u0nj60+rv5mabqx6lgKoZGW9VaNGe4
+         Bkk/S9cxGkSUhPDcpMJiU/m/oRshIOi4huTg0Uk01p2TYhkuMmvhNI/IilPYFh8VN1vc
+         RhS4m3ZOfx6EE+JmTRijksvkLVfRk7bwACBFYgcUCvFXGuPYYVovaK0jpnba3Fr8pEu6
+         iHzw==
+ARC-Message-Signature: i=1; a=rsa-sha256; c=relaxed/relaxed; d=google.com; s=arc-20260327;
+        h=mime-version:from:to:cc:subject:message-id:list-archive:list-post
+         :reply-to:precedence:date:list-id:dkim-signature;
+        bh=NWYageIrI0nhuC6vdq3iMWKUcr9BSkW2bVEdjhzQj74=;
+        fh=zx9sLxX6d0D7WARs+mozYfLWReOb8+V5Mq0DW2mRyL0=;
+        b=GTwti0RgBcJSISwY/CjGbObFbbusrZbeVP1OwDcFVt9CCGslreImFhLfdb5KCOigcS
+         WEgIDcw+vVgbHn5NhygDvC48Nvff5iLLTCTe/qZ+QtjYo0uXX9uRTYb/FWHnh6pkw6L6
+         Ilmg3YX3MSBWN66NcBGzvRPMTiMHStH/eIfY7w8vX8I+gCzkn7XmKJi4OYsBe4lNF2O7
+         Bka/wT71HtYSNnVEAEaSqpA6gYIaK4xyhgZTD2nIehoMT/67AhhtNYDRNdB6OQhS+X1/
+         UiNLR437txiN6WLWYC5skzyE1Fk0tnI9DseVYHDUXzw7KNdHKzFJd5ouHHv8z7sUPKA3
+         J+Cw==;
+        dara=google.com
+ARC-Authentication-Results: i=1; mx.google.com;
+       dkim=pass header.i=@github.com header.s=pf2023 header.b=ZJtTvmGp;
+       spf=pass (google.com: domain of notifications@github.com designates 192.30.252.196 as permitted sender) smtp.mailfrom=notifications@github.com;
+       dmarc=pass (p=QUARANTINE sp=REJECT dis=NONE) header.from=github.com
+Return-Path: sbriggssjc+caf_=sabriggs=northmarq.com@gmail.com
+Received: from out-5.smtp.github.com (out-5.smtp.github.com. [192.30.252.196])
+        by mx.google.com with UTF8SMTPS id d75a77b69052e-532a19e49e0si12924871cf.287.2026.09.18.04.41.23
+        for <sbriggssjc@gmail.com>
+        (version=TLS1_3 cipher=TLS_AES_256_GCM_SHA384 bits=256/256);
+        Fri, 18 Sep 2026 04:41:23 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=github.com;
+	s=pf2023; t=1789731683;
+	bh=NWYageIrI0nhuC6vdq3iMWKUcr9BSkW2bVEdjhzQj74=;
+	h=List-Id:Date:Reply-To:List-Post:List-Archive:Subject:Cc:To:From:
+	 From;
+	b=ZJtTvmGpW0t/V5kYD2p1AZizo4eJDB8llh1mQwXsDdsqsfuwNmsLquzGcX5/7ajzc
+	 HWhnD2Pi686bj5/68U1P5rxFPbFV2YWp/dVXU+XB0FDbXihCxwwa4+y/+SjaXx0KBI
+	 bhkY5kfSCTp2MEiYYYQ19QPZK0w+lajyCypmJE5M=
+Received: from localhost (hubbernetes-node-d57baeb.va3-iad.github.net [10.48.12.95])
+	by smtp.github.com (Postfix) with UTF8SMTPSA id 449E37804C3
+	for <sbriggssjc@gmail.com>; Fri, 18 Sep 2026 04:41:23 -0700 (PDT)
+List-Id: sbriggssjc/life-command-center
+ <life-command-center.sbriggssjc.github.com>
+Date: Fri, 18 Sep 2026 04:41:22 -0700
+Precedence: list
+X-Github-Sender: sbriggssjc
+Reply-To: sbriggssjc/life-command-center
+ <life-command-center@noreply.github.com>
+List-Post: noreply@github.com
+List-Archive: https://github.com/sbriggssjc/life-command-center
+Message-Id: <sbriggssjc/life-command-center/check-suites/CS_kwDORTlu4M8AAAAWSNXr-Q/1789731662@github.com>
+X-Github-Recipient: sbriggssjc
+X-Github-Reason: ci_activity
+X-Github-Notify-Platform: notifyd
+Subject: =?utf-8?q?[sbriggssjc/life-command-center]_Run_failed:_DEPLOY2_=E2=80=94_?= =?utf-8?q?merged-migration_application_check_-_main_(6656f86)?=
+Cc: "Ci activity" <ci_activity@noreply.github.com>
+To: "sbriggssjc/life-command-center"
+ <life-command-center@noreply.github.com>
+From: "sbriggssjc" <notifications@github.com>
+X-Mimecast-Spam-Score: -98
+X-Mimecast-MFC-PROC-ID: DirSImnpLTn1j_pAvRyV1xSfPTxRA-y1e1BU7GJ9rGU_1789731686
+Content-Type: multipart/alternative;
+ boundary="part_9d5db4d0981ddb70be13289cfabd749f64cdd029cb7d47ee906a1826a5351448"; charset=UTF-8
+X-MS-Exchange-Organization-ExpirationStartTime: 18 Sep 2026 11:41:31.1606
+ (UTC)
+X-MS-Exchange-Organization-ExpirationStartTimeReason: OriginalSubmit
+X-MS-Exchange-Organization-ExpirationInterval: 1:00:00:00.0000000
+X-MS-Exchange-Organization-ExpirationIntervalReason: OriginalSubmit
+X-MS-Exchange-Organization-Network-Message-Id: 4ec0c083-9f1e-41ac-697e-08df1579c8a8
+X-EOPAttributedMessage: 0
+X-EOPTenantAttributedMessage: fccf69d3-58a4-4c10-a59d-14937a5f5d3f:0
+X-MS-Exchange-Organization-MessageDirectionality: Incoming
+X-MS-PublicTrafficType: Email
+X-MS-TrafficTypeDiagnostic: BY1PEPF000264B4:EE_|DS6PR05MB546734:EE_|LV3PR05MB10982:EE_
+X-MS-Exchange-Organization-AuthSource: BY1PEPF000264B4.namprd02.prod.outlook.com
+X-MS-Exchange-Organization-AuthAs: Anonymous
+X-MS-Office365-Filtering-Correlation-Id: 4ec0c083-9f1e-41ac-697e-08df1579c8a8
+X-MS-Exchange-AtpMessageProperties: SA|SL
+X-MS-Exchange-Organization-SCL: -1
+X-MS-Exchange-Organization-BulkCategory: Promotions
+X-Microsoft-Antispam: BCL:4;ARA:13230040|12012899012|13102899012|7049299003|3109299003|13012899012|7093399015|1032899013|82310400026|5082899009|6062899009|35002699018|7149299003|5062899012|3092899012|3072899012|2092899012|43022699015|69100299015|4092899012|5113699003|3113699003|19002099009|5063699009|11063799006|10067099003|57112099003|55112099003|18002099003|16102099003|2066899003|8096899003|13003099007|43062017;
+X-Forefront-Antispam-Report: CIP:170.10.128.131;CTRY:US;LANG:en;SCL:-1;SRV:;IPV:CAL;SFV:SKN;H:us-smtp-inbound-delivery-1.mimecast.com;PTR:us-smtp-inbound-delivery-1.mimecast.com;CAT:NONE;SFS:(13230040)(12012899012)(13102899012)(7049299003)(3109299003)(13012899012)(7093399015)(1032899013)(82310400026)(5082899009)(6062899009)(35002699018)(7149299003)(5062899012)(3092899012)(3072899012)(2092899012)(43022699015)(69100299015)(4092899012)(5113699003)(3113699003)(19002099009)(5063699009)(11063799006)(10067099003)(57112099003)(55112099003)(18002099003)(16102099003)(2066899003)(8096899003)(13003099007)(43062017);DIR:INB;
+X-MS-Exchange-CrossTenant-OriginalArrivalTime: 18 Sep 2026 11:41:30.8664
+ (UTC)
+X-MS-Exchange-CrossTenant-Network-Message-Id: 4ec0c083-9f1e-41ac-697e-08df1579c8a8
+X-MS-Exchange-CrossTenant-Id: fccf69d3-58a4-4c10-a59d-14937a5f5d3f
+X-MS-Exchange-CrossTenant-AuthSource: BY1PEPF000264B4.namprd02.prod.outlook.com
+X-MS-Exchange-CrossTenant-AuthAs: Anonymous
+X-MS-Exchange-CrossTenant-FromEntityHeader: Internet
+X-MS-Exchange-Transport-CrossTenantHeadersStamped: DS6PR05MB546734
+X-MS-Exchange-Transport-EndToEndLatency: 00:00:04.2350820
+X-MS-Exchange-Processed-By-BccFoldering: 15.21.0406.000
+X-Microsoft-Antispam-Mailbox-Delivery:
+	ucf:0;jmr:0;auth:0;dest:I;ENG:(910005)(944490095)(944506478)(944626604)(920097)(930201)(20251009189)(140003);
+X-Microsoft-Antispam-Message-Info:
+	=?utf-8?B?T2hnN1V6SzNSZGpvc3k1QnRDVFpFZGREZHdEYkcydGgrV0NWR2Frb1ozRVZF?=
+ =?utf-8?B?c09sSlZ1NkpsNzhaWVg5anJMUzVSU24ra1JPZjg0anVCWkpmVExUZlFPeUpu?=
+ =?utf-8?B?dTYrODRINVVRbTgyWVVEWVhMck5McTVueHZkRHcyb2tlTW9FSTBzOWVuTjBJ?=
+ =?utf-8?B?ajJNZjJtUStsSnVES0pCbkFGOWN6WDl6ZGVYOUJiU0x4TmptUnl2QjZqc2g0?=
+ =?utf-8?B?OUp5S0dwL01sVVB0SXdZRjRaZTZDSmhWZEVtN0d2TmJFVk5KS0c3QUdtMUZ4?=
+ =?utf-8?B?MGNEZUlVVzNLVUpJWlRYaTU5QzFCamJ2MkM5TGl0ZDNIMWFpazllWXlHQXFv?=
+ =?utf-8?B?NXgydFVydGhvMjRhYWFDVzVhVEdiS0hpNkdyR2IvU0pDN3FvalNFaVdVQzds?=
+ =?utf-8?B?bm93NjFWeGthOXhWUnVPb0Q3Y3dRQ0FqRUtaSm9uTHJTRXVCSDVyaTg0RzRh?=
+ =?utf-8?B?QXlvcGRCWXhXeVJQYXdwTWQ3TzI3RXYrd1VUUDU4R3RpekdjNUFMaXlsVXlC?=
+ =?utf-8?B?Vmt5UFU4d05zNzdDd0w4ZkFhaFJ4SU5pZjM4N2JGZXpBTk44eE9VK0hCbEp1?=
+ =?utf-8?B?cGdmRkxwa2k3K1Zqa0xoNHhQRVE3UmkycEh5eXlLYjJKTEpkZWJhZlNUdGdK?=
+ =?utf-8?B?dFNNUFFOMlBIQXJXZkcrYXFCUGpxWDVpRFdsQVhmYjZDNmtuU2FtT2JCRzNE?=
+ =?utf-8?B?OGltaEY0VHkzQmlDRnJkWU04dE5LaG4xTkJad3k1M0Zzb2s3Z1h0Tng4Mjc5?=
+ =?utf-8?B?QldXSUtoKzEreVdyUmhtcklJelg3am55YWE1TXE4OHZwcW9pRGluNkpaVjNB?=
+ =?utf-8?B?WEdZdVdJM0xnblVKU2UrUVlBd2ZFUnJiNEZmMmQ5MHJzcHhYdHJKbkpzdzZM?=
+ =?utf-8?B?QWZ1ZHpkcXRrNnZPbUdoMk5UcTgzU296RXBpZ1VhOUhoWUhqcnZLc0dpUUdU?=
+ =?utf-8?B?Ry9mUUdIT0tVblUrajRMQ04wU3drd0pzc3U5UGkvcDZWVU5VMndrOG1pZWFm?=
+ =?utf-8?B?bE1yMnpzdlFjT0N5czV5NlBKM3Y2aWFRRG9jTmJTVmpKS1gxMVZxM2xqTEJa?=
+ =?utf-8?B?KzJNQUdkUElvRWVkQWgySlVBaUl2d2RuU2p6QmNMZjJCVDdnRjl3c1dtdEhk?=
+ =?utf-8?B?S2Nad0F5Z1lBeWNVazlQUVFzUWlqajVFVGxlRk9Na2NKb1YvMmt5R0ZXZFU2?=
+ =?utf-8?B?WnNlY05rUDY4dmJ1N1Q4dlNpZmd0RVBkUkZ3c1BnZkdQdUk5WkFGZWNzM2VI?=
+ =?utf-8?B?WHpwd1NsamZVZjVaY2dOcjJTVW94Tjh5dkFLU3UyQVVXRHUydjhIYVBwSHZ6?=
+ =?utf-8?B?a0RTZE93SW5nR2d5RzlsWHlhQ3dneGdxWkw4b1d2VmhvdFhGL01LUllTZTJH?=
+ =?utf-8?B?YzR5VTREOWpyYmNiRUpJZmxNNW56NjIyTmRkUmRhcGRSZkZCdU5DTGdyL05O?=
+ =?utf-8?B?YnQrTHBmbDhrdnFwNlFoNnhhN29LUXBKYkpYL0VWckFqUkVnbFdpaFk3M1dH?=
+ =?utf-8?B?S2RnMkNiWEp4TGtiWHZvMXpLN2p4ZjFXRWowMk04T2FIK0hJNnF1QW9tVlly?=
+ =?utf-8?B?MEY0bW9tZDBIaXdBNVBvejkyWVQ5SnlvTm9XV1JxRHdCZGJmTVBqeFJ1dDho?=
+ =?utf-8?B?TG13ejRFcHVrUVFmWWRqVXY4OTRNdGVCUUNOdFBaNkE2b3FaeSt2QlhWY0hF?=
+ =?utf-8?B?RktLMXRrc2hpaFZ2UVZZUngxSGt1WkFBOEdXbEoyeVZSdWpXYzlMV016R282?=
+ =?utf-8?B?QzBsajlDOGRlSysrNE5FUW5CRlUwOU4xL2V3NEduYXRXNHQwb1lHa3pTV0Vr?=
+ =?utf-8?B?U05IVUIyVHdWcWdtUWVpV1FRU1I5K0JtdStodmJyb2NxcnBTMGZxQmVPWU91?=
+ =?utf-8?B?MWY0aDdiT2hoNDllMlRZVkpwbmRPYzBhWTJnZnhuTStnZUkxdlJBVG55MlV3?=
+ =?utf-8?B?ek8xZVRzdDRLRXZVTDlkOWF2QmxvaGNLd2haKzN5ekdiZ1NDNUM0bFVSbFll?=
+ =?utf-8?B?empZaWlNU3FCRVJ4UFJGSkxTdlJYa01HRm02L05CTG9UV3M5dWptWHczMmN5?=
+ =?utf-8?B?S29oMkZYcmwrV1lUc2hhbkdRUks2alhRMjF4aHNBOHB1M254alVmNzc5RGNN?=
+ =?utf-8?B?bDVxMDhXbG54L2NuU2hjVUFUZStTelF2ZmREN0x5YXNVTHkrQ1FGSG1IaHpV?=
+ =?utf-8?B?YTV4WEFTMzB3bDJ1Qks2VUx1dzRaN1Bmb05ZanlUckR2cGQ5NHhMQVE3VkZh?=
+ =?utf-8?B?dHlxajF0SVBIU2cxUkp0eHpndlFHbjlIaHVGYWFJa1lZREh4ZXdGWmpUK29N?=
+ =?utf-8?B?RlVUMUhsTGFwcmY0OXNxYis4akdSWFpYTWprU2E2R1Bjd2EwN0xIeEdJS0Ev?=
+ =?utf-8?B?MlRaUWhxanBGRFV6UXdHQUduRHV3R3dsV1pxMTFWTTBqQWxWK1N5V3YzRTJH?=
+ =?utf-8?B?UnFrdmlNaTFBUUFkSVYrb0haV1M5VGFlbHEzNzVNYVZvL1hBNEhYTTg4eG5v?=
+ =?utf-8?B?aVovNEdWQU0wTVh2TkFESVVSaTZXRWE1MjNvRVFZaTJGY0tFcktzaFpSa2Y3?=
+ =?utf-8?B?RGE1ZHF5YWpYTjdvM0FaQURWZW9NOTZRTjhYMXFQTjlXR0JGT3lEeDg4TlR1?=
+ =?utf-8?B?eEVNaUZ0aHhwWG9QQmp4akY5SVRRdkJ5dGZBdVdEdEkzbFp2cW5odSswN0wy?=
+ =?utf-8?B?WFp3K3A1MmthYU5vdWhOU0k2ZE83VVFYSGg4NUtiRlJRMXlITzh3cDhHenpy?=
+ =?utf-8?B?OXJ1S1d5WS9TYmZLNEw4bk9ETEJyQlBnOTVaSHE3bU1lUjZQS0JSU2k0a2dk?=
+ =?utf-8?B?d2NFb3dsOW1wNVFoY25ub2habFhSOU9UQVhkb3JkVFNjM1VpOG01WEordG9l?=
+ =?utf-8?B?SlZpcCtpQ0VybFQ2bEdjeGRtNzBnKyt2TWE3MXhGWHNrSFhBVitnYlB6MGFo?=
+ =?utf-8?B?S1FvYVRGTG5GaWs5V3hNMURJRVdBNnlpYkR4U0Z6bUVNZ3QzclIxbHlPL05I?=
+ =?utf-8?B?M1RxQjhpU3lCU0tET0U5R3hTTG44ZFRZU0EvOVA0QXVFcE1PWWVubk1DKzcr?=
+ =?utf-8?B?NWhzem5FWnluZTdiaFQrbUtuVHkwMElPLzBXVWZxbEhFV3dLSWhyWTNqOVBR?=
+ =?utf-8?B?T2JibCt5dkdwdVp5NW5BRUUxZncyUjcyeVpabUw5WmQ1MVU4SGUxZDZpdHFH?=
+ =?utf-8?B?RGhrb2dPNHZNR2ZVWS90L2kxS3Z4bEE4UFdyUUdQTjRPZXl5VnhZaVNpOUNk?=
+ =?utf-8?B?dUtVaU1zNTdJY0drdEVHdlhmbXFmcDA3OC9lTzZyK1p3dDJGSDNPYTdTdTQ3?=
+ =?utf-8?B?dXVJQXcreVlhSDZTSUprTDFUNExLRHBDTHBVdVRjVEhBcXNUZEdGeitBMWNX?=
+ =?utf-8?B?RGQ4V0RVZ1hFTmhWNjh5U1NSZEVxWWM4NWlXcS93dTJqWHpYMkJHZUk3dUNG?=
+ =?utf-8?B?alF4SjdIWTV1a3VNM2VIYTQ2ZTlDT3poamYvNEtKOXE4WTVyb2hRVWlNNUg2?=
+ =?utf-8?B?OXFRb1NZV1VrZ2ZmTzlWZksvbFd3RDY2bUluUUtqNUZnN0FQcTBndjRiall2?=
+ =?utf-8?B?MVhZK2ZtdFQrYjBNdDFuQTA3dkFDVHpZaXF6N2hFc3FBU0x3PT0=?=
+MIME-Version: 1.0
+
+--part_9d5db4d0981ddb70be13289cfabd749f64cdd029cb7d47ee906a1826a5351448
+Content-Transfer-Encoding: quoted-printable
+Content-Type: text/plain; charset=UTF-8
+
+[sbriggssjc/life-command-center] DEPLOY2 =E2=80=94 merged-migration applica=
+tion check workflow run
+
+Repository: sbriggssjc/life-command-center
+Workflow: DEPLOY2 =E2=80=94 merged-migration application check
+Duration: 18.0 seconds
+Finished: 2026-09-18 11:41:02 UTC
+
+View results: https://url.us.m.mimecastprotect.com/s/OKilCqx5vJfrPOgJFEsKKi=
+EOFx4?domain=3Dgithub.com
+
+Jobs:
+  * Check merged migrations were actually applied failed (4 annotations)
+
+--=20
+You are receiving this because you are subscribed to this thread.
+Manage your GitHub Actions notifications: https://url.us.m.mimecastprotect.=
+com/s/M8eMCpYK0GTLNzgpTYi22iG2TH9?domain=3Dgithub.com
+
+--part_9d5db4d0981ddb70be13289cfabd749f64cdd029cb7d47ee906a1826a5351448
+Content-Transfer-Encoding: quoted-printable
+Content-Type: text/html; charset=UTF-8
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.=
+w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd"><html xmlns=3D"http://www.w3.=
+org/1999/xhtml" xmlns=3D"http://www.w3.org/1999/xhtml" lang=3D"en" xml:lang=
+=3D"en" style=3D"-webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%=
+; font-family: sans-serif; box-sizing: border-box;" xml:lang=3D"en"><head>
+<meta http-equiv=3D"Content-Type" content=3D"text/html; charset=3Dutf-8">
+    <meta name=3D"viewport" content=3D"width=3Ddevice-width">
+    <title>[sbriggssjc/life-command-center] Run failed: DEPLOY2 =E2=80=94 m=
+erged-migration application check - main (6656f86)</title>
+   =20
+  </head>
+  <body style=3D"box-sizing: border-box; color: #24292e; background-color: =
+#fff; font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Aria=
+l,sans-serif,Apple Color Emoji,Segoe UI Emoji; font-size: 14px; line-height=
+: 1.5; margin: 0;" bgcolor=3D"#fff">
+    <table align=3D"center" class=3D"container-sm width-full" width=3D"100%=
+" style=3D"box-sizing: border-box; border-spacing: 0; border-collapse: coll=
+apse; max-width: 544px; margin-left: auto; margin-right: auto; width: 100% =
+!important; font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Helvetic=
+a,Arial,sans-serif,Apple Color Emoji,Segoe UI Emoji !important;">
+      <tr style=3D"box-sizing: border-box; font-family: -apple-system,Blink=
+MacSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe U=
+I Emoji !important;">
+        <td class=3D"center tmp-p-3" align=3D"center" valign=3D"top" style=
+=3D"box-sizing: border-box; font-family: -apple-system,BlinkMacSystemFont,S=
+egoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Emoji !import=
+ant; padding: 16px;">
+          <center style=3D"box-sizing: border-box; font-family: -apple-syst=
+em,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji=
+,Segoe UI Emoji !important;">
+            <table role=3D"presentation" border=3D"0" cellspacing=3D"0" cel=
+lpadding=3D"0" align=3D"center" class=3D"width-full container-md" width=3D"=
+100%" style=3D"box-sizing: border-box; border-spacing: 0; border-collapse: =
+collapse; max-width: 768px; margin-left: auto; margin-right: auto; width: 1=
+00% !important; font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Helv=
+etica,Arial,sans-serif,Apple Color Emoji,Segoe UI Emoji !important;">
+  <tr style=3D"box-sizing: border-box; font-family: -apple-system,BlinkMacS=
+ystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Em=
+oji !important;">
+    <td align=3D"center" style=3D"box-sizing: border-box; font-family: -app=
+le-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Colo=
+r Emoji,Segoe UI Emoji !important; padding: 0;">
+              <table role=3D"presentation" style=3D"box-sizing: border-box;=
+ border-spacing: 0; border-collapse: collapse; font-family: -apple-system,B=
+linkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Seg=
+oe UI Emoji !important;">
+  <tbody style=3D"box-sizing: border-box; font-family: -apple-system,BlinkM=
+acSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI=
+ Emoji !important;">
+    <tr style=3D"box-sizing: border-box; font-family: -apple-system,BlinkMa=
+cSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI =
+Emoji !important;">
+      <td height=3D"16" style=3D"font-size: 16px; line-height: 16px; box-si=
+zing: border-box; font-family: -apple-system,BlinkMacSystemFont,Segoe UI,He=
+lvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Emoji !important; paddi=
+ng: 0;">&nbsp;</td>
+    </tr>
+  </tbody>
+</table>
+
+              <table border=3D"0" cellspacing=3D"0" cellpadding=3D"0" align=
+=3D"left" width=3D"100%" style=3D"box-sizing: border-box; border-spacing: 0=
+; border-collapse: collapse; font-family: -apple-system,BlinkMacSystemFont,=
+Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Emoji !impor=
+tant;">
+                <tr style=3D"box-sizing: border-box; font-family: -apple-sy=
+stem,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emo=
+ji,Segoe UI Emoji !important;">
+                  <td class=3D"text-left" style=3D"box-sizing: border-box; =
+text-align: left !important; font-family: -apple-system,BlinkMacSystemFont,=
+Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Emoji !impor=
+tant; padding: 0;" align=3D"left">
+                    <img src=3D"https://github.githubassets.com/assets/octo=
+cat-logo-805b5c3e249f.png" alt=3D"GitHub" width=3D"32" style=3D"box-sizing:=
+ border-box; font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Helveti=
+ca,Arial,sans-serif,Apple Color Emoji,Segoe UI Emoji !important; border-sty=
+le: none;">
+                    <h2 class=3D"lh-condensed mt-2 text-normal" style=3D"bo=
+x-sizing: border-box; margin-top: 8px !important; margin-bottom: 0; font-si=
+ze: 24px; font-weight: 400 !important; line-height: 1.25 !important; font-f=
+amily: -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif=
+,Apple Color Emoji,Segoe UI Emoji !important;">
+                        [sbriggssjc/life-command-center] DEPLOY2 =E2=80=94 =
+merged-migration application check workflow run
+
+                    </h2>
+                  </td>
+                </tr>
+              </table>
+              <table role=3D"presentation" style=3D"box-sizing: border-box;=
+ border-spacing: 0; border-collapse: collapse; font-family: -apple-system,B=
+linkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Seg=
+oe UI Emoji !important;">
+  <tbody style=3D"box-sizing: border-box; font-family: -apple-system,BlinkM=
+acSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI=
+ Emoji !important;">
+    <tr style=3D"box-sizing: border-box; font-family: -apple-system,BlinkMa=
+cSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI =
+Emoji !important;">
+      <td height=3D"16" style=3D"font-size: 16px; line-height: 16px; box-si=
+zing: border-box; font-family: -apple-system,BlinkMacSystemFont,Segoe UI,He=
+lvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Emoji !important; paddi=
+ng: 0;">&nbsp;</td>
+    </tr>
+  </tbody>
+</table>
+
+</td>
+  </tr>
+</table>
+            <table width=3D"100%" class=3D"width-full" style=3D"box-sizing:=
+ border-box; border-spacing: 0; border-collapse: collapse; width: 100% !imp=
+ortant; font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Ar=
+ial,sans-serif,Apple Color Emoji,Segoe UI Emoji !important;">
+              <tr style=3D"box-sizing: border-box; font-family: -apple-syst=
+em,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji=
+,Segoe UI Emoji !important;">
+                <td class=3D"border rounded-2 d-block" style=3D"box-sizing:=
+ border-box; border-radius: 6px !important; display: block !important; font=
+-family: -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-ser=
+if,Apple Color Emoji,Segoe UI Emoji !important; padding: 0; border: 1px sol=
+id #e1e4e8;">
+                  <table align=3D"center" class=3D"width-full text-center" =
+style=3D"box-sizing: border-box; border-spacing: 0; border-collapse: collap=
+se; width: 100% !important; text-align: center !important; font-family: -ap=
+ple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Col=
+or Emoji,Segoe UI Emoji !important;">
+                    <tr style=3D"box-sizing: border-box; font-family: -appl=
+e-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color=
+ Emoji,Segoe UI Emoji !important;">
+                      <td style=3D"box-sizing: border-box; font-family: -ap=
+ple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Col=
+or Emoji,Segoe UI Emoji !important; padding: 0;">
+                        <table role=3D"presentation" border=3D"0" cellspaci=
+ng=3D"0" cellpadding=3D"0" align=3D"center" class=3D"width-full" width=3D"1=
+00%" style=3D"box-sizing: border-box; border-spacing: 0; border-collapse: c=
+ollapse; width: 100% !important; font-family: -apple-system,BlinkMacSystemF=
+ont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Emoji !i=
+mportant;">
+  <tr style=3D"box-sizing: border-box; font-family: -apple-system,BlinkMacS=
+ystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Em=
+oji !important;">
+    <td align=3D"center" style=3D"box-sizing: border-box; font-family: -app=
+le-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Colo=
+r Emoji,Segoe UI Emoji !important; padding: 0;">
+                         =20
+<table role=3D"presentation" align=3D"center" class=3D"border-bottom width-=
+full text-center" style=3D"box-sizing: border-box; border-spacing: 0; borde=
+r-collapse: collapse; border-bottom-width: 1px !important; border-bottom-co=
+lor: #e1e4e8 !important; border-bottom-style: solid !important; width: 100%=
+ !important; text-align: center !important; font-family: -apple-system,Blin=
+kMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe =
+UI Emoji !important;">
+  <tr style=3D"box-sizing: border-box; font-family: -apple-system,BlinkMacS=
+ystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Em=
+oji !important;">
+    <td class=3D"d-block tmp-px-3 tmp-pt-3 tmp-p-sm-4" style=3D"box-sizing:=
+ border-box; display: block !important; font-family: -apple-system,BlinkMac=
+SystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI E=
+moji !important; padding: 16px 16px 0;">
+      <table role=3D"presentation" border=3D"0" cellspacing=3D"0" cellpaddi=
+ng=3D"0" align=3D"center" class=3D"width-full" width=3D"100%" style=3D"box-=
+sizing: border-box; border-spacing: 0; border-collapse: collapse; width: 10=
+0% !important; font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Helve=
+tica,Arial,sans-serif,Apple Color Emoji,Segoe UI Emoji !important;">
+  <tr style=3D"box-sizing: border-box; font-family: -apple-system,BlinkMacS=
+ystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Em=
+oji !important;">
+    <td align=3D"center" style=3D"box-sizing: border-box; font-family: -app=
+le-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Colo=
+r Emoji,Segoe UI Emoji !important; padding: 0;">
+       =20
+    <img src=3D"https://github.githubassets.com/assets/actions-1cc0c3ccfe18=
+.png" width=3D"56" height=3D"56" alt=3D"" style=3D"box-sizing: border-box; =
+font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans=
+-serif,Apple Color Emoji,Segoe UI Emoji !important; border-style: none;">
+  <table role=3D"presentation" style=3D"box-sizing: border-box; border-spac=
+ing: 0; border-collapse: collapse; font-family: -apple-system,BlinkMacSyste=
+mFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Emoji =
+!important;">
+  <tbody style=3D"box-sizing: border-box; font-family: -apple-system,BlinkM=
+acSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI=
+ Emoji !important;">
+    <tr style=3D"box-sizing: border-box; font-family: -apple-system,BlinkMa=
+cSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI =
+Emoji !important;">
+      <td height=3D"12" style=3D"font-size: 12px; line-height: 12px; box-si=
+zing: border-box; font-family: -apple-system,BlinkMacSystemFont,Segoe UI,He=
+lvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Emoji !important; paddi=
+ng: 0;">&nbsp;</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3 class=3D"lh-condensed" style=3D"box-sizing: border-box; margin-top: 0; =
+margin-bottom: 0; font-size: 20px; font-weight: 600; line-height: 1.25 !imp=
+ortant; font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Ar=
+ial,sans-serif,Apple Color Emoji,Segoe UI Emoji !important;">DEPLOY2 =E2=80=
+=94 merged-migration application check: All jobs have failed</h3>
+<table role=3D"presentation" style=3D"box-sizing: border-box; border-spacin=
+g: 0; border-collapse: collapse; font-family: -apple-system,BlinkMacSystemF=
+ont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Emoji !i=
+mportant;">
+  <tbody style=3D"box-sizing: border-box; font-family: -apple-system,BlinkM=
+acSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI=
+ Emoji !important;">
+    <tr style=3D"box-sizing: border-box; font-family: -apple-system,BlinkMa=
+cSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI =
+Emoji !important;">
+      <td height=3D"16" style=3D"font-size: 16px; line-height: 16px; box-si=
+zing: border-box; font-family: -apple-system,BlinkMacSystemFont,Segoe UI,He=
+lvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Emoji !important; paddi=
+ng: 0;">&nbsp;</td>
+    </tr>
+  </tbody>
+</table>
+
+
+
+  <table role=3D"presentation" border=3D"0" cellspacing=3D"0" cellpadding=
+=3D"0" align=3D"center" class=3D"width-full" width=3D"100%" style=3D"box-si=
+zing: border-box; border-spacing: 0; border-collapse: collapse; width: 100%=
+ !important; font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Helveti=
+ca,Arial,sans-serif,Apple Color Emoji,Segoe UI Emoji !important;">
+  <tr style=3D"box-sizing: border-box; font-family: -apple-system,BlinkMacS=
+ystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Em=
+oji !important;">
+    <td align=3D"center" style=3D"box-sizing: border-box; font-family: -app=
+le-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Colo=
+r Emoji,Segoe UI Emoji !important; padding: 0;">
+    <table role=3D"presentation" width=3D"100%" border=3D"0" cellspacing=3D=
+"0" cellpadding=3D"0" style=3D"box-sizing: border-box; border-spacing: 0; b=
+order-collapse: collapse; font-family: -apple-system,BlinkMacSystemFont,Seg=
+oe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Emoji !importan=
+t;">
+  <tr style=3D"box-sizing: border-box; font-family: -apple-system,BlinkMacS=
+ystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Em=
+oji !important;">
+    <td style=3D"box-sizing: border-box; font-family: -apple-system,BlinkMa=
+cSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI =
+Emoji !important; padding: 0;">
+      <table role=3D"presentation" border=3D"0" cellspacing=3D"0" cellpaddi=
+ng=3D"0" width=3D"100%" style=3D"box-sizing: border-box; border-spacing: 0;=
+ border-collapse: collapse; font-family: -apple-system,BlinkMacSystemFont,S=
+egoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Emoji !import=
+ant;">
+        <tr style=3D"box-sizing: border-box; font-family: -apple-system,Bli=
+nkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe=
+ UI Emoji !important;">
+          <td align=3D"center" style=3D"box-sizing: border-box; font-family=
+: -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Appl=
+e Color Emoji,Segoe UI Emoji !important; padding: 0;">
+              <!--[if mso]> <table><tr><td align=3D"center" bgcolor=3D"#28a=
+745"> <![endif]-->
+                <a href=3D"https://url.us.m.mimecastprotect.com/s/Wg8ACn5Xp=
+DCLqG4rT9fQQiJDtcX?domain=3Dgithub.com" target=3D"_blank" rel=3D"noopener n=
+oreferrer" class=3D"btn btn-large btn-primary" style=3D"background-color: #=
+1f883d !important; box-sizing: border-box; color: #fff; text-decoration: no=
+ne; white-space: nowrap; vertical-align: middle; cursor: pointer; -webkit-u=
+ser-select: none; user-select: none; appearance: none; border-radius: .5em;=
+ font-size: inherit; font-weight: 500; line-height: 1.5; display: inline-bl=
+ock; position: relative; transition: background-color .2s cubic-bezier(.3,0=
+,.5,1); box-shadow: 0 1px #1b1f231a,inset 0 1px #ffffff08; font-family: -ap=
+ple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Col=
+or Emoji,Segoe UI Emoji !important; padding: .75em 1.5em; border: 1px solid=
+ #1f883d;">View workflow run</a>
+              <!--[if mso]> </td></tr></table> <![endif]-->
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+</table>
+
+</td>
+  </tr>
+</table>
+  <table role=3D"presentation" style=3D"box-sizing: border-box; border-spac=
+ing: 0; border-collapse: collapse; font-family: -apple-system,BlinkMacSyste=
+mFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Emoji =
+!important;">
+  <tbody style=3D"box-sizing: border-box; font-family: -apple-system,BlinkM=
+acSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI=
+ Emoji !important;">
+    <tr style=3D"box-sizing: border-box; font-family: -apple-system,BlinkMa=
+cSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI =
+Emoji !important;">
+      <td height=3D"32" style=3D"font-size: 32px; line-height: 32px; box-si=
+zing: border-box; font-family: -apple-system,BlinkMacSystemFont,Segoe UI,He=
+lvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Emoji !important; paddi=
+ng: 0;">&nbsp;</td>
+    </tr>
+  </tbody>
+</table>
+
+
+</td>
+  </tr>
+</table>
+    </td>
+  </tr>
+</table>
+
+  <table role=3D"presentation" align=3D"center" class=3D"width-full text-ce=
+nter" style=3D"box-sizing: border-box; border-spacing: 0; border-collapse: =
+collapse; width: 100% !important; text-align: center !important; font-famil=
+y: -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif,App=
+le Color Emoji,Segoe UI Emoji !important;">
+  <tr style=3D"box-sizing: border-box; font-family: -apple-system,BlinkMacS=
+ystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Em=
+oji !important;">
+    <td class=3D"d-block" style=3D"box-sizing: border-box; display: block !=
+important; font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica=
+,Arial,sans-serif,Apple Color Emoji,Segoe UI Emoji !important; padding: 0;"=
+>
+      <table role=3D"presentation" border=3D"0" cellspacing=3D"0" cellpaddi=
+ng=3D"0" align=3D"center" class=3D"width-full" width=3D"100%" style=3D"box-=
+sizing: border-box; border-spacing: 0; border-collapse: collapse; width: 10=
+0% !important; font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Helve=
+tica,Arial,sans-serif,Apple Color Emoji,Segoe UI Emoji !important;">
+  <tr style=3D"box-sizing: border-box; font-family: -apple-system,BlinkMacS=
+ystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Em=
+oji !important;">
+    <td align=3D"center" style=3D"box-sizing: border-box; font-family: -app=
+le-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Colo=
+r Emoji,Segoe UI Emoji !important; padding: 0;">
+       =20
+    <table class=3D"width-full text-left" style=3D"box-sizing: border-box; =
+border-spacing: 0; border-collapse: collapse; width: 100% !important; text-=
+align: left !important; font-family: -apple-system,BlinkMacSystemFont,Segoe=
+ UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Emoji !important;=
+">
+      <thead style=3D"box-sizing: border-box; font-family: -apple-system,Bl=
+inkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Sego=
+e UI Emoji !important;">
+        <tr style=3D"box-sizing: border-box; font-family: -apple-system,Bli=
+nkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe=
+ UI Emoji !important;">
+          <th scope=3D"col" class=3D"tmp-pl-3 tmp-py-3 tmp-p-sm-4" style=3D=
+"width: 24px; box-sizing: border-box; font-family: -apple-system,BlinkMacSy=
+stemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Emo=
+ji !important; padding: 16px 0 16px 16px;">Status</th>
+          <th scope=3D"col" class=3D"tmp-p-3" style=3D"width: 100%; box-siz=
+ing: border-box; font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Hel=
+vetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Emoji !important; paddin=
+g: 16px;">Job</th>
+          <th scope=3D"col" class=3D"tmp-pr-3 tmp-py-3" style=3D"white-spac=
+e: nowrap; box-sizing: border-box; font-family: -apple-system,BlinkMacSyste=
+mFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Emoji =
+!important; padding: 16px 16px 16px 0;">Annotations</th>
+        </tr>
+      </thead>
+      <tbody style=3D"box-sizing: border-box; font-family: -apple-system,Bl=
+inkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Sego=
+e UI Emoji !important;">
+          <tr style=3D"box-sizing: border-box; font-family: -apple-system,B=
+linkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Seg=
+oe UI Emoji !important;">
+            <td class=3D"tmp-pl-3 tmp-py-3 tmp-p-sm-4" style=3D"box-sizing:=
+ border-box; font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Helveti=
+ca,Arial,sans-serif,Apple Color Emoji,Segoe UI Emoji !important; padding: 1=
+6px 0 16px 16px;">
+              <img src=3D"https://github.githubassets.com/assets/x-circle-f=
+ill-red-153d16960fc8.png" alt=3D"Check merged migrations were actually appl=
+ied" height=3D"24" width=3D"24" style=3D"box-sizing: border-box; font-famil=
+y: -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif,App=
+le Color Emoji,Segoe UI Emoji !important; border-style: none;">
+            </td>
+            <td class=3D"tmp-p-3" style=3D"width: 100%; box-sizing: border-=
+box; font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial=
+,sans-serif,Apple Color Emoji,Segoe UI Emoji !important; padding: 16px;">
+              <p class=3D"mb-0" style=3D"box-sizing: border-box; margin-top=
+: 0; margin-bottom: 0 !important; font-family: -apple-system,BlinkMacSystem=
+Font,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Emoji !=
+important;">
+                <b style=3D"font-weight: 600; box-sizing: border-box; font-=
+family: -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-seri=
+f,Apple Color Emoji,Segoe UI Emoji !important;">DEPLOY2 =E2=80=94 merged-mi=
+gration application check</b> / Check merged migrations were actually appli=
+ed
+                <br style=3D"box-sizing: border-box; font-family: -apple-sy=
+stem,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emo=
+ji,Segoe UI Emoji !important;">
+                Failed in 15 seconds
+              </p>
+            </td>
+            <td class=3D"tmp-pr-3 tmp-py-3" style=3D"white-space: nowrap; b=
+ox-sizing: border-box; font-family: -apple-system,BlinkMacSystemFont,Segoe =
+UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Emoji !important; =
+padding: 16px 16px 16px 0;">
+                <a href=3D"https://url.us.m.mimecastprotect.com/s/CXyNCo2Kq=
+ESGLXA6TzhqqipPey7?domain=3Dgithub.com" style=3D"background-color: #0000; b=
+ox-sizing: border-box; color: #0366d6; text-decoration: none; font-family: =
+-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple =
+Color Emoji,Segoe UI Emoji !important;">
+                  <img src=3D"https://github.githubassets.com/assets/report=
+-gray-d5f2721544ee.png" alt=3D"annotations for DEPLOY2 =E2=80=94 merged-mig=
+ration application check / Check merged migrations were actually applied" w=
+idth=3D"16" height=3D"16" style=3D"box-sizing: border-box; font-family: -ap=
+ple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Col=
+or Emoji,Segoe UI Emoji !important; border-style: none;">
+                  <span class=3D"d-table-cell v-align-middle text-gray-ligh=
+t" style=3D"box-sizing: border-box; color: #6a737d !important; vertical-ali=
+gn: middle !important; display: table-cell !important; font-family: -apple-=
+system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color E=
+moji,Segoe UI Emoji !important;"> 4 </span>
+                </a>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+</td>
+  </tr>
+</table>
+    </td>
+  </tr>
+</table>
+
+
+
+</td>
+  </tr>
+</table>
+                      </td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>
+            </table>
+            <table role=3D"presentation" border=3D"0" cellspacing=3D"0" cel=
+lpadding=3D"0" align=3D"center" class=3D"width-full text-center" width=3D"1=
+00%" style=3D"box-sizing: border-box; border-spacing: 0; border-collapse: c=
+ollapse; width: 100% !important; text-align: center !important; font-family=
+: -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Appl=
+e Color Emoji,Segoe UI Emoji !important;">
+  <tr style=3D"box-sizing: border-box; font-family: -apple-system,BlinkMacS=
+ystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Em=
+oji !important;">
+    <td align=3D"center" style=3D"box-sizing: border-box; font-family: -app=
+le-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Colo=
+r Emoji,Segoe UI Emoji !important; padding: 0;">
+              <table role=3D"presentation" style=3D"box-sizing: border-box;=
+ border-spacing: 0; border-collapse: collapse; font-family: -apple-system,B=
+linkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Seg=
+oe UI Emoji !important;">
+  <tbody style=3D"box-sizing: border-box; font-family: -apple-system,BlinkM=
+acSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI=
+ Emoji !important;">
+    <tr style=3D"box-sizing: border-box; font-family: -apple-system,BlinkMa=
+cSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI =
+Emoji !important;">
+      <td height=3D"16" style=3D"font-size: 16px; line-height: 16px; box-si=
+zing: border-box; font-family: -apple-system,BlinkMacSystemFont,Segoe UI,He=
+lvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Emoji !important; paddi=
+ng: 0;">&nbsp;</td>
+    </tr>
+  </tbody>
+</table>
+
+              <table role=3D"presentation" style=3D"box-sizing: border-box;=
+ border-spacing: 0; border-collapse: collapse; font-family: -apple-system,B=
+linkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Seg=
+oe UI Emoji !important;">
+  <tbody style=3D"box-sizing: border-box; font-family: -apple-system,BlinkM=
+acSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI=
+ Emoji !important;">
+    <tr style=3D"box-sizing: border-box; font-family: -apple-system,BlinkMa=
+cSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI =
+Emoji !important;">
+      <td height=3D"16" style=3D"font-size: 16px; line-height: 16px; box-si=
+zing: border-box; font-family: -apple-system,BlinkMacSystemFont,Segoe UI,He=
+lvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Emoji !important; paddi=
+ng: 0;">&nbsp;</td>
+    </tr>
+  </tbody>
+</table>
+
+              <p class=3D"f5 text-gray-light" style=3D"box-sizing: border-b=
+ox; margin-top: 0; margin-bottom: 10px; color: #6a737d !important; font-siz=
+e: 14px !important; font-family: -apple-system,BlinkMacSystemFont,Segoe UI,=
+Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Emoji !important;">  =
+</p><p style=3D"font-size: small; -webkit-text-size-adjust: none; color: #6=
+66; box-sizing: border-box; margin-top: 0; margin-bottom: 10px; font-family=
+: -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Appl=
+e Color Emoji,Segoe UI Emoji !important;">=E2=80=94<br style=3D"box-sizing:=
+ border-box; font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Helveti=
+ca,Arial,sans-serif,Apple Color Emoji,Segoe UI Emoji !important;">You are r=
+eceiving this because you are subscribed to this thread.<br style=3D"box-si=
+zing: border-box; font-family: -apple-system,BlinkMacSystemFont,Segoe UI,He=
+lvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Emoji !important;"><a h=
+ref=3D"https://url.us.m.mimecastprotect.com/s/M8eMCpYK0GTLNzgpTYi22iG2TH9?d=
+omain=3Dgithub.com" style=3D"background-color: #0000; box-sizing: border-bo=
+x; color: #0366d6; text-decoration: none; font-family: -apple-system,BlinkM=
+acSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI=
+ Emoji !important;">Manage your GitHub Actions notifications</a></p>
+
+</td>
+  </tr>
+</table>
+            <table role=3D"presentation" border=3D"0" cellspacing=3D"0" cel=
+lpadding=3D"0" align=3D"center" class=3D"width-full text-center" width=3D"1=
+00%" style=3D"box-sizing: border-box; border-spacing: 0; border-collapse: c=
+ollapse; width: 100% !important; text-align: center !important; font-family=
+: -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Appl=
+e Color Emoji,Segoe UI Emoji !important;">
+  <tr style=3D"box-sizing: border-box; font-family: -apple-system,BlinkMacS=
+ystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Em=
+oji !important;">
+    <td align=3D"center" style=3D"box-sizing: border-box; font-family: -app=
+le-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Colo=
+r Emoji,Segoe UI Emoji !important; padding: 0;">
+  <table role=3D"presentation" style=3D"box-sizing: border-box; border-spac=
+ing: 0; border-collapse: collapse; font-family: -apple-system,BlinkMacSyste=
+mFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Emoji =
+!important;">
+  <tbody style=3D"box-sizing: border-box; font-family: -apple-system,BlinkM=
+acSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI=
+ Emoji !important;">
+    <tr style=3D"box-sizing: border-box; font-family: -apple-system,BlinkMa=
+cSystemFont,Segoe UI,Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI =
+Emoji !important;">
+      <td height=3D"16" style=3D"font-size: 16px; line-height: 16px; box-si=
+zing: border-box; font-family: -apple-system,BlinkMacSystemFont,Segoe UI,He=
+lvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Emoji !important; paddi=
+ng: 0;">&nbsp;</td>
+    </tr>
+  </tbody>
+</table>
+
+  <p class=3D"f6 text-gray-light" style=3D"box-sizing: border-box; margin-t=
+op: 0; margin-bottom: 10px; color: #6a737d !important; font-size: 12px !imp=
+ortant; font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Ar=
+ial,sans-serif,Apple Color Emoji,Segoe UI Emoji !important;">GitHub, Inc. =
+=E3=83=BB88 Colin P Kelly Jr Street =E3=83=BBSan Francisco, CA 94107</p>
+</td>
+  </tr>
+</table>
+
+          </center>
+        </td>
+      </tr>
+    </table>
+    <!-- prevent Gmail on iOS font size manipulation -->
+   <div style=3D"display: none; white-space: nowrap; box-sizing: border-box=
+; font: 15px/0 apple-system, BlinkMacSystemFont, Segoe, UI, Helvetica, Aria=
+l, sans-serif, Apple, Color, Emoji, Segoe, UI, Emoji;"> &nbsp; &nbsp; &nbsp=
+; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nb=
+sp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &=
+nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; </div>
+  </body>
+</html>
+
+--part_9d5db4d0981ddb70be13289cfabd749f64cdd029cb7d47ee906a1826a5351448--
