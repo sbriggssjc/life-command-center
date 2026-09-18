@@ -212,3 +212,37 @@ describe('HOME2 — cache busters move as a set (app.js changed, so the shared ?
     assert.equal(versions.size, 1, `cache-buster versions diverged: ${[...versions].join(', ')}`);
   });
 });
+
+// HOME2-fix (2026-09-18) — app.js's renderHomeThreeLanes() looks up four
+// home3* ids via getElementById and no-ops when an id is missing
+// (`if (!el) return`). The flag shipped ON in the workspace with none of
+// these ids in index.html, so turning it on had zero visible effect except
+// suppressing the old _dbFillMyPrioritiesFromQueue fallback (app.js ~7281).
+// Generalised: ANY id app.js looks up behind checkFlag(...) must exist in
+// index.html, or the flag is a no-op by construction.
+describe('HOME2-fix — every home3* mount point app.js looks up must exist in index.html', () => {
+  const html = readFileSync(indexPath, 'utf8');
+
+  it('home3LanesWidget, home3ResearchContent, home3BdContent, home3InboxContent are all present', () => {
+    for (const id of ['home3LanesWidget', 'home3ResearchContent', 'home3BdContent', 'home3InboxContent']) {
+      assert.match(html, new RegExp('id="' + id + '"'), `#${id} not found in index.html`);
+    }
+  });
+
+  it('every getElementById(\'home3...\') call in app.js has a matching id in index.html', () => {
+    const ids = new Set();
+    const re = /getElementById\(['"](home3[A-Za-z0-9_]+)['"]\)/g;
+    let m;
+    while ((m = re.exec(cleanApp))) ids.add(m[1]);
+    assert.ok(ids.size > 0, 'no home3* getElementById calls found in app.js — test is stale');
+    for (const id of ids) {
+      assert.match(html, new RegExp('id="' + id + '"'), `app.js looks up #${id} but index.html has no such element`);
+    }
+  });
+
+  it('home3LanesWidget starts hidden (renderHomeThreeLanes unhides it only when the flag is on)', () => {
+    const m = html.match(/<div class="widget" id="home3LanesWidget"([^>]*)>/);
+    assert.ok(m, 'home3LanesWidget opening tag not found');
+    assert.match(m[1], /display:\s*none/, 'home3LanesWidget should default to display:none so it is invisible with the flag off');
+  });
+});
