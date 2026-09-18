@@ -37,7 +37,7 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-reconcile-2, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT, CANON-OWNERSHIP1 | 2026-09-16 | Arc complete through GOVDEED3 (gov #406); **the gov deed writer runs from GitHub Actions (weekly Mon 06:00 UTC) — verify 09-21 dateless = 0**; CANON-OWNERSHIP1 👤 confirmation open; sale-party conflicts 1,290 a review queue |
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k LIVE** (LCC PR #2506): 218 attested supersessions, 40/43 pairs to sponsor, 16/16 controls untouched, reversible; sponsor-as-edge = future work |
 | **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, -harris-b/-c/-d, -ledger-order, MCP1 | 2026-09-17 | **41 assessor-sourced owners live** (Philadelphia 20, Harris 21 of 50); Harris is done except the 27 situs-gap properties → §P10a is the lane's next unit; next free-bulk jurisdiction after that |
-| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS-consolidate-lcc, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift, RECON1, RECON1-b, RECON2, RECON2-b, RECON2-render, HOME2-fix, HOME2-b, HOME2-c, PERF-SPQ1, PERF-SPQ1-b, PERF-SPQ1-c, RECON2-c, SIDEBAR-LEASE1, VERCEL-LIVE1 | 2026-09-17 | PRI2-on live; HOME2 built, flag OFF → HOME2-on; F8/F8-b done; DIA1c live; **SBN-12 (Banning clinic) → `RECON1` merged + reconciled: one property, off Available; residue `RECON1-b` (deed task never created, sentinel party name); **`PERF-SPQ1-c` shipped (round 36, CC): reverted the #2581/#2583 contention regression + built the one-pass `lcc_seller_prospect_chip_counts()` RPC in the same change — locally verified (suite + new guard), browser probe of the deployed route still outstanding (👤)**; leases 2–7 read: 2 confirm, 4 confirm-with-successor; sidebar sends wrote no lease → `SIDEBAR-LEASE1`; Q1 clean (enforce ≥ 09-21); HOME2-c open; J13-teardown Q3 raw names list; Saturday digest verifies F1–F8 |
+| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS-consolidate-lcc, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift, RECON1, RECON1-b, RECON2, RECON2-b, RECON2-render, HOME2-fix, HOME2-b, HOME2-c, PERF-SPQ1, PERF-SPQ1-b, PERF-SPQ1-c, PERF-SPQ2, RECON2-c, SIDEBAR-LEASE1, VERCEL-LIVE1 | 2026-09-18 | **Today renders again** — PERF-SPQ1-c's RPC applied by Cowork (merged-not-applied); cold-load race → `PERF-SPQ2`; leases 2–7 read, sidebar wrote no lease → `SIDEBAR-LEASE1`; Q1 clean; HOME2-c open; J13-teardown: one variable, rotate, delete |
 | **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–5, INVENTORY1, INVENTORY1b, INVENTORY2, INVENTORY-process, REMEDIATION-2026-05, REPO1, ROADMAP, PROCESS-CC-DOCS, PROCESS-MERGE-CLOBBER, GUARD-CLOBBER1, PROCESS-ROW-CELLS, PROCESS-PARKING-LOT, DEPLOY2-coverage, DEPLOY2-stale-body | 2026-09-18 | **PR #2563 reverted STATUS + backlog to a week-old snapshot (7 entries / 11 rows lost) — restored round 26; `GUARD-CLOBBER1` live on `main` (PR #2566), manual per-turn diff retired round 28**; DEPLOY2 live + CI; parking lot triaged; EDGE-GATES1 live |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
 | **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
@@ -52,6 +52,33 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
 
 ---
+
+## 2026-09-18 — Round 37 (Cowork): `PERF-SPQ1-c` reconciled — **its RPC was merged but never applied; Cowork applied it and Today renders again** (route 200 in 1.5 s; the cold-load race is `PERF-SPQ2`); the Vercel env audit is finished from the raw lists — **one variable to add, then rotate, delete**; a fourth Railway service (the resolver) added to runtime truth
+
+*(Numbering: the CC entry below titled itself "Round 36 (CC)"; Cowork's round is 37.)*
+
+**`PERF-SPQ1-c` (PR #2585, `710df7f6`; Railway `2512db12`).** The round did what the prompt asked: reverted the
+fan-out, added `lcc_seller_prospect_chip_counts()` (one CTE pass, seven `count(*) FILTER`s), ten tests, and ran the
+full suite. **Step 4a:** the migration was merged and **not applied** — `pg_proc` on LCC Opps had no such function
+while `api/admin.js` on Railway was already calling `rpc/lcc_seller_prospect_chip_counts`. Cowork applied the repo
+file verbatim at 16:36 UTC (STABLE, SECURITY INVOKER; 0.81 s live). Browser after: **200 in 1.5 s**, five items, all
+seven chips exact; a second call during the page's own loads took 16.2 s. Today: dark at first paint (its 12 s race
+lost to the concurrent boot loads), **2.7 s and full on Retry**; `today_sections` alone 3.0 s. Q33 closes. The
+residue — the view is ~0.85 s per pass and a cold Home load runs several passes at once — is **`PERF-SPQ2`** (filed:
+materialise the queue on the existing tick, or one boot endpoint). No browser probe in the response again.
+
+**Vercel / J13-teardown — audit finished.** Scott's Raw-Editor lists: Vercel 78 names; Railway `tranquil-delight` 79
+(42 shared refs), `life-command-center` (MCP) 71, `pacific-love` (BOV) 37, **`gracious-radiance` (the owner resolver)
+28 — a fourth service missing from CURRENT-STATE §1, now added.** Against `process.env` reads on `main`: 52 of 58
+app-read Vercel names already on `tranquil-delight`; **the one real gap is `TEAMS_INTAKE_WEBHOOK_URL`** (Teams alerts
+from the web app silently off on Railway; value exists on the MCP service). 20 Vercel names are dead to current code
+or belong to BOV/resolver where they exist. Written into the runbook as the Step 3b result. Order for Scott (Q3):
+add the variable → rotate the LCC Opps key on all four services → delete the project → delete the `*variable
+names.docx` exports, which carry values (gitignored, never committed, still not a place for secrets).
+
+**Q1** stays clean (no `DENY-WOULD` since 12:01 UTC). **Q31** closed last round. **Q32** (lane placement) open.
+
+**Parking lot:** +PL-40…43, triaged. Next free: PL-44. **Open for Scott:** Q3 ①–④, Q32.
 
 ## 2026-09-18 — Round 36 (CC): `PERF-SPQ1-c` — revert #2581+#2583, then one-pass chip counts
 
