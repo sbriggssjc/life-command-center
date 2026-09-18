@@ -198,6 +198,14 @@ function applyFeatureFlags() {
   // must never render at once — hide the standalone widget while the flag is on.
   const nbaWidget = document.getElementById('nextBestActionWidget');
   if (nbaWidget) nbaWidget.style.display = checkFlag('home_three_lanes') ? 'none' : '';
+
+  // HOME2-c (2026-09-18): the three-lane widget takes SIGNIFICANT's place at the
+  // top of Today — its BD lane reads the same /api/seller-prospect-queue?limit=5
+  // SIGNIFICANT already rendered (Scott's 2026-09-18 screenshots showed the same
+  // five sellers in both places). Under the flag, SIGNIFICANT's own block is
+  // hidden so nothing renders twice; Important and Urgent are untouched.
+  const todaySig = document.getElementById('todaySignificantSection');
+  if (todaySig) todaySig.style.display = checkFlag('home_three_lanes') ? 'none' : '';
 }
 
 // Weather — uses geolocation with Tulsa fallback
@@ -7967,7 +7975,7 @@ function _home3RenderResearchLane() {
   if (!el) return;
   const items = _home3ResearchItems();
   if (!items.length) { el.innerHTML = '<div class="nba-empty">No outstanding gaps.</div>'; return; }
-  el.innerHTML = items.map((row) => {
+  let html = items.map((row) => {
     const label = String(row.gap_label || '').trim() || ('Property #' + (row.property_id || ''));
     const action = String(row.suggested_action || '').trim()
       || (typeof formatNbaGapType === 'function' ? formatNbaGapType(row.gap_type) : String(row.gap_type || ''));
@@ -7978,9 +7986,11 @@ function _home3RenderResearchLane() {
     const clickAttr = pid
       ? ' onclick="openNbaItem(&quot;' + esc(row.source_domain || '') + '&quot;, ' + Number(pid) + ')" style="cursor:pointer"'
       : '';
-    return '<div class="nba-item"' + clickAttr + '><div class="nba-item-head"><span class="nba-item-title">' + esc(label) + '</span></div>'
+    return '<div class="nba-item home3-item"' + clickAttr + '><div class="nba-item-head"><span class="nba-item-title">' + esc(label) + '</span></div>'
       + '<div class="nba-item-sub">' + esc(action) + source + '</div></div>';
   }).join('');
+  html += '<button type="button" class="nba-viewall" onclick="navTo(\'pageResearch\')">See all data gaps →</button>';
+  el.innerHTML = html;
 }
 
 // BD lane data = /api/seller-prospect-queue, the SAME route the Priority tab
@@ -8023,18 +8033,21 @@ function _home3RenderBdLane() {
     }
     return;
   }
-  el.innerHTML = items.map((r) => {
+  let html = items.map((r) => {
     const clickable = !!r.entity_id;
     const title = r.owner_name || r.entity_name || '—';
     const money = (typeof _todayMoney === 'function') ? _todayMoney(r.rank_value) : (r.rank_value || '');
     const loc = [r.city, r.state].filter(Boolean).join(', ');
-    return '<div class="nba-item' + (clickable ? ' clickable' : '') + '"'
+    return '<div class="nba-item home3-item' + (clickable ? ' clickable' : '') + '"'
       + (clickable ? ' onclick=\'openEntityDetail(' + JSON.stringify(String(r.entity_id)) + ')\'' : '')
       + ' style="cursor:' + (clickable ? 'pointer' : 'default') + '">'
       + '<div class="nba-item-head"><span class="nba-item-title">' + esc(title) + '</span>'
       + '<span class="q-badge type">' + esc(r.reach_state || '') + '</span></div>'
       + '<div class="nba-item-sub">' + esc(money) + (loc ? ' · ' + esc(loc) : '') + '</div></div>';
   }).join('');
+  const total = (typeof _home3BdTotal === 'number') ? (' (' + _home3BdTotal + ')') : '';
+  html += '<button type="button" class="nba-viewall" onclick="navTo(\'pageSellerProspectQueue\')">See all seller prospects' + total + ' →</button>';
+  el.innerHTML = html;
 }
 
 // Inbox lane data = canonicalInbox.items — the same /api/queue-v2?view=inbox
@@ -8048,10 +8061,12 @@ function _home3RenderInboxLane() {
     ? canonicalInbox.items : [];
   const items = _home3TopN(_home3RankInboxItems(raw), 5);
   if (!items.length) { el.innerHTML = '<div class="nba-empty">Inbox is clear.</div>'; return; }
-  el.innerHTML = items.map((r) => {
-    return '<div class="nba-item"><div class="nba-item-head"><span class="nba-item-title">' + esc(r.title || 'Item') + '</span>'
+  let html = items.map((r) => {
+    return '<div class="nba-item home3-item" onclick="navTo(\'pageInbox\')" style="cursor:pointer"><div class="nba-item-head"><span class="nba-item-title">' + esc(r.title || 'Item') + '</span>'
       + '<span class="q-badge type">' + esc(r.status || '') + '</span></div></div>';
   }).join('');
+  html += '<button type="button" class="nba-viewall" onclick="navTo(\'pageInbox\')">See all inbox items →</button>';
+  el.innerHTML = html;
 }
 
 // Entry point — no-ops entirely (no DOM writes, no fetch) unless the flag is
