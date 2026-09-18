@@ -53,6 +53,33 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-18 (CC) — `DEPLOY2-drop-aware` built: the unapplied-migration check no longer flags an object a LATER migration deliberately DROPs
+
+Built per the SBN-13-derived `DEPLOY2-drop-aware` prompt, not applied to any database (script-only). Added
+`parseDroppedObjects` (mirrors `parseDeclaredObjects` for `DROP FUNCTION|TRIGGER|VIEW|TABLE|INDEX|TYPE|POLICY`,
+comments stripped first) + `buildRetirementMap` in `scripts/build-brief-collector.mjs`: over every file's
+`[filename, sql]` pair in the migration window, sorted by **filename** (never the git-add-date order used to
+select the window — a later migration's own timestamp is the only ordering that should decide whether it
+retires an earlier one), an object whose LATEST in-window statement is a DROP is marked retired-by-that-file.
+`collectMigrationApplicationFindings` now splits each file's declared objects into active (still probed,
+unchanged behavior) and retired (never probed; emits a `migration_object_retired` finding at `info` severity
+naming the retiring file) before building the per-target probe buckets — so RECON1's guard function/trigger,
+dropped on purpose by RECON2, reads `info`/`retired_by` instead of `critical`/`unapplied`, and a CREATE after
+an earlier DROP (the control case) is still probed normally since it becomes the latest statement.
+
+Guard: `test/deploy2-drop-aware.test.mjs` (8 tests) — the RECON1/RECON2 pair in both input orders, a DROP-before-
+CREATE control (still probed), a never-dropped object (never retired), and the finding shape. `node --check` +
+the full `test/xb1-xb2-build-brief-collector.test.mjs` suite (57 tests) both green; no other collector behavior
+touched.
+
+**Not done here, by the prompt's own constraint:** no probe-RPC change (drop-detection reads the migration
+FILES only, same as the existing declared-object parse — it does not need `lcc_probe_schema_objects` to know
+about drops). Parked for Scott: re-run the DEPLOY2 check against `main` once this merges and confirm the
+`dia_recon1_lease_active_past_expiration_guard`/`trg_dia_recon1_lease_active_guard` pair now reports `info`,
+not `critical`.
+
+---
+
 ## 2026-09-18 — Round 32 (Cowork): `HOME2-fix` and `RECON2-b` reconciled live — the lanes now exist and the classifier now says 7 confirmed, not 1,494; but two lanes render wrong data (`HOME2-b`), the DEPLOY2 red on `main` is a false positive from RECON2's deliberate DROP (`DEPLOY2-drop-aware`), and `Sync SF Activities` still has no header; STATUS archived to tail14
 
 **Merged since round 31:** #2573 `HOME2-fix` (`f612db87`), #2574 `RECON2-b` (`2824d090`), #2575 HCRIS-TIMEOUT-8
