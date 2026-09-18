@@ -401,8 +401,8 @@ describe('HOME2-d — the three-lane grid fits its container instead of overflow
     assert.match(gridOpen, /<div class="widget-grid home3-grid"/);
   });
 
-  it('styles.css defines .home3-grid with minmax(0,1fr) tracks so columns cannot overflow their container', () => {
-    assert.match(css, /\.home3-grid\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/);
+  it('styles.css defines #home3LanesWidget .home3-grid with minmax(0,1fr) tracks, specific enough to beat the desktop .widget-grid 4-up rule', () => {
+    assert.match(css, /#home3LanesWidget \.home3-grid\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/);
   });
 
   it('styles.css zeroes min-width on each lane child of .home3-grid', () => {
@@ -413,8 +413,8 @@ describe('HOME2-d — the three-lane grid fits its container instead of overflow
     assert.match(css, /#todaySectionsWidget\s*\{[^}]*container-type:\s*inline-size/);
   });
 
-  it('a container query collapses .home3-grid to a single stacked column below ~900px of card width', () => {
-    assert.match(css, /@container\s*\(max-width:\s*900px\)\s*\{\s*\.home3-grid\s*\{[^}]*grid-template-columns:\s*1fr/);
+  it('a container query collapses #home3LanesWidget .home3-grid to a single stacked column below ~900px of card width, at the same raised specificity', () => {
+    assert.match(css, /@container\s*\(max-width:\s*900px\)\s*\{\s*#home3LanesWidget \.home3-grid\s*\{[^}]*grid-template-columns:\s*1fr/);
   });
 
   it('flag off is byte-identical in the parts HOME2-d touches: home3LanesWidget still defaults to display:none', () => {

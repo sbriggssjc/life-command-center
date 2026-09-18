@@ -298,10 +298,10 @@ body.compact .nba-subhead { margin: -2px 0 6px; }
    BD → Inbox, matching markup order) once the card itself is too narrow for
    three real columns, rather than guessing from the viewport width. */
 #todaySectionsWidget { container-type: inline-size; }
-.home3-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+#home3LanesWidget .home3-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .home3-grid > div { min-width: 0; }
 @container (max-width: 900px) {
-  .home3-grid { grid-template-columns: 1fr; }
+  #home3LanesWidget .home3-grid { grid-template-columns: 1fr; }
 }
 /* Fallback for a browser without container query support (neither Chrome nor
    Edge desktop lacks it, but this keeps the layout sane rather than silently
@@ -309,7 +309,7 @@ body.compact .nba-subhead { margin: -2px 0 6px; }
    column occupies once the sidebar is present (768px breakpoint + margin). */
 @supports not (container-type: inline-size) {
   @media (max-width: 900px) {
-    .home3-grid { grid-template-columns: 1fr; }
+    #home3LanesWidget .home3-grid { grid-template-columns: 1fr; }
   }
 }
 @media (max-width: 720px) {
