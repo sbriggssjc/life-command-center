@@ -55,3 +55,6 @@ Sibling ledgers: `SB notes/TRIAGE.md` (Scott's in-app observations — richer in
 | PL-24 | 2026-09-17 | → backlog `RECON2-b` — *`medicare_clinics.status='removed'` on 90% of rows while `is_operating=true` on the same rows; two fields, two truths, used as closure evidence (Cowork, reconcile)…* |
 | PL-25 | 2026-09-17 | → decision: said in both new prompts — *CC's RECON2 round titled its STATUS entry "Round 30 (Cowork)"; CC entries are labelled (CC) and do not take Cowork round numbers — this Cowork round is 31 (Cowork)…* |
 | PL-26 | 2026-09-17 | → backlog `HOME2-fix` (generalised test) — *a flag-gated feature can ship JS whose DOM ids exist nowhere and pass 200 lines of tests (Cowork, from Scott's look)…* |
+| PL-27 | 2026-09-18 | → backlog `HOME2-b` — *HOME2's Inbox lane reads `dailyBriefingSnapshot.inbox_summary`, a key the live snapshot never had; a lane built against an imagined shape (Cowork, browser look)…* |
+| PL-28 | 2026-09-18 | → backlog `DEPLOY2-drop-aware` — *DEPLOY2 treats an object a later migration DROPs as "never applied" (Cowork, from SBN-13)…* |
+| PL-29 | 2026-09-18 | → checklist Q31 — *a response docx saved as 0 bytes with a `~$` lock file beside it; Word had it open when Scott saved (Cowork)…* |
