@@ -7517,10 +7517,38 @@ async function handleSellerProspectQueue(req, res) {
   const limit = clampLimit(req.query.limit);
   const offset = clampOffset(req.query.offset);
 
+  // PERF-SPQ1 (2026-09-18): the items page, the 7 chip counts and the funnel summary
+  // are three INDEPENDENT reads of the same view -- nothing here depends on another's
+  // result -- so they run concurrently rather than as 9 sequential round trips. That
+  // alone does not change how many full-view scans Postgres does (each chip count is
+  // still its own `count=exact` pass), but it collapses their wall-clock cost from
+  // "sum of every query" to "the slowest one", which is most of what made this route
+  // take ~14s end to end.
+  //
   // count=exact on the list gives the pager an exact total for the ACTIVE filter --
   // so `has_more` is a fact, not "the page came back full".
-  const itemsR = await opsQuery('GET', buildQueuePath({ chipKey: chip.key, domain, limit, offset }),
-    undefined, { countMode: 'exact' });
+  //
+  // Chip counts: ONE query per chip, each carrying the SAME predicate its click sends,
+  // so a chip can never report a population the list would not show (P139). Chips
+  // soft-fail independently -- a hiccup on the counts must not take down the page --
+  // and a failed chip reports n: null (not 0), because "we could not count" and "there
+  // are none" are different facts (P180).
+  //
+  // The funnel, so the EXCLUDED populations stay visible instead of silently vanishing
+  // (the producer/consumer honest-counts rule). Soft-fails to null.
+  const [itemsR, countResults, summaryR] = await Promise.all([
+    opsQuery('GET', buildQueuePath({ chipKey: chip.key, domain, limit, offset }),
+      undefined, { countMode: 'exact' }),
+    Promise.all(SELLER_QUEUE_CHIPS.map((c) =>
+      opsQuery('GET', buildChipCountPath({ chipKey: c.key, domain }), undefined, { countMode: 'exact' })
+        .then((r) => ({ key: c.key, label: c.label, n: r.ok ? r.count : null }))
+        .catch((e) => {
+          console.warn('[seller-prospect-queue] chip count threw:', c.key, e?.message || e);
+          return { key: c.key, label: c.label, n: null };
+        }))),
+    opsQuery('GET', 'v_lcc_seller_prospect_queue_summary?select=*',
+      undefined, { countMode: 'none' }).catch(() => ({ ok: false, data: null })),
+  ]);
   if (!itemsR.ok) {
     console.warn('[seller-prospect-queue] items query failed:', itemsR.status, itemsR.data);
     // Pass the DB's own message through. A handler that discards it turns a one-line
@@ -7528,24 +7556,6 @@ async function handleSellerProspectQueue(req, res) {
     return res.status(502).json({ error: 'list_failed', detail: itemsR.data });
   }
   const items = Array.isArray(itemsR.data) ? itemsR.data : [];
-
-  // Chip counts: ONE query per chip, each carrying the SAME predicate its click sends,
-  // so a chip can never report a population the list would not show (P139). Chips
-  // soft-fail independently -- a hiccup on the counts must not take down the page --
-  // and a failed chip reports n: null (not 0), because "we could not count" and "there
-  // are none" are different facts (P180).
-  const countResults = await Promise.all(SELLER_QUEUE_CHIPS.map((c) =>
-    opsQuery('GET', buildChipCountPath({ chipKey: c.key, domain }), undefined, { countMode: 'exact' })
-      .then((r) => ({ key: c.key, label: c.label, n: r.ok ? r.count : null }))
-      .catch((e) => {
-        console.warn('[seller-prospect-queue] chip count threw:', c.key, e?.message || e);
-        return { key: c.key, label: c.label, n: null };
-      })));
-
-  // The funnel, so the EXCLUDED populations stay visible instead of silently vanishing
-  // (the producer/consumer honest-counts rule). Soft-fails to null.
-  const summaryR = await opsQuery('GET', 'v_lcc_seller_prospect_queue_summary?select=*',
-    undefined, { countMode: 'none' }).catch(() => ({ ok: false, data: null }));
 
   return res.status(200).json({
     chip: chip.key,
