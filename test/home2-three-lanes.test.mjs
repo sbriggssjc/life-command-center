@@ -374,3 +374,52 @@ describe('HOME2-c — lane cards clamp to a fixed number of lines rather than gr
     }
   });
 });
+
+// HOME2-d (2026-09-18, docs/os/PLANNED-BACKLOG.md §HOME2-d) — the three-lane
+// grid used a bare `grid-template-columns:1fr 1fr 1fr` inline style with no
+// min-width guard, so tracks sized to CONTENT instead of the container on a
+// narrow Today card (measured live on Railway: Inbox lane painted off the
+// right edge of the card). Fix: a `home3-grid` class with `minmax(0,1fr)`
+// tracks, plus a container query on the card itself that stacks to one
+// column (Research -> BD -> Inbox, markup order) below ~900px of card width.
+describe('HOME2-d — the three-lane grid fits its container instead of overflowing it', () => {
+  const html = readFileSync(indexPath, 'utf8');
+  const css = readFileSync(join(process.cwd(), 'styles.css'), 'utf8');
+
+  it('the widget-grid no longer carries an inline grid-template-columns style (HOME2-c\'s bare 1fr 1fr 1fr)', () => {
+    const m = html.match(/id="home3LanesWidget"[\s\S]*?<\/div>\s*<\/div>/);
+    assert.ok(m, 'home3LanesWidget block not found');
+    // Scope the check to the widget-grid div itself, not the whole lanes block.
+    const gridOpen = html.slice(html.indexOf('id="home3LanesWidget"'));
+    const gridTagMatch = gridOpen.match(/<div class="widget-grid[^"]*"([^>]*)>/);
+    assert.ok(gridTagMatch, 'widget-grid div not found inside home3LanesWidget');
+    assert.doesNotMatch(gridTagMatch[1], /grid-template-columns/, 'the widget-grid div must not carry an inline grid-template-columns style anymore');
+  });
+
+  it('the widget-grid inside home3LanesWidget carries the home3-grid class', () => {
+    const gridOpen = html.slice(html.indexOf('id="home3LanesWidget"'));
+    assert.match(gridOpen, /<div class="widget-grid home3-grid"/);
+  });
+
+  it('styles.css defines .home3-grid with minmax(0,1fr) tracks so columns cannot overflow their container', () => {
+    assert.match(css, /\.home3-grid\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/);
+  });
+
+  it('styles.css zeroes min-width on each lane child of .home3-grid', () => {
+    assert.match(css, /\.home3-grid\s*>\s*div\s*\{[^}]*min-width:\s*0/);
+  });
+
+  it('#todaySectionsWidget is a size container so the three-lane grid can query its own width', () => {
+    assert.match(css, /#todaySectionsWidget\s*\{[^}]*container-type:\s*inline-size/);
+  });
+
+  it('a container query collapses .home3-grid to a single stacked column below ~900px of card width', () => {
+    assert.match(css, /@container\s*\(max-width:\s*900px\)\s*\{\s*\.home3-grid\s*\{[^}]*grid-template-columns:\s*1fr/);
+  });
+
+  it('flag off is byte-identical in the parts HOME2-d touches: home3LanesWidget still defaults to display:none', () => {
+    const m = html.match(/id="home3LanesWidget"([^>]*)>/);
+    assert.ok(m);
+    assert.match(m[1], /display:\s*none/);
+  });
+});

@@ -289,6 +289,29 @@ body.compact .nba-subhead { margin: -2px 0 6px; }
    truncating to one, and the reason line clamps to one. */
 .home3-item .nba-item-title { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .home3-item .nba-item-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* HOME2-d — the three-lane grid used a bare 1fr 1fr 1fr template with no
+   min-width guard, so on a narrow Today card (the main column is ~500px on a
+   laptop, per .home-layout's 1fr/320px split) the tracks sized to content
+   instead of the container and the Inbox lane painted off the right edge of
+   the card. `minmax(0,1fr)` forces each track back down to the container's
+   share; the container query below drops to one stacked column (Research →
+   BD → Inbox, matching markup order) once the card itself is too narrow for
+   three real columns, rather than guessing from the viewport width. */
+#todaySectionsWidget { container-type: inline-size; }
+.home3-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.home3-grid > div { min-width: 0; }
+@container (max-width: 900px) {
+  .home3-grid { grid-template-columns: 1fr; }
+}
+/* Fallback for a browser without container query support (neither Chrome nor
+   Edge desktop lacks it, but this keeps the layout sane rather than silently
+   broken if one ever doesn't): stack below the viewport width the card's main
+   column occupies once the sidebar is present (768px breakpoint + margin). */
+@supports not (container-type: inline-size) {
+  @media (max-width: 900px) {
+    .home3-grid { grid-template-columns: 1fr; }
+  }
+}
 @media (max-width: 720px) {
   .nba-row { grid-template-columns: 28px 48px 1fr auto; gap: 8px; padding: 7px 8px; }
   .nba-action { font-size: 10px; }
