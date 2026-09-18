@@ -53,6 +53,42 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-18 — `RECON2-b` shipped live: `cms_closure` no longer fires on `status='removed'` (1,489 → 2), `expiration_unknown` state added, worklist gains `is_active` gate (CC)
+
+RECON2-b (filed round 31, `docs/claude-code/prompts/done/RECON2-b-cms-removed-is-not-a-closure-classifier-evidence-fix.md`)
+built and applied live to Dialysis_DB via Supabase MCP
+(`supabase/migrations/dialysis/20260918120000_dia_recon2b_lease_expiration_evidence_fix.sql`).
+Three fixes, all measured before/after:
+
+1. **`cms_closure` evidence redefined.** Was: ANY `medicare_clinics.status IN
+   ('removed','closed','relocated')` on the property. `status='removed'` is an import/list state
+   (90% of `medicare_clinics`, 7,690/8,547) — 1,489 of 1,494 `expired_confirmed` proposals fired on
+   it, 1,481 on a property with an `is_operating=true` clinic (the exact leases 13217/10060/12369/
+   6721/8826 named in the prompt). Now requires EVERY clinic row on the property to read
+   `is_operating IS NOT TRUE AND status IN ('closed','relocated')`; an operating clinic disqualifies
+   `cms_closure` and the row proposes `expired_unconfirmed` with a named evidence_detail
+   (`'clinic operating (CMS) — no expiration evidence; holdover or renewal undetermined'`) instead of
+   silence. Re-measured live: `cms_closure` **1,489 → 2**; new distribution 2,454 candidates → 2
+   cms_closure + 1 successor_lease + 4 termination_record + 2,447 expired_unconfirmed.
+2. **New `expiration_unknown` state.** 3,801 leases with NO `lease_expiration` on file (2,334
+   active) were reading `in_term` — `NULL < current_date` is false in SQL, so "we don't know" was
+   reported as "confirmed current." Added to the CHECK constraint; guard trigger branches NULL
+   before the date test; backfilled.
+3. **Enqueue worklist gains `l.is_active=true`.** 563 of the first 1,000 `pending_updates` rows
+   from `dia_recon2_enqueue_expired_unconfirmed_research` sat on leases already `is_active=false`
+   (superseded history — the function had no filter). Closed live (`status='ignored'`, ledgered to
+   `dia_recon1_run_log`, reversible). Verified: `pending_updates` for that worklist now reads 563
+   ignored / 437 open. The function also ranks a lease whose property carries an operating CMS
+   clinic first (cheapest case for an operator to confirm/refute) and stamps `clinic_operating` into
+   each row's payload.
+
+No fleet write to `is_active`/`expired_confirmed` happened — classifier + worklist only, exactly as
+scoped. `docs/architecture/reconcile-property-spec.md` §R5 updated in the same change with the fix +
+re-measured counts. Next: a fleet confirmation pass off the now-correct classifier output is still a
+separate, future, human-reviewed unit (unbuilt, per Scott's original rule).
+
+---
+
 ## 2026-09-17 — Round 31 (Cowork): `RECON2` unit 1 reconciled — live and correct on the model, **but its "confirmed" class is wrong: 1,481 of 1,489 "CMS closure" leases sit on clinics marked operating** (no fleet write; `RECON2-b` prompted); Scott is on Railway and the three-lane Home shows nothing because **`index.html` has no `home3*` elements** (`HOME2-fix` prompted)
 
 *(Numbering: the entry below is Claude Code's RECON2 round; it titled itself "Round 30 (Cowork)". Headings are
