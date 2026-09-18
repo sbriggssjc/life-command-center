@@ -37,7 +37,7 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-reconcile-2, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT, CANON-OWNERSHIP1 | 2026-09-16 | Arc complete through GOVDEED3 (gov #406); **the gov deed writer runs from GitHub Actions (weekly Mon 06:00 UTC) — verify 09-21 dateless = 0**; CANON-OWNERSHIP1 👤 confirmation open; sale-party conflicts 1,290 a review queue |
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k LIVE** (LCC PR #2506): 218 attested supersessions, 40/43 pairs to sponsor, 16/16 controls untouched, reversible; sponsor-as-edge = future work |
 | **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, -harris-b/-c/-d, -ledger-order, MCP1 | 2026-09-17 | **41 assessor-sourced owners live** (Philadelphia 20, Harris 21 of 50); Harris is done except the 27 situs-gap properties → §P10a is the lane's next unit; next free-bulk jurisdiction after that |
-| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS-consolidate-lcc, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift, RECON1, RECON1-b, RECON2, RECON2-b, RECON2-render, HOME2-fix, HOME2-b, HOME2-c, PERF-SPQ1, PERF-SPQ1-b, PERF-SPQ1-c, RECON2-c, SIDEBAR-LEASE1, VERCEL-LIVE1 | 2026-09-17 | PRI2-on live; HOME2 built, flag OFF → HOME2-on; F8/F8-b done; DIA1c live; **SBN-12 (Banning clinic) → `RECON1` merged + reconciled: one property, off Available; residue `RECON1-b` (deed task never created, sentinel party name); **Today still dark (502/26 s after PERF-SPQ1-b) → `PERF-SPQ1-c` revert both**; leases 2–7 read: 2 confirm, 4 confirm-with-successor; sidebar sends wrote no lease → `SIDEBAR-LEASE1`; Q1 clean (enforce ≥ 09-21); HOME2-c open; J13-teardown Q3 raw names list; Saturday digest verifies F1–F8 |
+| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS-consolidate-lcc, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift, RECON1, RECON1-b, RECON2, RECON2-b, RECON2-render, HOME2-fix, HOME2-b, HOME2-c, PERF-SPQ1, PERF-SPQ1-b, PERF-SPQ1-c, RECON2-c, SIDEBAR-LEASE1, VERCEL-LIVE1 | 2026-09-17 | PRI2-on live; HOME2 built, flag OFF → HOME2-on; F8/F8-b done; DIA1c live; **SBN-12 (Banning clinic) → `RECON1` merged + reconciled: one property, off Available; residue `RECON1-b` (deed task never created, sentinel party name); **`PERF-SPQ1-c` shipped (round 36, CC): reverted the #2581/#2583 contention regression + built the one-pass `lcc_seller_prospect_chip_counts()` RPC in the same change — locally verified (suite + new guard), browser probe of the deployed route still outstanding (👤)**; leases 2–7 read: 2 confirm, 4 confirm-with-successor; sidebar sends wrote no lease → `SIDEBAR-LEASE1`; Q1 clean (enforce ≥ 09-21); HOME2-c open; J13-teardown Q3 raw names list; Saturday digest verifies F1–F8 |
 | **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–5, INVENTORY1, INVENTORY1b, INVENTORY2, INVENTORY-process, REMEDIATION-2026-05, REPO1, ROADMAP, PROCESS-CC-DOCS, PROCESS-MERGE-CLOBBER, GUARD-CLOBBER1, PROCESS-ROW-CELLS, PROCESS-PARKING-LOT, DEPLOY2-coverage, DEPLOY2-stale-body | 2026-09-18 | **PR #2563 reverted STATUS + backlog to a week-old snapshot (7 entries / 11 rows lost) — restored round 26; `GUARD-CLOBBER1` live on `main` (PR #2566), manual per-turn diff retired round 28**; DEPLOY2 live + CI; parking lot triaged; EDGE-GATES1 live |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
 | **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
@@ -50,6 +50,42 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 > cuts) were moved **verbatim** to
 > [`docs/history/STATUS_claude-code_2026-08-31_to_2026-09-01.md`](../history/STATUS_claude-code_2026-08-31_to_2026-09-01.md).
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
+
+---
+
+## 2026-09-18 — Round 36 (CC): `PERF-SPQ1-c` — revert #2581+#2583, then one-pass chip counts
+
+**Reverted the contention regression in the SAME change as the real fix** (no separate revert-then-fix PR, since
+`admin.js`'s `handleSellerProspectQueue` was rewritten from scratch back to its pre-`PERF-SPQ1` shape plus the new
+RPC — a stepwise revert-commit would have been a no-op diff against this end state). `git show <pre-PERF-SPQ1
+sha>:api/admin.js` confirmed the pre-regression handler shape before rewriting.
+
+- **The nine-way `Promise.all` is gone.** Items page query runs alone first (own `opsQuery`, `timeoutMs: 20000` —
+  up from the 8s default, since P123's lesson about a caller aborting before the DB finishes applies at the fetch
+  layer here too), and only on success do chip counts + the funnel summary run concurrently with each other (two
+  cheap reads, not nine).
+- **The 7 independent `count=exact` chip queries are replaced by one RPC**, `lcc_seller_prospect_chip_counts(text)`
+  (migration `20261102220000`): a single CTE materializing `v_lcc_seller_prospect_queue` once, then
+  `count(*) FILTER (WHERE …)` per chip — one view-scan instead of seven. `STABLE SECURITY INVOKER`, granted to
+  `authenticated`/`service_role` (no elevated privilege — mirrors the view's own grant, so no
+  `sql-definer-privilege-stanza` stanza is needed; it is not `SECURITY DEFINER`).
+- **A failed RPC still returns 200 with `chips: [{key, label, n: null}, …]`**, never 0 and never a 500 — the
+  degrade path the round-35 entry named (`counts: null`).
+- **Verified locally, not from the browser** (no live Railway/DB access from this session): full syntax check,
+  the new guard `test/perf-spq1c-chip-counts-rpc.test.mjs` (10 tests — no `Promise.all` bundling the items query,
+  no per-chip `opsQuery` fan-out, the RPC call is present, the items query carries the longer timeout, the SQL's
+  chip predicates match `SELLER_QUEUE_CHIPS` one-for-one, single view scan), and the full existing suite
+  (6,685 pass / 0 fail / 6 pre-existing skips, unchanged from before this change). **The prompt's required browser
+  probe was NOT run** — this sandbox has no path to the signed-in Railway app or live Supabase, so the 200-in-~14s
+  (or better) confirmation from the browser is still outstanding and is the next thing to do post-merge, per the
+  prompt's own "no merge without a browser probe" rule. 👤 Scott/Cowork: after deploy, hit
+  `GET /api/seller-prospect-queue?chip=all&limit=5&offset=0` signed in and report status + duration in the PR
+  thread before calling this done.
+- **Not done (explicitly deferred, not forgotten):** the `?view=_perf` instrumentation step (per-upstream-read
+  timing surfaced on the response) that the prompt asked for as step 2 — skipped because step 1's revert should
+  already resolve the abort, and adding instrumentation to a route about to be rewritten again would be wasted
+  work if the revert alone is sufficient. If the browser probe still shows anything other than a clean 200, build
+  `_perf` next rather than guessing further.
 
 ---
 

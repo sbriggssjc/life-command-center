@@ -145,7 +145,7 @@ import {
 import { normalizeState, parseContactFromJunk, normalizeCanonicalName, recordContactFieldWrites } from './_shared/entity-link.js';
 import { diaSupabaseKey, govSupabaseKey } from './_shared/supabase-keys.js';
 import {
-  SELLER_QUEUE_CHIPS, buildQueuePath, buildChipCountPath, buildPagination,
+  SELLER_QUEUE_CHIPS, buildQueuePath, buildPagination,
   resolveChip, normalizeDomain, clampLimit, clampOffset,
 } from './_shared/seller-prospect-queue.js';
 import { createHash, randomUUID } from 'node:crypto';
@@ -7517,48 +7517,35 @@ async function handleSellerProspectQueue(req, res) {
   const limit = clampLimit(req.query.limit);
   const offset = clampOffset(req.query.offset);
 
-  // PERF-SPQ1 (2026-09-18): the items page, the 7 chip counts and the funnel summary
-  // are three INDEPENDENT reads of the same view -- nothing here depends on another's
-  // result -- so they run concurrently rather than as 9 sequential round trips. That
-  // alone does not change how many full-view scans Postgres does (each chip count is
-  // still its own `count=exact` pass), but it collapses their wall-clock cost from
-  // "sum of every query" to "the slowest one", which is most of what made this route
-  // take ~14s end to end.
+  // PERF-SPQ1-c (2026-09-18): reverts PERF-SPQ1/-b. Firing the items page + all 7 chip
+  // counts + the funnel summary CONCURRENTLY (9 queries at once) did not reduce how many
+  // full passes Postgres does over v_lcc_seller_prospect_queue -- that view is a stack of
+  // CTEs with regex owner-name guards and an EXISTS join to activity_events, real work per
+  // pass -- it just made all nine CONTEND for the same connection pool, and the one that
+  // matters (the items page) is the one that starved and aborted (measured live: 502 in
+  // 26s, "This operation was aborted"). -b only changed the shape of the resulting error
+  // (500 -> 502); it did not fix the abort.
+  //
+  // The actual fix: replace the 7 independent chip-count queries with ONE call to
+  // lcc_seller_prospect_chip_counts(), which computes every chip's count from a SINGLE
+  // pass over the view (one CTE + count(*) FILTER per chip). That leaves exactly TWO
+  // concurrent reads of the heavy view (items, counts) instead of eight, plus the light
+  // funnel summary -- three total, not nine.
   //
   // count=exact on the list gives the pager an exact total for the ACTIVE filter --
   // so `has_more` is a fact, not "the page came back full".
   //
-  // Chip counts: ONE query per chip, each carrying the SAME predicate its click sends,
-  // so a chip can never report a population the list would not show (P139). Chips
-  // soft-fail independently -- a hiccup on the counts must not take down the page --
-  // and a failed chip reports n: null (not 0), because "we could not count" and "there
-  // are none" are different facts (P180).
-  //
-  // The funnel, so the EXCLUDED populations stay visible instead of silently vanishing
-  // (the producer/consumer honest-counts rule). Soft-fails to null.
-  const [itemsR, countResults, summaryR] = await Promise.all([
-    opsQuery('GET', buildQueuePath({ chipKey: chip.key, domain, limit, offset }),
-      undefined, { countMode: 'exact' })
-      // PERF-SPQ1-b: an unhandled rejection here (an abort/timeout upstream) used to reject the
-      // whole Promise.all before the `if (!itemsR.ok)` check below ever ran, surfacing as a bare
-      // 500 "Internal server error" instead of the intended 502 list_failed -- that regression is
-      // what took the Today panel dark. Normalize to the same {ok:false} shape opsQuery itself
-      // returns on a non-OK response, so a network-level failure is handled identically to a
-      // DB-level one.
-      .catch((e) => {
-        console.warn('[seller-prospect-queue] items query threw:', e?.message || e);
-        return { ok: false, status: 0, count: 0, data: { error: 'items_query_threw', message: e?.message || String(e) } };
-      }),
-    Promise.all(SELLER_QUEUE_CHIPS.map((c) =>
-      opsQuery('GET', buildChipCountPath({ chipKey: c.key, domain }), undefined, { countMode: 'exact' })
-        .then((r) => ({ key: c.key, label: c.label, n: r.ok ? r.count : null }))
-        .catch((e) => {
-          console.warn('[seller-prospect-queue] chip count threw:', c.key, e?.message || e);
-          return { key: c.key, label: c.label, n: null };
-        }))),
-    opsQuery('GET', 'v_lcc_seller_prospect_queue_summary?select=*',
-      undefined, { countMode: 'none' }).catch(() => ({ ok: false, data: null })),
-  ]);
+  // The items query gets a longer timeout than opsQuery's 8s default: it is the heaviest
+  // read on this route and the one whose abort must never take the page dark. Chip counts
+  // and the funnel soft-fail independently -- a hiccup on either must not take down the
+  // items page -- and a failed chip count reports n: null (not 0), because "we could not
+  // count" and "there are none" are different facts (P180).
+  const itemsR = await opsQuery('GET', buildQueuePath({ chipKey: chip.key, domain, limit, offset }),
+    undefined, { countMode: 'exact', timeoutMs: 20000 })
+    .catch((e) => {
+      console.warn('[seller-prospect-queue] items query threw:', e?.message || e);
+      return { ok: false, status: 0, count: 0, data: { error: 'items_query_threw', message: e?.message || String(e) } };
+    });
   if (!itemsR.ok) {
     console.warn('[seller-prospect-queue] items query failed:', itemsR.status, itemsR.data);
     // Pass the DB's own message through. A handler that discards it turns a one-line
@@ -7567,10 +7554,31 @@ async function handleSellerProspectQueue(req, res) {
   }
   const items = Array.isArray(itemsR.data) ? itemsR.data : [];
 
+  const [chipCountsR, summaryR] = await Promise.all([
+    opsQuery('POST', 'rpc/lcc_seller_prospect_chip_counts', { p_domain: domain || null },
+      undefined, { countMode: 'none', timeoutMs: 15000 })
+      .catch((e) => {
+        console.warn('[seller-prospect-queue] chip counts rpc threw:', e?.message || e);
+        return { ok: false, data: null };
+      }),
+    opsQuery('GET', 'v_lcc_seller_prospect_queue_summary?select=*',
+      undefined, { countMode: 'none' }).catch(() => ({ ok: false, data: null })),
+  ]);
+  const chipCountByKey = new Map(
+    (chipCountsR.ok && Array.isArray(chipCountsR.data) ? chipCountsR.data : [])
+      .map((row) => [row.chip_key, Number(row.n)]));
+  // n: null when the RPC failed outright OR this chip's row didn't come back -- never 0,
+  // because "we could not count" and "there are none" are different facts (P180).
+  const chips = SELLER_QUEUE_CHIPS.map((c) => ({
+    key: c.key,
+    label: c.label,
+    n: chipCountsR.ok && chipCountByKey.has(c.key) ? chipCountByKey.get(c.key) : null,
+  }));
+
   return res.status(200).json({
     chip: chip.key,
     domain: domain || null,
-    chips: countResults,
+    chips,
     pagination: buildPagination({ total: itemsR.count, limit, offset }),
     funnel: (summaryR.ok && Array.isArray(summaryR.data)) ? summaryR.data : null,
     items,
