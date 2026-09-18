@@ -363,12 +363,29 @@ export async function stageOmIntake(input, auth, workspaceId) {
 
   // ---- 6. Insert inbox_items (canonical intake row on LCC Opps)
   const nowIso = new Date().toISOString();
+  // SIDEBAR2-c (2026-09-18) — this write had no `external_id`, so the
+  // existing dedup unique index (schema/028_email_dedup_constraint.sql,
+  // `idx_inbox_items_dedup` on (workspace_id, external_id, source_type)
+  // WHERE external_id IS NOT NULL) never covered it: a caller invoking
+  // stageOmIntake twice for the same artifact (a known shape — see the
+  // "TWO inbox rows" / dedup-path comments in intake-extractor.js and
+  // api/intake.js) minted two "OM: ..." cards. Prefer the content hash
+  // (sha256) when the caller supplied one — it is stable across retries
+  // even if the file name or timestamp differ slightly — else fall back to
+  // file_name + a minute bucket. This does not change WHY a caller might
+  // invoke stageOmIntake twice (that is a separate, larger intake.js
+  // race — see comments there); it stops a second call from minting a
+  // second visible triage card.
+  const dedupExternalId = input.sha256
+    ? `om_sha256:${input.sha256}`
+    : `om_file:${(input.file_name || '').toLowerCase()}:${nowIso.slice(0, 16)}`;
   const itemPayload = {
     workspace_id:        wsId,
     source_user_id:      user.id,
     assigned_to:         user.id,
     source_type:         `${input.channel}_om`,           // e.g. 'copilot_chat_om', 'email_om'
     source_connector_id: connectorId,
+    external_id:         dedupExternalId,
     title,
     body,
     visibility:          'private',
@@ -400,7 +417,7 @@ export async function stageOmIntake(input, auth, workspaceId) {
   };
 
   const itemRes = await opsQuery('POST', 'inbox_items', itemPayload, {
-    Prefer: 'return=representation',
+    Prefer: 'return=representation,resolution=merge-duplicates',
   });
   if (!itemRes.ok) {
     return {

@@ -169,6 +169,29 @@ const ROUTE_NUM_RE  = /^(?:rt|route|hwy|highway|us|sr|i)\s*\d+\s*$/i; // bare ro
 // Selects only the property_id column up to PostgREST's default page (1000) and
 // counts the returned array — properties with >1000 of any one type are vanishingly
 // rare here, and the counter underreporting at that ceiling is acceptable.
+// SIDEBAR2-c (2026-09-18) — idempotency-key helper for `inbox_items` writes
+// from this pipeline. Root cause of the duplicate-inbox-card bug: several
+// sidebar-triggered `inbox_items` inserts set no `external_id`, so the
+// existing dedup unique index (schema/028_email_dedup_constraint.sql,
+// `idx_inbox_items_dedup` on (workspace_id, external_id, source_type) WHERE
+// external_id IS NOT NULL) never covered them — a duplicate call (client
+// retry, or two sidebar events landing inside the same capture window)
+// inserted a fresh row every time instead of being caught by PostgREST's
+// `resolution=merge-duplicates` upsert path. This does NOT change the
+// dedup mechanism — it makes these writers participate in the one that
+// already exists. Callers pass parts + a coarse minute bucket (or omit the
+// timestamp entirely when a stronger natural key, like an entity id, is
+// already unique on its own).
+export function inboxItemDedupKey(sourceType, parts, atIso) {
+  const bucket = atIso
+    ? String(atIso).slice(0, 16) // YYYY-MM-DDTHH:MM — minute resolution
+    : new Date().toISOString().slice(0, 16);
+  const body = (Array.isArray(parts) ? parts : [parts])
+    .map((p) => String(p == null ? '' : p).toLowerCase().trim())
+    .join('|');
+  return `${sourceType}:${body}:${bucket}`;
+}
+
 async function fetchDomainRecordsCurrent(domain, propertyId) {
   if (!domain || !propertyId) return null;
   if (domain !== 'dialysis' && domain !== 'government') return null;
@@ -263,6 +286,81 @@ function isJunkAddress(addr) {
   const s = String(addr).trim();
   if (!s) return false;
   return OM_JUNK_ADDRESS_RE.test(s);
+}
+
+// SIDEBAR2-b (2026-09-18) — range-address / civic-number twin detector.
+// Pure, testable helper: given the captured address and an existing DB
+// candidate address (both leading with a civic number or an inclusive
+// range, e.g. "4550-4666 S Kirkman Rd" vs "4600 S Kirkman Rd"), decide
+// whether the two describe the SAME building (a governed containment
+// relationship) or a NEAR-MISS that must not be silently merged.
+//
+// This is deliberately NOT the deterministic resolver described in
+// docs/architecture/property-identity-and-address-resolution.md — that
+// document is explicit that "No shared service, schema, promotion, or
+// production write is authorized" for a real range/alias matcher, and a
+// range-containment attach there requires facility corroboration + a
+// second human review. Building that here, untested, against two domain
+// DBs would be inventing exactly the kind of new fuzzy-identity engine
+// this codebase's doctrine forbids ("never guess on identity, route
+// ambiguity to review"). So this function answers ONE narrower, strictly
+// safer question: "is this candidate close enough to the captured address
+// that auto-creating a NEW property row next to it would very likely mint
+// a twin?" — used only to REFUSE the create and flag for review, never to
+// auto-attach. A `null` return means "not a recognizable range collision,
+// proceed as before" (i.e. this function can only make the pipeline more
+// conservative than it already is, never less).
+function parseCivicNumberSpan(addr) {
+  const s = String(addr || '').trim();
+  const m = s.match(/^(\d+)\s*-\s*(\d+)\s+(.+)$/); // "4550-4666 S Kirkman Rd"
+  if (m) {
+    const lo = parseInt(m[1], 10);
+    const hi = parseInt(m[2], 10);
+    if (Number.isFinite(lo) && Number.isFinite(hi) && hi >= lo) {
+      return { lo, hi, rest: m[3].trim().toLowerCase() };
+    }
+  }
+  const single = s.match(/^(\d+)\s+(.+)$/); // "4600 S Kirkman Rd"
+  if (single) {
+    const n = parseInt(single[1], 10);
+    if (Number.isFinite(n)) return { lo: n, hi: n, rest: single[2].trim().toLowerCase() };
+  }
+  return null;
+}
+
+function sameStreetRest(a, b) {
+  // Cheap, conservative equality on the remaining street text (post civic
+  // number) — punctuation/whitespace-insensitive, and tolerant of a
+  // present-vs-absent leading directional (the real "2604 N Hospital Rd"
+  // vs "2609 Hospital Rd" shape) — but NO suffix expansion or fuzzy
+  // scoring, so it only fires on an otherwise near-verbatim street match.
+  const norm = (x) => String(x || '').toLowerCase()
+    .replace(/[.,]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^(n|s|e|w|ne|nw|se|sw)\s+/, '');
+  return norm(a) === norm(b);
+}
+
+export function detectRangeAddressCollision(capturedAddress, candidateAddress) {
+  const captured = parseCivicNumberSpan(capturedAddress);
+  const candidate = parseCivicNumberSpan(candidateAddress);
+  if (!captured || !candidate) return null;
+  if (!sameStreetRest(captured.rest, candidate.rest)) return null;
+
+  const isRange = (span) => span.hi > span.lo;
+  if (isRange(captured) || isRange(candidate)) {
+    const overlaps = captured.lo <= candidate.hi && candidate.lo <= captured.hi;
+    if (overlaps) return { kind: 'range_containment', capturedAddress, candidateAddress };
+    return null;
+  }
+  // Same street, single civic numbers within a few digits of each other —
+  // the "2604 N Hospital Rd" vs "2609 Hospital Rd" shape. Flag, don't guess.
+  const distance = Math.abs(captured.lo - candidate.lo);
+  if (distance > 0 && distance <= 20) {
+    return { kind: 'adjacent_civic_number', capturedAddress, candidateAddress, distance };
+  }
+  return null;
 }
 
 // R19 (2026-06-15): link/FK/metadata columns are not contested DATA values —
@@ -2187,6 +2285,16 @@ async function routeMisparseContactsToReview(reviewItems, ctx) {
       '',
       'Confirm any that are genuine contacts to re-add them manually.',
     ];
+    // SIDEBAR2-c (2026-09-18) — this write had no `external_id`, so the
+    // existing dedup unique index (schema/028_email_dedup_constraint.sql,
+    // `idx_inbox_items_dedup` on (workspace_id, external_id, source_type)
+    // WHERE external_id IS NOT NULL) never applied to it: a client/network
+    // retry within the same capture minted a second row every time. Stamp a
+    // stable key (source_type + property + minute bucket) and route through
+    // the existing merge-duplicates index instead of inventing a new one.
+    const dedupExternalId = inboxItemDedupKey('contact_misparse_review', [
+      propertyEntityId || 'no-property', source || 'costar', fanout ? fanout.email : reasons.join(','),
+    ], extractedAt);
     const res = await opsQuery('POST', 'inbox_items', {
       workspace_id: workspaceId,
       source_user_id: userId || null,
@@ -2194,6 +2302,7 @@ async function routeMisparseContactsToReview(reviewItems, ctx) {
       title,
       body: bodyLines.join('\n'),
       source_type: 'contact_misparse_review',
+      external_id: dedupExternalId,
       status: 'new',
       priority: 'normal',
       entity_id: propertyEntityId || null,
@@ -2208,7 +2317,7 @@ async function routeMisparseContactsToReview(reviewItems, ctx) {
         property_entity_id: propertyEntityId || null,
         extracted_at: extractedAt || null,
       },
-    }, { 'Prefer': 'return=minimal' });
+    }, { 'Prefer': 'return=minimal,resolution=merge-duplicates' });
     if (!res?.ok) console.warn('[sidebar misparse] inbox_items POST failed:', res?.status, res?.data);
     return reviewItems.length;
   } catch (e) {
@@ -2375,6 +2484,13 @@ async function unpackContacts(propertyEntityId, metadata, workspaceId, userId, d
           bodyLines.push('');
           bodyLines.push('Triage to qualify, set priority tier, and route to the right cadence template.');
 
+          // SIDEBAR2-c (2026-09-18) — same fix as the misparse-review write
+          // above: this insert had no `external_id`, so a duplicate call for
+          // the same newly-created contact entity (client retry / a second
+          // sidebar send landing inside the same capture) minted a second
+          // triage card every time. `link.createdEntity` is already gating
+          // on "this contact is brand new", so the entity id itself is a
+          // stable, sufficient dedup key — no time bucket needed.
           const inboxRes = await opsQuery('POST', 'inbox_items', {
             workspace_id:   workspaceId,
             source_user_id: userId,
@@ -2382,6 +2498,7 @@ async function unpackContacts(propertyEntityId, metadata, workspaceId, userId, d
             title,
             body:           bodyLines.join('\n'),
             source_type:    'new_contact_qualify',
+            external_id:    `contact:${link.entityId}`,
             status:         'new',
             priority:       'normal',
             entity_id:      link.entityId,
@@ -2398,7 +2515,7 @@ async function unpackContacts(propertyEntityId, metadata, workspaceId, userId, d
               extracted_at:     extractedAt,
               property_entity_id: propertyEntityId || null,
             },
-          }, { 'Prefer': 'return=minimal' });
+          }, { 'Prefer': 'return=minimal,resolution=merge-duplicates' });
           if (!inboxRes?.ok) {
             console.warn('[contact-cadence-seed] inbox_items POST failed for',
               link.entityId, '-', inboxRes?.status, inboxRes?.data);
@@ -4816,6 +4933,47 @@ export async function upsertDomainProperty(domain, entity, metadata) {
       }
     } catch (err) {
       console.warn('[upsertDomainProperty] Prompt31 DB-normalized fallback unavailable:', err?.message || err);
+    }
+  }
+
+  // SIDEBAR2-b (2026-09-18) — before falling through to CREATE a new
+  // property, check for a near-miss range/civic-number twin on the SAME
+  // street/city/state (see detectRangeAddressCollision above + the doc
+  // header comment on it for why this refuses rather than auto-attaches).
+  // Every prior fallback either matched exactly or gave up; this is the
+  // last chance to catch "4550-4666 S Kirkman Rd" landing beside the real
+  // "4600 S Kirkman Rd" row, or "2604 N Hospital Rd" beside "2609 Hospital
+  // Rd", as a NEW twin property instead of flagging it.
+  if (!lookup.data?.length && entity.state) {
+    try {
+      const streetHint = String(address).replace(/^\d+(\s*-\s*\d+)?\s+/, '').split(/\s+/).slice(0, 2).join(' ');
+      if (streetHint) {
+        const rangeFallbackPath = `properties?address=ilike.*${encodeURIComponent(streetHint)}*` +
+          `&state=eq.${encodeURIComponent(entity.state)}&select=property_id,${sizeCol},address&limit=10`;
+        const fb3 = await domainQuery(domain, 'GET', rangeFallbackPath);
+        if (fb3.ok && fb3.data?.length) {
+          const collision = fb3.data
+            .map((row) => ({ row, hit: detectRangeAddressCollision(address, row.address) }))
+            .find((x) => x.hit);
+          if (collision) {
+            _lastDomainPropertyError = {
+              status: 'ambiguous_property_match',
+              reason: 'range_address_collision',
+              message: `Captured address "${address}" is a near-miss (${collision.hit.kind}) of existing ` +
+                `property_id=${collision.row.property_id} address "${collision.row.address}"; refusing to ` +
+                `create a twin property. Needs human review — see property-identity-and-address-resolution.md.`,
+              domain,
+              address,
+              candidates: [{ property_id: collision.row.property_id, address: collision.row.address, ...collision.hit }],
+            };
+            console.warn(`[upsertDomainProperty] Range-address collision for "${address}" vs property_id=${collision.row.property_id} ` +
+              `("${collision.row.address}") — refusing create, routing to review (${domain}).`);
+            return null;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[upsertDomainProperty] Range-address collision fallback failed (proceeding):', err?.message || err);
     }
   }
 
@@ -11495,6 +11653,12 @@ async function upsertDomainLeases(domain, propertyId, metadata, provCollect) {
         is_active: true,
         data_source: leaseDataSource,
         source_confidence: leaseConfidence,
+        // SIDEBAR2-a (2026-09-18) — explicit marker so "captured, source
+        // had no date" is distinguishable from "never captured". dia-only
+        // (see the migration header for why gov is not touched here).
+        ...(domain === 'dialysis'
+          ? { lease_expiration_source_state: leaseExp ? 'dated' : 'source_no_date' }
+          : {}),
       });
     }
   } else {
@@ -11529,6 +11693,9 @@ async function upsertDomainLeases(domain, propertyId, metadata, provCollect) {
       is_active: true,
       data_source: leaseDataSource,
       source_confidence: leaseConfidence,
+      ...(domain === 'dialysis'
+        ? { lease_expiration_source_state: fallbackExp ? 'dated' : 'source_no_date' }
+        : {}),
     });
   }
 
