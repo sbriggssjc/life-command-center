@@ -112,31 +112,57 @@ test('confirm function APPENDS to expiration_evidence, never replaces the whole 
   assert.doesNotMatch(body, /set\s+expiration_evidence\s*=\s*jsonb_build_object\(/i);
 });
 
-test('every confirm-with-successor lease inserts the successor lease BEFORE confirming the old row', () => {
-  for (const leaseId of [23259, 12599, 12678, 13058]) {
-    const blockRe = new RegExp(
-      `v_old_lease_id\\s*integer\\s*:=\\s*${leaseId}[\\s\\S]*?end \\$\\$;`
+// ⚠️ CORRECTED LIVE 2026-09-18 (Supabase MCP apply against Dialysis_DB
+// zqzrriwuavgrquhisnoa, from a session that has live access — see the
+// migration's own section-4 note). Only Orlando (12599) has a real CoStar
+// lease_expiration, so only it gets a successor-lease INSERT. A dateless
+// active successor for 23259/12678/13058 was REJECTED by the live trigger
+// dia_reject_dateless_active_lease (SQLSTATE 23514: an active lease must
+// carry at least one of lease_start/lease_expiration) — that trigger could
+// not be seen from the sandbox this test was first written in. Fabricating
+// a date to satisfy it would be the exact guess this doctrine bans, so
+// those three instead go to holdover_confirmed on the SAME row (no
+// successor). This test now pins that real, live-verified shape.
+test('lease 12599 (Orlando) inserts its successor lease BEFORE confirming the old row; 23259/12678/13058 use holdover_confirmed on the same row with no successor', () => {
+  const orlandoBlockRe = /v_old_lease_id\s*integer\s*:=\s*12599[\s\S]*?end \$\$;/;
+  const orlandoBlock = SQL.match(orlandoBlockRe);
+  assert.ok(orlandoBlock, 'expected a DO block for lease 12599');
+  const insertIdx = orlandoBlock[0].indexOf('insert into leases');
+  const confirmIdx = orlandoBlock[0].indexOf('dia_recon2_confirm_lease_expired');
+  assert.ok(insertIdx >= 0, 'lease 12599: expected an INSERT INTO leases (the successor)');
+  assert.ok(confirmIdx >= 0, 'lease 12599: expected a dia_recon2_confirm_lease_expired call');
+  assert.ok(insertIdx < confirmIdx, 'lease 12599: successor insert must precede the confirm call');
+
+  for (const leaseId of [23259, 12678, 13058]) {
+    const holdoverRe = new RegExp(
+      `dia_recon2_confirm_lease_expired\\(\\s*${leaseId},\\s*'holdover_confirmed'`
     );
-    const block = SQL.match(blockRe);
-    assert.ok(block, `expected a DO block for lease ${leaseId}`);
-    const insertIdx = block[0].indexOf('insert into leases');
-    const confirmIdx = block[0].indexOf('dia_recon2_confirm_lease_expired');
-    assert.ok(insertIdx >= 0, `lease ${leaseId}: expected an INSERT INTO leases (the successor)`);
-    assert.ok(confirmIdx >= 0, `lease ${leaseId}: expected a dia_recon2_confirm_lease_expired call`);
-    assert.ok(insertIdx < confirmIdx, `lease ${leaseId}: successor insert must precede the confirm call`);
+    assert.match(SQL, holdoverRe, `lease ${leaseId}: expected a holdover_confirmed call, not a successor insert`);
+    // No INSERT INTO leases naming this lease as parent — no fabricated
+    // dateless successor row for these three.
+    assert.doesNotMatch(
+      SQL,
+      new RegExp(`parent_lease_id[\\s\\S]{0,60}${leaseId}\\b[\\s\\S]{0,200}insert into leases`),
+      `lease ${leaseId}: expected no successor-lease insert`
+    );
   }
 });
 
-test('successor lease_expiration is never guessed — 2028-06-30 only for Orlando (12599), NULL for the other three', () => {
+test('successor lease_expiration is never guessed — 2028-06-30 only for Orlando (12599); the other three never insert a successor row at all', () => {
   const orlandoBlock = SQL.match(/v_old_lease_id\s*integer\s*:=\s*12599[\s\S]*?end \$\$;/);
   assert.ok(orlandoBlock, 'expected Orlando (12599) DO block');
   assert.match(orlandoBlock[0], /date\s+'2028-06-30'/);
 
   for (const leaseId of [23259, 12678, 13058]) {
-    const blockRe = new RegExp(`v_old_lease_id\\s*integer\\s*:=\\s*${leaseId}[\\s\\S]*?end \\$\\$;`);
-    const block = SQL.match(blockRe);
-    assert.ok(block, `expected a DO block for lease ${leaseId}`);
-    assert.doesNotMatch(block[0], /date\s+'20\d\d-\d\d-\d\d'/, `lease ${leaseId}: no date literal should be inserted as lease_expiration — only 12599 has a CoStar date`);
+    // No "v_old_lease_id integer := <id>" DO block exists for these three
+    // any more — they moved to a plain confirm call, guarded on current
+    // expiration_state, with no successor-lease insert and so no date
+    // literal to guess.
+    assert.doesNotMatch(
+      SQL,
+      new RegExp(`v_old_lease_id\\s*integer\\s*:=\\s*${leaseId}\\b`),
+      `lease ${leaseId}: expected no confirm-with-successor DO block (holdover_confirmed uses a plain guard block instead)`
+    );
   }
 });
 
@@ -169,19 +195,16 @@ test('every confirm call is guarded on current expiration_state (idempotent re-r
 });
 
 test('successor-lease insert failure aborts the whole pair (do block, no exception swallowed)', () => {
-  for (const leaseId of [23259, 12599, 12678, 13058]) {
-    const blockRe = new RegExp(`v_old_lease_id\\s*integer\\s*:=\\s*${leaseId}[\\s\\S]*?end \\$\\$;`);
-    const block = SQL.match(blockRe);
-    assert.ok(block, `expected a DO block for lease ${leaseId}`);
-    // No "exception when others" inside these pair blocks — an insert
-    // failure must propagate and roll back the whole DO block, never be
-    // swallowed and leave a dangling confirm.
-    assert.doesNotMatch(block[0], /exception\s+when\s+others/i);
-  }
+  const orlandoBlock = SQL.match(/v_old_lease_id\s*integer\s*:=\s*12599[\s\S]*?end \$\$;/);
+  assert.ok(orlandoBlock, 'expected a DO block for lease 12599');
+  // No "exception when others" inside the pair block — an insert failure
+  // must propagate and roll back the whole DO block, never be swallowed
+  // and leave a dangling confirm.
+  assert.doesNotMatch(orlandoBlock[0], /exception\s+when\s+others/i);
 });
 
-test('reversal runbook documents both the confirm-path and the successor-lease undo', () => {
+test('reversal runbook documents both the confirm-path and the (single) successor-lease undo', () => {
   assert.match(RAW, /REVERSAL RUNBOOK/);
-  assert.match(RAW, /parent_lease_id in \(23259,12599,12678,13058\)/);
+  assert.match(RAW, /parent_lease_id = 12599/);
   assert.match(RAW, /data_source = 'costar_field_check'/);
 });

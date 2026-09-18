@@ -89,18 +89,28 @@
 --        (a genuine relocation, not a same-DB successor lease).
 --      - lease 6912  (Cartersville)-> expired_confirmed, no successor needed
 --        (site use changed — no longer a dialysis clinic).
---      - leases 23259 (Goldsboro), 12599 (Orlando), 12678 (Dixon),
---        13058 (Scranton) -> confirm-WITH-successor, one transaction each
+--      - lease 12599 (Orlando)     -> confirm-WITH-successor, one transaction
 --        (insert the successor lease first; only then confirm the old row —
---        if the insert fails, nothing about the old row changes). The
---        successor's tenant is copied from the old row (never guessed); its
---        lease_expiration is 2028-06-30 for Orlando (the CoStar date Scott
---        stated) and NULL/expiration_unknown for Goldsboro/Dixon/Scranton
---        (Scott named no CoStar date for those three — SIDEBAR-LEASE1: the
---        sidebar sends touched the TWIN rows and wrote no expiration on any
---        of the four). lease_start is left NULL — unknown, not guessed.
---        data_source='costar_field_check', source_confidence='documented',
---        parent_lease_id -> the old lease_id.
+--        if the insert fails, nothing about the old row changes). Tenant
+--        copied from the old row (never guessed); lease_expiration 2028-06-30
+--        (the CoStar date Scott stated). data_source='costar_field_check',
+--        source_confidence='documented', parent_lease_id -> the old lease_id.
+--      - leases 23259 (Goldsboro), 12678 (Dixon), 13058 (Scranton) ->
+--        holdover_confirmed on the SAME row, NO successor row. ⚠️ CORRECTED
+--        LIVE 2026-09-18: the first apply attempt tried the same
+--        confirm-WITH-successor pattern as Orlando, inserting a successor
+--        with both lease_start and lease_expiration NULL — a live trigger,
+--        dia_reject_dateless_active_lease (SQLSTATE 23514), REFUSED it: "an
+--        active lease must carry at least one of lease_start /
+--        lease_expiration." That trigger could not be seen from the
+--        sandboxed session that first drafted this migration. Fabricating a
+--        date to satisfy it would be exactly the guess this whole doctrine
+--        bans, so instead: is_active stays true, expiration_state moves to
+--        'holdover_confirmed' (a real value dia_recon2_confirm_lease_expired
+--        already supports) directly on the EXISTING row — the tenant is
+--        confirmed still in place with no new terms known. Update
+--        lease_expiration on that same row once a CoStar renewal/holdover
+--        date is confirmed; do not insert a second row for it.
 --      - lease 23273 (Sierra Vista) -> NO WRITE to is_active/expiration_state.
 --        Both field-check evidence rows are recorded, the conflict flag is
 --        set, and it stays expired_unconfirmed. This is a property-identity
@@ -129,8 +139,10 @@
 --   --     (expiration_evidence is NOT restored to its pre-confirm value by
 --   --     this — the confirm-evidence entry stays appended; to remove just
 --   --     that entry, filter it out of the array by recorded_at.)
---   -- 4b. Successor leases (23259/12599/12678/13058's new rows): find via
---   --       select lease_id from leases where parent_lease_id in (23259,12599,12678,13058)
+--   -- 4b. Successor lease (12599's new row only — 23259/12678/13058 use
+--   --     holdover_confirmed on the SAME row, no successor, see the live
+--   --     correction note in section 4 above): find via
+--   --       select lease_id from leases where parent_lease_id = 12599
 --   --         and data_source = 'costar_field_check';
 --   --     then `delete from leases where lease_id = <new_id>` (a fresh insert
 --   --     with no other row referencing it yet — safe to hard-delete, unlike
@@ -291,6 +303,20 @@ comment on function dia_recon2_record_evidence(integer, text, text, date, text) 
 --       "Byp"/"Bypass" suffix is NOT stripped here and would defeat the
 --       match; if so, add it to the same regexp rather than a second
 --       normalizer). ─────────────────────────────────────────────────────
+-- ⚠️ CORRECTED LIVE 2026-09-18 (Supabase MCP apply against Dialysis_DB
+-- zqzrriwuavgrquhisnoa). This function's own header, before this fix, said
+-- "a trailing highway 'Byp'/'Bypass' suffix is NOT stripped here and would
+-- defeat the match" — measured live it does: 22471 "629 North Hwy 90" and
+-- 35849 "629 N Highway 90 Byp, Ste 6" (THE Sierra Vista pair this whole
+-- migration is built around) collapsed to "629 hwy 90" vs "629 hwy 90 byp"
+-- and never matched. Fixed per the header's own instruction ("add it to the
+-- same regexp rather than a second normalizer"): byp|bypass folded into the
+-- existing directional-word strip. Re-verified: both now collapse to
+-- "629 hwy 90". (The twin-evidence rule STILL does not auto-flag 23273
+-- after this fix, for an unrelated, pre-existing reason: the operating
+-- clinic row on 35849 has chain_organization=NULL, so
+-- dia_resolve_operator() cannot match it to the tenant — a data-quality
+-- defect on that CMS row, out of scope here, not a bug in this function.)
 create or replace function dia_recon2_street_twin_key(addr text)
 returns text
 language sql
@@ -305,7 +331,7 @@ as $$
             dia_normalize_address(addr),
             '\s+(ste|suite|unit|bldg|building|fl|floor|#)\.?\s*\S*\s*$', '', 'i'
           ),
-          '\y(north|south|east|west|ne|nw|se|sw|n|s|e|w)\y', '', 'gi'
+          '\y(north|south|east|west|ne|nw|se|sw|n|s|e|w|bypass|byp)\y', '', 'gi'
         ),
         '\s+', ' ', 'g'
       )
@@ -315,15 +341,20 @@ as $$
 $$;
 
 comment on function dia_recon2_street_twin_key(text) is
-  'RECON2-c: dia_normalize_address(addr) further stripped of a trailing '
-  'suite/unit/bldg/floor token and standalone directional words, so two '
-  'properties at the same street number+street but different suite/range '
-  '(an "R1 twin" — same building, split into multiple property rows) share '
-  'a key. NOT identity — used only for the twin-evidence lookup in '
-  'dia_recon2_classify_expired_leases, never for a write.';
+  'RECON2-c (fixed live 2026-09-18, twin-key bypass-suffix follow-up): '
+  'dia_normalize_address(addr) further stripped of a trailing '
+  'suite/unit/bldg/floor token, standalone directional words, AND a '
+  'standalone bypass/byp road-suffix token, so two properties at the same '
+  'street number+street but a different suite/range/bypass-suffix (an '
+  '"R1 twin") share a key. NOT identity — used only for the twin-evidence '
+  'lookup in dia_recon2_classify_expired_leases, never for a write.';
 
 -- ── 3. Classifier — rules (a)-(d). Still DRY-RUN / READ-ONLY: writes nothing
---       to leases. Adds `conflict` to the output. ───────────────────────────
+--       to leases. Adds `conflict` to the output. The OUT-parameter row type
+--       is changing (adding `conflict`), so Postgres 42P13 refuses a bare
+--       CREATE OR REPLACE — drop first, live-verified 2026-09-18. ──────────
+drop function if exists dia_recon2_classify_expired_leases(integer);
+
 create or replace function dia_recon2_classify_expired_leases(p_limit int default null)
 returns table (
   lease_id            integer,
@@ -454,13 +485,22 @@ as $$
       else null
     end as evidence_detail,
     (
-      (
+      -- ⚠️ CORRECTED LIVE 2026-09-18: this arm used to be a bare
+      -- `twn.twin_property_id is not null and (dd.flag OR status ilike ... OR
+      -- cm.all_confirmed_closed)` with no coalesce, which read NULL (not
+      -- false) on 38 live rows whenever c.status was NULL and the other two
+      -- disjuncts were also NULL — three-valued SQL logic (NULL OR FALSE =
+      -- NULL), invisible until run against real data. Wrapped in
+      -- coalesce(...,false) like the outer OR's right side already was, so
+      -- `conflict` is a clean boolean on every row.
+      coalesce(
         twn.twin_property_id is not null
         and (
           coalesce(dd.flag, false)
-          or c.status ilike '%terminat%'
+          or coalesce(c.status ilike '%terminat%', false)
           or coalesce(cm.all_confirmed_closed, false)
-        )
+        ),
+        false
       )
       or coalesce(dia_recon2_evidence_array_conflicts(c.expiration_evidence), false)
     ) as conflict
@@ -503,6 +543,7 @@ create or replace function dia_recon2_confirm_lease_expired(
 returns table (lease_id integer, expiration_state text, is_active boolean)
 language plpgsql
 as $$
+#variable_conflict use_column
 declare
   v_prior      jsonb;
   v_new_active boolean;
@@ -687,29 +728,27 @@ end $$;
 -- 6c. Confirm-with-successor, one transaction each. If the successor insert
 --     fails, the whole DO block raises and nothing about the old row changes.
 
--- 23259 Goldsboro — no CoStar date supplied; successor lease_expiration left
--- NULL (expiration_unknown, never guessed).
+-- 23259 Goldsboro — no CoStar date supplied. A dateless active successor
+-- lease is REFUSED live by dia_reject_dateless_active_lease (a real DB
+-- CHECK-by-trigger this sandbox could not see when this migration was
+-- first drafted: an active lease must carry at least one of lease_start /
+-- lease_expiration). Fabricating either date to satisfy it would be a
+-- guess, which is banned. Since the tenant is confirmed OPERATING with no
+-- new lease terms known, the honest classification is holdover_confirmed
+-- on the EXISTING row (is_active stays true; expiration_state records that
+-- the pre-2012 expiration was reviewed and the tenant holds over) — no
+-- successor row. Update lease_expiration on this same row directly once a
+-- CoStar renewal/holdover date is confirmed.
 do $$
-declare
-  v_old_lease_id  integer := 23259;
-  v_old           record;
-  v_new_lease_id  integer;
+declare v_state text;
 begin
-  select * into v_old from leases where lease_id = v_old_lease_id;
-  if v_old.expiration_state is distinct from 'expired_confirmed'
-     and not exists (select 1 from leases where parent_lease_id = v_old_lease_id and data_source = 'costar_field_check') then
-    insert into leases (property_id, tenant, lease_start, lease_expiration, is_active,
-                         parent_lease_id, data_source, source_confidence)
-    values (v_old.property_id, v_old.tenant, null, null, true,
-            v_old_lease_id, 'costar_field_check', 'documented')
-    returning lease_id into v_new_lease_id;
-
+  select expiration_state into v_state from leases where lease_id = 23259;
+  if v_state is not null and v_state is distinct from 'holdover_confirmed' and v_state is distinct from 'expired_confirmed' then
     perform dia_recon2_confirm_lease_expired(
-      v_old_lease_id, 'expired_confirmed', 'successor_lease',
+      23259, 'holdover_confirmed', 'operator_holdover',
       'Field check (Scott, 2026-09-18): DaVita operating, possible recent expansion; CoStar lease sent via sidebar, no expiration date landed.',
-      v_new_lease_id::text,
-      'Successor lease ' || v_new_lease_id || ' inserted with tenant carried forward; lease_expiration left NULL '
-      '(expiration_unknown) — no CoStar date supplied for this property. Update it when the CoStar date is confirmed.',
+      null,
+      'No successor lease inserted — dia_reject_dateless_active_lease refuses an active lease with no dates, and no CoStar date is known for this property yet. Tenant is confirmed still in place (holdover past the recorded 2012-05-31 expiration). Update lease_expiration on THIS row once the CoStar renewal date is confirmed.',
       'scott'
     );
   end if;
@@ -741,55 +780,36 @@ begin
   end if;
 end $$;
 
--- 12678 Dixon — no CoStar date supplied.
+-- 12678 Dixon — no CoStar date supplied; same dateless-active-lease
+-- constraint as Goldsboro above, same resolution: holdover_confirmed on
+-- the existing row, no fabricated successor.
 do $$
-declare
-  v_old_lease_id  integer := 12678;
-  v_old           record;
-  v_new_lease_id  integer;
+declare v_state text;
 begin
-  select * into v_old from leases where lease_id = v_old_lease_id;
-  if v_old.expiration_state is distinct from 'expired_confirmed'
-     and not exists (select 1 from leases where parent_lease_id = v_old_lease_id and data_source = 'costar_field_check') then
-    insert into leases (property_id, tenant, lease_start, lease_expiration, is_active,
-                         parent_lease_id, data_source, source_confidence)
-    values (v_old.property_id, v_old.tenant, null, null, true,
-            v_old_lease_id, 'costar_field_check', 'documented')
-    returning lease_id into v_new_lease_id;
-
+  select expiration_state into v_state from leases where lease_id = 12678;
+  if v_state is not null and v_state is distinct from 'holdover_confirmed' and v_state is distinct from 'expired_confirmed' then
     perform dia_recon2_confirm_lease_expired(
-      v_old_lease_id, 'expired_confirmed', 'successor_lease',
+      12678, 'holdover_confirmed', 'operator_holdover',
       'Field check (Scott, 2026-09-18): operating, hours on Google; CoStar lease active, sent via sidebar, no expiration date landed.',
-      v_new_lease_id::text,
-      'Successor lease ' || v_new_lease_id || ' inserted with tenant carried forward; lease_expiration left NULL '
-      '(expiration_unknown) — no CoStar date supplied for this property. Update it when the CoStar date is confirmed.',
+      null,
+      'No successor lease inserted — dia_reject_dateless_active_lease refuses an active lease with no dates, and no CoStar date is known for this property yet. Tenant is confirmed still in place (holdover past the recorded 2014-03-31 expiration). Update lease_expiration on THIS row once the CoStar date is confirmed.',
       'scott'
     );
   end if;
 end $$;
 
--- 13058 Scranton — no CoStar date supplied.
+-- 13058 Scranton — no CoStar date supplied; same dateless-active-lease
+-- constraint, same resolution: holdover_confirmed, no fabricated successor.
 do $$
-declare
-  v_old_lease_id  integer := 13058;
-  v_old           record;
-  v_new_lease_id  integer;
+declare v_state text;
 begin
-  select * into v_old from leases where lease_id = v_old_lease_id;
-  if v_old.expiration_state is distinct from 'expired_confirmed'
-     and not exists (select 1 from leases where parent_lease_id = v_old_lease_id and data_source = 'costar_field_check') then
-    insert into leases (property_id, tenant, lease_start, lease_expiration, is_active,
-                         parent_lease_id, data_source, source_confidence)
-    values (v_old.property_id, v_old.tenant, null, null, true,
-            v_old_lease_id, 'costar_field_check', 'documented')
-    returning lease_id into v_new_lease_id;
-
+  select expiration_state into v_state from leases where lease_id = 13058;
+  if v_state is not null and v_state is distinct from 'holdover_confirmed' and v_state is distinct from 'expired_confirmed' then
     perform dia_recon2_confirm_lease_expired(
-      v_old_lease_id, 'expired_confirmed', 'successor_lease',
+      13058, 'holdover_confirmed', 'operator_holdover',
       'Field check (Scott, 2026-09-18): operating, hours on Google, 83k SF centre; CoStar lease active, sent via sidebar, no expiration date landed.',
-      v_new_lease_id::text,
-      'Successor lease ' || v_new_lease_id || ' inserted with tenant carried forward; lease_expiration left NULL '
-      '(expiration_unknown) — no CoStar date supplied for this property. Update it when the CoStar date is confirmed.',
+      null,
+      'No successor lease inserted — dia_reject_dateless_active_lease refuses an active lease with no dates, and no CoStar date is known for this property yet. Tenant is confirmed still in place (holdover past the recorded 2016-01-31 expiration). Update lease_expiration on THIS row once the CoStar date is confirmed.',
       'scott'
     );
   end if;

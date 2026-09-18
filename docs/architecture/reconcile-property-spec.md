@@ -299,25 +299,62 @@ own automated proposals never combine more than one derived signal into a single
 as one fact class, and rule (c)'s twin check exists specifically to add a corroborating (or
 contradicting) second read before anything downstream treats the first as sufficient.
 
-**Confirmed 2026-09-18 (RECON2-c), all through `dia_recon2_confirm_lease_expired`, all idempotent:**
+**Confirmed 2026-09-18 (RECON2-c), all through `dia_recon2_confirm_lease_expired`, all idempotent —
+✅ APPLIED LIVE this same day via Supabase MCP against Dialysis_DB (`zqzrriwuavgrquhisnoa`), from a
+session that had live access. Two things changed from the plan above during the live apply, both
+forced by real DB state the sandboxed drafting session could not see:**
+
 lease 23506 (Washington DC) → `expired_confirmed` — CMS closed + DaVita relocated to 920
 Bladensburg Rd NE, verified by two independent sources; lease 6912 (Cartersville) →
-`expired_confirmed` — site use changed to a restaurant (2019), Google evidence; leases 23259
-(Goldsboro), 12599 (Orlando), 12678 (Dixon), 13058 (Scranton) → **confirm-with-successor**, one
-transaction each (insert the successor lease with the same tenant, `data_source =
-'costar_field_check'`, `parent_lease_id` → the old row, THEN confirm the old row — if the insert
-fails, nothing about the old row changes); Orlando's successor carries `lease_expiration =
-2028-06-30` (Scott's CoStar read); the other three carry no `lease_expiration` (unknown — no
-CoStar date supplied — `expiration_unknown`, never guessed). Lease 23273 (Sierra Vista) gets **no
-write** — both field-check evidence rows are recorded, the conflict flag is set, and it stays
-`expired_unconfirmed`; the underlying defect is a property-identity split (a real DaVita clinic
-minted on twin property 35849 while the lease's own property, 22471, carries only a
-demoted-duplicate Fresenius row) — a RECON1-class fold, filed but not performed in RECON2-c.
+`expired_confirmed` — site use changed to a restaurant (2019), Google evidence; lease 12599
+(Orlando) → **confirm-with-successor** (insert the successor lease with the same tenant,
+`data_source = 'costar_field_check'`, `parent_lease_id` → the old row, THEN confirm the old row —
+if the insert fails, nothing about the old row changes), `lease_expiration = 2028-06-30` (Scott's
+CoStar read).
 
-⚠️ **This migration was authored without live Supabase access** (the session that wrote it had no
-Supabase MCP connection) — its live dry-run counts and the exact twin-key match for the Sierra
-Vista pair (22471/35849) are UNVERIFIED. Re-run `dia_recon2_classify_expired_leases(null)` after
-applying and correct any figure here that does not reproduce.
+⚠️ **Leases 23259 (Goldsboro), 12678 (Dixon), 13058 (Scranton) did NOT get a successor-lease
+insert — a live trigger, `dia_reject_dateless_active_lease` (SQLSTATE 23514), refused it: "an
+active lease must carry at least one of lease_start/lease_expiration."** Fabricating a date to
+satisfy it would be exactly the guess this doctrine bans. Instead all three moved to
+`holdover_confirmed` directly on the EXISTING row (`is_active` stays `true`, no successor row
+inserted) — the tenant is confirmed still operating with no new lease terms known.
+`lease_expiration` on each of these three rows should be updated in place once a CoStar
+renewal/holdover date is confirmed; do not insert a second row for it.
+
+Lease 23273 (Sierra Vista) gets **no write** — both field-check evidence rows are recorded, and it
+stays `expired_unconfirmed`; the underlying defect is a property-identity split (a real DaVita
+clinic minted on twin property 35849 while the lease's own property, 22471, carries only a
+demoted-duplicate Fresenius row) — a RECON1-class fold, filed but not performed in RECON2-c.
+⚠️ **Its `conflict` flag reads `false`, not `true` as originally predicted** — the twin-key match
+now correctly collapses 22471/35849 to the same key (see below), but the OPERATING clinic row on
+35849 carries `chain_organization = NULL`, so `dia_resolve_operator()` cannot match it to the
+tenant and the twin-evidence rule never fires for this pair. That is a separate, pre-existing
+data-quality defect on the CMS row (not something this migration attempts to fix) — the automated
+`conflict` column is correctly silent here; the qualitative signal lives only in the two evidence
+rows recorded from Scott's own field check.
+
+⚠️ **Two live-only defects were found and fixed in the same session, both from the class the
+sandboxed drafting session could not have caught:**
+1. **The twin-key function's own header predicted this exact gap and it reproduced**: a trailing
+   "Byp"/"Bypass" highway suffix defeated the Sierra Vista match (22471 "629 North Hwy 90" →
+   `629 hwy 90`; 35849 "629 N Highway 90 Byp, Ste 6" → `629 hwy 90 byp` — different keys). Fixed by
+   folding `bypass|byp` into `dia_recon2_street_twin_key`'s existing directional-word strip, per the
+   header's own instruction. Re-verified: both now collapse to `629 hwy 90`.
+2. **The classifier's `conflict` output column read NULL on 38 live rows** instead of a boolean —
+   `twn.twin_property_id is not null AND (... OR ... OR ...)` evaluates to NULL under three-valued
+   SQL logic when every inner disjunct is NULL, and `NULL OR coalesce(...,false)` is NULL, not
+   false. Fixed by wrapping the inner AND-arm in `coalesce(...,false)`. Re-verified: 0 NULLs, live
+   dry-run population unchanged where it was already true/false.
+
+**Live dry-run, re-measured 2026-09-18 after both fixes** (`select proposed_state, evidence_type,
+conflict, count(*) from dia_recon2_classify_expired_leases(null) group by 1,2,3`): 1
+`expired_confirmed`/`successor_lease` (Orlando's confirmed old row itself no longer matches the
+classifier's own `is_active=true` candidate filter post-confirm, so this count reflects the
+remaining live population, not a re-count of the seven); 2 `expired_confirmed`/`termination_record`;
+48 `expired_unconfirmed`/`twin_operating`, all `conflict=false`; 2,399
+`expired_unconfirmed`/no-evidence. No row currently reads `conflict=true` — Sierra Vista's twin
+match now resolves but does not clear the operator-match gate (above), and no other row's own
+`expiration_evidence` array currently mixes a positive and negative observation.
 
 ## R6 — Name variants are not conflicts: run alias/normalize check BEFORE raising an owner conflict
 
