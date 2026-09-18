@@ -53,6 +53,20 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-18 — Round 44-CC (CC): `HOME2-e` — the `.home3-grid` rule loses to `.widget-grid`'s desktop rule; raised specificity
+
+Measured on Railway (Chrome, flag on, 1438px): `#home3LanesWidget .widget-grid.home3-grid` computed
+`grid-template-columns: 115.6px x4` — the single-class `.home3-grid` base rule and its `@container`/`@supports`
+fallbacks (specificity 0,1,0) lose to `@media (min-width:768px) { .widget-grid { grid-template-columns:
+repeat(4,1fr) } } ` (styles.css ~1292), same specificity, later in the cascade. Fixed by scoping all three
+`.home3-grid` rules to `#home3LanesWidget .home3-grid` (0,1,1) — the shared `.widget-grid` desktop rule is
+untouched (other pages read it). Cache-buster bumped as a set. `test/home2-three-lanes.test.mjs`'s two
+HOME2-d assertions updated to require the raised-specificity selector; 46/46 pass locally. Not yet re-probed
+on a Railway deploy of this fix — PR pending; the response to the human names the merge-and-redeploy proof
+still owed (computed `gridTemplateColumns` at ~1440px and at a card width >900px, plus a screenshot).
+
+---
+
 ## 2026-09-18 — Round 44 (Cowork): a **runaway writer** on Dialysis_DB (the DialysisProject scheduler, ~1M junk rows/day, every property re-PATCHed 4×/hour → `DIA-PROPAGATOR1`, Q37); `RECON2-d` live and verified but built in the **wrong repo** (Dialysis #7420 → ported here, `RECON2-d-reconcile`, Q36); `HOME2-d` merged but **not effective** (specificity → `HOME2-e`); 8 sidebar sends measured — external_id ✅, twin contact entities ✗ (`SIDEBAR4`), 1 of 8 reached the lease writer
 
 Merged: #2593 (round 42 docs), #2594 HOME2-d (`c64413d7`, Railway on it). The entry above this one was written by CC and
