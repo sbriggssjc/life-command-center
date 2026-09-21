@@ -53,6 +53,14 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-21 — Round 49 (Cowork, short): correction — `PA_WEBHOOK_SECRET` is already set on `tranquil-delight`, `RAILWAY-PA-SECRET`/Q4 updated
+
+**Scott: "The PA_WEBHOOK_SECRET is already set on tranquil delight and has been set."** Cowork's Q4 answer last turn repeated the backlog row's 2026-09-09 read ("appears to be UNSET", derived from `DENY-WOULD` log volume, never confirmed directly against Railway) without re-checking it — that was stale or simply wrong. Cowork has no Railway dashboard/log access from this session to verify `PA_WEBHOOK_AUTH_MODE` or the `DENY-WOULD ... none` caller history directly, so rather than re-deriving another guess, asked Scott the one question that actually determines the next step: is `PA_WEBHOOK_AUTH_MODE` still `log` (3-day `none`-caller watch not done yet) or already `enforce`, and has anything logged a `none` line.
+
+Updated `RAILWAY-PA-SECRET`'s row and `OPERATOR-CHECKLIST` Q4 to reflect the correction and the open question, rather than leave a wrong "unauthenticated" claim standing in either file.
+
+---
+
 ## 2026-09-21 — Round 48 (Cowork): reconciled the `DIA-PROPAGATOR1` desktop response — PR #7421 confirmed merged and live, production purge confirmed complete and holding; `OPERATOR-CHECKLIST` Q37 closed, Q38 filed for the low-priority tail
 
 **Scott: "We should be onto that 46-47 round in the prompt thread. Review that latest version and let's get a status update from our reconciled responses and where we are in our to do lists, etc."** The `DIA-PROPAGATOR1 desktop response.docx` had been sitting unreconciled in `responses/` since 09-19 (round 46's edits that were supposed to close it out never made it to `main` — lost to a compaction, not a merge conflict). Reconciled it properly this round.
