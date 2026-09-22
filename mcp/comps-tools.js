@@ -18,6 +18,7 @@
 // ============================================================================
 
 import { enforceHttpResponseSize } from "./http-response-bound.js";
+import { leaseExpirationStateLabel } from "./lease-expiration-state.js";
 
 const DEFAULT_QUERY_LIMIT = 40;
 const DEFAULT_SYNTHESIZE_LIMIT = 25;
@@ -617,6 +618,12 @@ function applyHydratedSubject(subject, rec) {
   setNum('year_built', rec.year_built, null);
   setNum('remaining_term', rec.remaining_term, 'remaining_term');
   if (rec.lease_expiration && _blankSubjectVal(subject.lease_expiration)) subject.lease_expiration = rec.lease_expiration;
+  // RECON2-render: label an expired-but-unconfirmed lease beside remaining_term.
+  // Added only for that state, so every other subject is unchanged.
+  if (rec.lease_expiration_note) {
+    subject.lease_expiration_note = rec.lease_expiration_note;
+    fields.lease_expiration_note = rec.lease_expiration_note;
+  }
   if (rec.bumps) {
     if (_blankSubjectVal(subject.bumps)) subject.bumps = rec.bumps;
     // Prompt 49 — mirror into the nested fields block the cover/subject summary renders.
@@ -691,9 +698,13 @@ export async function hydrateSubjectFromRecord(args, deps) {
   // Remaining term (yrs) from the property's weighted expiration, else the latest lease row.
   let expiration = p.wavg_lease_expiration || (dom === 'gov' ? p.lease_expiration : null);
   if (!expiration && dom === 'dia') {
-    const lr = await q('GET', `leases?property_id=eq.${enc(p.property_id)}&select=lease_expiration&order=lease_expiration.desc&limit=1`)
+    // RECON2-render: expiration_state is dia-only (gov leases has no such column).
+    const lr = await q('GET', `leases?property_id=eq.${enc(p.property_id)}&select=lease_expiration,expiration_state&order=lease_expiration.desc&limit=1`)
       .catch(() => ({ data: [] }));
-    expiration = (lr && lr.data && lr.data[0] && lr.data[0].lease_expiration) || null;
+    const lrow = (lr && lr.data && lr.data[0]) || null;
+    expiration = (lrow && lrow.lease_expiration) || null;
+    const note = leaseExpirationStateLabel(lrow);
+    if (note && expiration) rec.lease_expiration_note = note;
   }
   if (expiration) { rec.lease_expiration = expiration; rec.remaining_term = _yearsFromNow(expiration); }
   // Cap from the subject's OWN active listing (broker-underwritten ask cap).

@@ -2331,7 +2331,7 @@ async function handleIntakePromote(req, res) {
   //    force:true ensures we re-process even if the entity has stale
   //    _pipeline_processed_at from a prior aborted run.
   const pipelineResult = await processSidebarExtraction(
-    entityId, workspaceId, user.user_id, { force: true }
+    entityId, workspaceId, user.user_id, { force: true, trigger: 'intake.promote' }
   );
 
   // 5. Record promotion result

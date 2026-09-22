@@ -220,6 +220,10 @@ async function apiCall(endpoint, body, method = 'POST') {
     const url = `${baseUrl.replace(/\/+$/, '')}${endpoint}`;
     const headers = { 'Content-Type': 'application/json' };
     if (apiKey) headers['X-LCC-Key'] = apiKey;
+    // SIDEBAR4: one id per user action, so a server-side pipeline run can be
+    // traced back to the request (and a second request for the same click is
+    // distinguishable from a retry of the same one).
+    try { headers['X-LCC-Request-Id'] = crypto.randomUUID(); } catch { /* best-effort */ }
 
     const fetchOpts = { method, headers };
     if (method !== 'GET' && method !== 'HEAD') {

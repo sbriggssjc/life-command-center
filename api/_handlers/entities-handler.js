@@ -25,6 +25,7 @@ import { generateDossier, recordDossier } from '../_shared/dossier-generator.js'
 import { projectRentAtDate } from '../_shared/rent-projection.js';
 import { deriveStageLine } from '../_shared/deal-stage-line.js';
 import { ensureAssetEntityForProperty } from '../_shared/asset-entity.js';
+import { leaseExpirationStateLabel } from '../../mcp/lease-expiration-state.js';
 import { ENTITY_TYPES, DOMAINS, isValidEnum } from '../_shared/lifecycle.js';
 import { normalizeAddress, stripListingStatusPrefix, canonicalIdentitySystem, CANONICAL_DOMAIN_SYSTEMS, canonicalDomainSourceType, canonicalEntityDomain, normalizeCanonicalName } from '../_shared/entity-link.js';
 import { writeListingCreatedSignal } from '../_shared/signals.js';
@@ -377,6 +378,18 @@ const _govSystems = ['gov', 'gov_db', 'gov_supabase', 'government'];
 function tag(v, source, extra = {}) {
   if (v == null || v === '') return undefined;
   return { v, ...(source ? { source } : {}), ...extra };
+}
+
+/**
+ * RECON2-render — add `lease_expiration_state` to a packet's tenancy_lease block
+ * ONLY when the live lease is 'expired_unconfirmed'. Mutates and returns the block.
+ */
+export function applyLeaseExpirationStateTag(tenancyLease, lease) {
+  const note = leaseExpirationStateLabel(lease);
+  if (note) {
+    tenancyLease.lease_expiration_state = tag(note, 'leases', { expiration_state: lease.expiration_state });
+  }
+  return tenancyLease;
 }
 
 function num(v) {
@@ -803,6 +816,11 @@ export async function buildPropertyPacket(entityId, workspaceId) {
     renewal_options: tag(lease && lease.renewal_options, 'leases'),
     option_bumps_continue: optionBumpsContinueTag(lease),
   };
+  // RECON2-render: the live-lease query is `select *`, so dia rows already carry
+  // expiration_state — name it explicitly for the one ambiguous state (past its
+  // own expiration, is_active still true, no renewal evidence). Every other
+  // state (and every gov lease, which has no such column) leaves the packet unchanged.
+  applyLeaseExpirationStateTag(tenancy_lease, lease);
   // Derived term remaining (years) — every input present.
   if (lease && lease.lease_expiration) {
     const exp = new Date(lease.lease_expiration);
@@ -1171,6 +1189,14 @@ export async function buildDealPacket(entityId, workspaceId) {
   const meta = { ...propertyPacket.meta };
   meta.title = `${propertyPacket.meta.property_label} — Deal`;
   return { ...propertyPacket, deal, meta };
+}
+
+// SIDEBAR4: the id that ties a pipeline run back to the HTTP request that
+// triggered it. The extension stamps X-LCC-Request-Id (one per user action);
+// Railway's edge id is the fallback.
+function sidebarRequestId(req) {
+  const h = req?.headers || {};
+  return h['x-lcc-request-id'] || h['x-railway-request-id'] || h['x-request-id'] || null;
 }
 
 export const entitiesHandler = withErrorHandler(async function handler(req, res) {
@@ -2126,7 +2152,7 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
         return res.status(400).json({ error: 'entity_id is required' });
       }
       try {
-        const result = await processSidebarExtraction(entity_id, workspaceId, user.id, { force: !!force });
+        const result = await processSidebarExtraction(entity_id, workspaceId, user.id, { force: !!force, trigger: 'action.process_sidebar_extraction', requestId: sidebarRequestId(req) });
         if (!result.ok) {
           return res.status(result.error === 'Entity not found' ? 404 : 500).json(result);
         }
@@ -2846,7 +2872,7 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
             const patched = Array.isArray(patchResult.data)
               ? patchResult.data[0] : patchResult.data;
             if (patched?.id) {
-              processSidebarExtraction(patched.id, workspaceId, user.id)
+              processSidebarExtraction(patched.id, workspaceId, user.id, { trigger: 'entities.post_dedup', requestId: sidebarRequestId(req) })
                 .catch(err => console.error('[Dedup pipeline re-trigger]',
                   err?.message || err));
             }
@@ -2890,7 +2916,7 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
 
     // Fire-and-forget: unpack sidebar extraction data (contacts, sales, domain classification)
     if (entity_type === 'asset' && created?.id && hasSidebarData(metadata)) {
-      processSidebarExtraction(created.id, workspaceId, user.id)
+      processSidebarExtraction(created.id, workspaceId, user.id, { trigger: 'entities.post', requestId: sidebarRequestId(req) })
         .catch(err => console.error('[Sidebar pipeline async error]', err?.message || err));
     }
 
@@ -2935,7 +2961,7 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
 
     // Fire-and-forget: if metadata was updated with new sidebar data, run the pipeline
     if (metadata && updated?.id && updated?.entity_type === 'asset' && hasSidebarData(metadata)) {
-      processSidebarExtraction(updated.id, workspaceId, user.id)
+      processSidebarExtraction(updated.id, workspaceId, user.id, { trigger: 'entities.patch', requestId: sidebarRequestId(req) })
         .catch(err => console.error('[Sidebar pipeline async error on PATCH]', err?.message || err));
     }
 
