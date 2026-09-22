@@ -1682,11 +1682,36 @@ const COSTAR_DATE_RE = /^(since\s+)?((?:january|february|march|april|may|june|ju
 // Anchored; deliberately does NOT reject bare "google"/"satellite" ("Satellite
 // Healthcare" is a real dialysis operator; "Google" can be a real tenant).
 const MAP_WIDGET_RE = /^(keyboard\s+shortcuts|map\s+data(\s+.*)?|imagery(\s+.*)?|©\s*\d{4}\b.*|report\s+a\s+map\s+error|terms(\s+of\s+use)?|this\s+page\s+can'?t\s+load\s+google\s+maps\s+correctly|do\s+you\s+own\s+this\s+website\?|map\s+details?|\d{1,4}\s*(ft|mi|m|km|yd))\s*$/i;
-function isJunkTenant(name) {
+
+// RECON3 (2026-09-22, property_id 27266, 175 Righter Rd Succasunna NJ): a
+// listing/property page DESCRIPTION sentence ("DaVita dialysis clinic in
+// Succasunna", "Fresenius clinic located in Denton") leaked into
+// leases.tenant instead of the bare operator/tenant name. This one is
+// dangerous specifically because it PASSES every other guard here — it
+// starts with a real, known brand, so `canonicalizeTenant`'s anchored
+// `^da\s*vita\b` even "matches" it — the misparse is invisible unless you
+// check for the trailing narrative. The tell: a facility-type noun
+// ("clinic"/"center"/"facility") followed by a lowercase preposition
+// ("in"/"at"/"near"/"located") introducing a place — a shape no real
+// operator/brand name in this dataset ever takes (see CANONICAL_TENANTS,
+// all <=5 words, none containing a preposition). A second, broader net
+// catches any candidate tenant string that reads as a sentence (7+ words
+// with a preposition) even without the exact facility-noun phrasing.
+const TENANT_LISTING_SENTENCE_RE = /\b(dialysis|medical|kidney|renal|health(care)?)\s+(clinic|center|centre|facility)\s+(located\s+)?(in|at|near)\s+[a-z]/i;
+export function isListingDescriptionSentence(name) {
+  if (!name) return false;
+  const n = String(name).trim();
+  if (TENANT_LISTING_SENTENCE_RE.test(n)) return true;
+  const wordCount = n.split(/\s+/).filter(Boolean).length;
+  return wordCount >= 7 && /\b(in|at|near|located)\b/i.test(n);
+}
+
+export function isJunkTenant(name) {
   if (!name || name.trim().length < 3) return true;
   const n = name.trim();
   if (JUNK_TENANT_RE.test(n)) return true;
   if (STREET_NAME_RE.test(n)) return true;
+  if (isListingDescriptionSentence(n)) return true;
   if (GROWTH_RE.test(n)) return true;
   if (OM_SECTION_RE.test(n)) return true;
   if (NAICS_SECTOR_RE.test(n)) return true;
@@ -11713,6 +11738,16 @@ async function upsertDomainLeases(domain, propertyId, metadata, provCollect) {
     // Fallback: single lease from top-level metadata fields
     const tenantName = metadata.tenant_name || metadata.primary_tenant;
     if (!tenantName) return 0;
+    // RECON3 (2026-09-22, property_id 27266): this fallback branch (no
+    // tenants[] array — single-tenant captures) never ran the tenant
+    // through isJunkTenant(), unlike the per-row loop above (line ~11668).
+    // That is exactly the gap that let a listing description sentence
+    // ("DaVita dialysis clinic in Succasunna") land in leases.tenant — the
+    // array-path guard existed and this path was silently unguarded.
+    if (isJunkTenant(tenantName)) {
+      console.warn(`[upsertDomainLeases] skip junk top-level tenant on property=${propertyId}: "${String(tenantName).slice(0, 80)}"`);
+      return 0;
+    }
 
     const fallbackStart = parseDate(metadata.lease_commencement);
     const fallbackExp   = parseDate(metadata.lease_expiration);
