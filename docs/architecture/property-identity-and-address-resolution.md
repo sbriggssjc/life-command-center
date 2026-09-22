@@ -262,3 +262,14 @@ research time, false-block/false-accept evidence, and reviewer agreement will de
 worth building and which rule classes enter the first shadow evaluation. Collection completion does not pass
 the Phase B gate and does not authorize PI2–PI3, shared aliases, lane activation, or promotion. Aggregate
 checkpoint: `docs/audits/HEALTHCARE_ASC_50_PROPERTY_CAPTURE_CHECKPOINT_2026-09-11.md`.
+
+## Sidebar create-guard (SIDEBAR2-b → SIDEBAR3-c), as shipped
+
+`api/_handlers/sidebar-pipeline.js` carries a narrow guard, not the resolver this document describes:
+before the CoStar sidebar CREATEs a property, `detectRangeAddressCollision` refuses when the capture is a
+range-containment or ±20 civic-number near-miss of a same-street row. Since SIDEBAR3-c (2026-09-22) the
+street comparison folds leading directionals in both spellings (`S` ≡ `South`), and the candidate fetch
+keys on the first street-name word so both spellings are fetched. The one attach exception: when exactly
+one candidate collides and an un-reversed `dia_property_merge_backup` row shows a human already merged a
+property carrying this address INTO that candidate, the capture attaches there (address not overwritten).
+That consults a recorded decision; it does not make a new one. Everything else still refuses.
