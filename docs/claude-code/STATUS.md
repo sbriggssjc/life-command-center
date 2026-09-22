@@ -53,6 +53,17 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-22 — `SIDEBAR3-d` (CC): the directional sweep is in the twin-review lane, 37 new rows, nothing merged
+
+**The sweep, re-run live, gives 86 pairs, not 85.** The `SIDEBAR3-c` query was never written down. A SQL port of the guard's own parse reproduces all four of the backlog's examples and lands one row off; the query is now recorded in `docs/audits/SIDEBAR3d_DIRECTIONAL_SWEEP_TWIN_REVIEW_2026-09-22.md`. Disposition: **37 newly queued** in `dia_property_twin_review` (`batch_tag='sidebar3d_directional_20260922'`, ids 5049–5085: `review_name` 23 / `review_conflict` 12 / `review_ambiguous` 2); **43 already pending** (left untouched); **3 already rejected by a human** as "not a twin" (#89, #185, #316), which were not re-queued; **3 not queued** because city **and** ZIP differ (Livingston vs Brownwood TX, 248 mi; Pontiac vs Monroe MI; Louisburg vs Fuquay-Varina NC). The sweep never checks city, and the lane's deterministic assist ignores distance, so a same-operator pair 248 mi apart could have been annotated "likely twin". Live delta: pending **1,138 → 1,175**; max `backup_id` still 598, so **no merge ran**. No property, address or alias was written.
+
+**Opposite-directional shape: 6 of 86** (vs 67 same-direction/different-spelling, 13 present-vs-absent). **3 of the 6 are the cross-city false positives**, so the strip-any-directional guard's real cost is the extra refusals it predicts. The guard was left alone as instructed.
+
+⚠️ **Two traps avoided, one found.** (1) `dia_merge_twins(mode=>'auto')` merges **every** pending `auto_blank` row with no batch or detector filter. The detectors' own rule would have classed blank-tenant shadows `auto_blank`, so this batch never uses that class. (2) The anchor is the more complete record (the strong-id scoring), because a **Merge** verdict keeps the anchor. **Found, not fixed:** the unique index is orientation-sensitive, so two pairs already sit in the lane twice in reverse orientation (25415/37568 as #649 + #4964; 28233/37766 as #676 + #4973, from the 09-11 strong-id batch). This batch checked both orientations first. Filed as backlog `SIDEBAR3-d-orient`.
+
+Reverse: `delete from dia_property_twin_review where batch_tag='sidebar3d_directional_20260922' and status='pending'`. **Next:** the rows are worked in the Decision Center `property_twin` lane at Scott's pace. The assist cron (`property-twin-assist-tick`) will annotate them on its next pass.
+
+
 ## 2026-09-22 — `PERF-SPQ2` (CC): the cold-boot cost was the funnel summary, not the queue view — single-pass rewrite (live) + chips/funnel opt-in (needs deploy)
 
 **Measured first (LCC Opps, one session, idle).** One pass of `v_lcc_seller_prospect_queue` ≈ 0.85 s. **`v_lcc_seller_prospect_queue_summary` 6,567 ms**: 11 `UNION ALL` branches, each re-running `v_lcc_seller_prospect_universe`. `pg_stat_statements` over real traffic agrees: summary mean **7,281 ms / max 28,334 ms** (523 calls), exact-count probes ~8 s mean, items page 3.2 s, chip RPC 1.0 s. A cold Home boot's passes: `today_sections` = items(200) + exact count (2); Home's BD lane `/api/seller-prospect-queue?limit=5` = items + `count=exact` (2) + chip RPC (1) + summary (~12). **≈17 view passes, ~10.7 s of idle DB work fired in one burst.** Under contention that is the 16–20 s request round 37/45 saw. The priority-queue lane on Home is this same BD route (`/api/priority-queue` reads the materialized `lcc_priority_queue_resolved`, not this view).
