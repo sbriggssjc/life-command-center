@@ -97,6 +97,12 @@ gh pr create --title "fix(round51): LOG1 PostgREST filter escaping + LOG2 sales-
 
 ```
 
+## 2026-09-22 — Round 50 (Cowork, short): `PA_WEBHOOK_AUTH_MODE` is not set at all on Railway — functionally `log` mode; next step is Scott's log pull, not Cowork's
+
+**Scott: "There is no variable PA_WEBHOOK_AUTH_MODE set at all."** Confirms the picture: `PA_WEBHOOK_SECRET` is set (round 49), but `PA_WEBHOOK_AUTH_MODE` was never set on Railway, so `api/sync.js::webhookAuth()`'s `(process.env.PA_WEBHOOK_AUTH_MODE || 'log')` default puts it in `log` mode right now — `DENY-WOULD` lines are being written for any call the secret-check would fail, nothing is actually blocked.
+
+Cowork has no Railway log access from this session, so the next concrete step is Scott's: pull `tranquil-delight`'s deploy logs, check whether any `[pa-webhook] DENY-WOULD` line ends in `none` (the only outcome that predicts a break on enforce), and if clean for a few days, set `PA_WEBHOOK_AUTH_MODE=enforce`. Updated `RAILWAY-PA-SECRET`'s backlog row and `OPERATOR-CHECKLIST` Q4 to say this precisely instead of leaving an open question standing.
+
 ---
 
 ## 2026-09-21 — Round 49 (Cowork, short): correction — `PA_WEBHOOK_SECRET` is already set on `tranquil-delight`, `RAILWAY-PA-SECRET`/Q4 updated
