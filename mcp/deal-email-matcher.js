@@ -91,6 +91,19 @@ function coreTenantOf(tenantSeg) {
   return core.length >= 4 ? core : tenantSeg;   // fall back rather than strip to noise
 }
 const reEsc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// LOG1 (2026-09-22): PostgREST's logical-operator grammar (and=/or=) treats a
+// literal comma or parenthesis INSIDE a filter value as a condition separator,
+// even though percent-encoding already hides those characters from the URL
+// transport layer — PostgREST decodes the query string before parsing its own
+// grammar, so encodeURIComponent alone is not enough. core/cityLike below get
+// embedded inside and=(or(...),or(...)) / or=(...) expressions, and either one
+// can legitimately contain a comma or parens (a tenant/entity name or address
+// segment such as "Midland Ave, Glenwood" or "ABC (Holdings) LLC") — PostgREST
+// requires those reserved characters to be backslash-escaped in the raw value
+// before percent-encoding. Confirmed live: 638 `status: 400` "non-array GET
+// data coerced to []" warnings over 2026-09-15→18, every single one on a
+// title/city string containing a comma.
+export const pgrestLogicEsc = (s) => String(s).replace(/\\/g, '\\\\').replace(/[,()]/g, '\\$&');
 // Whole-word (bounded) presence test, case-insensitive. Fixes "Essentia" ⊂ "Essential".
 function hasWord(text, term) {
   const t = String(term || '').trim();
@@ -260,8 +273,8 @@ export function makeDealEmailMatcherRoute({ opsQuery, enc, WORKSPACE_ID }) {
           // past the cap. Both terms now go to the DB (substring ⊇ the word-boundary
           // test applied below, so this cannot lose a match the in-memory filter
           // would have kept) — the candidate set collapses and the cap stops binding.
-          const coreLike = enc('*' + core + '*');
-          const cityLike = enc('*' + cityBase + '*');
+          const coreLike = enc('*' + pgrestLogicEsc(core) + '*');
+          const cityLike = enc('*' + pgrestLogicEsc(cityBase) + '*');
           const selectCols = '&select=id,entity_id,title,body,occurred_at,external_id,domain';
           let cand = await fetchAllPages(
             `activity_events?source_type=eq.outlook` +
