@@ -150,7 +150,8 @@ app.use(cors({
   methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: [
     'Content-Type', 'Authorization', 'Prefer',
-    'X-LCC-Key', 'X-LCC-User-Id', 'X-LCC-User-Email', 'X-LCC-Workspace'
+    'X-LCC-Key', 'X-LCC-User-Id', 'X-LCC-User-Email', 'X-LCC-Workspace',
+    'X-LCC-Request-Id'
   ]
 }));
 

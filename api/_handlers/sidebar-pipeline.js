@@ -16,6 +16,7 @@
 //   - On-demand via POST /api/entities?action=process_sidebar_extraction
 // ============================================================================
 
+import { randomUUID } from 'node:crypto';
 import { ensureEntityLink, normalizeCanonicalName, normalizeAddress, stripStreetSuffix, stripListingStatusPrefix, canonicalIdentitySystem, canonicalEntityDomain, isJunkEntityName, normalizeEmail, isGenericInboxEmail, looksLikeContactPhone, recordContactFieldWrites, hasFirmSuffix } from '../_shared/entity-link.js';
 import { isCompetitorBroker } from '../_shared/sf-nm-classifier.js';
 import { opsQuery, insertEntityRelationship, fetchWithTimeout } from '../_shared/ops-db.js';
@@ -13284,7 +13285,90 @@ async function recordSidebarPipelineFailure({ entityId, workspaceId, domain, rea
  * @param {string} userId - Acting user UUID
  * @returns {object} Summary of what was processed
  */
+// ── SIDEBAR4: single-flight per entity ────────────────────────────────────
+//
+// Measured 2026-09-18 (entity 68874e8d, "506 N Patterson St"): ONE capture
+// payload was processed by TWO overlapping runs of this function. The second
+// began a few seconds after the first and caught up with it; most of its writes
+// resolved onto rows the first run had just created, but every name both runs
+// reached in the same instant was minted twice ("John Messer" 26 ms apart,
+// "W Wayne Fann" 4 ms, "Pineview Real Estate Grp Llc" 79 ms). Live, 42 of the 78
+// same-name/same-mailbox person groups on LCC Opps carry that < 2 s signature.
+//
+// The run has four triggers (entities POST, POST-dedup, PATCH, the explicit
+// process action) plus intake promote, and every lookup inside it is a
+// check-then-insert, so two concurrent runs over the same capture race on every
+// entity they create. This serializes runs PER ENTITY inside the process:
+//   * no run in flight           → start one;
+//   * a run in flight            → queue ONE trailing run (force = OR of all
+//                                  queued callers) and hand every later caller
+//                                  that same trailing promise.
+// The trailing run re-reads the entity, so a newer capture is never dropped —
+// it is only ordered. Two SEQUENTIAL runs over identical data resolve onto the
+// first run's rows (ensureEntityLink's lookups) and mint nothing.
+//
+// Scope, stated: this is per Node process. Railway runs one replica today; a
+// second replica would need a DB lock. The person-level DB backstop
+// (uq_entities_person_contact_key_sidebar4) covers the cross-process case for
+// contacts regardless.
+const _sidebarRunsInFlight = new Map();
+
+function _startSidebarRun(key, slot, runFn, force) {
+  return Promise.resolve()
+    .then(() => runFn(force))
+    .finally(() => {
+      if (!slot.queued && _sidebarRunsInFlight.get(key) === slot) _sidebarRunsInFlight.delete(key);
+    });
+}
+
+/**
+ * Exported for tests. Returns { promise, coalesced } — `coalesced` is true when
+ * the caller was queued behind (or merged into) a run already in flight.
+ */
+export function serializeSidebarRun(key, runFn, force = false) {
+  let slot = _sidebarRunsInFlight.get(key);
+  if (!slot) {
+    slot = { current: null, queued: null, queuedForce: false };
+    _sidebarRunsInFlight.set(key, slot);
+    slot.current = _startSidebarRun(key, slot, runFn, !!force);
+    return { promise: slot.current, coalesced: false };
+  }
+  slot.queuedForce = slot.queuedForce || !!force;
+  if (!slot.queued) {
+    slot.queued = slot.current.catch(() => {}).then(() => {
+      const f = slot.queuedForce;
+      slot.queued = null;
+      slot.queuedForce = false;
+      slot.current = _startSidebarRun(key, slot, runFn, f);
+      return slot.current;
+    });
+  }
+  return { promise: slot.queued, coalesced: true };
+}
+
+const SIDEBAR_RUN_LOG_MAX = 10;
+
 export async function processSidebarExtraction(entityId, workspaceId, userId, opts = {}) {
+  const trace = {
+    run_id: randomUUID(),
+    trigger: opts.trigger || 'unspecified',
+    request_id: opts.requestId || null,
+    requested_at: new Date().toISOString(),
+  };
+  const { promise, coalesced } = serializeSidebarRun(
+    `${workspaceId}:${entityId}`,
+    (force) => _processSidebarExtractionOnce(entityId, workspaceId, userId,
+      { ...opts, force, _runTrace: { ...trace, coalesced } }),
+    !!opts.force,
+  );
+  console.log('[sidebar-pipeline] SIDEBAR4 run requested', {
+    entity_id: entityId, ...trace, coalesced,
+  });
+  return promise;
+}
+
+async function _processSidebarExtractionOnce(entityId, workspaceId, userId, opts = {}) {
+  const runTrace = { ...(opts._runTrace || {}), started_at: new Date().toISOString() };
   // Fetch the full entity
   const entityResult = await opsQuery('GET',
     `entities?id=eq.${entityId}&workspace_id=eq.${workspaceId}&select=*`
@@ -13422,7 +13506,17 @@ export async function processSidebarExtraction(entityId, workspaceId, userId, op
       domain_records_note: 'writes_this_run_only — see domain_records_current for live DB state',
       domain_records_current: await fetchDomainRecordsCurrent(domain, propagation.property_id).catch(() => null),
       _classifier_diag: _lastClassifierDiag,
+      // SIDEBAR4: which request/trigger produced this run.
+      run_trace: runTrace,
     },
+    // SIDEBAR4: bounded history of runs over this entity, newest last. Runs are
+    // serialized, so each run reads its predecessor's log — two runs a few
+    // seconds apart for one capture are now visible in the DB, not only in
+    // Railway logs that age out.
+    _pipeline_run_log: [
+      ...(Array.isArray(metadata._pipeline_run_log) ? metadata._pipeline_run_log : []),
+      { ...runTrace, finished_at: new Date().toISOString() },
+    ].slice(-SIDEBAR_RUN_LOG_MAX),
   };
   await opsQuery('PATCH',
     `entities?id=eq.${entityId}&workspace_id=eq.${workspaceId}`,
