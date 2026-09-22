@@ -36,18 +36,31 @@ import { sf15, toSf18, classifySfId } from './sf-id.js';
  * This is a SHAPE check, not a liveness check — it flags "this looks like an
  * id, not a name" regardless of whether LCC can resolve it.
  */
+// A real 15/18-char SF id is pure base62 (alphanumeric, no spaces/punctuation)
+// AND its 3-char key prefix must be one of the ones we recognize. Requiring
+// BOTH is what keeps this from misfiring on an ordinary 15/18-character name
+// that happens to be the right length — e.g. "DaVita Kidney Care" is exactly
+// 18 characters and contains no space-free run classifySfId could mistake for
+// an id, but a shape check on length alone (kind !== 'invalid', where
+// 'invalid' only means "wrong length") would still flag it via the 'other'
+// bucket. Caught by this file's own test suite before it ever wrote wrong.
+const SF_ID_CHARS_RE = /^[A-Za-z0-9]{15}([A-Za-z0-9]{3})?$/;
+function isRecognizedSfIdShape(s) {
+  return SF_ID_CHARS_RE.test(s) && !['invalid', 'other'].includes(classifySfId(s).kind);
+}
+
 export function looksLikeRawSalesforceId(value) {
   if (value === null || value === undefined) return false;
   const s = String(value).trim();
   if (!s) return false;
-  return classifySfId(s).kind !== 'invalid';
+  return isRecognizedSfIdShape(s);
 }
 
 /** Convenience: specifically an Account (001…) id — the shape RECON3 found. */
 export function looksLikeRawSalesforceAccountId(value) {
   if (value === null || value === undefined) return false;
   const s = String(value).trim();
-  if (!s) return false;
+  if (!s || !SF_ID_CHARS_RE.test(s)) return false;
   return classifySfId(s).kind === 'Account';
 }
 

@@ -1697,7 +1697,7 @@ const MAP_WIDGET_RE = /^(keyboard\s+shortcuts|map\s+data(\s+.*)?|imagery(\s+.*)?
 // all <=5 words, none containing a preposition). A second, broader net
 // catches any candidate tenant string that reads as a sentence (7+ words
 // with a preposition) even without the exact facility-noun phrasing.
-const TENANT_LISTING_SENTENCE_RE = /\b(dialysis|medical|kidney|renal|health(care)?)\s+(clinic|center|centre|facility)\s+(located\s+)?(in|at|near)\s+[a-z]/i;
+const TENANT_LISTING_SENTENCE_RE = /\b(clinic|center|centre|facility)\s+(located\s+)?(in|at|near)\s+[a-z]/i;
 export function isListingDescriptionSentence(name) {
   if (!name) return false;
   const n = String(name).trim();

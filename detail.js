@@ -5156,14 +5156,25 @@ function _udTabOperations() {
     html += '<th style="text-align:right;padding:4px 8px;color:var(--text3);font-weight:700">Dist</th>';
     html += '<th style="text-align:left;padding:4px 8px;color:var(--text3);font-weight:700">Operator</th>';
     html += '<th style="text-align:left;padding:4px 8px;color:var(--text3);font-weight:700">Tenant</th>';
+    // RECON3 fix #5: additive Rent/SF + Census columns (leases.rent_per_sf /
+    // reconciled CMS census) when the underlying record has them. Renders
+    // '—' otherwise; never blocks or gates the rest of the table.
+    html += '<th style="text-align:right;padding:4px 8px;color:var(--text3);font-weight:700">Rent/SF</th>';
+    html += '<th style="text-align:right;padding:4px 8px;color:var(--text3);font-weight:700">Census</th>';
     html += '</tr></thead><tbody>';
     geoComps.forEach(c => {
+      const cRentPsf = c.rent_per_sf != null ? c.rent_per_sf : (c.rent_psf != null ? c.rent_psf : null);
+      const cCensus = c.reconciled_census_current != null ? c.reconciled_census_current
+        : (c.latest_estimated_patients != null ? c.latest_estimated_patients
+        : (c.census != null ? c.census : (c.patient_count != null ? c.patient_count : null)));
       html += '<tr style="border-bottom:1px solid var(--s3)">';
       html += '<td style="padding:4px 8px;white-space:nowrap">' + (c.address || '—') + '</td>';
       html += '<td style="padding:4px 8px">' + (c.city || '') + (c.state ? ', ' + c.state : '') + '</td>';
       html += '<td style="padding:4px 8px;text-align:right">' + (c.distance_miles != null ? Number(c.distance_miles).toFixed(2) + ' mi' : '—') + '</td>';
       html += '<td style="padding:4px 8px">' + (c.operator || c.chain_canonical || 'Independent') + (c.same_operator ? ' ●' : '') + '</td>';
       html += '<td style="padding:4px 8px">' + (c.tenant || '—') + '</td>';
+      html += '<td style="padding:4px 8px;text-align:right">' + (cRentPsf != null ? '$' + Number(cRentPsf).toFixed(2) : '—') + '</td>';
+      html += '<td style="padding:4px 8px;text-align:right">' + (cCensus != null ? Number(cCensus).toLocaleString() : '—') + '</td>';
       html += '</tr>';
     });
     html += '</tbody></table></div>';
@@ -5196,14 +5207,20 @@ function _udTabOperations() {
     html += '<th style="text-align:left;padding:4px 8px;color:var(--text3);font-weight:700">Operator</th>';
     html += '<th style="text-align:right;padding:4px 8px;color:var(--text3);font-weight:700">Chairs</th>';
     html += '<th style="text-align:right;padding:4px 8px;color:var(--text3);font-weight:700">Patients</th>';
+    // RECON3 fix #5: additive Rent/SF column (leases.rent_per_sf) when the
+    // county-fallback competitor row carries it. '\u2014' otherwise, non-blocking.
+    html += '<th style="text-align:right;padding:4px 8px;color:var(--text3);font-weight:700">Rent/SF</th>';
     html += '</tr></thead><tbody>';
     competitors.forEach(c => {
+      const cRentPsf = c.rent_per_sf != null ? c.rent_per_sf : (c.rent_psf != null ? c.rent_psf : null);
+      const cCensus = c.reconciled_census_current != null ? c.reconciled_census_current : c.latest_estimated_patients;
       html += '<tr style="border-bottom:1px solid var(--s3)">';
       html += '<td style="padding:4px 8px;white-space:nowrap">' + (c.facility_name || '') + '</td>';
       html += '<td style="padding:4px 8px">' + (c.city || '') + '</td>';
       html += '<td style="padding:4px 8px">' + (c.chain_organization || 'Independent') + '</td>';
       html += '<td style="padding:4px 8px;text-align:right">' + (c.number_of_chairs || '\u2014') + '</td>';
-      html += '<td style="padding:4px 8px;text-align:right">' + (c.latest_estimated_patients ? Number(c.latest_estimated_patients).toLocaleString() : '\u2014') + '</td>';
+      html += '<td style="padding:4px 8px;text-align:right">' + (cCensus ? Number(cCensus).toLocaleString() : '\u2014') + '</td>';
+      html += '<td style="padding:4px 8px;text-align:right">' + (cRentPsf != null ? '$' + Number(cRentPsf).toFixed(2) : '\u2014') + '</td>';
       html += '</tr>';
     });
     html += '</tbody></table></div>';
@@ -5433,6 +5450,47 @@ function _udBuildPerfExhibit(ext, econ, r, B) {
   return out;
 }
 
+// RECON3 fix #6 (property_id 27266, 2026-09-22): the client Asset Profile
+// export was rendering live Risk Assessment / Lease Expiration scoring for
+// a property that had ALREADY CLOSED — sending stale "still owned by the
+// old landlord, here's the renewal risk" analysis on a deal that was done.
+// This reads the sales data the Sales tab ALREADY loaded into `_salesCache`
+// (`_udRenderSalesAsync`) — best-effort/non-blocking: if the Sales tab has
+// never been opened for this property in this session, `_salesCache` is
+// null and this returns null, and the export falls back to its prior
+// (live-risk) behaviour unchanged. TODO(RECON3 backlog): make this
+// deterministic by having the export itself fetch sales_transactions
+// before rendering, rather than depending on tab-visit order.
+function _udDetectClosedSale() {
+  try {
+    const propertyId = _udCache && (_udCache.ids?.property_id || _udCache.property?.property_id);
+    if (!propertyId) return null;
+    const sales = (_salesCache && _salesCache.property_id === propertyId) ? _salesCache : null;
+    if (!sales) return null;
+    const closed = (sales.transactions || [])
+      .filter(t => t && t.sale_date && t.price != null)
+      .slice()
+      .sort((a, b) => new Date(b.sale_date) - new Date(a.sale_date));
+    if (!closed.length) return null;
+    const latest = closed[0];
+    // A buyer_name that is itself a raw Salesforce record id (see RECON3
+    // fix #1, api/_shared/sf-account-name-resolver.js) is not a usable
+    // display name — show "buyer information pending" instead of leaking
+    // the opaque id onto a client-facing export.
+    const SF_ID_RE = /^(00[135Q6])[A-Za-z0-9]{12}(?:[A-Za-z0-9]{3})?$/;
+    const buyerRaw = latest.buyer_name || null;
+    const buyerLooksLikeRawId = !!(buyerRaw && SF_ID_RE.test(String(buyerRaw).trim()));
+    return {
+      sale_date: latest.sale_date,
+      price: latest.price,
+      buyer_name: buyerLooksLikeRawId ? null : buyerRaw,
+      buyer_pending: buyerLooksLikeRawId,
+    };
+  } catch (_e) {
+    return null;
+  }
+}
+
 function _udExportOperations() {
   const rankings = _udCache.rankings;
   const cmsLink = _udCache.cms || null;
@@ -5539,10 +5597,17 @@ function _udExportOperations() {
   const censusHeadline = concurrentCensus != null ? concurrentCensus : bestPatientCount;
   const utilPct = r.capacity_utilization_pct != null ? Number(r.capacity_utilization_pct) : null;
   const demo = ext.demographics || null;
+  // RECON3 fix #6: a closed sale takes priority over live risk scoring — see
+  // _udDetectClosedSale() above. When found, riskScores is forced null so
+  // the template's existing `${riskScores ? ... : ''}` gate (below) never
+  // renders the live Risk Assessment section, and a SOLD banner is injected
+  // in its place near the report header instead.
+  const soldInfo = _udDetectClosedSale();
   // Composite risk (reuse the in-app model so screen + export agree)
   let leaseMonths = null;
   if (lease.expiration_date) { const _ld = new Date(lease.expiration_date); leaseMonths = Math.round((_ld - new Date()) / (1000 * 60 * 60 * 24 * 30.44)); }
   let riskScores = null, riskLevel = '', riskColor = B.muted;
+  if (!soldInfo) {
   try {
     if (typeof _computeLeaseRisk === 'function') {
       // The risk model's Patient-Trend factor reads r.patient_yoy_pct, which the
@@ -5555,6 +5620,7 @@ function _udExportOperations() {
       riskColor = riskScores.total <= 25 ? '#2E7D32' : riskScores.total <= 50 ? '#B26A00' : riskScores.total <= 75 ? '#C75300' : '#B3261E';
     }
   } catch (_re) { riskScores = null; }
+  }
   // Comparative rankings → percentile (higher = larger). County rank in
   // v_property_rankings groups by county NAME only (ignores state), so it is
   // intentionally excluded from the client export.
@@ -5643,6 +5709,27 @@ function _udExportOperations() {
   };
   const today = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
   const perfExhibitHtml = _udBuildPerfExhibit(ext, _econ, r, B);
+
+  // RECON3 fix #6: SOLD banner replaces the live Risk Assessment / lease
+  // scoring narrative once soldInfo is set (see _udDetectClosedSale above).
+  // Falls back gracefully when the buyer name isn't resolvable (it is a raw
+  // Salesforce id \u2014 RECON3 fix #1) rather than leaking the opaque id.
+  let soldBannerHtml = '';
+  if (soldInfo) {
+    const soldDateStr = soldInfo.sale_date
+      ? new Date(soldInfo.sale_date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+      : 'an undated sale on file';
+    const soldPriceStr = soldInfo.price != null
+      ? '$' + Number(soldInfo.price).toLocaleString('en-US', { maximumFractionDigits: 0 })
+      : 'price not on file';
+    const buyerLine = soldInfo.buyer_name
+      ? ('Buyer: ' + _esc(soldInfo.buyer_name))
+      : (soldInfo.buyer_pending ? 'Buyer information pending' : '');
+    soldBannerHtml = '<div style="background:#FDECEA;border:1px solid #B3261E;border-radius:8px;padding:14px 18px;margin:0 0 16px 0">'
+      + '<div style="font-weight:700;font-size:14px;color:#B3261E;letter-spacing:0.5px;text-transform:uppercase">SOLD \u2014 ' + soldDateStr + '</div>'
+      + '<div style="font-size:13px;color:' + B.bodyText + ';margin-top:4px">This property closed at ' + soldPriceStr + '. Live lease-renewal risk scoring is not applicable to a completed transaction; see the Deal History tab for the full sale record.' + (buyerLine ? ' ' + buyerLine + '.' : '') + '</div>'
+      + '</div>';
+  }
 
   const doc = `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>${facilityName} \u2014 Net-Lease Asset Profile | Northmarq</title>
@@ -5759,7 +5846,7 @@ function _udExportOperations() {
 </div>
 
 <div class="content">
-
+${soldBannerHtml}
 <!-- Investment snapshot -->
 <div class="snap">
   <div class="sk accent"><div class="l">Operator / Tenant</div><div class="v" style="font-size:15px">${operatorName}</div></div>
@@ -7110,6 +7197,12 @@ function _udRenderGeoSection(geo, domain) {
     html += domain === 'gov'
       ? '<th style="text-align:right;padding:4px 8px;color:var(--text3)">Rent</th>'
       : '<th style="text-align:left;padding:4px 8px;color:var(--text3)">Operator</th>';
+    // RECON3 fix #5: additive Rent/SF + Census columns when the row already
+    // carries them (leases.rent_per_sf / a reconciled census figure). Purely
+    // additive — renders '—' when the underlying record doesn't have it, so
+    // this never gates or blocks the rest of the table.
+    html += '<th style="text-align:right;padding:4px 8px;color:var(--text3)">Rent/SF</th>';
+    html += '<th style="text-align:right;padding:4px 8px;color:var(--text3)">Census</th>';
     html += '</tr></thead><tbody>';
     owners.forEach(o => {
       html += '<tr style="border-bottom:1px solid var(--s3)">';
@@ -7120,6 +7213,12 @@ function _udRenderGeoSection(geo, domain) {
       html += domain === 'gov'
         ? '<td style="padding:4px 8px;text-align:right">' + _money(o.annual_rent) + '</td>'
         : '<td style="padding:4px 8px">' + esc(o.operator || o.tenant) + '</td>';
+      const oRentPsf = o.rent_per_sf != null ? o.rent_per_sf : (o.rent_psf != null ? o.rent_psf : null);
+      const oCensus = o.reconciled_census_current != null ? o.reconciled_census_current
+        : (o.latest_estimated_patients != null ? o.latest_estimated_patients
+        : (o.census != null ? o.census : (o.patient_count != null ? o.patient_count : null)));
+      html += '<td style="padding:4px 8px;text-align:right">' + (oRentPsf != null ? '$' + Number(oRentPsf).toFixed(2) : '—') + '</td>';
+      html += '<td style="padding:4px 8px;text-align:right">' + (oCensus != null ? Number(oCensus).toLocaleString() : '—') + '</td>';
       html += '</tr>';
     });
     html += '</tbody></table></div></div>';
