@@ -10,12 +10,20 @@
 -- sidebar-pipeline.js's isJunkSalesParty()) stops the defect going forward.
 -- This migration is the measurement + repair half for what ALREADY landed.
 --
--- ⚠️ NOT APPLIED LIVE. This session has no egress to Supabase (sandboxed, no
--- DB access) — see docs/claude-code/STATUS.md / the RECON3 handoff note for
--- who runs this and when. Written to the same dry-run-default / provenance /
--- reversible / idempotent contract every other migration in this directory
--- follows (see e.g. 20261010120000_dia_ownergap2_owner_resolution_ledger.sql)
--- so it is ready to run as-is once someone with live access reviews it.
+-- ✅ APPLIED LIVE 2026-09-22 (RECON3-b follow-up, Supabase MCP session with
+-- Dialysis_DB access). Dry-run measurement via v_dia_recon3_sf_id_as_name
+-- found the FLEET-WIDE blast radius was exactly the 5 rows RECON3-b already
+-- named on property 27266 — nothing else in the fleet carries this defect.
+-- Cleared with `SELECT * FROM dia_recon3_clear_sf_id_names(false,
+-- 'recon3b_20260922', NULL)`; v_dia_recon3_sf_id_as_name now reads 0.
+-- Reverse with `SELECT * FROM dia_recon3_restore_sf_id_names('recon3b_20260922')`.
+-- The cleared names are NOT recovered — per this file's own discipline below,
+-- a repair here removes an opaque id, it never guesses a replacement; DaVita's/
+-- the buyer's real name still needs to be looked up (Salesforce/closing docs)
+-- and entered manually or via a resolver with live SF/entity-link access.
+-- Written to the same dry-run-default / provenance / reversible / idempotent
+-- contract every other migration in this directory follows (see e.g.
+-- 20261010120000_dia_ownergap2_owner_resolution_ledger.sql).
 --
 -- SCOPE. dia (Dialysis_DB) ONLY. Per this repo's CLAUDE.md ownership table
 -- ("🗄️ ONE REPO OWNS EACH DATABASE'S OBJECTS", Scott 2026-09-12), the

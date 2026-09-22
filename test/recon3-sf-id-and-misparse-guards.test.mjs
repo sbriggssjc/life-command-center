@@ -179,15 +179,18 @@ describe('sidebar-pipeline: reconcilePropertyOwnership prefers a closed sale ove
       'the old fill-blanks-only guard must be gone'
     );
   });
-  it('reads properties.updated_at so it can judge sale recency', () => {
-    assert.match(src, /select=recorded_owner_id,current_value_estimate,updated_at/);
+  it('does not gate the overwrite on properties.updated_at (RECON3-b: updated_at is not a per-field stamp)', () => {
+    // RECON3's first attempt gated on `saleIsOlder` derived from
+    // properties.updated_at, which is touched by every writer that ever
+    // saves the row (not just value-estimate writes) — live-verified to
+    // silently refuse the fix on the exact property it was written for.
+    assert.doesNotMatch(src, /saleIsOlder/);
   });
-  it('overwrites when the price differs and the sale is not older than updated_at', () => {
+  it('unconditionally overwrites when the price differs (a closed sale always beats a modeled estimate)', () => {
     assert.match(src, /priceDiffers/);
-    assert.match(src, /saleIsOlder/);
     assert.match(
       src,
-      /if \(!prop\.current_value_estimate \|\| \(priceDiffers && !saleIsOlder\)\)/
+      /if \(!prop\.current_value_estimate \|\| priceDiffers\)/
     );
   });
 });
