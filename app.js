@@ -7756,7 +7756,8 @@ async function renderSellerProspectQueuePage(force, opts) {
   if (opts && typeof opts.offset === 'number') { _sellerProspectPage.offset = opts.offset; }
   el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
   try {
-    const q = 'chip=' + encodeURIComponent(_sellerProspectPage.chip) + '&limit=50&offset=' + _sellerProspectPage.offset;
+    // PERF-SPQ2: chips are opt-in on the route; this page is the one that draws them.
+    const q = 'chip=' + encodeURIComponent(_sellerProspectPage.chip) + '&limit=50&offset=' + _sellerProspectPage.offset + '&include=chips';
     const res = await opsApi('/api/seller-prospect-queue?' + q);
     if (!res.ok || !res.data) {
       el.innerHTML = '<div class="nba-empty">Seller prospect queue unavailable — HTTP ' + (res && res.status || '?')

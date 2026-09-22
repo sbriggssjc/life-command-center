@@ -147,6 +147,7 @@ import { diaSupabaseKey, govSupabaseKey } from './_shared/supabase-keys.js';
 import {
   SELLER_QUEUE_CHIPS, buildQueuePath, buildPagination,
   resolveChip, normalizeDomain, clampLimit, clampOffset,
+  parseSellerQueueInclude,
 } from './_shared/seller-prospect-queue.js';
 import { createHash, randomUUID } from 'node:crypto';
 
@@ -7554,33 +7555,49 @@ async function handleSellerProspectQueue(req, res) {
   }
   const items = Array.isArray(itemsR.data) ? itemsR.data : [];
 
+  // PERF-SPQ2 (2026-09-22): chips and funnel are OPT-IN (`include=chips,funnel`).
+  // Measured on a cold Home boot, this route was the bulk of the view passes: items
+  // (+ its exact count), the chip RPC (1 pass) and the funnel summary (11 passes before
+  // the single-pass rewrite in 20261102230000). Home's BD lane (limit=5) and the
+  // Priority tab (limit=100) read ONLY `items` + `pagination` and never render chips or
+  // the funnel, yet paid for both on every load. Only the seller-prospect page draws
+  // chips, and it now asks for them. A skipped block is `null` (not requested), never
+  // an empty list or n: 0, so "not asked" cannot read as "there are none" (P180).
+  const include = parseSellerQueueInclude(req.query.include);
   const [chipCountsR, summaryR] = await Promise.all([
-    opsQuery('POST', 'rpc/lcc_seller_prospect_chip_counts', { p_domain: domain || null },
-      undefined, { countMode: 'none', timeoutMs: 15000 })
-      .catch((e) => {
-        console.warn('[seller-prospect-queue] chip counts rpc threw:', e?.message || e);
-        return { ok: false, data: null };
-      }),
-    opsQuery('GET', 'v_lcc_seller_prospect_queue_summary?select=*',
-      undefined, { countMode: 'none' }).catch(() => ({ ok: false, data: null })),
+    include.chips
+      ? opsQuery('POST', 'rpc/lcc_seller_prospect_chip_counts', { p_domain: domain || null },
+          undefined, { countMode: 'none', timeoutMs: 15000 })
+          .catch((e) => {
+            console.warn('[seller-prospect-queue] chip counts rpc threw:', e?.message || e);
+            return { ok: false, data: null };
+          })
+      : null,
+    include.funnel
+      ? opsQuery('GET', 'v_lcc_seller_prospect_queue_summary?select=*',
+          undefined, { countMode: 'none' }).catch(() => ({ ok: false, data: null }))
+      : null,
   ]);
-  const chipCountByKey = new Map(
-    (chipCountsR.ok && Array.isArray(chipCountsR.data) ? chipCountsR.data : [])
-      .map((row) => [row.chip_key, Number(row.n)]));
-  // n: null when the RPC failed outright OR this chip's row didn't come back -- never 0,
-  // because "we could not count" and "there are none" are different facts (P180).
-  const chips = SELLER_QUEUE_CHIPS.map((c) => ({
-    key: c.key,
-    label: c.label,
-    n: chipCountsR.ok && chipCountByKey.has(c.key) ? chipCountByKey.get(c.key) : null,
-  }));
+  let chips = null;
+  if (chipCountsR) {
+    const chipCountByKey = new Map(
+      (chipCountsR.ok && Array.isArray(chipCountsR.data) ? chipCountsR.data : [])
+        .map((row) => [row.chip_key, Number(row.n)]));
+    // n: null when the RPC failed outright OR this chip's row didn't come back -- never 0,
+    // because "we could not count" and "there are none" are different facts (P180).
+    chips = SELLER_QUEUE_CHIPS.map((c) => ({
+      key: c.key,
+      label: c.label,
+      n: chipCountsR.ok && chipCountByKey.has(c.key) ? chipCountByKey.get(c.key) : null,
+    }));
+  }
 
   return res.status(200).json({
     chip: chip.key,
     domain: domain || null,
     chips,
     pagination: buildPagination({ total: itemsR.count, limit, offset }),
-    funnel: (summaryR.ok && Array.isArray(summaryR.data)) ? summaryR.data : null,
+    funnel: (summaryR && summaryR.ok && Array.isArray(summaryR.data)) ? summaryR.data : null,
     items,
   });
 }
