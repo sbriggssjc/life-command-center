@@ -60,6 +60,7 @@ import {
 import { deriveListingDate, deriveOnMarketDate } from '../_shared/listing-date.js';
 export { deriveListingDate };
 import { cleanLenderName } from '../_shared/lender-name.js';
+import { looksLikeRawSalesforceId } from '../_shared/sf-account-name-resolver.js';
 import { deriveGovernmentCreditTier } from '../_shared/gov-credit-tier.js';
 
 // ============================================================================
@@ -210,10 +211,22 @@ async function fetchDomainRecordsCurrent(domain, propertyId) {
   return out;
 }
 
-function isJunkSalesParty(name) {
+export function isJunkSalesParty(name) {
   if (name === null || name === undefined) return false;
   const trimmed = String(name).trim();
   if (!trimmed) return false;
+  // RECON3 (2026-09-22, property_id 27266): a raw Salesforce record id
+  // ("001…", 18 chars) is not a buyer/seller NAME — some upstream capture
+  // put an AccountId where it meant Account.Name. This is a synchronous,
+  // text-only guard (this function has no DB/workspace context to resolve
+  // the id to the real Account name), so it strips the raw id rather than
+  // writing it — the same "skip the write and leave blank" fallback the
+  // async `guardNameField` in sf-account-name-resolver.js uses when the id
+  // can't be resolved. ensureEntityLink's choke point (entity-link.js) does
+  // the fuller async resolve-then-write for the org/contact entity itself;
+  // this only protects the flat buyer_name/seller_name TEXT columns fed by
+  // cleanSalesPartyValue.
+  if (looksLikeRawSalesforceId(trimmed)) return true;
   if (SALES_PARTY_JUNK_RE.test(trimmed.toLowerCase())) return true;
   // Round 76ax-D: shape-based junk detectors. Each guards a class the
   // alternation regex can't easily cover without false-positives on real
@@ -227,7 +240,7 @@ function isJunkSalesParty(name) {
   return false;
 }
 
-function cleanSalesPartyValue(name) {
+export function cleanSalesPartyValue(name) {
   if (name === null || name === undefined) return null;
   const trimmed = String(name).trim();
   if (!trimmed) return null;
@@ -1669,11 +1682,36 @@ const COSTAR_DATE_RE = /^(since\s+)?((?:january|february|march|april|may|june|ju
 // Anchored; deliberately does NOT reject bare "google"/"satellite" ("Satellite
 // Healthcare" is a real dialysis operator; "Google" can be a real tenant).
 const MAP_WIDGET_RE = /^(keyboard\s+shortcuts|map\s+data(\s+.*)?|imagery(\s+.*)?|©\s*\d{4}\b.*|report\s+a\s+map\s+error|terms(\s+of\s+use)?|this\s+page\s+can'?t\s+load\s+google\s+maps\s+correctly|do\s+you\s+own\s+this\s+website\?|map\s+details?|\d{1,4}\s*(ft|mi|m|km|yd))\s*$/i;
-function isJunkTenant(name) {
+
+// RECON3 (2026-09-22, property_id 27266, 175 Righter Rd Succasunna NJ): a
+// listing/property page DESCRIPTION sentence ("DaVita dialysis clinic in
+// Succasunna", "Fresenius clinic located in Denton") leaked into
+// leases.tenant instead of the bare operator/tenant name. This one is
+// dangerous specifically because it PASSES every other guard here — it
+// starts with a real, known brand, so `canonicalizeTenant`'s anchored
+// `^da\s*vita\b` even "matches" it — the misparse is invisible unless you
+// check for the trailing narrative. The tell: a facility-type noun
+// ("clinic"/"center"/"facility") followed by a lowercase preposition
+// ("in"/"at"/"near"/"located") introducing a place — a shape no real
+// operator/brand name in this dataset ever takes (see CANONICAL_TENANTS,
+// all <=5 words, none containing a preposition). A second, broader net
+// catches any candidate tenant string that reads as a sentence (7+ words
+// with a preposition) even without the exact facility-noun phrasing.
+const TENANT_LISTING_SENTENCE_RE = /\b(clinic|center|centre|facility)\s+(located\s+)?(in|at|near)\s+[a-z]/i;
+export function isListingDescriptionSentence(name) {
+  if (!name) return false;
+  const n = String(name).trim();
+  if (TENANT_LISTING_SENTENCE_RE.test(n)) return true;
+  const wordCount = n.split(/\s+/).filter(Boolean).length;
+  return wordCount >= 7 && /\b(in|at|near|located)\b/i.test(n);
+}
+
+export function isJunkTenant(name) {
   if (!name || name.trim().length < 3) return true;
   const n = name.trim();
   if (JUNK_TENANT_RE.test(n)) return true;
   if (STREET_NAME_RE.test(n)) return true;
+  if (isListingDescriptionSentence(n)) return true;
   if (GROWTH_RE.test(n)) return true;
   if (OM_SECTION_RE.test(n)) return true;
   if (NAICS_SECTOR_RE.test(n)) return true;
@@ -10288,7 +10326,7 @@ export async function reconcilePropertyOwnership(domain, propertyId) {
   //    update.  Also grab the current owner's transfer date for comparison.
   const propRes = await domainQuery(domain, 'GET',
     `properties?property_id=eq.${propertyId}` +
-    `&select=recorded_owner_id,current_value_estimate` +
+    `&select=recorded_owner_id,current_value_estimate,updated_at` +
     `&limit=1`
   );
   if (!propRes.ok || !propRes.data?.length) return { updated: false };
@@ -10343,9 +10381,35 @@ export async function reconcilePropertyOwnership(domain, propertyId) {
     }
   }
 
-  // 3. Back-fill current_value_estimate from the latest sold price
-  if (latestPrice && !prop.current_value_estimate) {
-    patch.current_value_estimate = latestPrice;
+  // 3. Back-fill / overwrite current_value_estimate from the latest sold price.
+  //
+  // RECON3 fix (2026-09-22, property_id 27266): the prior guard
+  // (`latestPrice && !prop.current_value_estimate`) only ever FILLED an empty
+  // field, so a closed sale could never correct an existing-but-STALE
+  // estimate (e.g. an asking price captured while the property was still
+  // listed, left standing after the sale closed at a different number). A
+  // closed sale is the most authoritative value signal available — an
+  // actual transaction beats any prior estimate — so this now overwrites
+  // whenever:
+  //   (a) the estimate is empty (unchanged behavior), OR
+  //   (b) the estimate DISAGREES with the sale price AND the sale is not
+  //       demonstrably OLDER than whatever last touched the property row.
+  //       `properties` has no dedicated `value_estimate_updated_at` column,
+  //       so `updated_at` is the best proxy we have; when it's absent we do
+  //       NOT fall back to "field is empty" as the sole gate (that was the
+  //       bug) — we prefer the closed sale over an unstamped estimate.
+  //
+  // TODO(RECON3 backlog): this only fixes the JS logic going forward — it
+  // does NOT backfill existing stale current_value_estimate values already
+  // on file. A dry-run, reversible backfill migration for that is filed at
+  // supabase/migrations/dialysis/20260922_dia_recon3_stale_value_estimate_backfill.sql
+  // (NOT applied live — see the migration header).
+  if (latestPrice) {
+    const priceDiffers = Number(prop.current_value_estimate) !== Number(latestPrice);
+    const saleIsOlder = !!(latestDate && prop.updated_at && new Date(latestDate) < new Date(prop.updated_at));
+    if (!prop.current_value_estimate || (priceDiffers && !saleIsOlder)) {
+      patch.current_value_estimate = latestPrice;
+    }
   }
 
   if (Object.keys(patch).length === 0) return { updated: false, reason: 'no_change' };
@@ -11674,6 +11738,16 @@ async function upsertDomainLeases(domain, propertyId, metadata, provCollect) {
     // Fallback: single lease from top-level metadata fields
     const tenantName = metadata.tenant_name || metadata.primary_tenant;
     if (!tenantName) return 0;
+    // RECON3 (2026-09-22, property_id 27266): this fallback branch (no
+    // tenants[] array — single-tenant captures) never ran the tenant
+    // through isJunkTenant(), unlike the per-row loop above (line ~11668).
+    // That is exactly the gap that let a listing description sentence
+    // ("DaVita dialysis clinic in Succasunna") land in leases.tenant — the
+    // array-path guard existed and this path was silently unguarded.
+    if (isJunkTenant(tenantName)) {
+      console.warn(`[upsertDomainLeases] skip junk top-level tenant on property=${propertyId}: "${String(tenantName).slice(0, 80)}"`);
+      return 0;
+    }
 
     const fallbackStart = parseDate(metadata.lease_commencement);
     const fallbackExp   = parseDate(metadata.lease_expiration);
