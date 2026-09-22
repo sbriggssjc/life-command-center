@@ -2680,7 +2680,16 @@ async function unpackTenant(propertyEntityId, metadata, workspaceId, userId, dom
 
 // ── Step 2: Unpack Sales History ────────────────────────────────────────────
 
-async function unpackSalesHistory(propertyEntityId, metadata, workspaceId, userId, domain) {
+// LOG2 (2026-09-22): `entity` is the caller's already-fetched property
+// entity row (from processSidebarExtraction's initial `entities?id=eq...`
+// read), threaded through so saleHistoryBelongsToAsset() below has an
+// address to compare against. Previously this function only received
+// propertyEntityId (a bare id) and referenced an `entity` that was never
+// in scope, throwing ReferenceError on the FIRST sale in metadata.sales_history
+// and aborting the rest of that sidebar send's extraction (buyer/seller/lender
+// entity creation for every remaining sale never ran). Confirmed live: 200+
+// occurrences in Railway logs over 2026-09-15→17 alone.
+async function unpackSalesHistory(propertyEntityId, metadata, workspaceId, userId, domain, entity) {
   const sales = metadata.sales_history;
   if (!Array.isArray(sales) || sales.length === 0) return 0;
 
@@ -13100,7 +13109,7 @@ export async function processSidebarExtraction(entityId, workspaceId, userId, op
   const tenantCount = await unpackTenant(entityId, metadata, workspaceId, userId, domain);
 
   // Step 3 — Unpack sales history → activity events + buyer/seller/lender entities
-  const salesCount = await unpackSalesHistory(entityId, metadata, workspaceId, userId, domain);
+  const salesCount = await unpackSalesHistory(entityId, metadata, workspaceId, userId, domain, entity);
 
   // Step 4 — Propagate to EVERY applicable domain database. Each
   // domain's writers filter metadata.tenants[] via isTenantForDomain

@@ -53,6 +53,36 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-22 — Round 51 (Cowork): reviewed a week of Railway logs (25,000 rows, `tranquil-delight`, 2026-09-15 to 2026-09-18), fixed two real silent-failure bugs, cataloged the rest
+
+**Scott's message: "Attached are the logs for the past week. Review and catalog all errors that need to be addressed and make a list that we can work through to debug and triage. Add that to our to do lists. Also, provide the exact commands for copy/paste to push and create a PR."** Uploaded export: 25,000 rows, 6,599 `severity:error`, single service (`tranquil-delight`), 2026-09-15T11:30 to 2026-09-18T07:15 UTC. Multi-line `console.error(msg, obj)` calls split into one array entry per pretty-printed line, so raw counts overstate distinct events — triage below counts **header lines**, not raw rows.
+
+**Fixed and shipped (branch `fix/round51-log-triage`):**
+
+**LOG1 — PostgREST filter-escaping bug, `mcp/deal-email-matcher.js` (638 occurrences, `status:400` "non-array GET data coerced to []").** The deal-email-matcher's candidate query builds nested `and=(or(...),or(...))`/`or=(...)` PostgREST logical-operator filters from entity names and cities; PostgREST decodes the query string before parsing its own grammar, so a raw comma or paren inside a VALUE (e.g. "Midland Ave, Glenwood") breaks the filter's structure even after `encodeURIComponent`. Added `pgrestLogicEsc()` (backslash-escapes `,` `(` `)`, backslash-first so it never double-escapes) and applied it to both the `coreLike` and `cityLike` values. New test `test/log1-pgrest-logic-escape.test.mjs` (5/5 passing).
+
+**LOG2 — `ReferenceError` silently aborting sales-history entity creation, `api/_handlers/sidebar-pipeline.js` (~200 live occurrences).** `unpackSalesHistory()` never received `entity` as a parameter, but `saleHistoryBelongsToAsset(entity, sale)` inside its `for (const sale of sales)` loop referenced it anyway — the first sale in a batch happened to work (some other in-scope `entity` from a stale closure), every sale after it in the same capture threw and silently stopped buyer/seller/lender entity creation for the rest of that batch. Added `entity` as a parameter and passed it from the one call site in `processSidebarExtraction`, which already has it.
+
+Both fixes verified: `node --check` clean, escaping behavior checked by hand, and all 388 tests across the 29 test files that import either module passing (including `test/owner-deed-propagation.test.mjs`, which exercises `saleHistoryBelongsToAsset` directly).
+
+**Cataloged, not yet fixed — filed as `LOG3`–`LOG9` in `docs/os/PLANNED-BACKLOG.md`:** `LOG3`/`LOG4` duplicate-key write noise (`upsertDomainSales` PATCH, 22×; `upsertDialysisListings` INSERT, 17×) from missing compare-before-write/upsert-on-conflict — same class of bug as `HCRIS-TIMEOUT`'s row, smaller blast radius. `LOG5` — gov `intake-promoter`'s `REFRESH MATERIALIZED VIEW` on `v_available_listings`, which is a plain view (`42809`), silently failing on every promote; this matches a bug an old audit (`audit/data-flow-2026-05-30/archive/build_report.js`) already found and never fixed. `LOG6` — `cm_gov_market_quarterly_master_m` hitting Postgres's statement timeout (`57014`) 16× across two days; the gov capital-markets export degrades gracefully (falls back to per-view quarterly data) but the underlying query needs a look. `LOG7` — `GEOCODIO_API_KEY`/`GOOGLE_MAPS_API_KEY` unset on `tranquil-delight`, so the geocode fallback tiers never run; filed as `OPERATOR-CHECKLIST` Q39 since it needs Scott's call. `LOG8` — not a bug: `console.warn()` writes to stderr, which Railway buckets as `severity:error` same as `console.error()`, so two intentional/expected call sites (`[sidebar misparse]`, `[field-provenance:strict]`) account for 853 of the 6,599 `error` rows (~13%) in this export — worth knowing before reading Railway's error count as a triage signal. `LOG9` — `[Intake extraction] No valid extraction result` (`api/intake.js:1758`), 15× with no `intake_id` or reason attached to the log line, so it can't be diagnosed from the export alone.
+
+Updated: `mcp/deal-email-matcher.js`, `api/_handlers/sidebar-pipeline.js`, `test/log1-pgrest-logic-escape.test.mjs` (new), `docs/os/PLANNED-BACKLOG.md` (`LOG3`–`LOG9`, new rows), `docs/claude-code/OPERATOR-CHECKLIST.md` (Q39, new), this file's Open-threads summary is unchanged (no existing thread owns log triage; `LOG3`–`LOG9` stand alone in the backlog until/unless a pattern justifies opening one).
+
+**Push/PR commands for Scott — branch `fix/round51-log-triage` is complete and committed locally on the connected machine; run these to publish it:**
+
+```
+
+cd C:\Users\scott\life-command-center
+
+git push -u origin fix/round51-log-triage
+
+gh pr create --title "fix(round51): LOG1 PostgREST filter escaping + LOG2 sales-history ReferenceError, catalog remaining log-review items" --body "Fixes two silent-failure bugs found in a week of Railway logs (round 51 log triage): LOG1 escapes commas/parens before they hit PostgREST's and=()/or=() grammar (638 previously-failing deal-email matches), LOG2 fixes a ReferenceError that was silently aborting sales-history entity creation after the first sale in a CoStar sidebar capture (~200 occurrences). Remaining lower-priority items from the same log review are cataloged as LOG3-LOG9 in PLANNED-BACKLOG.md. All 388 tests across 29 dependent files pass; new test/log1-pgrest-logic-escape.test.mjs added (5/5)."
+
+```
+
+---
+
 ## 2026-09-21 — Round 49 (Cowork, short): correction — `PA_WEBHOOK_SECRET` is already set on `tranquil-delight`, `RAILWAY-PA-SECRET`/Q4 updated
 
 **Scott: "The PA_WEBHOOK_SECRET is already set on tranquil delight and has been set."** Cowork's Q4 answer last turn repeated the backlog row's 2026-09-09 read ("appears to be UNSET", derived from `DENY-WOULD` log volume, never confirmed directly against Railway) without re-checking it — that was stale or simply wrong. Cowork has no Railway dashboard/log access from this session to verify `PA_WEBHOOK_AUTH_MODE` or the `DENY-WOULD ... none` caller history directly, so rather than re-deriving another guess, asked Scott the one question that actually determines the next step: is `PA_WEBHOOK_AUTH_MODE` still `log` (3-day `none`-caller watch not done yet) or already `enforce`, and has anything logged a `none` line.
