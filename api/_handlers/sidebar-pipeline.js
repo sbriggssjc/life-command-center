@@ -341,18 +341,44 @@ function parseCivicNumberSpan(addr) {
   return null;
 }
 
+// SIDEBAR3-c (2026-09-22): the leading-directional token set covers BOTH the
+// abbreviated and the spelled-out forms. The original set held only the
+// abbreviations, so "920 South Washington Ave" (DB) normalized to
+// "south washington ave" while CoStar's "920-1000 S Washington Ave" normalized
+// to "washington ave" — the guard saw no collision and the Scranton re-send
+// minted twin 51252 of the property SIDEBAR3 had just merged. Longer
+// alternatives first so "northeast" is never read as "north" + "east...".
+const LEADING_DIRECTIONAL_RE =
+  /^(northeast|northwest|southeast|southwest|north|south|east|west|ne|nw|se|sw|n|s|e|w)\s+/;
+
+function normStreetRest(x) {
+  return String(x || '').toLowerCase()
+    .replace(/[.,]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(LEADING_DIRECTIONAL_RE, '');
+}
+
 function sameStreetRest(a, b) {
   // Cheap, conservative equality on the remaining street text (post civic
   // number) — punctuation/whitespace-insensitive, and tolerant of a
   // present-vs-absent leading directional (the real "2604 N Hospital Rd"
-  // vs "2609 Hospital Rd" shape) — but NO suffix expansion or fuzzy
-  // scoring, so it only fires on an otherwise near-verbatim street match.
-  const norm = (x) => String(x || '').toLowerCase()
-    .replace(/[.,]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .replace(/^(n|s|e|w|ne|nw|se|sw)\s+/, '');
-  return norm(a) === norm(b);
+  // vs "2609 Hospital Rd" shape) in either spelling ("S" / "South") — but
+  // NO suffix expansion or fuzzy scoring, so it only fires on an otherwise
+  // near-verbatim street match.
+  return normStreetRest(a) === normStreetRest(b);
+}
+
+// SIDEBAR3-c: the candidate query that feeds the guard used the first two
+// raw words after the civic number ("S Washington") as an ilike hint, so a
+// DB row spelled "South Washington Ave" was never even FETCHED — fixing
+// sameStreetRest alone would not have caught Scranton. The hint is now the
+// first street-name word with any leading directional (either spelling)
+// removed, so both spellings are in the candidate set.
+export function streetNameHint(address) {
+  const rest = String(address || '').trim().replace(/^\d+(\s*-\s*\d+)?\s+/, '');
+  const name = normStreetRest(rest);
+  return name.split(' ')[0] || '';
 }
 
 export function detectRangeAddressCollision(capturedAddress, candidateAddress) {
@@ -372,6 +398,34 @@ export function detectRangeAddressCollision(capturedAddress, candidateAddress) {
   const distance = Math.abs(captured.lo - candidate.lo);
   if (distance > 0 && distance <= 20) {
     return { kind: 'adjacent_civic_number', capturedAddress, candidateAddress, distance };
+  }
+  return null;
+}
+
+// SIDEBAR3-c (2026-09-22) — merge-ledger confirmation. When the range guard
+// would refuse a create because the captured address is a near-miss of an
+// existing property, check whether a HUMAN has already decided exactly this
+// question: an un-reversed dia_property_merge_backup row whose kept property
+// is that candidate and whose DROPPED property carried this captured address
+// (same collision logic, or the identical address). That is a recorded,
+// executed identity decision, not a new heuristic — so the capture attaches to
+// the kept property instead of refusing forever. Pure + testable: returns the
+// matching ledger row, or null (⇒ refuse exactly as before).
+export function findMergeLedgerConfirmation(capturedAddress, capturedState, candidatePropertyId, ledgerRows) {
+  const captured = parseCivicNumberSpan(capturedAddress);
+  if (!captured || !Array.isArray(ledgerRows)) return null;
+  const pid = Number(candidatePropertyId);
+  const st = String(capturedState || '').trim().toUpperCase();
+  for (const row of ledgerRows) {
+    if (!row || Number(row.kept_property_id) !== pid) continue;
+    if (row.unmerged_at) continue;
+    const droppedState = String(row.dropped_state || '').trim().toUpperCase();
+    if (st && droppedState && st !== droppedState) continue;
+    const dropped = parseCivicNumberSpan(row.dropped_address);
+    if (!dropped) continue;
+    const identical = dropped.lo === captured.lo && dropped.hi === captured.hi &&
+      sameStreetRest(dropped.rest, captured.rest);
+    if (identical || detectRangeAddressCollision(capturedAddress, row.dropped_address)) return row;
   }
   return null;
 }
@@ -4991,18 +5045,53 @@ export async function upsertDomainProperty(domain, entity, metadata) {
   // last chance to catch "4550-4666 S Kirkman Rd" landing beside the real
   // "4600 S Kirkman Rd" row, or "2604 N Hospital Rd" beside "2609 Hospital
   // Rd", as a NEW twin property instead of flagging it.
+  let attachedViaMergeLedger = null;
   if (!lookup.data?.length && entity.state) {
     try {
-      const streetHint = String(address).replace(/^\d+(\s*-\s*\d+)?\s+/, '').split(/\s+/).slice(0, 2).join(' ');
+      const streetHint = streetNameHint(address);
       if (streetHint) {
         const rangeFallbackPath = `properties?address=ilike.*${encodeURIComponent(streetHint)}*` +
-          `&state=eq.${encodeURIComponent(entity.state)}&select=property_id,${sizeCol},address&limit=10`;
+          `&state=eq.${encodeURIComponent(entity.state)}&select=property_id,${sizeCol},address` +
+          `&order=property_id.asc&limit=50`;
         const fb3 = await domainQuery(domain, 'GET', rangeFallbackPath);
         if (fb3.ok && fb3.data?.length) {
-          const collision = fb3.data
+          const collisions = fb3.data
             .map((row) => ({ row, hit: detectRangeAddressCollision(address, row.address) }))
-            .find((x) => x.hit);
-          if (collision) {
+            .filter((x) => x.hit);
+          const collision = collisions[0];
+
+          // SIDEBAR3-c — consult the merge ledger before refusing. Attach only
+          // when EXACTLY ONE collision candidate is confirmed by an un-reversed
+          // merge whose dropped row carried this address, and no OTHER
+          // unconfirmed near-miss is in play; anything else refuses as before.
+          if (collisions.length && domain === 'dialysis') {
+            try {
+              const ids = [...new Set(collisions.map((c) => Number(c.row.property_id)))].join(',');
+              const ledger = await domainQuery(domain, 'GET',
+                `dia_property_merge_backup?kept_property_id=in.(${ids})&unmerged_at=is.null` +
+                `&select=backup_id,batch_tag,kept_property_id,dropped_property_id,unmerged_at,` +
+                `dropped_address:row_json->>address,dropped_state:row_json->>state&limit=100`);
+              if (ledger.ok && Array.isArray(ledger.data) && ledger.data.length) {
+                const confirmed = collisions
+                  .map((c) => ({ c, row: findMergeLedgerConfirmation(address, entity.state, c.row.property_id, ledger.data) }))
+                  .filter((x) => x.row);
+                const confirmedIds = new Set(confirmed.map((x) => Number(x.c.row.property_id)));
+                const allIds = new Set(collisions.map((c) => Number(c.row.property_id)));
+                if (confirmedIds.size === 1 && allIds.size === 1) {
+                  const { c, row } = confirmed[0];
+                  console.log(`[upsertDomainProperty] Range-address near-miss "${address}" vs property_id=${c.row.property_id} ` +
+                    `confirmed by merge ledger backup_id=${row.backup_id} (${row.batch_tag}, dropped ${row.dropped_property_id}) ` +
+                    `— attaching to kept property instead of refusing (${domain}).`);
+                  lookup = { ok: true, data: [{ property_id: c.row.property_id, [sizeCol]: c.row[sizeCol] ?? null }] };
+                  attachedViaMergeLedger = { property_id: c.row.property_id, backup_id: row.backup_id, batch_tag: row.batch_tag };
+                }
+              }
+            } catch (err) {
+              console.warn('[upsertDomainProperty] Merge-ledger confirmation lookup failed (refusing as before):', err?.message || err);
+            }
+          }
+
+          if (collision && !attachedViaMergeLedger) {
             _lastDomainPropertyError = {
               status: 'ambiguous_property_match',
               reason: 'range_address_collision',
@@ -5300,6 +5389,13 @@ export async function upsertDomainProperty(domain, entity, metadata) {
   }
 
   if (lookup.ok && lookup.data?.length) {
+    // SIDEBAR3-c: a merge-ledger attach lands a RANGE capture on the kept
+    // property whose own address was the human-chosen canonical one; never
+    // let this PATCH overwrite it back to the range the merge retired.
+    if (attachedViaMergeLedger) {
+      delete propertyData.address;
+      delete propertyData.normalized_address;
+    }
     // Update existing property. Cap-rate anchor fields that get written here
     // are picked up by the end-of-propagateToDomainDbDirect recalc step
     // (Step 5g), which fires on every dialysis save and is idempotent.
