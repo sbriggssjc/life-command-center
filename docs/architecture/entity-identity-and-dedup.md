@@ -65,7 +65,7 @@ domain-scoped — by email address it is 31** (the view emits both). §5b.
 trigger) · N15g (dead `canonical_name` argument in the asset mint) · N16 (retire r9's unattached
 mints) · N20 (gov address-punctuation duplicate properties) · N21 (`sync.js`/`domains.js` POST
 without looking up by key) · N3h (9 $0 duplicates on three firms; Gardner Tanenbaum's history split)
-· PR5c-entities-c-race (needs N15e)
+· PR5c-entities-c-race (needs N15e) — **persons covered by SIDEBAR4's partial index + retry once applied; orgs still need N15e** · SIDEBAR4-b (the 78 existing person groups, 42 of them races)
 · ~~PR5c-entities-c-oldest~~ **MEASURED AND THE GATE REFUSED 2026-09-03**
 · ~~PR5c-entities-c-junk80~~ **CENSUSED + PRODUCER GATED (ENTC 2026-09-03)** — the seeder is
 dry-run and 👤 **nobody has applied it** (`junk80-apply`); the JS mint gate reaches 47.5% and the
@@ -363,6 +363,22 @@ RED; reverting the filter turns 6 red). Review surface
   domain** — the lookup ran before the sibling insert committed. A lookup fix cannot close
   a race; that needs a unique constraint on `(workspace_id, canonical_name)` — the open
   operator decision N15e sized at **6,608 violating groups** — or retry-on-conflict.
+  - ✅ **SIDEBAR4 (2026-09-22) built the retry-on-conflict half for PERSONS, and found the race
+    is mostly a SECOND PIPELINE RUN, not two lookups in one run.** One CoStar capture
+    (entity `68874e8d`, one `extracted_at`) was processed by two overlapping
+    `processSidebarExtraction` runs, so "John Messer" (26 ms), "W Wayne Fann" (4 ms) and
+    "Pineview Real Estate Grp Llc" (79 ms) were each minted twice. Measured class: **78 live
+    person groups share (workspace, canonical_name, email-or-phone); 42 were created < 2 s
+    apart**, 33 ≥ 1 day apart (a lookup miss, not a race). Fix, three layers: (1) the pipeline
+    is single-flight per entity (`serializeSidebarRun` — a mid-run trigger queues ONE trailing
+    run, never a parallel one; per Node process); (2) partial unique index
+    `uq_entities_person_contact_key_sidebar4` on `(workspace_id, canonical_name,
+    coalesce(email, phone digits))` for live persons created **after 2026-09-22 21:00 UTC**
+    (so the 78 existing groups did not have to be merged first, and N15e stays open for
+    orgs/name-only); (3) `ensureEntityLink` catches that 23505 and attaches to the winner on the
+    same full key, never on name alone. **The migration is written and NOT applied** — it goes
+    live only after the JS that handles 23505 is deployed (deploy-order rule). The 78 groups are
+    backlog **SIDEBAR4-b**.
 - **Honest rate, with its definition.** Over 30 days: **326** `salesforce/Contact` creates,
   **17** landed on an existing live canonical key (5.21%), of which **11 are probable
   duplicates (3.37%)** — 9 `cross_domain_canonical_miss` (fixed here) + 2 races. Expect
