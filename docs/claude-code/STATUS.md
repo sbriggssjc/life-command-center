@@ -53,6 +53,15 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-22 — GOV-AVAIL1 (Claude Code): the Findlay OM → gov Available chain fixed link by link; residue quarantined
+
+- **Trace (measured):** a dia OM (Findlay OH, seed `source_vertical=dia`) was extracted as our Tulsa office block, matched 0.97 via an LCC asset entity *named* `6120 South Yale Ave` but bridged to gov 11255 (`5110 South Yale Ave`), and promoted as gov listing `c04dc749…`. That entity had absorbed 124 match rows from 5 intakes since June.
+- **Fixed (LCC, JS — ships on Railway redeploy):** one own-/brokerage-office list + contact-block detector (`intake-address-guard.js`, extractor and pre-matcher), DB registry `lcc_brokerage_office_address`, promoter refusals `vertical_domain_mismatch` / `civic_number_mismatch`, create-property honours the stated vertical, gov.js Available agency/address cells.
+- **Fixed (DB, live):** LCC entity renamed to its property's address (ledgered); drift view `v_lcc_asset_entity_civic_drift` (115). gov: 2 office listings quarantined (reversible), `v_available_listings` 496 → 494 with display/canonical-agency columns (106 addresses stripped, 273/494 agencies resolve), twin view (18 pairs, 2 in the existing lane).
+- **Not done, stated:** Findlay re-run (no bytes retained, 3 candidate dia properties — re-send from SF). Property 11255 and 36662 untouched. Follow-ups filed: `GOV-AVAIL1-postoak / -agency-tail / -twins / -govtype / -civic-drift`.
+- **Deploy:** redeploy BOTH Railway services (tranquil-delight + the standalone MCP), then `npm run verify:deploy`. `npm test` 6,850 pass / 0 fail.
+
+
 ## 2026-09-22 — Round 64 (Cowork): SIDEBAR4 index applied live; SBN-21–25 (gov Available) triaged into `GOV-AVAIL1` + `GOV-UX1`; `RECON2-render-spa` prompted; docs swept for stale states
 
 **Q43, first half: done by Cowork.** The `uq_entities_person_contact_key_sidebar4` migration was applied to LCC Opps at 20:41 UTC, after the pre-check showed 0 blocking rows. It is recorded in `supabase_migrations` as `lcc_sidebar4_person_contact_race_unique_index`, and the index is valid and unique. A rolled-back probe with `created_at` after the cutoff confirmed the behavior. A second person with the same name and the same email (case- and whitespace-folded) raised `23505`. The same name with a different email passed. Rows created before 21:00 UTC are outside the partial index by design. The second half of Q43 (extension reload to 1.0.55 plus one Update) is still Scott's, and it is what unblocks `SIDEBAR4-c`.

@@ -63,6 +63,7 @@ export { deriveListingDate };
 import { cleanLenderName } from '../_shared/lender-name.js';
 import { looksLikeRawSalesforceId } from '../_shared/sf-account-name-resolver.js';
 import { deriveGovernmentCreditTier } from '../_shared/gov-credit-tier.js';
+import { parseCivicNumberSpan } from '../_shared/intake-address-guard.js';
 
 // ============================================================================
 // FIELD-LEVEL PROVENANCE RECORDER (Phase 2.2, 2026-04-25)
@@ -324,23 +325,8 @@ function isJunkAddress(addr) {
 // auto-attach. A `null` return means "not a recognizable range collision,
 // proceed as before" (i.e. this function can only make the pipeline more
 // conservative than it already is, never less).
-function parseCivicNumberSpan(addr) {
-  const s = String(addr || '').trim();
-  const m = s.match(/^(\d+)\s*-\s*(\d+)\s+(.+)$/); // "4550-4666 S Kirkman Rd"
-  if (m) {
-    const lo = parseInt(m[1], 10);
-    const hi = parseInt(m[2], 10);
-    if (Number.isFinite(lo) && Number.isFinite(hi) && hi >= lo) {
-      return { lo, hi, rest: m[3].trim().toLowerCase() };
-    }
-  }
-  const single = s.match(/^(\d+)\s+(.+)$/); // "4600 S Kirkman Rd"
-  if (single) {
-    const n = parseInt(single[1], 10);
-    if (Number.isFinite(n)) return { lo: n, hi: n, rest: single[2].trim().toLowerCase() };
-  }
-  return null;
-}
+// GOV-AVAIL1: parseCivicNumberSpan moved to api/_shared/intake-address-guard.js
+// (one copy, shared with the intake promoter's civic-number guard).
 
 // SIDEBAR3-c (2026-09-22): the leading-directional token set covers BOTH the
 // abbreviated and the spelled-out forms. The original set held only the

@@ -36,6 +36,7 @@ import { reconcilePropertyOwnership, isOmTableHeaderTenant } from './sidebar-pip
 // ============================================================================
 
 import { domainQuery, domainPropertyExists } from '../_shared/domain-db.js';
+import { civicNumbersAgree, verticalDomainConflict } from '../_shared/intake-address-guard.js';
 import { opsQuery, pgFilterVal } from '../_shared/ops-db.js';
 import { emitMatchDisambiguation } from './intake-matcher.js';
 import { normalizeState, ensureEntityLink, normalizeCanonicalName, canonicalIdentitySystem } from '../_shared/entity-link.js';
@@ -2678,6 +2679,44 @@ export async function attachEnrichDocument(domain, propertyId, { fileName, docTy
   return { ok: false, ...lastErr, domain };
 }
 
+// GOV-AVAIL1 — the two promotion-time identity guards. Returns a refusal
+// result ({ ok:false, skipped, … }) or null. Exported for tests.
+//   vertical_domain_mismatch — seed_data.source_vertical names the other domain.
+//   civic_number_mismatch    — the matched domain property's civic number is
+//                              disjoint from the extracted subject address's.
+// The civic check needs the property's address; if that read fails the guard
+// cannot decide and lets the promotion proceed, stamping the result so the
+// gap is visible (civic_check='unverified') instead of silent.
+export async function checkPromotionIdentityGuards(snapshot, effectiveMatch, context = {}) {
+  const domain = effectiveMatch?.domain;
+  if (domain !== 'government' && domain !== 'dialysis') return null;
+
+  const vertical = verticalDomainConflict(context?.seedData, domain);
+  if (vertical) {
+    return { ok: false, skipped: 'vertical_domain_mismatch', ...vertical,
+             property_id: effectiveMatch.property_id ?? null };
+  }
+
+  const subject = typeof snapshot?.address === 'string' ? snapshot.address : null;
+  const pid = Number(effectiveMatch?.property_id);
+  if (!subject || !Number.isFinite(pid)) return null;
+  let propAddress = null;
+  try {
+    const r = await domainQuery(domain, 'GET',
+      `properties?property_id=eq.${pid}&select=property_id,address&limit=1`);
+    if (r.ok && Array.isArray(r.data) && r.data.length) propAddress = r.data[0].address || null;
+    else if (!r.ok) effectiveMatch.civic_check = 'unverified';
+  } catch {
+    effectiveMatch.civic_check = 'unverified';
+  }
+  if (civicNumbersAgree(subject, propAddress) === false) {
+    return { ok: false, skipped: 'civic_number_mismatch', domain, property_id: pid,
+             subject_address: subject, property_address: propAddress,
+             match_reason: effectiveMatch.reason || null };
+  }
+  return null;
+}
+
 export async function promoteIntakeToDomainListing(intakeId, snapshot, match, context = {}) {
   // Round 76ej.h (2026-05-04): re-ordered so artifact persistence
   // happens BEFORE the doctype guard. Previous order let an unknown
@@ -2824,6 +2863,16 @@ export async function promoteIntakeToDomainListing(intakeId, snapshot, match, co
       }
     }
   }
+
+  // ---- 1b. GOV-AVAIL1 identity guards (before ANY domain write) ----------
+  // (d) a document whose seed states its vertical (source_vertical='dia') is
+  //     never promoted into the other domain's tables, and vice versa;
+  // (c) a match whose domain property carries a DIFFERENT civic number from
+  //     the extracted subject address is a different building (6120 vs 5110
+  //     South Yale). Both refuse the whole promotion, including the artifact
+  //     attach below, because every write after this point trusts the match.
+  const identityRefusal = await checkPromotionIdentityGuards(snapshot, effectiveMatch, context);
+  if (identityRefusal) return identityRefusal;
 
   // ---- 2. Look up the staged artifact (used by both persistence + listing row)
   let artifact = null;
