@@ -35,6 +35,7 @@
 // hold.
 // ============================================================================
 
+import { leaseExpirationStateLabel } from '../../mcp/lease-expiration-state.js';
 import { opsQuery, pgFilterVal } from './ops-db.js';
 import { domainQuery } from './domain-db.js';
 import {
@@ -105,10 +106,19 @@ function buildTenants(leases) {
     const key = String(name).toLowerCase().trim();
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push({
+    const row = {
       name: String(name),
       lease_expiration: firstNonBlank(l.lease_expiration, l.lease_exp) || null,
-    });
+    };
+    // RECON2-render: label a lease past its own expiration with no renewal on
+    // file (dia-only column; the leases read here is `select *`). Added only for
+    // that state, so every other tenant row is unchanged.
+    const note = leaseExpirationStateLabel(l);
+    if (note) {
+      row.expiration_state = l.expiration_state;
+      row.lease_expiration_note = note;
+    }
+    out.push(row);
   }
   return out;
 }

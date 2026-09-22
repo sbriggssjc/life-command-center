@@ -68,6 +68,12 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 **Verified.** `test/sidebar4-contact-entity-idempotency.test.mjs` 10/10. Mutations go RED: unique-violation handling off (2 fail), single-flight off (2), name-only attach (1). `npm test` **6,810 pass / 0 fail**; boot check green.
 
 **Next.** 👤 Railway redeploy → then apply the migration → reload the extension (1.0.55) → on the next sidebar send, read `metadata._pipeline_run_log` on the property entity. More than one entry within seconds for one send names the second trigger. Then SIDEBAR4-b.
+## 2026-09-22 — `RECON2-render` (CC): `expiration_state='expired_unconfirmed'` is now labelled in all four named lease readers
+
+- One helper, `mcp/lease-expiration-state.js`: `"Expired <date> — renewal not on file (unconfirmed)"` for `expired_unconfirmed`, `null` for everything else. Wired into `hydrateSubjectFromRecord` (comps subject), `buildPropertyPacket` (`tenancy_lease.lease_expiration_state`), asset-entity `buildTenants`, and the provenance review-queue `dia.leases` label. Every other state's output is byte-identical (tested against the pre-RECON2 row shape). `is_active` untouched.
+- Measured: `expiration_state` exists on dia `leases` only (gov has no column). **2,447 active dia leases** are `expired_unconfirmed`. `wavg_lease_expiration` is NULL on all 11,841 dia properties, so the comps hydrate always takes the lease-row path that now carries the state.
+- Guard `test/recon2-render-expiration-state.test.mjs` (13 tests, mutation-checked). `npm test` 6,806 pass / 0 fail; boot check green.
+- **Next:** merge → Railway redeploy **and** MCP server redeploy (the comps path runs there). Two further human-facing sites filed, not touched: `RECON2-render-spa` (property panel — the surface that matters most) and `RECON2-render-dossier`.
 
 ## 2026-09-22 — `PERF-SPQ2` (CC): the cold-boot cost was the funnel summary, not the queue view — single-pass rewrite (live) + chips/funnel opt-in (needs deploy)
 
