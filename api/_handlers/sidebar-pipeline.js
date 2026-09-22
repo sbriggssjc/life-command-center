@@ -60,6 +60,7 @@ import {
 import { deriveListingDate, deriveOnMarketDate } from '../_shared/listing-date.js';
 export { deriveListingDate };
 import { cleanLenderName } from '../_shared/lender-name.js';
+import { looksLikeRawSalesforceId } from '../_shared/sf-account-name-resolver.js';
 import { deriveGovernmentCreditTier } from '../_shared/gov-credit-tier.js';
 
 // ============================================================================
@@ -210,10 +211,22 @@ async function fetchDomainRecordsCurrent(domain, propertyId) {
   return out;
 }
 
-function isJunkSalesParty(name) {
+export function isJunkSalesParty(name) {
   if (name === null || name === undefined) return false;
   const trimmed = String(name).trim();
   if (!trimmed) return false;
+  // RECON3 (2026-09-22, property_id 27266): a raw Salesforce record id
+  // ("001…", 18 chars) is not a buyer/seller NAME — some upstream capture
+  // put an AccountId where it meant Account.Name. This is a synchronous,
+  // text-only guard (this function has no DB/workspace context to resolve
+  // the id to the real Account name), so it strips the raw id rather than
+  // writing it — the same "skip the write and leave blank" fallback the
+  // async `guardNameField` in sf-account-name-resolver.js uses when the id
+  // can't be resolved. ensureEntityLink's choke point (entity-link.js) does
+  // the fuller async resolve-then-write for the org/contact entity itself;
+  // this only protects the flat buyer_name/seller_name TEXT columns fed by
+  // cleanSalesPartyValue.
+  if (looksLikeRawSalesforceId(trimmed)) return true;
   if (SALES_PARTY_JUNK_RE.test(trimmed.toLowerCase())) return true;
   // Round 76ax-D: shape-based junk detectors. Each guards a class the
   // alternation regex can't easily cover without false-positives on real
@@ -227,7 +240,7 @@ function isJunkSalesParty(name) {
   return false;
 }
 
-function cleanSalesPartyValue(name) {
+export function cleanSalesPartyValue(name) {
   if (name === null || name === undefined) return null;
   const trimmed = String(name).trim();
   if (!trimmed) return null;
@@ -10288,7 +10301,7 @@ export async function reconcilePropertyOwnership(domain, propertyId) {
   //    update.  Also grab the current owner's transfer date for comparison.
   const propRes = await domainQuery(domain, 'GET',
     `properties?property_id=eq.${propertyId}` +
-    `&select=recorded_owner_id,current_value_estimate` +
+    `&select=recorded_owner_id,current_value_estimate,updated_at` +
     `&limit=1`
   );
   if (!propRes.ok || !propRes.data?.length) return { updated: false };
@@ -10343,9 +10356,35 @@ export async function reconcilePropertyOwnership(domain, propertyId) {
     }
   }
 
-  // 3. Back-fill current_value_estimate from the latest sold price
-  if (latestPrice && !prop.current_value_estimate) {
-    patch.current_value_estimate = latestPrice;
+  // 3. Back-fill / overwrite current_value_estimate from the latest sold price.
+  //
+  // RECON3 fix (2026-09-22, property_id 27266): the prior guard
+  // (`latestPrice && !prop.current_value_estimate`) only ever FILLED an empty
+  // field, so a closed sale could never correct an existing-but-STALE
+  // estimate (e.g. an asking price captured while the property was still
+  // listed, left standing after the sale closed at a different number). A
+  // closed sale is the most authoritative value signal available — an
+  // actual transaction beats any prior estimate — so this now overwrites
+  // whenever:
+  //   (a) the estimate is empty (unchanged behavior), OR
+  //   (b) the estimate DISAGREES with the sale price AND the sale is not
+  //       demonstrably OLDER than whatever last touched the property row.
+  //       `properties` has no dedicated `value_estimate_updated_at` column,
+  //       so `updated_at` is the best proxy we have; when it's absent we do
+  //       NOT fall back to "field is empty" as the sole gate (that was the
+  //       bug) — we prefer the closed sale over an unstamped estimate.
+  //
+  // TODO(RECON3 backlog): this only fixes the JS logic going forward — it
+  // does NOT backfill existing stale current_value_estimate values already
+  // on file. A dry-run, reversible backfill migration for that is filed at
+  // supabase/migrations/dialysis/20260922_dia_recon3_stale_value_estimate_backfill.sql
+  // (NOT applied live — see the migration header).
+  if (latestPrice) {
+    const priceDiffers = Number(prop.current_value_estimate) !== Number(latestPrice);
+    const saleIsOlder = !!(latestDate && prop.updated_at && new Date(latestDate) < new Date(prop.updated_at));
+    if (!prop.current_value_estimate || (priceDiffers && !saleIsOlder)) {
+      patch.current_value_estimate = latestPrice;
+    }
   }
 
   if (Object.keys(patch).length === 0) return { updated: false, reason: 'no_change' };

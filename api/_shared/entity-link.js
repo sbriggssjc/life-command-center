@@ -1,6 +1,7 @@
 import { opsQuery, pgFilterVal, insertEntityRelationship } from './ops-db.js';
 import { syncSalesforceForEntity } from './salesforce-sync.js';
 import { recordFieldWrites, provenanceTargetDatabase } from './field-priority-guard.js';
+import { looksLikeRawSalesforceId, guardNameField } from './sf-account-name-resolver.js';
 
 // ============================================================================
 // CONTACT1a (2026-09-04) — repoint the LIVE entities.email/phone writer at
@@ -1158,6 +1159,29 @@ export async function ensureEntityLink({
       };
     }
     return { ok: false, skipped: 'no_existing_entity', resolveOnly: true };
+  }
+
+  // RECON3 (2026-09-22, property_id 27266): a caller can hand seedFields.name
+  // a raw Salesforce record id ("001…", 18 chars) instead of the record's
+  // actual Name — an upstream mapper reading AccountId where it meant
+  // Account.Name. Never let a raw id become the entity's name/canonical_name.
+  // Resolve it from what LCC already knows (never a live SF call — never
+  // fabricate); when it can't be resolved, drop it so the existing
+  // first/last-name / address / "<type> <id>" fallback chain below takes
+  // over instead of persisting an opaque id as a display name.
+  if (seedFields.name && looksLikeRawSalesforceId(seedFields.name)) {
+    const guarded = await guardNameField(seedFields.name);
+    if (guarded.resolved) {
+      console.warn(`[ensureEntityLink] seedFields.name was a raw Salesforce id — resolved "${guarded.rawId}" -> "${guarded.value}"`);
+      seedFields = { ...seedFields, name: guarded.value };
+    } else {
+      console.warn(`[ensureEntityLink] seedFields.name was a raw Salesforce id with no resolvable name — dropping: "${guarded.rawId}"`);
+      seedFields = {
+        ...seedFields,
+        name: undefined,
+        metadata: { ...(seedFields.metadata || {}), unresolved_sf_id_name: guarded.rawId },
+      };
+    }
   }
 
   let candidateName = seedFields.name
