@@ -34,14 +34,14 @@ import { sendTeamsAlert } from './_shared/teams-alert.js';
 import { ensureEntityLink, normalizeCanonicalName, recordContactFieldWrites } from './_shared/entity-link.js';
 import { processIntakeExtraction, handleExtractRoute } from './_handlers/intake-extractor.js';
 import { createPropertyFromIntake } from './_handlers/intake-create-property.js';
-import { processSidebarExtraction } from './_handlers/sidebar-pipeline.js';
+import { processSidebarExtraction, isOmTableHeaderTenant } from './_handlers/sidebar-pipeline.js';
 import { parseOmLeaseAbstract, processOmDocument } from './_handlers/om-parser.js';
 import { handleIntakeStageOm } from './_handlers/intake-stage-om.js';
 import { handleIntakeFinalizeOm } from './_handlers/intake-finalize-om.js';
 import { writeIntakeFeedback } from './_handlers/intake-feedback.js';
 import { stageOmIntake } from './_shared/intake-om-pipeline.js';
 import { domainQuery } from './_shared/domain-db.js';
-import { firstOf, joinedOf, detectInfraAlert, buildInfraScoringItem, priorityTierFromScore } from './_shared/intake-classify.js';
+import { firstOf, firstOfWhere, joinedOf, detectInfraAlert, buildInfraScoringItem, priorityTierFromScore } from './_shared/intake-classify.js';
 import { scoreItem } from './_shared/briefing-data.js';
 import { isClosingAnnouncement } from './_shared/sf-closing-email-parse.js';
 import { emitProcessingComplete } from './_shared/processing-complete.js';
@@ -2133,9 +2133,10 @@ async function handleIntakePromote(req, res) {
     // pipeline (processSidebarExtraction) and its writers expect scalars/
     // joined strings — coerce here so the re-promote path doesn't crash with
     // "(...).trim is not a function" (Round 77f, defect 4).
-    tenant_name: firstOf(extraction.tenant_name) || null,
+    // LEASEJUNK1: never take a rent-roll header ("Type") as the tenant.
+    tenant_name: firstOfWhere(extraction.tenant_name, isOmTableHeaderTenant) || null,
     tenant_guarantor: firstOf(extraction.tenant_guarantor) || null,
-    primary_tenant: firstOf(extraction.tenant_name) || null,
+    primary_tenant: firstOfWhere(extraction.tenant_name, isOmTableHeaderTenant) || null,
     square_footage: extraction.building_sf || null,
     lot_sf: extraction.lot_sf || null,
     year_built: extraction.year_built || null,

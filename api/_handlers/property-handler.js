@@ -397,7 +397,8 @@ async function assembleDomainPropertyFallback(domainProperty) {
       },
     };
   }
-  const leases = await domainQuery('dialysis', 'GET', `leases?property_id=eq.${enc(domainProperty.property_id)}&select=*&limit=5`)
+  // LEASEJUNK1: data_quality_flag marks quarantined rows (header text as tenant).
+  const leases = await domainQuery('dialysis', 'GET', `leases?property_id=eq.${enc(domainProperty.property_id)}&data_quality_flag=is.null&select=*&limit=5`)
     .catch(() => ({ data: [] }));
   return {
     resolved_via: 'dia_property_fallback',

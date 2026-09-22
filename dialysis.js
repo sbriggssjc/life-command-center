@@ -399,7 +399,7 @@ async function loadDiaSalesCompsFromTxns() {
     'anchor_rent,anchor_rent_source,',
     'leases(lease_id,tenant,leased_area,lease_start,lease_expiration,',
     'expense_structure,rent_per_sf,annual_rent,rent,renewal_options,is_active,',
-    'status,data_source,source_confidence))',
+    'status,data_source,source_confidence,data_quality_flag))',
   ].join('');
 
   // Sales + brokers + cross-source fallbacks (ownership_history, deed_records,
@@ -643,7 +643,15 @@ function pickDeedMatch(deeds, saleDate, maxDays) {
   return best;
 }
 
+// LEASEJUNK1: a lease carrying data_quality_flag is quarantined (e.g. an
+// OM/CoStar table header such as "Avail. Spaces" landed as the tenant) and
+// must never be picked as the property's lease or counted toward its area.
+function dropQuarantinedLeases(leases) {
+  return Array.isArray(leases) ? leases.filter(l => l && !l.data_quality_flag) : leases;
+}
+
 function pickCurrentLease(leases) {
+  leases = dropQuarantinedLeases(leases);
   if (!Array.isArray(leases) || leases.length === 0) return null;
   const scored = leases.slice().sort((a, b) => {
     const aActive = (a.is_active === true || a.status === 'active') ? 1 : 0;
@@ -866,7 +874,7 @@ function normalizeSalesTxnRow(r, lookups) {
   // properties.building_size is null. Audit coverage is low (~1 row) but
   // costs nothing extra since the lease is already loaded.
   let leaseAreaMax = null;
-  const leasesList = p.leases || r.leases || [];
+  const leasesList = dropQuarantinedLeases(p.leases || r.leases || []);
   if (Array.isArray(leasesList)) {
     for (const l of leasesList) {
       if (l && l.leased_area != null && Number(l.leased_area) > 0) {

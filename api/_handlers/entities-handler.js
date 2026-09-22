@@ -663,7 +663,8 @@ export async function buildPropertyPacket(entityId, workspaceId) {
   let staticMap = null, nearbyNationalTenants = [];
   if (domain && pid) {
     const calls = [
-      domainQuery(domain, 'GET', `leases?property_id=eq.${pid}&superseded_at=is.null&order=is_active.desc.nullslast,lease_start.desc&limit=1`).catch(() => null),
+      // LEASEJUNK1: dia-only quarantine flag (gov leases has no such column).
+      domainQuery(domain, 'GET', `leases?property_id=eq.${pid}&superseded_at=is.null${domain === 'dia' ? '&data_quality_flag=is.null' : ''}&order=is_active.desc.nullslast,lease_start.desc&limit=1`).catch(() => null),
       domainQuery(domain, 'GET', `sales_transactions?property_id=eq.${pid}&transaction_state=eq.live&order=sale_date.desc&limit=8`).catch(() => null),
       domainQuery(domain, 'GET', `available_listings?property_id=eq.${pid}&order=listing_date.desc.nullslast&limit=50`).catch(() => null),
       domainQuery(domain, 'GET',

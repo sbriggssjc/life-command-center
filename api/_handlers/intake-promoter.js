@@ -2,7 +2,7 @@
 // Item #3 (audit/03-dia-owner-linkage): pulled in to denormalize
 // recorded_owner_name / true_owner_name on dia.properties after the new
 // resolveOwnerLinksDia branch patches recorded_owner_id / true_owner_id.
-import { reconcilePropertyOwnership } from './sidebar-pipeline.js';
+import { reconcilePropertyOwnership, isOmTableHeaderTenant } from './sidebar-pipeline.js';
 // ============================================================================
 // Intake Promoter — write matched OM intakes into domain databases
 // Life Command Center
@@ -58,6 +58,7 @@ import {
   snapshotLooksLikeListing,
   normalizeCapRate,
   firstOf,
+  firstOfWhere,
   joinedOf,
 } from '../_shared/intake-classify.js';
 
@@ -1388,7 +1389,9 @@ async function promoteDiaLeaseFromOm(propertyId, snapshot) {
     property_id:               Number(propertyId),
     // Canonicalize brand variants (DaVita Inc. / DAVITA / Davita Healthcare
     // Partners → DaVita Kidney Care). See _shared/tenant-canonical.js.
-    tenant:                    canonicalizeTenant(firstOf(snapshot.tenant_name)) || null,
+    // LEASEJUNK1: skip rent-roll header text ("Type", "Avail. Spaces") that an
+    // OM table can put at the head of the tenant_name array.
+    tenant:                    canonicalizeTenant(firstOfWhere(snapshot.tenant_name, isOmTableHeaderTenant)) || null,
     guarantor:                 firstOf(snapshot.tenant_guarantor) || null,
     lease_start:               commencement,
     lease_expiration:          expiration,

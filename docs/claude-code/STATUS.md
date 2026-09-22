@@ -53,6 +53,33 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-22 — `LEASEJUNK1` (CC): table-header text in `leases.tenant` — quarantined (56 rows, live), writer + DB guard, readers filtered
+
+**Mechanism (measured, not the prompt's guess).** The Tacoma rows say `data_source='email_intake'`, but every Tacoma OM extraction is clean (`tenant_name` = "Total Renal Care, Inc (dba DaVita)"). The headers came from the entity's `metadata.tenants[]`, filled by the extension's CoStar Tenants-panel parse. That parse mixes panel headers ("Type"), summary rows ("Total Avail", "Asking") and cell values ("Chain", "Yes") in with real tenants; live examples are still in `entities.metadata`. The OM promote (`api/intake.js`) merges into that entity and sets `_intake_promoted`, so `upsertDomainLeases` wrote the stale CoStar array stamped `email_intake`. The shared 2012-01-01 / 2029-02-28 / $31.69 psf values are property-level metadata fallbacks, which is why all four rows carry the real DaVita lease's term. The 2029-02-28 date is real, not a placeholder.
+
+**Size (dia, exact normalized match on a curated list):** **25 distinct values / 56 rows / 25 properties / 1 active** (18398). 41 are `costar_sidebar`, 4 `email_intake`, 15 were already superseded. The prompt's broader "≤2 tokens, no operator match" heuristic hits 189 rows / 14 active, but that set is mostly real retailers (Subway, Publix, AutoZone). It is **report-only; nothing in it was touched**. ⚠️ **The existing `isJunkTenant()` was not used as the backfill key.** Run over all 3,391 distinct tenants, it also flags real clinics ("Renal Treatment Centers Southeast, LP" via its city/state regex; "Davita … At Home" via the listing-sentence net). gov is out of scope: its `leases` has no free-text tenant, and the writer is dia-only.
+
+**Shipped:**
+- Migration `supabase/migrations/dialysis/20261013090000_dia_leasejunk1_header_tenant_quarantine.sql`, **applied live**.
+  - Adds `leases.data_quality_flag`, plus `dia_is_om_table_header_tenant()`, the single SQL detector.
+  - Quarantines the 56 rows (flag + `is_active=false` + `status='quarantined_header_tenant'`), logged to `dia_leasejunk1_quarantine_log`. Never deleted.
+  - Adds a BEFORE guard trigger so no writer (JS, Python or SQL) can land an active header tenant. It flags and deactivates; it never raises.
+  - `trg_leases_propagate_tenant_to_property` now skips flagged rows.
+  - Restore: `dia_leasejunk1_restore_quarantine('leasejunk1_20260922')`, service_role only, asserted with `has_function_privilege`.
+- JS changes:
+  - `OM_TABLE_HEADER_TENANTS` / `isOmTableHeaderTenant` added to `isJunkTenant` (`sidebar-pipeline.js`). It mirrors the SQL list byte-for-byte, and the test fails on drift.
+  - Both OM promote paths use a new `firstOfWhere` (`intake-classify.js`), so an OM `tenant_name` array that leads with a header yields the first real tenant.
+  - Readers exclude flagged rows: `property-handler.js`, `asset-entity.js` and `entities-handler.js` (dia branch only; gov has no column), `detail.js`, and `dialysis.js` (`pickCurrentLease` + leased-area scan). Cache busters were bumped as a set.
+
+**Verified live:** 56 flagged / 56 logged / 0 still active, and 0 flagged outside the detector. A rolled-back write test of the guard: "Avail. Spaces" and "Type:" were forced inactive, while "Shopping Center Dialysis LLC" passed untouched. A rolled-back restore round trip returned 56 restored, 18398 back to active, second call 0. The CM rent box is unaffected: the only 4 rent-bearing junk rows are byte-identical to the real DaVita lease and collapse under its `SELECT DISTINCT`. Guard: `test/leasejunk1-header-tenant-guard.test.mjs` (8 tests, **11/11 mutations RED**). `npm test` 6,814 / 0 fail. Boot check green.
+
+**Not live until the Railway redeploy of merged `main`** (the JS readers and writer). The DB guard and quarantine are live now.
+
+**Open, not fixed here:**
+- ⚠️ **29671 now has NO `is_active=true` lease.** The junk row was the only one. The real DaVita lease 16828 was already `is_active=false` / `status='active'` and was left untouched (out of scope). Worth a look under the lease-lifecycle work.
+- **The extension parse is still the producer.** `extension/content/costar.js` `COSTAR_UI_REJECT` / `TENANT_REJECT` do not carry "type", "shopping center", "strip center", "avail. spaces", "chain", "yes". The server guard makes this defence-in-depth, so it was not changed here (it needs an extension reload).
+- **Unfixed:** CoStar industry-category values ("Pizza", "Supermarket", "Fitness", "Insurance") land as tenants. These are cell values rather than headers, and they are a judgement call.
+
 ## 2026-09-22 — `SIDEBAR3-d` (CC): the directional sweep is in the twin-review lane, 37 new rows, nothing merged
 
 **The sweep, re-run live, gives 86 pairs, not 85.** The `SIDEBAR3-c` query was never written down. A SQL port of the guard's own parse reproduces all four of the backlog's examples and lands one row off; the query is now recorded in `docs/audits/SIDEBAR3d_DIRECTIONAL_SWEEP_TWIN_REVIEW_2026-09-22.md`. Disposition: **37 newly queued** in `dia_property_twin_review` (`batch_tag='sidebar3d_directional_20260922'`, ids 5049–5085: `review_name` 23 / `review_conflict` 12 / `review_ambiguous` 2); **43 already pending** (left untouched); **3 already rejected by a human** as "not a twin" (#89, #185, #316), which were not re-queued; **3 not queued** because city **and** ZIP differ (Livingston vs Brownwood TX, 248 mi; Pontiac vs Monroe MI; Louisburg vs Fuquay-Varina NC). The sweep never checks city, and the lane's deterministic assist ignores distance, so a same-operator pair 248 mi apart could have been annotated "likely twin". Live delta: pending **1,138 → 1,175**; max `backup_id` still 598, so **no merge ran**. No property, address or alias was written.
