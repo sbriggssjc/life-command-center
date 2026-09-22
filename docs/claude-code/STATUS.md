@@ -61,6 +61,32 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 - **Not done, stated:** Findlay re-run (no bytes retained, 3 candidate dia properties — re-send from SF). Property 11255 and 36662 untouched. Follow-ups filed: `GOV-AVAIL1-postoak / -agency-tail / -twins / -govtype / -civic-drift`.
 - **Deploy:** redeploy BOTH Railway services (tranquil-delight + the standalone MCP), then `npm run verify:deploy`. `npm test` 6,850 pass / 0 fail.
 
+## 2026-09-22 — GOV-UX1 (Claude Code): gov Available navigation jump, owner panel, one verification component, automation audit
+
+- **A (SBN-24):** the router caused the jump, not the panel. The Business sub-tabs never wrote the hash, and
+  `_routeCurrentPageSlug` preferred the stale `#/dia`, so opening a gov row wrote `#/dia?d=prop:gov:…` and `applyRoute`
+  navTo'd Dialysis. Also `pageBiz` reverse-mapped to `capmarkets`, which forces dialysis. Fixed; the slug is read from the live DOM.
+- **B (SBN-25):** one owner resolver, `?action=resolve_owner` (id → true_owner identity → exact canonical key,
+  merge-followed). "Gold Circle Properties, LLC" now resolves to `ff84dd24…`. The owner docks beside the property,
+  or stacks with Back, and never replaces it. The search excludes tombstones.
+- **C (SBN-23):** `listing-verification.js` is shared by both lanes: Sales › Available, `overdue (30d+)` headline, Evidence default.
+- **D:** measured and ranked, not built. The agency-drift view reads raw strings on superseded and expired leases:
+  654 of 1,644 rows are live true disagreements and 272 of those are GSA-vs-agency. There are 7,708 lead-less resolved
+  owners, but only 98 sit in the seller queue with a reason to sell and a person. See
+  `docs/audits/GOV_UX1_NAVIGATION_OWNER_VERIFICATION_2026-09-22.md`.
+- `npm test` 6,859 / 0 fail; guard 22 tests, 11/11 mutations RED. **Next:** redeploy both Railway services + `verify:deploy`; then prompt GOV-UX1-D1/D2.
+
+## 2026-09-22 — RECON2-render-spa + RECON2-render-dossier (CC): the property panel, dia sales comps and the dossier now label the 2,447 `expired_unconfirmed` leases
+
+**Labelling only. Which lease is chosen as "active" is unchanged**, and a test pins the three selectors RECON2 designed. Live re-query: **2,447** active dia leases at `expired_unconfirmed` (matches round 63).
+
+- **SPA mirror of the one label:** `lease-expiration-label.js` (a new classic script, loaded before `dialysis.js`/`detail.js`) mirrors `mcp/lease-expiration-state.js`. The SPA cannot import `mcp/`. Reading it off the packet (the backlog's first preference) was not available, because the panel never loads the packet: `_udCache.leases` comes from `diaQuery('leases','*')`, and that already carries `expiration_state`. A lock-step test runs the mirror in a `vm` context against the server helper over every state and date shape, and a one-word drift turns it red.
+- **Wired in (all dia; gov leases have no such column, so they render byte-identically):** the Rent Roll tenant header beside "Active", the Rent Roll term timeline "Active" badge, the Lease tab Expiration row, the lease sub-detail Expiration row, and the Overview "Lease Expiration" KPI (tooltip plus a sub-line). The dia sales-comps table also labels its expiration cell: the `leases` embed now selects `expiration_state`, and the comp row carries it only for `expired_unconfirmed`.
+- ⚠️ **Not covered:** the legacy `dia-clinic` detail (`renderDiaDetailBody`) reads `v_cms_data`, and the lease sub-detail's cold fetch reads `v_lease_detail`. Neither view carries `expiration_state` (checked live in `information_schema`). The sub-detail labels when the row comes from the panel cache and is inert otherwise. Filed as **`RECON2-render-views`**.
+- **Dossier:** one `Expiration status` `kvRow` in both the property and deal dossiers, present only when the packet carries `tenancy_lease.lease_expiration_state`.
+- **Tests:** `test/recon2-render-spa-label.test.mjs` (12 tests). The dossier output is byte-for-byte unchanged across 5 other states, NULL and absent, checked behaviourally on both renderers. **Mutation pass 11/11 red:** helper state/date/empty-string, all three dossier-row mutations, both detail badges, a re-pick of the active lease, the dialysis embed column, and the index.html script tag. `test/leasejunk1-header-tenant-guard.test.mjs` pinned the literal `data_quality_flag))`, which went stale once `expiration_state` was appended to that embed. It was widened, not weakened: `data_quality_flag` is still asserted. Suite **6,843 / 0**; boot check passes.
+- **Cache busters:** the whole `2026092202` set moved to `2026092203`.
+- **Deploy:** merge → redeploy **both** Railway services (`tranquil-delight` serves the SPA and `/api`; the MCP service shares `mcp/`). No migration and no edge-function change. Then `npm run verify:deploy` (it probes the new `<script src>`).
 
 ## 2026-09-22 — Round 64 (Cowork): SIDEBAR4 index applied live; SBN-21–25 (gov Available) triaged into `GOV-AVAIL1` + `GOV-UX1`; `RECON2-render-spa` prompted; docs swept for stale states
 

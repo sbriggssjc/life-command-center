@@ -596,15 +596,86 @@ function _openEntitySmart(id) {
 }
 window._openEntitySmart = _openEntitySmart;
 
-async function _openEntityByNameSmart(name) {
-  if (!name) return;
-  if (_dualCapable() && _panelPrimaryOpen() && _activePrimaryKind === 'property') {
-    try {
-      const data = await _entityApiFetch('/api/entities?action=search&q=' + encodeURIComponent(name));
-      const hit = (data && Array.isArray(data.entities) && data.entities[0]) || null;
-      if (hit && hit.id) { openCompanionEntity(String(hit.id)); return; }
-    } catch (_e) { /* fall through */ }
+// ── GOV-UX1 (2026-09-22, SBN-25) — ONE owner resolver on the client ──────────
+// Every "open this owner" path (Current Owner chip, "Work this owner →",
+// "research owner →", entityLink owner/buyer/seller chips, openEntityDetailByName)
+// resolves through /api/entities?action=resolve_owner: entity_id → domain
+// true_owner identity → exact canonical key (legal suffixes like ", LLC"
+// stripped server-side by normalizeCanonicalName). The old path did a substring
+// ILIKE on the raw display string and took `entities[0]`, so
+// "Gold Circle Properties, LLC" found nothing while the Next-step card beside
+// it said "Owner resolved".
+//
+// `hint` = { entity_id?, db?, true_owner_id? } — whatever the caller holds.
+async function _resolveOwnerEntity(name, hint) {
+  const h = hint || {};
+  if (h.entity_id) return { entity_id: String(h.entity_id), status: 'resolved', method: 'entity_id', candidates: [] };
+  const params = ['action=resolve_owner'];
+  if (name) params.push('q=' + encodeURIComponent(name));
+  const db = h.db === 'gov' || h.db === 'government' ? 'gov' : (h.db === 'dia' || h.db === 'dialysis' ? 'dia' : null);
+  if (db && h.true_owner_id) params.push('source_system=' + db, 'external_id=' + encodeURIComponent(String(h.true_owner_id)));
+  try {
+    const data = await _entityApiFetch('/api/entities?' + params.join('&'));
+    if (data && (data.status === 'resolved' || data.status === 'ambiguous' || data.status === 'none')) return data;
+  } catch (_e) { /* fall through to 'error' */ }
+  return { entity_id: null, status: 'error', method: null, candidates: [] };
+}
+window._resolveOwnerEntity = _resolveOwnerEntity;
+
+// When a property panel is on screen, an owner that cannot be resolved must
+// NOT replace the property (SBN-25: "opening over the prior sale view"). Show
+// the outcome in the companion dock when there is room, else a toast.
+function _ownerUnresolvedBeside(name, res) {
+  const panel = document.getElementById('companionPanel');
+  const header = document.getElementById('companionHeader');
+  const body = document.getElementById('companionBody');
+  const cands = (res && res.candidates) || [];
+  if (!panel || !header || !body || !_dualCapable()) {
+    if (typeof showToast === 'function') {
+      showToast(cands.length
+        ? ('"' + name + '" matches ' + cands.length + ' owners — pick one on the Ownership tab.')
+        : ('No LCC owner entity for "' + name + '" yet — resolve it on the Ownership tab.'), 'info');
+    }
+    return;
   }
+  const _compTabs = document.getElementById('companionTabs');
+  if (_compTabs) { _compTabs.innerHTML = ''; _compTabs.style.display = 'none'; }
+  panel.classList.add('open');
+  panel.style.display = 'block';
+  _companionState = { kind: 'entity', entityId: null, label: name };
+  _panelSyncResizers();
+  header.innerHTML = '<div class="detail-header-info" style="width:100%"><div style="flex:1;min-width:0">'
+    + '<div class="detail-title">' + esc(name) + '</div>'
+    + '<div class="detail-subtitle">' + (cands.length ? 'Several owner entities match' : 'No owner entity yet') + '</div></div>'
+    + '<span class="detail-badge" style="background:var(--accent);color:#fff">OWNER</span>'
+    + _panelHeaderControls('companion') + '</div>';
+  let h = '<div class="detail-section">';
+  if (cands.length) {
+    h += '<div class="detail-section-title">Which owner?</div><div style="display:flex;flex-direction:column;gap:6px">';
+    for (const c of cands) {
+      h += '<div data-owner-candidate="' + esc(String(c.id)) + '" onclick="openCompanionEntity(' + JSON.stringify(String(c.id)).replace(/"/g, '&quot;') + ')" '
+        + 'style="padding:10px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px;cursor:pointer">'
+        + '<div style="font-weight:600">' + esc(c.name || String(c.id)) + '</div>'
+        + '<div style="font-size:11px;color:var(--text2)">' + esc(c.entity_type || '') + '</div></div>';
+    }
+    h += '</div>';
+  } else {
+    h += '<div class="detail-empty">No LCC owner entity matches "' + esc(name) + '".<br>'
+      + '<span class="t-meta3-sm">The property panel stays open — resolve the owner on its Ownership tab.</span></div>';
+  }
+  body.innerHTML = h + '</div>';
+}
+window._ownerUnresolvedBeside = _ownerUnresolvedBeside;
+
+// Open an owner by name (+ optional id hints). Resolved → the companion dock
+// beside the property (dual-width) or the stacked entity panel whose ← Back
+// returns to the property (narrow). Never replaces an open property panel
+// with a "not found" page.
+async function _openEntityByNameSmart(name, hint) {
+  if (!name && !(hint && (hint.entity_id || hint.true_owner_id))) return;
+  const res = await _resolveOwnerEntity(name, hint);
+  if (res && res.entity_id) { _openEntitySmart(String(res.entity_id)); return; }
+  if (_panelPrimaryOpen() && _activePrimaryKind === 'property') { _ownerUnresolvedBeside(name, res); return; }
   openEntityDetailByName(name);
 }
 window._openEntityByNameSmart = _openEntityByNameSmart;

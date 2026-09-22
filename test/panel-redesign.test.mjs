@@ -194,6 +194,9 @@ describe('§0 owner resolution — the panel never asserts the operator owns the
 describe('§2.5.1 the "Work this owner" hand-off is a valid, safe CTA', () => {
   const cta = build(ESC_STUB, [
     sliceFn(detailSrc, '_jsStrArg'),
+    // GOV-UX1: the onclick builder moved into _udOwnerRefOnclick (shared with
+    // the Current Owner chip) — the harness must carry the callee (Step 5b).
+    sliceFn(detailSrc, '_udOwnerRefOnclick'),
     sliceFn(detailSrc, '_udWorkOwnerCta'),
   ], '_udWorkOwnerCta');
 
