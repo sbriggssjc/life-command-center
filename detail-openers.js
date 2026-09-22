@@ -187,6 +187,13 @@ async function openEntityDetailByName(name) {
   if (tabsEl) tabsEl.innerHTML = '';
 
   try {
+    // GOV-UX1 (SBN-25): the shared owner resolver first — exact canonical key
+    // (", LLC" and other legal suffixes stripped), tombstones followed to the
+    // survivor — so this agrees with the property panel's "Owner resolved".
+    if (typeof _resolveOwnerEntity === 'function') {
+      const res = await _resolveOwnerEntity(name);
+      if (res && res.entity_id) { openEntityDetail(String(res.entity_id)); return; }
+    }
     const data = await _entityApiFetch('/api/entities?action=search&q=' + encodeURIComponent(name));
     const entities = data?.entities || [];
 

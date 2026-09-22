@@ -7415,7 +7415,24 @@ function _udResolvedOwnerRef(own) {
     || (own.true_owner && !own.true_owner_is_operator ? (own.true_owner_canonical || own.true_owner) : null)
     || null;
   if (!name) return null;
-  return { name: name, id: (po && po.owner_entity_id) || own.owner_entity_id || null };
+  // GOV-UX1 (SBN-25): carry the domain true_owner id so the owner click resolves
+  // through the SAME identity the Next-step "Owner resolved" card reads
+  // (external_identities(dia|gov, true_owner, <id>)), not a name substring.
+  const toId = (own.true_owner_id && !own.true_owner_is_operator) ? own.true_owner_id : null;
+  return {
+    name: name,
+    id: (po && po.owner_entity_id) || own.owner_entity_id || null,
+    db: (typeof _udCache !== 'undefined' && _udCache && _udCache.db) || null,
+    trueOwnerId: toId,
+  };
+}
+
+/** onclick source that opens `ref` via the ONE owner resolver (GOV-UX1). */
+function _udOwnerRefOnclick(ref) {
+  if (!ref) return '';
+  if (ref.id) return `_openEntitySmart(${_jsStrArg(String(ref.id))})`;
+  const hint = ref.trueOwnerId ? { db: ref.db || null, true_owner_id: String(ref.trueOwnerId) } : null;
+  return `_openEntityByNameSmart(${_jsStrArg(ref.name)}${hint ? ', JSON.parse(' + _jsStrArg(JSON.stringify(hint)) + ')' : ''})`;
 }
 
 /**
@@ -7427,9 +7444,7 @@ function _udResolvedOwnerRef(own) {
  */
 function _udWorkOwnerCta(ref, size) {
   if (!ref) return '';
-  const open = ref.id
-    ? `_openEntitySmart(${_jsStrArg(String(ref.id))})`
-    : `_openEntityByNameSmart(${_jsStrArg(ref.name)})`;
+  const open = _udOwnerRefOnclick(ref);
   const hero = size === 'hero';
   const btn = `<button onclick="${open}" title="Open the owner panel — calls, emails, cadence, contacts"`
     + ` style="padding:${hero ? '9px 16px' : '7px 14px'};border-radius:8px;font-size:${hero ? '13px' : '12px'};font-weight:600;cursor:pointer;`
@@ -7463,7 +7478,9 @@ function _udCurrentOwnerCard(own, db) {
   const id = _ref.id;
   // With a resolved owner_entity_id, open it directly (entity type uses the id);
   // else fall back to name resolution (owner type).
-  const chip = entityLink(name, id ? 'entity' : 'owner', id, db);
+  // GOV-UX1: the chip opens through the same resolver as "Work this owner".
+  const chip = id ? entityLink(name, 'entity', id, db)
+    : `<span style="color:var(--accent);cursor:pointer;text-decoration:underline;text-decoration-style:dotted;" onclick="${_udOwnerRefOnclick(_ref)}" title="View owner">${esc(name)}</span>`;
   const srcMap = { sf_seller: 'Salesforce seller', manual: 'Verified (manual)',
                    relationship_graph: 'Ownership graph', deed_recorded: 'County deed' };
   const src = po ? (srcMap[po.source] || po.source || 'Reconciled')
@@ -7501,10 +7518,9 @@ function _udCurrentOwnerCard(own, db) {
     if (eng.length) h += `<div style="font-size:11px;color:var(--text3);margin-top:2px">${eng.join(' · ')}</div>`;
   } else if (ps && ps.prospecting === false) {
     // Not prospected — P3.3 suggestion (research the owner / connect in SF).
-    const safe = _jsStrArg(name);
     h += `<div style="margin-top:8px;font-size:12px;color:var(--text2)">Not yet prospected · ` +
       `<span style="color:var(--accent);cursor:pointer;text-decoration:underline;text-decoration-style:dotted" ` +
-      `onclick="_openEntityByNameSmart(${safe})" title="Open owner to research / connect in SF">research owner &rarr;</span></div>`;
+      `onclick="${_udOwnerRefOnclick(_ref)}" title="Open owner to research / connect in SF">research owner &rarr;</span></div>`;
   }
   // The hand-off (redesign §2.5.1) — the card ends in the one CTA that carries
   // the user from "this asset's owner is X" to actually working X.
