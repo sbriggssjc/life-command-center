@@ -1,7 +1,9 @@
 # RECON3 — 175 Righter Rd, Succasunna NJ (DaVita, property_id 27266): raw Salesforce Account IDs stored as owner/buyer/seller names, a stale $10.3M estimate sitting next to a closed $2.6M sale, and a sidebar-polluted lease tenant
 
 **Filed:** 2026-09-22 (Cowork), from Scott's SB note *Dialysis Property - Sept 22.docx* (SBN-19) — 12
-screenshots of a property our team just sold. **Owner:** LCC (dia intake/ingest paths in `api/`,
+screenshots of a property our team just sold, plus the exported client report *DaVita Renal Center Of
+Succasunna — Net-Lease Asset Profile _ Northmarq.pdf* Scott added to the folder after the fact (SBN-20,
+see Bug 4 below). **Owner:** LCC (dia intake/ingest paths in `api/`,
 `supabase/migrations/dialysis/`, `test/`). **Read first:** `docs/architecture/property-identity-and-address-resolution.md`
 (§P10a), RECON1's response (`docs/claude-code/prompts/done/RECON1-one-clinic-three-properties-ingestion-never-reconciles.md`,
 same reconciliation-gap class, different property), RECON2's spec (`docs/architecture/reconcile-property-spec.md`),
@@ -110,7 +112,33 @@ here (link-click behavior isn't observable from a screenshot) — **part (d): re
 `Open ↗` links, and separately audit why only the OM made it into Documents when ShareFile evidently
 holds more for this deal.**
 
+**Bug 4 (SBN-20) -- the client-facing Asset Profile export has zero sale-status awareness.** Scott
+exported this property's Northmarq-branded "Dialysis Net-Lease · Asset Profile" PDF on 2026-09-22 at
+6:42 AM -- **two weeks after the property closed** (sold 2026-09-09, `sale_id 15170`, $2,587,220) --
+and added it to this SB note as the "exported client report" his original note referenced (flagged as
+missing when SBN-19 was first triaged; it wasn't fabricated, just filed a few hours later). The export
+itself, read end to end, contains **no sale indicator anywhere**: no "SOLD" badge, no closed-sale date
+or price, no banner -- it presents live Risk Assessment (35/100, "Moderate Risk"), a 15%-weighted "Lease
+Expiration" score, and a cap-rate/value crosswalk exactly as it would for an active listing. Traced to
+the generator: `_udExportOperations()` (`detail.js:5436`) builds this HTML purely from
+`_udCache.property`/`_opsExtraCache` (CMS, HCRIS, rankings, lease) and never reads `pipeline_stage`
+(tracked separately on `property_intel`, see `detail.js:2246`) or checks `sales_transactions` for a
+closed sale on this property. **This is a business-risk-grade gap, not a cosmetic one** -- nothing stops
+this same button from generating and being sent to a client/investor as a current analysis of a
+property Team Briggs no longer has under contract or listed.
+
+Two things in this same export are worth keeping as corroborating evidence for Bugs 2/3 above, not new
+defects: the $172,050 "Contract rent" figure matches lease 16621's `rent`/`annual_rent` exactly
+(verified live), so the underlying rent number is right even though that same row's `tenant` field is
+the bad display-name string (Bug 3). And the export's own rent-based "implied
+real-estate value" crosswalk ($2.29M-$2.87M across a 6.0-7.5% cap range) lands close to the actual
+$2.587M sale price -- a sharp contrast with the sidebar's stale $10.3M `current_value_estimate` (Bug 2),
+and a hint that the export's cap-rate crosswalk (not the sidebar's never-overwrite estimate) is the
+right model to prefer once a property is `SOLD`.
+
 ## What this prompt asks for
+
+
 
 1. **Trace and fix the SF-Account-ID-as-name write path** (part a above) — find where this sale's
    `buyer_name`/`seller_name`/`recorded_owners.name` got written as raw Salesforce IDs, add the
@@ -126,6 +154,13 @@ holds more for this deal.**
    than an LCC bug.
 6. **Design-gap addendum**: add rent/SF and patient-census columns to the Nearby Owner Cohort and
    Competitive Landscape tables (non-blocking, can ship separately).
+7. **Gate the Asset Profile / client-report export on sale status** (Bug 4/part e) -- before
+   `_udExportOperations()` (`detail.js:5436`) renders, check `sales_transactions` (and/or
+   `pipeline_stage`) for a closed sale on the property and, if one exists, replace the live
+   Risk Assessment / Lease Expiration scoring with a closed-sale banner (date, price, buyer once
+   Bug 1 is fixed) so this export can never be sent out as if the deal were still live. Consider
+   whether this same gate belongs on every export/report generator, not just this one, as part of
+   the blast-radius measurement in part (b).
 
 ⛔ Do not build a new one-off reconciliation script for this single property — RECON2 is already
 building the general `reconcile_property()` this case should ultimately run through. Where this
