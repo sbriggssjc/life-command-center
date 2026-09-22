@@ -8960,7 +8960,7 @@ let govVerificationSummaryLoading = false;
 // shape as the dia equivalent in dialysis.js.
 let govRecentVerifications = null;
 let govRecentVerificationsLoading = false;
-let govRecentVerificationsFilter = 'all';
+let govRecentVerificationsFilter = 'evidence'; // GOV-UX1: lead with real evidence, like dia
 
 async function loadGovVerificationSummary() {
   if (govVerificationSummaryLoading) return;
@@ -8988,36 +8988,9 @@ async function loadGovVerificationSummary() {
 //   yellow — some listings due
 //   red    — broken URLs or 90d+ overdue
 function renderGovListingVerificationCard() {
-  if (!govVerificationSummary) {
-    return metricHTML('Verification Status', '…', 'Loading verification digest', 'blue');
-  }
-  const s = govVerificationSummary;
-  const due       = Number(s.due_for_verification) || 0;
-  const overdue30 = Number(s.overdue_30d) || 0;
-  const overdue90 = Number(s.overdue_90d) || 0;
-  const broken    = Number(s.broken_url_count) || 0;
-  const recent    = Number(s.verifications_last_7d) || 0;
-  const changes7d = Number(s.recent_status_changes_7d) || 0;
-  // Round 76et-E breakout. Falls back to the monolithic 'recent' count
-  // when running against a database that hasn't applied the migration yet.
-  const evidence7d = (s.evidence_verifications_7d != null) ? Number(s.evidence_verifications_7d) : null;
-  const cronOnly7d = (s.cron_timer_advances_7d   != null) ? Number(s.cron_timer_advances_7d)   : null;
-  const checks7dPart = (evidence7d != null && cronOnly7d != null)
-    ? evidence7d + ' evidence/7d · ' + cronOnly7d + ' cron-only/7d'
-    : recent + ' checks/7d';
-
-  let color = 'blue';
-  if (overdue90 > 0 || broken > 0) color = 'red';
-  else if (due > 0 || overdue30 > 0) color = 'yellow';
-
-  const sub =
-    overdue30 + ' 30d-overdue · ' +
-    overdue90 + ' 90d · ' +
-    broken    + ' broken-url · ' +
-    checks7dPart + ' · ' +
-    changes7d + ' status-changes/7d';
-
-  return metricHTML('Verification Status', fmtN(due), sub, color);
+  // GOV-UX1 (SBN-23): one component for both lanes — listing-verification.js.
+  // Headline is overdue (30d+), matching dia (was "due now").
+  return renderListingVerificationDigest(govVerificationSummary, 'gov');
 }
 
 // Round 76et-F: drill-down for the gov verification summary card. Mirror
@@ -9052,62 +9025,10 @@ window.setGovRecentVerificationsFilter = function (f) {
   if (typeof renderGovSales === 'function') renderGovSales();
 };
 
-function _govFmtTimeAgo(iso) {
-  if (!iso) return '';
-  const ms = Date.now() - Date.parse(iso);
-  if (!Number.isFinite(ms) || ms < 0) return '';
-  const m = Math.floor(ms / 60000);
-  if (m < 1)  return 'just now';
-  if (m < 60) return m + 'm ago';
-  const h = Math.floor(m / 60);
-  if (h < 24) return h + 'h ago';
-  const d = Math.floor(h / 24);
-  return d + 'd ago';
-}
-
 function renderRecentGovVerificationsPanel() {
-  if (govRecentVerifications === null) {
-    return '<div style="margin-top:14px;padding:14px 16px;border:1px solid var(--border);border-radius:8px;color:var(--text3);font-size:11px">Loading recent verifications…</div>';
-  }
-  const all = govRecentVerifications;
-  const filter = govRecentVerificationsFilter;
-  const isCron = (r) => r.method === 'auto_scrape' && r.check_result === 'inferred_active';
-  const evidenceLen = all.filter(r => !isCron(r)).length;
-  const cronLen     = all.filter(isCron).length;
-  const filtered = filter === 'all'      ? all
-                 : filter === 'cron'     ? all.filter(isCron)
-                 :                          all.filter(r => !isCron(r));
-
-  let h = '<div style="margin-top:14px;padding:14px 16px;border:1px solid var(--border);border-radius:8px;background:var(--s2)">';
-  h += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">';
-  h += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3)">Recent Verifications (7d)</div>';
-  h += '<div style="flex:1"></div>';
-  h += '<button class="ops-filter ' + (filter === 'all'      ? 'active' : '') + '" onclick="setGovRecentVerificationsFilter(\'all\')">All ('      + all.length + ')</button>';
-  h += '<button class="ops-filter ' + (filter === 'evidence' ? 'active' : '') + '" onclick="setGovRecentVerificationsFilter(\'evidence\')">Evidence (' + evidenceLen + ')</button>';
-  h += '<button class="ops-filter ' + (filter === 'cron'     ? 'active' : '') + '" onclick="setGovRecentVerificationsFilter(\'cron\')">Cron-only ('  + cronLen + ')</button>';
-  h += '</div>';
-
-  if (filtered.length === 0) {
-    h += '<div style="color:var(--text3);font-size:12px;padding:8px 0">No rows for this filter.</div>';
-  } else {
-    h += '<div style="max-height:280px;overflow-y:auto">';
-    for (const r of filtered.slice(0, 50)) {
-      const ago = _govFmtTimeAgo(r.verified_at);
-      const noteSnip = String(r.notes || '').substring(0, 80);
-      const url = r.source_url ? '<a href="' + esc(r.source_url) + '" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none">↗</a>' : '';
-      h += '<div style="display:grid;grid-template-columns:80px 110px 130px 220px 1fr 20px;gap:10px;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px;align-items:center">';
-      h += '<span style="color:var(--text3)">' + esc(ago) + '</span>';
-      h += '<span class="q-badge">' + esc(String(r.method || '')) + '</span>';
-      h += '<span class="q-badge">' + esc(String(r.check_result || '')) + '</span>';
-      h += '<span style="font-family:monospace;color:var(--text2);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(String(r.listing_id || '')) + '">' + esc(String(r.listing_id || '')) + '</span>';
-      h += '<span style="color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(noteSnip) + '">' + esc(noteSnip) + '</span>';
-      h += '<span>' + url + '</span>';
-      h += '</div>';
-    }
-    h += '</div>';
-  }
-  h += '</div>';
-  return h;
+  // GOV-UX1 (SBN-23): shared panel; opens on Evidence like dia.
+  return renderRecentVerificationsPanel(govRecentVerifications, govRecentVerificationsFilter,
+    'setGovRecentVerificationsFilter', 'gov');
 }
 
 window.govSalesSortBy = function(col) {

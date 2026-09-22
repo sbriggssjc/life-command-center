@@ -53,6 +53,21 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-22 — GOV-UX1 (Claude Code): gov Available navigation jump, owner panel, one verification component, automation audit
+
+- **A (SBN-24):** the router caused the jump, not the panel. The Business sub-tabs never wrote the hash, and
+  `_routeCurrentPageSlug` preferred the stale `#/dia`, so opening a gov row wrote `#/dia?d=prop:gov:…` and `applyRoute`
+  navTo'd Dialysis. Also `pageBiz` reverse-mapped to `capmarkets`, which forces dialysis. Fixed; the slug is read from the live DOM.
+- **B (SBN-25):** one owner resolver, `?action=resolve_owner` (id → true_owner identity → exact canonical key,
+  merge-followed). "Gold Circle Properties, LLC" now resolves to `ff84dd24…`. The owner docks beside the property,
+  or stacks with Back, and never replaces it. The search excludes tombstones.
+- **C (SBN-23):** `listing-verification.js` is shared by both lanes: Sales › Available, `overdue (30d+)` headline, Evidence default.
+- **D:** measured and ranked, not built. The agency-drift view reads raw strings on superseded and expired leases:
+  654 of 1,644 rows are live true disagreements and 272 of those are GSA-vs-agency. There are 7,708 lead-less resolved
+  owners, but only 98 sit in the seller queue with a reason to sell and a person. See
+  `docs/audits/GOV_UX1_NAVIGATION_OWNER_VERIFICATION_2026-09-22.md`.
+- `npm test` 6,859 / 0 fail; guard 22 tests, 11/11 mutations RED. **Next:** redeploy both Railway services + `verify:deploy`; then prompt GOV-UX1-D1/D2.
+
 ## 2026-09-22 — RECON2-render-spa + RECON2-render-dossier (CC): the property panel, dia sales comps and the dossier now label the 2,447 `expired_unconfirmed` leases
 
 **Labelling only. Which lease is chosen as "active" is unchanged**, and a test pins the three selectors RECON2 designed. Live re-query: **2,447** active dia leases at `expired_unconfirmed` (matches round 63).

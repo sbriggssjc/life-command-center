@@ -2909,18 +2909,6 @@ function renderOnMarketInner() {
   if (!haveCanonical && !diaAvailListings) {
     return '<div class="dia-grid dia-grid-4"><div class="dia-info-card" style="grid-column:span 4;text-align:center;padding:24px"><span class="spinner"></span><div style="margin-top:8px;font-size:12px;color:var(--text2)">Loading listings...</div></div></div>';
   }
-  // Round 76cx Phase 2: kick off lazy load of the verification digest the
-  // first time the on-market dashboard renders. Fire-and-forget; the card
-  // shows "Loading verification digest…" until the data arrives, then a
-  // re-render fills in the counts.
-  if (!diaVerificationSummary && !diaVerificationSummaryLoading) {
-    loadDiaVerificationSummary();
-  }
-  // Round 76et-F: same lazy-load pattern for the recent verifications
-  // drill-down panel rendered below the metrics row.
-  if (diaRecentVerifications === null && !diaRecentVerificationsLoading) {
-    loadRecentDiaVerifications();
-  }
 
   let recentListings, staleCount;
   if (haveCanonical) {
@@ -2994,11 +2982,9 @@ function renderOnMarketInner() {
   h += infoCard({ title: 'Avg Ask Price', value: avgAskPrice, sub: fmtN(withPrice.length) + ' priced', color: 'blue', tab: 'sales' });
   h += infoCard({ title: 'Avg Days on Market', value: avgDomVal, sub: fmtN(avgDom.length) + ' with dates', color: 'yellow', tab: 'sales' });
   h += infoCard({ title: 'NM Market Share', value: recentListings.length > 0 ? (nmListings.length/recentListings.length*100).toFixed(1)+'%' : '—', sub: 'of active listings', color: 'green', tab: 'sales' });
-  // Round 76cx Phase 2: verification status card
-  h += renderListingVerificationCard();
+  // GOV-UX1 (SBN-23): the verification card + Recent Verifications panel moved
+  // to Sales › Available — the same place gov shows them (listing-verification.js).
   h += '</div>';
-  // Round 76et-F: drill-down panel below the metrics row.
-  h += renderRecentDiaVerificationsPanel();
   return h;
 }
 
@@ -5539,49 +5525,8 @@ async function loadDiaVerificationSummary() {
 //   yellow — some listings due
 //   red    — broken URLs or 90d+ overdue
 function renderListingVerificationCard() {
-  if (!diaVerificationSummary) {
-    return '<div class="dia-info-card" style="padding:14px 16px;color:var(--text3);font-size:11px">Loading verification digest…</div>';
-  }
-  const s = diaVerificationSummary;
-  const due       = Number(s.due_for_verification) || 0;
-  const overdue30 = Number(s.overdue_30d) || 0;
-  const overdue90 = Number(s.overdue_90d) || 0;
-  const broken    = Number(s.broken_url_count) || 0;
-  const recent    = Number(s.verifications_last_7d) || 0;
-  const changes7d = Number(s.recent_status_changes_7d) || 0;
-  // Round 76et-E breakout. Falls back to the monolithic 'recent' count
-  // when running against a database that hasn't applied the migration yet.
-  const evidence7d = (s.evidence_verifications_7d != null) ? Number(s.evidence_verifications_7d) : null;
-  const cronOnly7d = (s.cron_timer_advances_7d   != null) ? Number(s.cron_timer_advances_7d)   : null;
-  const checks7dPart = (evidence7d != null && cronOnly7d != null)
-    ? `${evidence7d} evidence/7d · ${cronOnly7d} cron-only/7d`
-    : `${recent} checks/7d`;
-
-  let color = 'blue';
-  if (overdue90 > 0 || broken > 0) color = 'red';
-  else if (due > 0 || overdue30 > 0) color = 'yellow';
-
-  // DIA_OVERVIEW_TILE_AUDIT Unit 4: headline the actionable OVERDUE count, not
-  // the "due now" number (which is genuinely 0 and read as broken). "due now"
-  // moves into the sub-detail.
-  const title = 'Verification Status';
-  const value = fmtN(overdue30);
-  const headlineLabel = 'overdue (30d+)';
-  const sub = `${due} due now · ${overdue90} 90d-overdue · ${broken} broken-url · ${checks7dPart} · ${changes7d} status-changes/7d`;
-
-  // Round 76et-B (2026-04-29): Phase 3 + 3b + 4b all shipped. The card was
-  // pointing users at a "lands later" toast for a feature that already exists.
-  // Now the card surfaces the active verification toolset: open any overdue
-  // listing in the sidebar (CoStar/LoopNet/etc.) and click "Verify still
-  // available" or "Mark off market". The 6h auto-scrape cron handles the
-  // sale-window heuristic automatically; manual review is for everything
-  // it can't decide.
-  const tooltipText = `Open an overdue listing in the sidebar and use Verify still available / Mark off market. The auto-scrape cron handles ${recent} checks/7d automatically.`;
-  return `<div class="dia-info-card dia-info-${color}" onclick="showToast('${escapeHtmlSafe(tooltipText)}','info')" style="cursor:pointer;padding:14px 16px" title="${escapeHtmlSafe(tooltipText)}">
-    <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);margin-bottom:6px">${title}</div>
-    <div style="font-size:24px;font-weight:700;color:var(--text1);margin-bottom:4px">${value}</div>
-    <div style="font-size:11px;color:var(--text2)">${escapeHtmlSafe(headlineLabel)} · ${escapeHtmlSafe(sub)}</div>
-  </div>`;
+  // GOV-UX1 (SBN-23): one component for both lanes — listing-verification.js.
+  return renderListingVerificationDigest(diaVerificationSummary, 'dia');
 }
 
 // Round 76et-F: drill-down for the verification summary card. Pulls the
@@ -5615,62 +5560,10 @@ window.setDiaRecentVerificationsFilter = function (f) {
   renderDiaTab();
 };
 
-function _diaFmtTimeAgo(iso) {
-  if (!iso) return '';
-  const ms = Date.now() - Date.parse(iso);
-  if (!Number.isFinite(ms) || ms < 0) return '';
-  const m = Math.floor(ms / 60000);
-  if (m < 1)  return 'just now';
-  if (m < 60) return m + 'm ago';
-  const h = Math.floor(m / 60);
-  if (h < 24) return h + 'h ago';
-  const d = Math.floor(h / 24);
-  return d + 'd ago';
-}
-
 function renderRecentDiaVerificationsPanel() {
-  if (diaRecentVerifications === null) {
-    return '<div class="dia-info-card" style="margin-top:14px;padding:14px 16px;color:var(--text3);font-size:11px">Loading recent verifications…</div>';
-  }
-  const all = diaRecentVerifications;
-  const filter = diaRecentVerificationsFilter;
-  const isCron = (r) => r.method === 'auto_scrape' && r.check_result === 'inferred_active';
-  const evidenceLen = all.filter(r => !isCron(r)).length;
-  const cronLen     = all.filter(isCron).length;
-  const filtered = filter === 'all'      ? all
-                 : filter === 'cron'     ? all.filter(isCron)
-                 :                          all.filter(r => !isCron(r));
-
-  let h = '<div class="dia-info-card" style="margin-top:14px;padding:14px 16px">';
-  h += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">';
-  h += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3)">Recent Verifications (7d)</div>';
-  h += '<div style="flex:1"></div>';
-  h += '<button class="ops-filter ' + (filter === 'all'      ? 'active' : '') + '" onclick="setDiaRecentVerificationsFilter(\'all\')">All ('      + all.length + ')</button>';
-  h += '<button class="ops-filter ' + (filter === 'evidence' ? 'active' : '') + '" onclick="setDiaRecentVerificationsFilter(\'evidence\')">Evidence (' + evidenceLen + ')</button>';
-  h += '<button class="ops-filter ' + (filter === 'cron'     ? 'active' : '') + '" onclick="setDiaRecentVerificationsFilter(\'cron\')">Cron-only ('  + cronLen + ')</button>';
-  h += '</div>';
-
-  if (filtered.length === 0) {
-    h += '<div style="color:var(--text3);font-size:12px;padding:8px 0">No rows for this filter.</div>';
-  } else {
-    h += '<div style="max-height:280px;overflow-y:auto">';
-    for (const r of filtered.slice(0, 50)) {
-      const ago = _diaFmtTimeAgo(r.verified_at);
-      const noteSnip = String(r.notes || '').substring(0, 80);
-      const url = r.source_url ? '<a href="' + escapeHtmlSafe(r.source_url) + '" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none">↗</a>' : '';
-      h += '<div style="display:grid;grid-template-columns:80px 110px 110px 80px 1fr 20px;gap:10px;padding:6px 0;border-bottom:1px solid var(--s2);font-size:12px;align-items:center">';
-      h += '<span style="color:var(--text3)">' + escapeHtmlSafe(ago) + '</span>';
-      h += '<span class="q-badge">' + escapeHtmlSafe(String(r.method || '')) + '</span>';
-      h += '<span class="q-badge">' + escapeHtmlSafe(String(r.check_result || '')) + '</span>';
-      h += '<span style="font-family:monospace;color:var(--text2);font-size:11px">#' + escapeHtmlSafe(String(r.listing_id || '')) + '</span>';
-      h += '<span style="color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escapeHtmlSafe(noteSnip) + '">' + escapeHtmlSafe(noteSnip) + '</span>';
-      h += '<span>' + url + '</span>';
-      h += '</div>';
-    }
-    h += '</div>';
-  }
-  h += '</div>';
-  return h;
+  // GOV-UX1 (SBN-23): shared panel (listing-verification.js).
+  return renderRecentVerificationsPanel(diaRecentVerifications, diaRecentVerificationsFilter,
+    'setDiaRecentVerificationsFilter', 'dia');
 }
 
 // Defensive escapeHtml stub (some dialysis.js builds inline this differently;
@@ -10398,8 +10291,13 @@ async function renderDiaSales() {
     const avgDom = data.filter(r => r.dom > 0);
     const avgDomVal = avgDom.length > 0 ? Math.round(avgDom.reduce((s, r) => s + r.dom, 0) / avgDom.length) : '—';
     html += infoCard({ title: 'Avg DOM', value: avgDomVal, sub: avgDom.length + ' with dates', color: 'yellow' });
+    // GOV-UX1 (SBN-23): verification card on Sales › Available, same as gov.
+    if (!diaVerificationSummary && !diaVerificationSummaryLoading) loadDiaVerificationSummary();
+    if (diaRecentVerifications === null && !diaRecentVerificationsLoading) loadRecentDiaVerifications();
+    html += renderListingVerificationCard();
   }
   html += '</div>';
+  if (!isComps) html += renderRecentDiaVerificationsPanel();
 
   // Search bar + State filter
   const allStates = [...new Set(data.map(r => r.state).filter(Boolean))].sort();
