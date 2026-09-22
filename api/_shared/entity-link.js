@@ -1077,6 +1077,51 @@ export async function refreshPlaceholderEntityNameById(entityId, workspaceId, re
   return refreshPlaceholderEntityName(ent, clean);
 }
 
+/**
+ * SIDEBAR4 — true when a PostgREST write failed on a unique constraint.
+ * PostgREST maps BOTH 23505 (unique) and 23503 (FK) to HTTP 409, so the status
+ * alone is not enough (the P116 lesson): require the DB's own code.
+ */
+export function isUniqueViolation(result) {
+  return result?.status === 409 && result?.data?.code === '23505';
+}
+
+/** SIDEBAR4 — the same key uq_entities_person_contact_key_sidebar4 enforces. */
+export function personContactKey(email, phone) {
+  const e = String(email ?? '').trim().toLowerCase();
+  if (e) return e;
+  const p = String(phone ?? '').replace(/\D/g, '');
+  return p || null;
+}
+
+/**
+ * SIDEBAR4 — after a 23505 on a person INSERT, find the live row that won the
+ * race: same workspace + canonical_name + (email, else phone digits). Returns
+ * null when nothing matches on the full key — never falls back to name alone,
+ * because a shared name is not identity.
+ */
+export async function findConcurrentPersonTwin(workspaceId, payload) {
+  if (!workspaceId) return null;
+  const key = personContactKey(payload?.email, payload?.phone);
+  if (!key) return null;
+  // The N15c BEFORE trigger rewrites canonical_name from `name` on INSERT, so
+  // the stored key can differ from the JS-computed one in the payload. Both
+  // racers carried the same raw `name`, so try that exact value too.
+  const filters = [];
+  if (payload.canonical_name) filters.push(`canonical_name=eq.${pgFilterVal(payload.canonical_name)}`);
+  if (payload.name) filters.push(`name=eq.${pgFilterVal(payload.name)}`);
+  for (const f of filters) {
+    const path = `entities?workspace_id=eq.${workspaceId}&${f}`
+      + '&entity_type=eq.person&merged_into_entity_id=is.null'
+      + '&select=*&order=created_at.asc&limit=10';
+    const res = await opsQuery('GET', path);
+    if (!res.ok || !Array.isArray(res.data)) continue;
+    const hit = res.data.find((e) => personContactKey(e.email, e.phone) === key);
+    if (hit) return hit;
+  }
+  return null;
+}
+
 export async function ensureEntityLink({
   workspaceId,
   userId,
@@ -1359,15 +1404,28 @@ export async function ensureEntityLink({
       ...pickSeedFields(entityType, seedFields)
     };
     const created = await opsQuery('POST', 'entities', createPayload);
-    if (!created.ok) {
+    // SIDEBAR4: a concurrent caller minted the same person between our lookup
+    // and this INSERT, and uq_entities_person_contact_key_sidebar4 refused the
+    // second row. Attach to the row that won instead of failing — that is the
+    // answer the lookup above would have given a moment later.
+    if (!created.ok && isUniqueViolation(created)) {
+      const winner = await findConcurrentPersonTwin(workspaceId, createPayload);
+      if (winner) {
+        console.warn(`[ensureEntityLink] SIDEBAR4 concurrent mint of "${String(candidateName).slice(0, 60)}" — attached to ${winner.id}`);
+        resolvedEntity = winner;
+      }
+    }
+    if (!created.ok && !resolvedEntity) {
       return {
         ok: false,
         error: 'Failed to create canonical entity',
         detail: created.data
       };
     }
-    resolvedEntity = Array.isArray(created.data) ? created.data[0] : created.data;
-    createdEntity = true;
+    if (created.ok) {
+      resolvedEntity = Array.isArray(created.data) ? created.data[0] : created.data;
+      createdEntity = true;
+    }
 
     // CONTACT1a — record the ladder-governed fields THIS create established
     // (see the block comment at the top of this file). Only fields carrying a
@@ -1378,7 +1436,9 @@ export async function ensureEntityLink({
       const v = createPayload[f];
       if (v != null && String(v).trim() !== '') contact1aFields[f] = v;
     }
-    if (Object.keys(contact1aFields).length) {
+    // SIDEBAR4: an attach to a concurrent winner established nothing — the
+    // winning create recorded its own provenance.
+    if (createdEntity && Object.keys(contact1aFields).length) {
       try {
         await recordFieldWrites({
           targetDb:    CONTACT1A_TARGET_DB,

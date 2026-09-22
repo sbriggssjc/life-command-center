@@ -1172,6 +1172,14 @@ export async function buildDealPacket(entityId, workspaceId) {
   return { ...propertyPacket, deal, meta };
 }
 
+// SIDEBAR4: the id that ties a pipeline run back to the HTTP request that
+// triggered it. The extension stamps X-LCC-Request-Id (one per user action);
+// Railway's edge id is the fallback.
+function sidebarRequestId(req) {
+  const h = req?.headers || {};
+  return h['x-lcc-request-id'] || h['x-railway-request-id'] || h['x-request-id'] || null;
+}
+
 export const entitiesHandler = withErrorHandler(async function handler(req, res) {
   if (handleCors(req, res)) return;
   if (requireOps(res)) return;
@@ -2125,7 +2133,7 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
         return res.status(400).json({ error: 'entity_id is required' });
       }
       try {
-        const result = await processSidebarExtraction(entity_id, workspaceId, user.id, { force: !!force });
+        const result = await processSidebarExtraction(entity_id, workspaceId, user.id, { force: !!force, trigger: 'action.process_sidebar_extraction', requestId: sidebarRequestId(req) });
         if (!result.ok) {
           return res.status(result.error === 'Entity not found' ? 404 : 500).json(result);
         }
@@ -2845,7 +2853,7 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
             const patched = Array.isArray(patchResult.data)
               ? patchResult.data[0] : patchResult.data;
             if (patched?.id) {
-              processSidebarExtraction(patched.id, workspaceId, user.id)
+              processSidebarExtraction(patched.id, workspaceId, user.id, { trigger: 'entities.post_dedup', requestId: sidebarRequestId(req) })
                 .catch(err => console.error('[Dedup pipeline re-trigger]',
                   err?.message || err));
             }
@@ -2889,7 +2897,7 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
 
     // Fire-and-forget: unpack sidebar extraction data (contacts, sales, domain classification)
     if (entity_type === 'asset' && created?.id && hasSidebarData(metadata)) {
-      processSidebarExtraction(created.id, workspaceId, user.id)
+      processSidebarExtraction(created.id, workspaceId, user.id, { trigger: 'entities.post', requestId: sidebarRequestId(req) })
         .catch(err => console.error('[Sidebar pipeline async error]', err?.message || err));
     }
 
@@ -2934,7 +2942,7 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
 
     // Fire-and-forget: if metadata was updated with new sidebar data, run the pipeline
     if (metadata && updated?.id && updated?.entity_type === 'asset' && hasSidebarData(metadata)) {
-      processSidebarExtraction(updated.id, workspaceId, user.id)
+      processSidebarExtraction(updated.id, workspaceId, user.id, { trigger: 'entities.patch', requestId: sidebarRequestId(req) })
         .catch(err => console.error('[Sidebar pipeline async error on PATCH]', err?.message || err));
     }
 
