@@ -140,5 +140,5 @@ restored.
 ## 5. Deploy
 
 JS only, with no migration. Redeploy **both Railway services**, then run `npm run verify:deploy` (the new
-`listing-verification.js` is probed as a `<script src>`). The cache busters moved as a set: `2026092202 → 2026092203`,
+`listing-verification.js` is probed as a `<script src>`). The cache busters moved as a set: `2026092203 → 2026092204` (after merging main, which had already moved the set to `2026092203`),
 and `gov.js` joined the set.

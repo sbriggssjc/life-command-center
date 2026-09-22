@@ -2943,6 +2943,7 @@ function _udTabRentRoll() {
     html += `<div style="font-size:15px;font-weight:700">${_udTenantLink(tenantName, activeTerm, em)}`;
     if (isActive) {
       html += ' <span style="font-size:9px;padding:2px 7px;border-radius:10px;background:var(--green);color:#fff;font-weight:600;margin-left:6px">Active</span>';
+      html += _leaseExpStateBadge(activeTerm);   // RECON2-render-spa — label only
     } else {
       html += ' <span style="font-size:9px;padding:2px 7px;border-radius:10px;background:var(--red);color:#fff;font-weight:600;margin-left:6px">Expired</span>';
     }
@@ -3046,7 +3047,7 @@ function _udTabRentRoll() {
         html += `<span style="font-size:11px;font-weight:700;color:${isActiveTerm ? 'var(--green)' : 'var(--text2)'}">${esc(typeLabel)} (Term ${tNum})</span>`;
         if (tenantAgency) html += `<span style="font-size:11px;color:var(--text);font-weight:600">${esc(tenantAgency)}</span>`;
         if (leaseNum)     html += `<span style="font-size:10px;color:var(--text3);font-family:'JetBrains Mono',monospace">${esc(leaseNum)}</span>`;
-        if (isActiveTerm) html += '<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:var(--green);color:#fff;font-weight:600">Active</span>';
+        if (isActiveTerm) html += '<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:var(--green);color:#fff;font-weight:600">Active</span>' + _leaseExpStateBadge(t);
         if (t.superseded_at) html += `<span style="font-size:9px;color:var(--text3)">Superseded ${esc(_fmtDate(t.superseded_at))}</span>`;
         html += '</div>';
         html += '<div style="font-size:12px;color:var(--text)">';
@@ -3921,7 +3922,12 @@ function _udTabLease() {
     const leaseSections = [
       { label: 'Tenant',            row: pick(l.tenant, em.tenant_name) },
       { label: 'Commencement',      row: pick(l.lease_start, em.lease_commencement, dateFmt) },
-      { label: 'Expiration',        row: pick(l.lease_expiration, em.lease_expiration, dateFmt) },
+      { label: 'Expiration',        row: (function() {
+        // RECON2-render-spa — label an expired-unconfirmed lease beside its date.
+        const base = pick(l.lease_expiration, em.lease_expiration, dateFmt);
+        const badge = _leaseExpStateBadge(l);
+        return (badge && base.html) ? { html: base.html + badge, est: base.est } : base;
+      })() },
       { label: 'Term Remaining',    row: termRow },
       { label: 'Year-1 rent + $/SF', row: year1RentRow },
       { label: 'Current rent + $/SF', row: currentRentRow },
@@ -4510,6 +4516,7 @@ function _udTabOperations() {
 
   // Lease Expiration KPI
   let leaseMonths = null;
+  let leaseExpStateLabel = null;   // RECON2-render-spa — label only, never re-picks
   if (lease.expiration_date) {
     const expDate = new Date(lease.expiration_date);
     const now = new Date();
@@ -4526,6 +4533,7 @@ function _udTabOperations() {
       }, null)
       || _udCache.leases[0];
     const primaryLease = activeLease;
+    leaseExpStateLabel = _leaseExpStateLabel(primaryLease);
     if (primaryLease.expiration_date || primaryLease.lease_expiration) {
       const expDate = new Date(primaryLease.expiration_date || primaryLease.lease_expiration);
       const now = new Date();
@@ -4537,7 +4545,8 @@ function _udTabOperations() {
     label: 'Lease Expiration',
     value: leaseMonths != null ? (leaseMonths > 0 ? leaseMonths + ' mo' : 'Expired') : 'N/A',
     color: leaseColor,
-    info: leaseMonths != null && leaseMonths < 24 ? 'Less than 24 months remaining' : ''
+    info: leaseExpStateLabel || (leaseMonths != null && leaseMonths < 24 ? 'Less than 24 months remaining' : ''),
+    ...(leaseExpStateLabel ? { trend: '<span class="lease-exp-unconfirmed" style="font-size:10px;color:#f59e0b;font-weight:600">' + esc(leaseExpStateLabel) + '</span>' } : {})
   });
 
   // Render KPI cards
@@ -12901,7 +12910,13 @@ function _udRenderLeaseSubDetail(l, db) {
   let html = '<div class="detail-section"><div class="detail-section-title">Lease Terms</div><div class="detail-grid">';
   html += _row('Tenant', l.tenant || l.tenant_name || em.tenant_name);
   html += _row('Commencement', _fmtDate(l.lease_start || l.lease_commencement || em.lease_commencement));
-  html += _row('Expiration', _fmtDate(l.lease_expiration || em.lease_expiration));
+  {
+    // RECON2-render-spa — only a cached `leases` row carries expiration_state
+    // (v_lease_detail does not), so this labels when it can and is inert otherwise.
+    const _expBadge = _leaseExpStateBadge(l);
+    if (_expBadge) html += _udLeaseRowH('Expiration', esc(_fmtDate(l.lease_expiration || em.lease_expiration)) + _expBadge);
+    else html += _row('Expiration', _fmtDate(l.lease_expiration || em.lease_expiration));
+  }
   if (l.term_remaining_years != null) {
     const n = Number(l.term_remaining_years);
     html += _udLeaseRowH('Term Remaining', n < 0 ? '<span style="color:var(--red)">Expired</span>' : esc(n.toFixed(1) + ' yrs remaining'));

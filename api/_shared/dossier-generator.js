@@ -442,6 +442,10 @@ function renderPropertySections(p) {
     kvRowHtml('Year-1 rent + $/SF', renderRentAndPsf(lease.annual_base_rent, lease.year1_rent_psf)),
     kvRowHtml('Current rent + $/SF', renderRentAndPsf(lease.current_base_rent, lease.current_rent_psf)),
     kvRow('Lease term', lease.lease_term || renderTermTag(lease)),
+    // RECON2-render-dossier — present ONLY for a dia lease at
+    // expiration_state='expired_unconfirmed' (entities-handler adds it), so every
+    // other state and every gov lease renders byte-for-byte as before.
+    lease.lease_expiration_state ? kvRow('Expiration status', lease.lease_expiration_state) : '',
     lease.term_remaining_years ? kvRow('Term remaining (years)', lease.term_remaining_years) : '',
     kvRow('Expense structure', lease.expense_structure),
     kvRowHtml('Expense-structure prose', renderExpenseStructureProse(lease)),
@@ -660,6 +664,7 @@ function renderDealSections(p) {
     kvRow('Operator / tenant', own.operator_tenant),
     kvRow('Year-1 base rent', lease.annual_base_rent, fmtMoney),
     kvRow('Lease term', renderTermTag(lease)),
+    lease.lease_expiration_state ? kvRow('Expiration status', lease.lease_expiration_state) : '',   // RECON2-render-dossier
   ].filter(Boolean)));
 
   // 2a. W7.4 — deterministic stage line + open-issues "what's coming" panel.
