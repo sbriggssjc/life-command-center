@@ -37,6 +37,7 @@ import { computeRoe, mergeTimeline } from '../_shared/roe.js';
 import { sf15, toSf18 } from '../_shared/sf-id.js';
 import { loadOrCreateStaticMap, loadOrCreateNearbyNationalTenants } from '../_shared/location-trade-area.js';
 import { buildReachableVia } from '../_shared/owner-reachable-via.js';
+import { planOwnerResolution, ownerCanonicalKey } from '../_shared/owner-entity-resolve.js';
 
 function pageMeta(page, perPage, totalCount) {
   const totalPages = Math.ceil((totalCount || 0) / perPage);
@@ -1698,6 +1699,46 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
       });
     }
 
+    // GOV-UX1 (SBN-25) — ONE owner resolver shared by the property panel's
+    // owner chip, "Work this owner", and openEntityDetailByName.
+    // GET /api/entities?action=resolve_owner&q=<display name>
+    //     [&entity_id=<uuid>][&source_system=dia|gov&external_id=<true_owner_id>]
+    // Ladder + rationale: api/_shared/owner-entity-resolve.js.
+    if (action === 'resolve_owner') {
+      const { entity_id: hintId, source_system: srcSys, external_id: extId } = req.query;
+      const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const key = ownerCanonicalKey(q);
+      const sel = 'id,name,entity_type,canonical_name,merged_into_entity_id';
+      const [identityRes, canonicalRes] = await Promise.all([
+        (srcSys === 'dia' || srcSys === 'gov') && extId
+          ? opsQuery('GET', `external_identities?workspace_id=eq.${workspaceId}&source_system=eq.${srcSys}` +
+              `&source_type=eq.true_owner&external_id=eq.${pgFilterVal(extId)}&select=entity_id&limit=10`)
+          : Promise.resolve({ data: [] }),
+        key
+          ? opsQuery('GET', `entities?workspace_id=eq.${workspaceId}&canonical_name=eq.${pgFilterVal(key)}&select=${sel}&limit=25`)
+          : Promise.resolve({ data: [] }),
+      ]);
+      const identityRows = identityRes.data || [];
+      const canonicalRows = canonicalRes.data || [];
+      // Fetch the merge chains of every id we might follow (max 5 rounds).
+      const entityRows = [];
+      const have = new Set(canonicalRows.map((r) => String(r.id)));
+      let want = new Set([hintId, ...identityRows.map((r) => r.entity_id), ...canonicalRows.map((r) => r.merged_into_entity_id)]
+        .filter((v) => v && uuidRe.test(String(v)) && !have.has(String(v))).map(String));
+      for (let round = 0; round < 5 && want.size; round++) {
+        const r = await opsQuery('GET', `entities?id=in.(${[...want].join(',')})&select=${sel}`);
+        const rows = r.data || [];
+        entityRows.push(...rows);
+        rows.forEach((x) => have.add(String(x.id)));
+        want = new Set(rows.map((x) => x.merged_into_entity_id).filter((v) => v && !have.has(String(v))).map(String));
+      }
+      const plan = planOwnerResolution({
+        entityId: hintId && uuidRe.test(String(hintId)) ? String(hintId) : null,
+        entityRows, identityRows, canonicalRows,
+      });
+      return res.status(200).json({ ...plan, canonical_key: key });
+    }
+
     // Search by name
     if (action === 'search' && q) {
       const searchTerm = q.replace(/[%_]/g, '').trim();
@@ -1705,7 +1746,12 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
         return res.status(400).json({ error: 'Search term must be at least 2 characters' });
       }
 
-      let path = `entities?workspace_id=eq.${workspaceId}&or=(name.ilike.*${encodeURIComponent(searchTerm)}*,canonical_name.ilike.*${encodeURIComponent(searchTerm.toLowerCase())}*)&select=id,entity_type,name,domain,city,state,email,phone,address,org_type,asset_type,external_identities(source_system,source_type,external_id)`;
+      // GOV-UX1: also match the canonical key exactly (so "X, LLC" finds "X"),
+      // and never return merged-away tombstones — a survivor and its own twin
+      // read as "Multiple entities found" for one real party.
+      const searchKey = ownerCanonicalKey(searchTerm);
+      const keyArm = searchKey ? `,canonical_name.eq.${encodeURIComponent('"' + searchKey + '"')}` : '';
+      let path = `entities?workspace_id=eq.${workspaceId}&merged_into_entity_id=is.null&or=(name.ilike.*${encodeURIComponent(searchTerm)}*,canonical_name.ilike.*${encodeURIComponent(searchTerm.toLowerCase())}*${keyArm})&select=id,entity_type,name,domain,city,state,email,phone,address,org_type,asset_type,canonical_name,external_identities(source_system,source_type,external_id)`;
       if (entity_type && isValidEnum(entity_type, ENTITY_TYPES)) {
         path += `&entity_type=eq.${entity_type}`;
       }
@@ -1717,7 +1763,10 @@ export const entitiesHandler = withErrorHandler(async function handler(req, res)
       // Search results — countMode='estimated' is fine for the surfaced count
       // and skips the second COUNT(*) trip.
       const result = await opsQuery('GET', path, undefined, { countMode: 'estimated' });
-      return res.status(200).json({ entities: result.data || [], count: result.count });
+      // Exact canonical matches first, so a caller taking [0] takes the right one.
+      const ents = (result.data || []).slice().sort((a, b) =>
+        (b.canonical_name === searchKey) - (a.canonical_name === searchKey));
+      return res.status(200).json({ entities: ents, count: result.count, canonical_key: searchKey });
     }
 
     // Lookup a single asset entity by address (+ optional city/state).

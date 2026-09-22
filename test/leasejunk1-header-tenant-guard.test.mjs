@@ -122,7 +122,7 @@ test('app readers of dia leases exclude quarantined rows', () => {
   assert.match(read('detail.js'),
     /diaQuery\('leases', '\*', \{ filter: `property_id=eq\.\$\{encodeURIComponent\(propId\)\}`, filter2: 'data_quality_flag=is\.null'/);
   const dia = read('dialysis.js');
-  assert.match(dia, /source_confidence,data_quality_flag\)\)/);
+  assert.match(dia, /source_confidence,data_quality_flag(,expiration_state)?\)\)/);
   assert.match(dia, /function pickCurrentLease\(leases\) \{\n  leases = dropQuarantinedLeases\(leases\);/);
 });
 

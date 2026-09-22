@@ -2158,9 +2158,15 @@ const ROUTE_SLUG_TO_PAGE = {
   'ops-health': 'pageOpsHealth',
   settings: 'pageSettings'
 };
-const ROUTE_PAGE_TO_SLUG = Object.fromEntries(
-  Object.entries(ROUTE_SLUG_TO_PAGE).map(([slug, pageId]) => [pageId, slug])
-);
+// GOV-UX1 (2026-09-22): FIRST slug wins. `Object.fromEntries` kept the LAST
+// entry, so pageBiz reverse-mapped to 'capmarkets' — and applyRoute's
+// capmarkets branch forces currentBizTab='dialysis'. Any detail opened on a
+// non-domain Business tab therefore wrote `#/capmarkets?d=…` and yanked the
+// background to Dialysis › Capital Markets. 'capmarkets' stays an INBOUND alias.
+const ROUTE_PAGE_TO_SLUG = Object.entries(ROUTE_SLUG_TO_PAGE).reduce((acc, [slug, pageId]) => {
+  if (!(pageId in acc)) acc[pageId] = slug;
+  return acc;
+}, {});
 // Legacy page aliases that redirect to a canonical page (mirror handlePageLoad).
 const ROUTE_PAGE_ALIAS = { pageMyWork: 'pagePipeline', pageTeamQueue: 'pagePipeline' };
 
@@ -2372,11 +2378,33 @@ function _routeSetPageHash(pageId) {
   _routePush('#/' + slug);
 }
 
+// The slug of the page the user is ACTUALLY looking at, read from the live DOM.
+//
+// GOV-UX1 (2026-09-22, SBN-24): this used to prefer the slug already in the
+// hash. The Business sub-tabs (Dialysis | Government | …) never wrote the hash,
+// so after `#/dia` → click "Government" the hash still said `dia`. Opening any
+// row then wrote `#/dia?d=prop:gov:…`, applyRoute saw pageDia was not the
+// active bnav and called navTo('pageDia') — the background jumped to
+// Dialysis › Overview behind the property panel. Opening a detail must never
+// move the background, so the writer reads the DOM, which cannot be stale.
+function _routeLivePageSlug() {
+  const ap = document.querySelector('.page.active');
+  if (!ap) return null;
+  if (ap.id === 'pageBiz') {
+    const biz = (typeof currentBizTab !== 'undefined') ? currentBizTab : null;
+    if (biz === 'government') return 'gov';
+    if (biz === 'dialysis') return 'dia';
+    return 'business';
+  }
+  return _routePageToSlug(ap.id);
+}
+
 function _routeCurrentPageSlug() {
+  const live = _routeLivePageSlug();
+  if (live) return live;
   const parsed = _routeParseHash(location.hash);
   if (parsed.page) return _routePageToSlug(parsed.page);
-  const ap = document.querySelector('.page.active');
-  return (ap && _routePageToSlug(ap.id)) || 'today';
+  return 'today';
 }
 
 function _routeSetDetailHash(detail, opts) {
@@ -2416,7 +2444,9 @@ function _routeClearDetailHash() {
   _routeCurrentDetail = null;
   const parsed = _routeParseHash(location.hash);
   if (!parsed.detail) return;          // nothing to clear
-  const slug = (parsed.page && _routePageToSlug(parsed.page)) || _routeCurrentPageSlug();
+  // GOV-UX1: the live page, never the (possibly stale) slug in the hash — a
+  // replace to a stale slug would mis-route the next Back/Forward.
+  const slug = _routeCurrentPageSlug();
   _routeReplace('#/' + (slug || 'today'));
 }
 
@@ -2581,6 +2611,9 @@ document.getElementById('bizSubTabs')?.addEventListener('click', (e) => {
   if (primaryNavMap[tabBiz]) {
     const navBtn = document.querySelector('.bnav[data-page="' + primaryNavMap[tabBiz] + '"]');
     if (navBtn) navBtn.classList.add('active');
+    // GOV-UX1 (SBN-24): keep the hash in step with the domain the user just
+    // chose. No-op while the router applies, and on an equal hash.
+    if (typeof _routeSetPageHash === 'function') _routeSetPageHash(primaryNavMap[tabBiz]);
   } else {
     // Other biz tabs (prospects, etc.) — highlight Business in More
     const moreItem = document.querySelector('.more-drawer-item[data-page="pageBiz"]');
