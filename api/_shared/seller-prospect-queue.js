@@ -132,3 +132,15 @@ export function buildPagination({ total, limit, offset }) {
     has_more: t == null ? null : off + lim < t,
   };
 }
+
+/**
+ * PERF-SPQ2 — which optional blocks the caller asked for. `include=chips,funnel`.
+ * Both default OFF: each is a full pass over v_lcc_seller_prospect_queue (the chip RPC)
+ * or its universe (the funnel), and the two high-traffic callers (Home's BD lane, the
+ * Priority tab) render neither. Unknown tokens are ignored; case and whitespace are not
+ * significant.
+ */
+export function parseSellerQueueInclude(raw) {
+  const tokens = new Set(String(raw || '').split(',').map((t) => t.trim().toLowerCase()).filter(Boolean));
+  return { chips: tokens.has('chips'), funnel: tokens.has('funnel') };
+}

@@ -50,6 +50,12 @@
 > `20261016120000_lcc_uxt1a_seller_prospect_queue.sql`; record
 > [`UX-T1a-queue.response.md`](../claude-code/responses/done/UX-T1a-queue.response.md); guard
 > `test/uxt1a-queue.test.mjs` (22 tests, 24/24 mutations RED).
+> **PERF-SPQ2 (2026-09-22):** `chips` and `funnel` are now **opt-in** on that route
+> (`include=chips,funnel`; a block not requested is `null`). Only the seller-prospect page asks,
+> for chips; Home's BD lane and the Priority tab read items + pagination only. The summary view
+> is **one pass** over the universe now (was 11 `UNION ALL` re-scans, 6.6 s → 0.8 s, 0-row diff);
+> its `queue` bucket restates the queue view's WHERE inline, and
+> `test/perf-spq2-seller-queue-boot.test.mjs` fails if the two drift.
 > **`value_unknown`, `term_unknown`, `no_linked_person` and `reason_to_sell_unmeasured` are
 > STATES, never 0 / false / "none".** `reason_to_sell` carries only the two RECORDED arms (debt,
 > developer): **UX-T1a-regex stays refused** — the audit's own trust/estate regex measured 42%

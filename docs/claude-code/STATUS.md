@@ -53,6 +53,20 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-22 — `PERF-SPQ2` (CC): the cold-boot cost was the funnel summary, not the queue view — single-pass rewrite (live) + chips/funnel opt-in (needs deploy)
+
+**Measured first (LCC Opps, one session, idle).** One pass of `v_lcc_seller_prospect_queue` ≈ 0.85 s. **`v_lcc_seller_prospect_queue_summary` 6,567 ms**: 11 `UNION ALL` branches, each re-running `v_lcc_seller_prospect_universe`. `pg_stat_statements` over real traffic agrees: summary mean **7,281 ms / max 28,334 ms** (523 calls), exact-count probes ~8 s mean, items page 3.2 s, chip RPC 1.0 s. A cold Home boot's passes: `today_sections` = items(200) + exact count (2); Home's BD lane `/api/seller-prospect-queue?limit=5` = items + `count=exact` (2) + chip RPC (1) + summary (~12). **≈17 view passes, ~10.7 s of idle DB work fired in one burst.** Under contention that is the 16–20 s request round 37/45 saw. The priority-queue lane on Home is this same BD route (`/api/priority-queue` reads the materialized `lcc_priority_queue_resolved`, not this view).
+
+**Neither the funnel nor the chips are rendered on Home.** No renderer reads `funnel` anywhere (grep). Chips are drawn only by the seller-prospect page. Home's BD lane and the Priority tab read `items` + `pagination` only.
+
+**Fix (chosen from the measurement, not options a/b/c):**
+1. `20261102230000_lcc_perf_spq2_seller_summary_single_pass.sql`, **applied live.** Summary is one pass with `count(*) FILTER`: **6,567 → 815 ms**, `EXCEPT ALL` diff **0 rows both directions**, same 11 buckets/columns. Live read after apply: 849 ms, queue bucket 506 = the queue view's 506.
+2. `/api/seller-prospect-queue`: chips + funnel are **opt-in** (`include=chips,funnel`; not requested ⇒ `null`, never `[]`/0). The seller page sends `include=chips`. The BD lane and Priority tab URLs are unchanged, so they stop paying for both. Cache-buster set bumped `2026091805 → 2026092201`.
+
+**Result, idle DB work per cold boot: ~10.7 s → ~5.0 s now (migration live) → ~3.3 s after the Railway redeploy (4 passes).** Guard: `test/perf-spq2-seller-queue-boot.test.mjs` (7 tests; dropping `include=chips` or forcing the RPC on both go RED). `npm test` **6,800 pass / 0 fail**.
+
+**Not done, stated:** no cold-load browser measurement yet. The JS half is not live until Railway redeploys merged `main`, and the sandbox cannot drive a signed-in browser. **Verify after deploy:** a cold Home load, with `today_sections` and the BD lane both completing well inside 12 s, and Today painting without Retry. Options (a) materialize and (b) `home_boot` were **not built**. Both would still remove the remaining 4 passes. (a) is more work and adds up to a 5-min staleness on `reach_state` (a touched owner stays on the card until the next refresh), and the priority-queue cache already has that model. Recommendation: do the post-deploy measurement first, and only build (a) or (b) if Today still loses its race. Scott's call between them if so.
+
 ## 2026-09-22 — `SIDEBAR3-c` (CC): range guard now folds spelled-out directionals, and attaches when the merge ledger already holds the decision
 
 **Finding 1 fixed — and it was TWO gaps, not one.** `sameStreetRest()` now strips `north`/`south`/`east`/`west`/`northeast`/`northwest`/`southeast`/`southwest` as well as the abbreviations (`LEADING_DIRECTIONAL_RE`). ⚠️ **That alone would NOT have caught Scranton:** the candidate query feeding the guard used the first two raw words as an ilike hint (`*S Washington*`), which cannot match `920 South Washington Ave`, so `28547` was never even fetched. The hint is now `streetNameHint()` — the first street-name word with any directional removed (`washington`) — and the limit went 10 → 50 with a stable `order=property_id` (measured: `%washington%` in PA = 1 row, `%kirkman%` in FL = 1).
