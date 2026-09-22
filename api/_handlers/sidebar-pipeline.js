@@ -1760,9 +1760,49 @@ export function isListingDescriptionSentence(name) {
   return wordCount >= 7 && /\b(in|at|near|located)\b/i.test(n);
 }
 
+// LEASEJUNK1 (2026-09-22, property 29671 Tacoma): the extension's CoStar
+// Tenants-panel parse puts the panel's column headers, summary rows and
+// lease-type cell values into metadata.tenants[] next to the real tenants
+// ("Type", "Shopping Center", "Strip Center", "Avail. Spaces" — lease_id
+// 18398 was is_active=true). An OM promote merged into the same entity and
+// upsertDomainLeases wrote them as 'email_intake' leases. Exact match after
+// normalization, never a substring, so "Shopping Center Dialysis LLC" still
+// passes. This list is mirrored BYTE-FOR-BYTE by dia_is_om_table_header_tenant()
+// in supabase/migrations/dialysis/20261013090000_dia_leasejunk1_header_tenant_quarantine.sql
+// (the DB-side write guard); test/leasejunk1-header-tenant-guard.test.mjs
+// fails if the two drift. Edit both together.
+export const OM_TABLE_HEADER_TENANTS = Object.freeze([
+  // rent-roll / tenant-table column headers
+  'type', 'tenant', 'tenant name', 'tenants', 'suite', 'unit', 'sq ft', 'sq. ft', 'sf', 'rsf',
+  'size', 'rent', 'annual rent', 'monthly rent', 'base rent', 'rent/sf', 'rent psf', 'term',
+  'lease term', 'lease start', 'lease end', 'lease expiration', 'lease exp', 'commencement',
+  'expiration', 'notes', 'comments', 'options', 'renewal options', 'increases', 'escalations',
+  '% of gla', 'pro rata share', 'lease type', 'avail. spaces', 'avail spaces', 'available spaces',
+  // CoStar panel headers / summary rows / section labels
+  'shopping center', 'strip center', 'total avail', 'office/med avail', 'office/ret avail',
+  'retail avail', 'asking', 'anchor', 'anchors', 'sale highlights', 'sale broker',
+  'recorded owner', 'property contacts', 'store type', 'analytics', 'starting', 'financials',
+  'loan', 'about the architect', 'public transportation', 'commuter rail', 'services',
+  // lease-type cell values read as a tenant
+  'triple net', 'double net', 'absolute net', 'full service', 'modified gross', 'cam', 'nnn',
+]);
+const OM_TABLE_HEADER_TENANT_SET = new Set(OM_TABLE_HEADER_TENANTS);
+
+// Mirror of SQL dia_normalize_header_candidate(): trim, lower, collapse
+// whitespace, drop trailing ':' / '.'.
+export function normalizeHeaderCandidate(name) {
+  return String(name ?? '').trim().toLowerCase().replace(/\s+/g, ' ').replace(/[:.\s]+$/, '');
+}
+
+export function isOmTableHeaderTenant(name) {
+  if (name == null) return false;
+  return OM_TABLE_HEADER_TENANT_SET.has(normalizeHeaderCandidate(name));
+}
+
 export function isJunkTenant(name) {
   if (!name || name.trim().length < 3) return true;
   const n = name.trim();
+  if (isOmTableHeaderTenant(n)) return true;
   if (JUNK_TENANT_RE.test(n)) return true;
   if (STREET_NAME_RE.test(n)) return true;
   if (isListingDescriptionSentence(n)) return true;

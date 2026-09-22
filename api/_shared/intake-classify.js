@@ -358,6 +358,18 @@ export function firstOf(v) {
   return first == null ? null : first;
 }
 
+// firstOfWhere(v, reject) — firstOf, but skips elements the caller rejects
+// (LEASEJUNK1: an OM tenant_name array can lead with a rent-roll header such
+// as "Type"; taking element 0 wrote that header into leases.tenant). A scalar
+// that is rejected yields null — never the rejected value.
+export function firstOfWhere(v, reject) {
+  if (v == null) return v;
+  const arr = parseArrayShape(v);
+  const list = arr == null ? [v] : arr;
+  const hit = list.find((x) => x != null && String(x).trim() !== '' && !reject(x));
+  return hit == null ? null : hit;
+}
+
 export function joinedOf(v, sep = ', ') {
   if (v == null) return v;
   const arr = parseArrayShape(v);

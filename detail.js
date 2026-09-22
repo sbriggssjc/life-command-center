@@ -1450,7 +1450,8 @@ async function _udRenderOperationsAsync(bodyEl) {
       // Lease via property_id
       const propId = _udCache.ids?.property_id || _udCache.property?.property_id;
       if (propId) {
-        promises.push(diaQuery('leases', '*', { filter: `property_id=eq.${encodeURIComponent(propId)}`, limit: 5 }).catch(() => []));
+        // LEASEJUNK1: exclude quarantined rows (OM/CoStar table-header text as tenant).
+        promises.push(diaQuery('leases', '*', { filter: `property_id=eq.${encodeURIComponent(propId)}`, filter2: 'data_quality_flag=is.null', limit: 5 }).catch(() => []));
       } else {
         promises.push(Promise.resolve([]));
       }

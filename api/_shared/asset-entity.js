@@ -83,8 +83,11 @@ async function readDomainPacket(longDomain, propertyId, deps) {
   const [property] = await safe(
     `properties?property_id=eq.${pid}&limit=1`);
 
+  // LEASEJUNK1: dia carries leases.data_quality_flag (quarantined header-text
+  // tenants); gov's leases has no such column, so the filter is dia-only.
+  const leaseQuarantine = longDomain === 'dialysis' ? '&data_quality_flag=is.null' : '';
   const leases = await safe(
-    `leases?property_id=eq.${pid}&order=lease_id.desc&limit=25`);
+    `leases?property_id=eq.${pid}${leaseQuarantine}&order=lease_id.desc&limit=25`);
   const sales = await safe(
     `sales_transactions?property_id=eq.${pid}&order=sale_date.desc&limit=25`);
   const contacts = await safe(
