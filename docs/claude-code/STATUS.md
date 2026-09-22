@@ -53,6 +53,46 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-22 — Round 52 (Cowork): `LOG5` fixed live and closed — `lcc_refresh_available_listings()` guarded against `v_available_listings` no longer being a materialized view
+
+**Scott: "This PR is merged. Let's proceed with your next recommended step or the next item on our to do list."** Picked up round 51's cataloged `LOG3`–`LOG9`. `LOG5` (gov `intake-promoter`'s post-promote dashboard refresh silently failing every call) was diagnosed precisely enough and low-risk enough to fix directly rather than just leave cataloged.
+
+**Confirmed live before touching anything**: queried the government Supabase project directly — `v_available_listings` is `relkind='v'` (plain view), and `lcc_refresh_available_listings()`'s live definition still unconditionally issues `REFRESH MATERIALIZED VIEW CONCURRENTLY public.v_available_listings` (with an `EXCEPTION` fallback that retries the same broken blocking form) — both fail identically with `42809` since the view stopped being materialized on 2026-05-29. Neither this function's original 2026-04-23 source nor a fix was ever committed anywhere: it's untracked drift, exactly the class of incident `government-lease`'s own `CLAUDE.md` (ID3a-c) exists to prevent.
+
+**Found the fix pattern already proven in production**: `v_sales_comps`, converted from materialized to plain the same day as `v_available_listings`, hit the identical bug in a *different* function (`lcc_data_hygiene_sweep()`'s nightly matview step) and was fixed 2026-06-01 by guarding on `pg_class.relkind = 'm'` before refreshing — also never committed anywhere. Applied that same guard to `lcc_refresh_available_listings()`.
+
+**⚠️ Important standing-instruction correction surfaced by this work**: this session's Cowork global instructions still say "life-command-center owns Dialysis_DB/Government DB schema objects," but `government-lease`'s own `CLAUDE.md` and `docs/architecture/data-coherence-invariants.md` (I16) record that ownership was formally moved to `government-lease` on 2026-09-12 (Scott's decision, ID3a-d) after a real drift incident. `life-command-center/supabase/migrations/government/` is explicitly marked historical (`README.md`) and its own guard test (`test/gov-migrations-directory-retired.test.mjs`) enforces that nothing new is added there. This fix was written and committed into `government-lease`, correctly, per current doctrine — flagging so the global instructions can be updated to match.
+
+**Applied and verified**: `CREATE OR REPLACE FUNCTION` via Supabase MCP directly against the government project, then `select public.lcc_refresh_available_listings();` returned cleanly with no error (previously always raised). Committed as the first source-of-truth copy of this object in `government-lease`, branch `fix/log5-refresh-available-listings-matview-guard`, commit `eb31836` — **the live database fix is already in effect; only the source-code record still needs Scott's push+PR.**
+
+`LOG5` closed ✅ in `PLANNED-BACKLOG.md`. `LOG3`, `LOG4`, `LOG6`–`LOG9` remain open — `LOG3`/`LOG4` (sales/listings duplicate-key write noise) sit inside a much more intricate, carefully-tuned dedup-matching system in `sidebar-pipeline.js` (fuzzy price/date matching, a existing 409-recovery path for the *insert* branch that already turned out to check the wrong domain's constraint name) and were judged too risky to patch without a slower, more deliberate look rather than a same-session fix; recommend a dedicated round for those rather than folding them in here.
+
+Updated: `docs/os/PLANNED-BACKLOG.md` (`LOG5` closed), `government-lease/sql/20260922_gov_lcc_refresh_available_listings_matview_guard.sql` (new, committed there).
+
+**Push/PR commands for Scott:**
+
+```
+
+cd C:\Users\scott\GovernmentProject
+
+git push -u origin fix/log5-refresh-available-listings-matview-guard
+
+gh pr create --title "fix: guard lcc_refresh_available_listings() against v_available_listings being a plain view" --body "v_available_listings was converted from a materialized view to a plain view on 2026-05-29, but lcc_refresh_available_listings() never updated to match and has raised 42809 on every call since -- silently failing the gov dashboard's post-promote refresh on every OM promotion. Applies the same relkind-guard pattern already proven on v_sales_comps's 2026-06-01 sibling fix. Already applied live via Supabase MCP and verified (select public.lcc_refresh_available_listings() returns cleanly); this PR lands the first source-of-truth copy of the fix."
+
+```
+
+```
+
+cd C:\Users\scott\life-command-center
+
+git push -u origin docs/round52-log5-closed
+
+gh pr create --title "docs(round52): LOG5 closed -- lcc_refresh_available_listings() fixed live in government-lease" --body "Marks LOG5 closed in PLANNED-BACKLOG.md. The fix itself lives in government-lease (branch fix/log5-refresh-available-listings-matview-guard, commit eb31836) since gov DB schema objects are owned there per the 2026-09-12 ownership doctrine, not this repo. Also flags that this session's standing Cowork instructions are stale on that point and should be updated."
+
+```
+
+---
+
 ## 2026-09-22 — `HCRIS-TIMEOUT-9`'s response reconciled against round 47/48's parallel work: real fix, wrong pipeline — `HCRIS-TIMEOUT-10` (compare-before-write, already drafted by round 47) queued as the actual next step
 
 **Scott: "This PR is merged. The HCRIS timeout round 9 prompt is done and the response is saved in the folder. Review and update all documentation and plans accordingly."** The response is to *this session's own* `HCRIS-TIMEOUT-9` prompt (`HCRIS-TIMEOUT-9-wrong-function-hypothesis-and-dia-propagator1-merge.md`, delivered directly 2026-09-21 but never actually merged to `main` — that branch's push/PR instructions were apparently not run; only the earlier question-raising commit, `edd64714`, landed). Reviewing it surfaced that a **parallel Cowork session (round 47, same day) had already answered the question this prompt asked, more authoritatively, while this branch sat unmerged.**
