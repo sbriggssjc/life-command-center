@@ -10389,15 +10389,24 @@ export async function reconcilePropertyOwnership(domain, propertyId) {
   // estimate (e.g. an asking price captured while the property was still
   // listed, left standing after the sale closed at a different number). A
   // closed sale is the most authoritative value signal available — an
-  // actual transaction beats any prior estimate — so this now overwrites
-  // whenever:
-  //   (a) the estimate is empty (unchanged behavior), OR
-  //   (b) the estimate DISAGREES with the sale price AND the sale is not
-  //       demonstrably OLDER than whatever last touched the property row.
-  //       `properties` has no dedicated `value_estimate_updated_at` column,
-  //       so `updated_at` is the best proxy we have; when it's absent we do
-  //       NOT fall back to "field is empty" as the sole gate (that was the
-  //       bug) — we prefer the closed sale over an unstamped estimate.
+  // actual transaction beats any prior estimate — so this overwrites
+  // whenever the estimate disagrees with the sale price.
+  //
+  // RECON3-b fix (2026-09-22): the first attempt at (b) tried to gate the
+  // overwrite on `properties.updated_at` (a boolean derived from latestDate <
+  // updated_at`) so it wouldn't clobber a *newer* re-estimate. That is
+  // wrong: `updated_at` is a general last-modified stamp touched by every
+  // writer that ever saves the row (propagators, enrichment, sidebar
+  // sends) — it is NOT specific to when current_value_estimate was last
+  // set. Live-verified on property 27266 itself: a routine background
+  // write touched `updated_at` 13 days after the sale closed, so
+  // that boolean evaluated true and the guard silently refused to fix the
+  // exact property it was written for. There is no column that records
+  // when the estimate was actually calculated, so a closed sale is always
+  // preferred over a modeled estimate — unconditionally, per the RECON3-b
+  // writeup's recommended option (a). If a real
+  // `current_value_estimate_source` / `_updated_at` pair is ever added,
+  // this can go back to comparing against that instead of `updated_at`.
   //
   // TODO(RECON3 backlog): this only fixes the JS logic going forward — it
   // does NOT backfill existing stale current_value_estimate values already
@@ -10406,8 +10415,7 @@ export async function reconcilePropertyOwnership(domain, propertyId) {
   // (NOT applied live — see the migration header).
   if (latestPrice) {
     const priceDiffers = Number(prop.current_value_estimate) !== Number(latestPrice);
-    const saleIsOlder = !!(latestDate && prop.updated_at && new Date(latestDate) < new Date(prop.updated_at));
-    if (!prop.current_value_estimate || (priceDiffers && !saleIsOlder)) {
+    if (!prop.current_value_estimate || priceDiffers) {
       patch.current_value_estimate = latestPrice;
     }
   }
