@@ -25,6 +25,7 @@ import { generateDossier, recordDossier } from '../_shared/dossier-generator.js'
 import { projectRentAtDate } from '../_shared/rent-projection.js';
 import { deriveStageLine } from '../_shared/deal-stage-line.js';
 import { ensureAssetEntityForProperty } from '../_shared/asset-entity.js';
+import { leaseExpirationStateLabel } from '../../mcp/lease-expiration-state.js';
 import { ENTITY_TYPES, DOMAINS, isValidEnum } from '../_shared/lifecycle.js';
 import { normalizeAddress, stripListingStatusPrefix, canonicalIdentitySystem, CANONICAL_DOMAIN_SYSTEMS, canonicalDomainSourceType, canonicalEntityDomain, normalizeCanonicalName } from '../_shared/entity-link.js';
 import { writeListingCreatedSignal } from '../_shared/signals.js';
@@ -377,6 +378,18 @@ const _govSystems = ['gov', 'gov_db', 'gov_supabase', 'government'];
 function tag(v, source, extra = {}) {
   if (v == null || v === '') return undefined;
   return { v, ...(source ? { source } : {}), ...extra };
+}
+
+/**
+ * RECON2-render — add `lease_expiration_state` to a packet's tenancy_lease block
+ * ONLY when the live lease is 'expired_unconfirmed'. Mutates and returns the block.
+ */
+export function applyLeaseExpirationStateTag(tenancyLease, lease) {
+  const note = leaseExpirationStateLabel(lease);
+  if (note) {
+    tenancyLease.lease_expiration_state = tag(note, 'leases', { expiration_state: lease.expiration_state });
+  }
+  return tenancyLease;
 }
 
 function num(v) {
@@ -802,6 +815,11 @@ export async function buildPropertyPacket(entityId, workspaceId) {
     renewal_options: tag(lease && lease.renewal_options, 'leases'),
     option_bumps_continue: optionBumpsContinueTag(lease),
   };
+  // RECON2-render: the live-lease query is `select *`, so dia rows already carry
+  // expiration_state — name it explicitly for the one ambiguous state (past its
+  // own expiration, is_active still true, no renewal evidence). Every other
+  // state (and every gov lease, which has no such column) leaves the packet unchanged.
+  applyLeaseExpirationStateTag(tenancy_lease, lease);
   // Derived term remaining (years) — every input present.
   if (lease && lease.lease_expiration) {
     const exp = new Date(lease.lease_expiration);

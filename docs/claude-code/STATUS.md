@@ -53,6 +53,13 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-22 — `RECON2-render` (CC): `expiration_state='expired_unconfirmed'` is now labelled in all four named lease readers
+
+- One helper, `mcp/lease-expiration-state.js`: `"Expired <date> — renewal not on file (unconfirmed)"` for `expired_unconfirmed`, `null` for everything else. Wired into `hydrateSubjectFromRecord` (comps subject), `buildPropertyPacket` (`tenancy_lease.lease_expiration_state`), asset-entity `buildTenants`, and the provenance review-queue `dia.leases` label. Every other state's output is byte-identical (tested against the pre-RECON2 row shape). `is_active` untouched.
+- Measured: `expiration_state` exists on dia `leases` only (gov has no column). **2,447 active dia leases** are `expired_unconfirmed`. `wavg_lease_expiration` is NULL on all 11,841 dia properties, so the comps hydrate always takes the lease-row path that now carries the state.
+- Guard `test/recon2-render-expiration-state.test.mjs` (13 tests, mutation-checked). `npm test` 6,806 pass / 0 fail; boot check green.
+- **Next:** merge → Railway redeploy **and** MCP server redeploy (the comps path runs there). Two further human-facing sites filed, not touched: `RECON2-render-spa` (property panel — the surface that matters most) and `RECON2-render-dossier`.
+
 ## 2026-09-22 — `PERF-SPQ2` (CC): the cold-boot cost was the funnel summary, not the queue view — single-pass rewrite (live) + chips/funnel opt-in (needs deploy)
 
 **Measured first (LCC Opps, one session, idle).** One pass of `v_lcc_seller_prospect_queue` ≈ 0.85 s. **`v_lcc_seller_prospect_queue_summary` 6,567 ms**: 11 `UNION ALL` branches, each re-running `v_lcc_seller_prospect_universe`. `pg_stat_statements` over real traffic agrees: summary mean **7,281 ms / max 28,334 ms** (523 calls), exact-count probes ~8 s mean, items page 3.2 s, chip RPC 1.0 s. A cold Home boot's passes: `today_sections` = items(200) + exact count (2); Home's BD lane `/api/seller-prospect-queue?limit=5` = items + `count=exact` (2) + chip RPC (1) + summary (~12). **≈17 view passes, ~10.7 s of idle DB work fired in one burst.** Under contention that is the 16–20 s request round 37/45 saw. The priority-queue lane on Home is this same BD route (`/api/priority-queue` reads the materialized `lcc_priority_queue_resolved`, not this view).

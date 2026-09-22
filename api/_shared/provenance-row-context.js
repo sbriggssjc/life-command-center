@@ -26,6 +26,7 @@
 // ============================================================================
 
 import { domainQuery } from './domain-db.js';
+import { leaseExpirationStateLabel } from '../../mcp/lease-expiration-state.js';
 
 const DB_TO_DOMAIN = {
   dia_db: 'dialysis',
@@ -51,11 +52,14 @@ const TABLE_CONFIG = {
   },
   'dia.leases': {
     pk: 'lease_id',
-    cols: 'lease_id,property_id,tenant,lease_start,lease_expiration',
+    // RECON2-render: expiration_state exists on dia.leases (NOT gov.leases).
+    cols: 'lease_id,property_id,tenant,lease_start,lease_expiration,expiration_state',
     label: (r) => {
       const exp = r.lease_expiration ? String(r.lease_expiration).slice(0, 10) : null;
       const parts = [r.tenant || 'lease'];
-      if (exp) parts.push(`expires ${exp}`);
+      const note = leaseExpirationStateLabel(r);
+      if (note) parts.push(note);
+      else if (exp) parts.push(`expires ${exp}`);
       return parts.join(' · ');
     },
     propertyIdOf: (r) => r.property_id,
@@ -187,3 +191,6 @@ export async function enrichReviewQueueContext(rows) {
     r.record_context = { label, sub };
   }
 }
+
+// Test seam (RECON2-render): the per-table label builders.
+export const __test__ = { TABLE_CONFIG };
