@@ -399,7 +399,7 @@ async function loadDiaSalesCompsFromTxns() {
     'anchor_rent,anchor_rent_source,',
     'leases(lease_id,tenant,leased_area,lease_start,lease_expiration,',
     'expense_structure,rent_per_sf,annual_rent,rent,renewal_options,is_active,',
-    'status,data_source,source_confidence,data_quality_flag))',
+    'status,data_source,source_confidence,data_quality_flag,expiration_state))',
   ].join('');
 
   // Sales + brokers + cross-source fallbacks (ownership_history, deed_records,
@@ -954,6 +954,10 @@ function normalizeSalesTxnRow(r, lookups) {
     rent:              annualRent,
     rent_per_sf:       rentPsf,
     lease_expiration:  lease ? lease.lease_expiration : null,
+    // RECON2-render-spa — carries the lease's own state so the comps table can
+    // label an expired-unconfirmed lease. Labelling only; pickCurrentLease is
+    // untouched. Absent (undefined) for every other state.
+    ...(lease && lease.expiration_state === 'expired_unconfirmed' ? { expiration_state: lease.expiration_state } : {}),
     term_remaining_yrs: termYrs,
     expenses:          lease ? lease.expense_structure : null,
     bumps:             bumps,
@@ -10521,7 +10525,13 @@ async function renderDiaSales() {
     html += tdrX(fmtSF(r.rba), prov, 'rba');
     html += tdr(fmtMoney(r.rent));
     html += tdr(fmtPSF(r.rent_per_sf));
-    html += td(fmtDate(r.lease_expiration));
+    {
+      // RECON2-render-spa — label beside the date, else byte-identical td().
+      const _expBadge = _leaseExpStateBadge(r);
+      html += _expBadge
+        ? '<td style="padding: 8px; border-bottom: 1px solid var(--border); white-space: nowrap;">' + esc(fmtDate(r.lease_expiration) || '—') + _expBadge + '</td>'
+        : td(fmtDate(r.lease_expiration));
+    }
     html += tdr(fmtTerm(r.term_remaining_yrs));
     html += td(r.expenses);
     html += td(r.bumps, true);
