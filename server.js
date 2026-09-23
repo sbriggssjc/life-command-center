@@ -151,7 +151,7 @@ app.use(cors({
   allowedHeaders: [
     'Content-Type', 'Authorization', 'Prefer',
     'X-LCC-Key', 'X-LCC-User-Id', 'X-LCC-User-Email', 'X-LCC-Workspace',
-    'X-LCC-Request-Id'
+    'X-LCC-Request-Id', 'X-LCC-Client'
   ]
 }));
 

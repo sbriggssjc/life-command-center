@@ -183,6 +183,9 @@
     .property-source { font-size: 10px; color: var(--accent); margin-top: 4px; }
     .property-body { flex: 1; overflow-y: auto; }
     .property-actions { flex-shrink: 0; padding-top: 8px; }
+    /* SIDEBAR4-c: status/toasts render BELOW the buttons so nothing shifts under the cursor. */
+    .property-action-status { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+    .property-actions .btn { white-space: nowrap; }
     /* Persistent, always-available entry point to the SOS Research Worklist —
        survives property/org/worklist re-renders (lives outside those containers). */
     .property-tab-footer {
@@ -507,6 +510,7 @@
 
   <script src="lib/pdf.min.js"></script>
   <script src="shared/property-identity.js"></script>
+  <script src="shared/action-guard.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>

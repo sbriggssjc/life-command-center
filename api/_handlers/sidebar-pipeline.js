@@ -13339,6 +13339,7 @@ export async function processSidebarExtraction(entityId, workspaceId, userId, op
     run_id: randomUUID(),
     trigger: opts.trigger || 'unspecified',
     request_id: opts.requestId || null,
+    client: opts.client || null,
     requested_at: new Date().toISOString(),
   };
   const { promise, coalesced } = serializeSidebarRun(
