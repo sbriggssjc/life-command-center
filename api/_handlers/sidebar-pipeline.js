@@ -16,6 +16,7 @@
 //   - On-demand via POST /api/entities?action=process_sidebar_extraction
 // ============================================================================
 
+import { stripPrivateFinancialNames } from '../_shared/private-financial-names.js';
 import { randomUUID } from 'node:crypto';
 import { ensureEntityLink, normalizeCanonicalName, normalizeAddress, stripStreetSuffix, stripListingStatusPrefix, canonicalIdentitySystem, canonicalEntityDomain, isJunkEntityName, normalizeEmail, isGenericInboxEmail, looksLikeContactPhone, recordContactFieldWrites, hasFirmSuffix } from '../_shared/entity-link.js';
 import { isCompetitorBroker } from '../_shared/sf-nm-classifier.js';
@@ -65,6 +66,7 @@ import { looksLikeRawSalesforceId } from '../_shared/sf-account-name-resolver.js
 import { deriveGovernmentCreditTier } from '../_shared/gov-credit-tier.js';
 import { parseCivicNumberSpan, matchBrokerageOffice, captureTitleStreetMismatch } from '../_shared/intake-address-guard.js';
 import { loadBrokerageOfficeRegistry } from '../_shared/brokerage-office-registry.js';
+import { routeStreetsEquivalent } from '../_shared/route-address-equivalence.js';
 
 // ============================================================================
 // FIELD-LEVEL PROVENANCE RECORDER (Phase 2.2, 2026-04-25)
@@ -390,6 +392,90 @@ export function detectRangeAddressCollision(capturedAddress, candidateAddress) {
   return null;
 }
 
+// GOV-CLASSIFY1 (2026-09-23) — are two addresses the SAME building for an
+// existing-record lookup? Exact civic number (or identical range), then the
+// street: a numbered route compares by (system, number) so "Ca-139" ==
+// "State Highway 139"; anything else compares with the SIDEBAR3-c street rule
+// (suffix-normalized, a present-vs-absent leading directional tolerated in
+// either spelling). No fuzzy scoring — a caller must still require exactly one
+// candidate. City/state are the caller's filter, not this function's.
+export function addressesIdentityEquivalent(capturedAddress, candidateAddress, state) {
+  const a = parseCivicNumberSpan(String(stripListingStatusPrefix(capturedAddress || '')).split(',')[0]);
+  const b = parseCivicNumberSpan(String(candidateAddress || '').split(',')[0]);
+  if (!a || !b) return false;
+  if (a.lo !== b.lo || a.hi !== b.hi) return false;
+  const route = routeStreetsEquivalent(a.rest, b.rest, state);
+  if (route !== null) return route;
+  return sameStreetRest(normalizeAddress(a.rest), normalizeAddress(b.rest));
+}
+
+const EXISTING_MATCH_DOMAINS = ['dialysis', 'government'];
+
+/**
+ * GOV-CLASSIFY1 — existing-record-first domain evidence. Before any tenant
+ * text pattern, ask each domain DB whether this capture's address already IS a
+ * property there. A property already filed in gov is the strongest statement
+ * available about the capture's domain (Jellico 601 5th St = gov 16334,
+ * Tulelake 49870 State Highway 139 = gov 16268 — both failed no_domain).
+ *
+ * One query per domain: rows in the same state (and city, when known) whose
+ * address starts with the captured civic number, then addressesIdentityEquivalent
+ * on each. A domain counts only when EXACTLY ONE property matches; two or more
+ * is recorded as ambiguous and contributes nothing (never guess).
+ *
+ * Fails open: a query error means "no evidence", and the pattern classifier
+ * runs exactly as before.
+ */
+export async function findExistingDomainPropertiesForCapture(entity, metadata, deps = {}) {
+  const q = deps.domainQuery || domainQuery;
+  const creds = deps.getDomainCredentials || getDomainCredentials;
+  const out = { matches: [], ambiguous: [], checked: [] };
+  const rawAddress = entity?.address || metadata?.address;
+  const address = String(stripListingStatusPrefix(rawAddress || '')).split(',')[0].trim();
+  const state = String(entity?.state || metadata?.state || '').trim();
+  const city = String(entity?.city || metadata?.city || '').trim();
+  const span = parseCivicNumberSpan(address);
+  if (!span || !state) return out;
+  for (const domain of (deps.domains || EXISTING_MATCH_DOMAINS)) {
+    if (!creds(domain)) continue;
+    try {
+      let path = `properties?state=eq.${encodeURIComponent(state)}` +
+        `&address=ilike.${encodeURIComponent(String(span.lo) + '*')}` +
+        `&select=property_id,address,city,state&order=property_id.asc&limit=50`;
+      if (city) path += `&city=ilike.${encodeURIComponent(city)}`;
+      const res = await q(domain, 'GET', path);
+      out.checked.push(domain);
+      if (!res?.ok || !Array.isArray(res.data)) continue;
+      const hits = res.data.filter((row) => addressesIdentityEquivalent(address, row.address, state));
+      const ids = [...new Set(hits.map((r) => Number(r.property_id)))];
+      if (ids.length === 1) {
+        out.matches.push({ domain, property_id: ids[0], address: hits[0].address });
+      } else if (ids.length > 1) {
+        out.ambiguous.push({ domain, property_ids: ids });
+      }
+    } catch (err) {
+      console.warn(`[existing-record] ${domain} lookup failed (no evidence):`, err?.message || err);
+    }
+  }
+  return out;
+}
+
+/**
+ * GOV-CLASSIFY1 — combine existing-record evidence with the pattern
+ * classifier. An existing record WINS: when any domain already holds this
+ * property, the domain set is exactly the domains that hold it, and the
+ * primary is the pattern's pick if it is one of them, else the first match.
+ * With no existing record the pattern result stands unchanged. Pure.
+ */
+export function resolveDomainsWithExistingRecords(patternPrimary, patternAll, existing) {
+  const matched = (existing?.matches || []).map((m) => m.domain);
+  if (!matched.length) {
+    return { primary: patternPrimary || null, all: Array.isArray(patternAll) ? [...patternAll] : [], source: 'pattern' };
+  }
+  const primary = matched.includes(patternPrimary) ? patternPrimary : matched[0];
+  return { primary, all: [primary, ...matched.filter((d) => d !== primary)], source: 'existing_record' };
+}
+
 // SIDEBAR3-c (2026-09-22) — merge-ledger confirmation. When the range guard
 // would refuse a create because the captured address is a near-miss of an
 // existing property, check whether a HUMAN has already decided exactly this
@@ -713,6 +799,21 @@ export function lenderNameForGraphFinance(rawName) {
 // Short acronyms use \b boundaries; multi-word phrases use plain includes via
 // the longer string naturally preventing substring collisions.
 
+// GOV-CLASSIFY1: US state names + postal codes, lowercase, as a regex
+// alternation source (the searchText is lowercased before matching).
+const US_STATE_NAMES_AND_CODES_RE_SRC = [
+  'alabama','alaska','arizona','arkansas','california','colorado','connecticut','delaware',
+  'florida','georgia','hawaii','idaho','illinois','indiana','iowa','kansas','kentucky',
+  'louisiana','maine','maryland','massachusetts','michigan','minnesota','mississippi',
+  'missouri','montana','nebraska','nevada','new hampshire','new jersey','new mexico',
+  'new york','north carolina','north dakota','ohio','oklahoma','oregon','pennsylvania',
+  'rhode island','south carolina','south dakota','tennessee','texas','utah','vermont',
+  'virginia','washington','west virginia','wisconsin','wyoming',
+  'al','ak','az','ar','ca','co','ct','de','fl','ga','hi','id','il','in','ia','ks','ky','la',
+  'me','md','ma','mi','mn','ms','mo','mt','ne','nv','nh','nj','nm','ny','nc','nd','oh','ok',
+  'or','pa','ri','sc','sd','tn','tx','ut','vt','va','wa','wv','wi','wy',
+].join('|');
+
 export const GOV_TENANT_PATTERNS = [
   /\bgsa\b/,  /\bgeneral services administration\b/,  /\bveterans affairs\b/,
   /\bva\b/,   /\bsocial security\b/,  /\bssa\b/,  /\birs\b/,
@@ -825,6 +926,20 @@ export const GOV_TENANT_PATTERNS = [
   /\bpublic safety\b/,                            // Dept of Public Safety (state police), common across states
   /\bstate board\b/,                             // State Board of <profession> (licensing boards)
   /\bhistorical commission\b/,                    // (TX) Historical Commission
+  // ── GOV-CLASSIFY1 (2026-09-23) ──
+  // Federal land-management occupants. CoStar files a Forest Service district
+  // office as tenant "Us Ranger Station" (Tulelake CA, gov 16268), which none
+  // of the rows above match. "ranger" alone is not enough (Texas Rangers,
+  // Ranger Construction), so it needs station/district.
+  /\branger\s+(?:station|district)\b/,
+  /\bbureau of land management\b/,  /\bblm\b/,
+  /\busfws\b/,
+  /\bnational (?:park|wildlife refuge|grassland)s?\b/,
+  /\bnational archives\b/,             // NARA (Hoffman Estates IL, 30-day no_domain sweep)
+  // State DHS when a state is named next to it ("State of TN DHS", "TN DHS",
+  // "Tennessee DHS" — the Jellico OM title). Bare "dhs" is left out: the
+  // abbreviation alone is too short to trust in free text.
+  new RegExp('\\b(?:state|' + US_STATE_NAMES_AND_CODES_RE_SRC + ')\\s+(?:of\\s+\\w+\\s+)?dhs\\b'),
 ];
 
 // Max chars of a sales_history[].sale_notes_raw narrative scanned for the
@@ -1603,7 +1718,9 @@ function selectPrimaryTenant(metadata, domain) {
       || null;
   }
   const priorityRe = domain === 'government' ? GOV_TENANT_PRIORITY : MEDICAL_TENANT_PRIORITY;
-  const match = tenants.find(t => t.name && priorityRe.test(t.name));
+  // GOV-CU1: a credit union is never the gov PRIMARY tenant of a multi-tenant building.
+  const match = tenants.find(t => t.name && priorityRe.test(
+    domain === 'government' ? stripPrivateFinancialNames(t.name) : t.name));
   if (match) return match.name;
   // Fall back to first (largest by SF) tenant
   return tenants[0]?.name
@@ -1950,6 +2067,36 @@ function dropTenantJunk(val) {
   return val;
 }
 
+// GOV-CLASSIFY1 (2026-09-23): captured document TITLES are domain evidence.
+// The Jellico capture (saved from the Contacts tab, no tenant) carried
+// "OM_State of TN DHS - Jellico, TN" three times in metadata.document_links and
+// the classifier read none of it. Only OFFERING documents count (OM / flyer /
+// brochure, by type or by title): a site plan titled "City of Austin zoning
+// map" must not turn a private building into a government one.
+const OFFERING_DOC_TYPES = new Set(['om', 'offering_memorandum', 'flyer', 'brochure', 'marketing_brochure', 'marketing']);
+const OFFERING_DOC_TITLE_RE = /(^|[^a-z])(om|offering|flyer|brochure)([^a-z]|$)/i;
+export function classifierDocumentTitles(metadata) {
+  const out = [];
+  const seen = new Set();
+  for (const key of ['document_links', 'documents']) {
+    const arr = metadata && metadata[key];
+    if (!Array.isArray(arr)) continue;
+    for (const d of arr) {
+      if (!d || typeof d !== 'object') continue;
+      const title = String(d.label || d.title || d.name || '').trim();
+      if (!title) continue;
+      const type = String(d.type || d.document_type || '').trim().toLowerCase();
+      if (!OFFERING_DOC_TYPES.has(type) && !OFFERING_DOC_TITLE_RE.test(title)) continue;
+      const t = title.substring(0, 200);
+      if (seen.has(t.toLowerCase())) continue;
+      seen.add(t.toLowerCase());
+      out.push(t);
+      if (out.length >= 20) return out;
+    }
+  }
+  return out;
+}
+
 export function classifyDomain(metadata, entityFields) {
   const textParts = [
     dropTenantJunk(metadata.tenant_name),
@@ -2040,6 +2187,8 @@ export function classifyDomain(metadata, entityFields) {
     }
   }
 
+  for (const t of classifierDocumentTitles(metadata)) textParts.push(t);
+
   const searchText = textParts.filter(Boolean).join(' ').toLowerCase();
 
   // ── Diagnostic: log classifier inputs for debugging ──
@@ -2062,8 +2211,11 @@ export function classifyDomain(metadata, entityFields) {
     console.log(`[classifyDomain] → government (asset_type=government_leased)`);
     return 'government';
   }
+  // GOV-CU1: a private federally-chartered lender ("Navy Federal Credit Union") is not a
+  // government tenant — strip its name before the gov patterns read the word "federal".
+  const govSearchText = stripPrivateFinancialNames(searchText);
   for (const rx of GOV_TENANT_PATTERNS) {
-    if (rx.test(searchText)) {
+    if (rx.test(govSearchText)) {
       console.log(`[classifyDomain] → government (matched ${rx})`);
       return 'government';
     }
@@ -2134,6 +2286,7 @@ function classifyAllApplicableDomains(metadata, entityFields) {
       if (ev?.sale_notes_raw) textParts.push(String(ev.sale_notes_raw).substring(0, SALE_NOTES_CLASSIFY_MAXLEN));
     }
   }
+  for (const t of classifierDocumentTitles(metadata)) textParts.push(t);
   const searchText = textParts.filter(Boolean).join(' ').toLowerCase();
 
   // Dialysis first (more specific) — same priority as classifyDomain.
@@ -2141,7 +2294,7 @@ function classifyAllApplicableDomains(metadata, entityFields) {
   // Government — either explicit asset_type tag OR keyword match.
   if (entityFields.asset_type === 'government_leased') {
     if (!all.includes('government')) all.push('government');
-  } else if (GOV_TENANT_PATTERNS.some((rx) => rx.test(searchText))) {
+  } else if (GOV_TENANT_PATTERNS.some((rx) => rx.test(stripPrivateFinancialNames(searchText)))) { // GOV-CU1
     if (!all.includes('government')) all.push('government');
   }
   return all;
@@ -2160,7 +2313,8 @@ function classifyAllApplicableDomains(metadata, entityFields) {
 function isTenantForDomain(tenantName, domain) {
   if (!tenantName || typeof tenantName !== 'string') return false;
   const name = tenantName.toLowerCase();
-  const isGov = GOV_TENANT_PATTERNS.some((rx) => rx.test(name));
+  const govName = stripPrivateFinancialNames(name); // GOV-CU1
+  const isGov = GOV_TENANT_PATTERNS.some((rx) => rx.test(govName));
   const isDia = DIALYSIS_TENANT_PATTERNS.some((rx) => rx.test(name));
   if (domain === 'government') return isGov;
   if (domain === 'dialysis') return !(isGov && !isDia);
@@ -2195,8 +2349,9 @@ function detectDomainMismatch(domain, metadata, entityFields) {
 
   // domain='dialysis' but primary tenant is government → likely misroute
   if (domain === 'dialysis') {
+    const govPrimaryText = stripPrivateFinancialNames(primaryText); // GOV-CU1
     for (const rx of GOV_TENANT_PATTERNS) {
-      if (rx.test(primaryText)) {
+      if (rx.test(govPrimaryText)) {
         // Suppress when the dialysis signal is ALSO in the primary tenant
         // (hybrid like "DaVita Dialysis | VA Clinic"). Only warn when no
         // dialysis pattern matches the primary slot — that's the "pure
@@ -2268,13 +2423,14 @@ function classifyDomainWithDiag(metadata, entityFields) {
   if (Array.isArray(metadata.tenants)) for (const t of metadata.tenants) { if (t.name) textParts.push(t.name); }
   if (Array.isArray(metadata.contacts)) for (const c of metadata.contacts) { if (c.name) textParts.push(c.name); }
   if (Array.isArray(metadata.pdf_extracted_texts)) for (const pdf of metadata.pdf_extracted_texts) { if (pdf.text) textParts.push(pdf.text.substring(0, 500)); }
+  for (const t of classifierDocumentTitles(metadata)) textParts.push(t);
   const searchText = textParts.filter(Boolean).join(' ').toLowerCase();
 
   // Find which pattern matched
   let matchedPattern = null;
   for (const rx of DIALYSIS_TENANT_PATTERNS) { if (rx.test(searchText)) { matchedPattern = `DIA:${rx}`; break; } }
   if (!matchedPattern && entityFields.asset_type === 'government_leased') matchedPattern = 'asset_type=government_leased';
-  if (!matchedPattern) { for (const rx of GOV_TENANT_PATTERNS) { if (rx.test(searchText)) { matchedPattern = `GOV:${rx}`; break; } } }
+  if (!matchedPattern) { const govSearchText = stripPrivateFinancialNames(searchText); for (const rx of GOV_TENANT_PATTERNS) { if (rx.test(govSearchText)) { matchedPattern = `GOV:${rx}`; break; } } } // GOV-CU1
 
   // Round 76cr-Phase 2: detect and log primary-tenant/domain mismatches.
   // Surfaced into the response via _lastClassifierDiag.mismatchWarning so
@@ -3045,8 +3201,26 @@ async function writeExtractionSignal(propertyEntityId, metadata, domain, userId,
 
 // ── Step 4: Domain classification + update ──────────────────────────────────
 
-async function classifyAndUpdateDomain(entity, metadata, workspaceId) {
-  const classified = classifyDomainWithDiag(metadata, entity);
+async function classifyAndUpdateDomain(entity, metadata, workspaceId, opts = {}) {
+  const patternClassified = classifyDomainWithDiag(metadata, entity);
+  // GOV-CLASSIFY1 — an existing dia/gov property at this address decides the
+  // domain before any text pattern does (see findExistingDomainPropertiesForCapture).
+  const existing = opts.existing || { matches: [], ambiguous: [], checked: [] };
+  const resolved = resolveDomainsWithExistingRecords(patternClassified, [], existing);
+  const classified = resolved.primary;
+  if (_lastClassifierDiag) {
+    _lastClassifierDiag.existingRecord = {
+      source: resolved.source,
+      matches: existing.matches,
+      ambiguous: existing.ambiguous,
+      checked: existing.checked,
+      pattern_result: patternClassified || null,
+    };
+    if (resolved.source === 'existing_record') {
+      _lastClassifierDiag.result = classified;
+      _lastClassifierDiag.matchedPattern = `EXISTING:${existing.matches.map((m) => `${m.domain}#${m.property_id}`).join(',')}`;
+    }
+  }
 
   if (classified) {
     // Positive keyword match — update if it changed. entities.domain is
@@ -5092,6 +5266,35 @@ export async function upsertDomainProperty(domain, entity, metadata) {
     }
   }
 
+  // GOV-CLASSIFY1 (2026-09-23) — equivalence fallback. Every lookup above
+  // compares one spelling; "49870 State Highway 139" (CoStar) and gov 16268's
+  // "49870 Ca-139" are the same road and would otherwise mint a twin here.
+  // Same exact-civic-number, unique-candidate rule as the classifier's
+  // existing-record check; the stored address is kept (see the PATCH below).
+  let attachedViaEquivalence = null;
+  if (!lookup.data?.length && entity.state) {
+    const eq = await findExistingDomainPropertiesForCapture(entity, metadata, { domains: [domain] })
+      .catch(() => ({ matches: [], ambiguous: [] }));
+    const hit = eq.matches.find((m) => m.domain === domain);
+    if (hit) {
+      console.log(`[upsertDomainProperty] Address-equivalence fallback matched "${address}" -> property_id=${hit.property_id} ("${hit.address}") (${domain})`);
+      lookup = { ok: true, data: [{ property_id: hit.property_id, [sizeCol]: null }] };
+      attachedViaEquivalence = hit;
+    } else if (eq.ambiguous.some((a) => a.domain === domain)) {
+      const amb = eq.ambiguous.find((a) => a.domain === domain);
+      _lastDomainPropertyError = {
+        status: 'ambiguous_property_match',
+        reason: 'address_equivalence_ambiguous',
+        message: `Address "${address}" is equivalent to ${amb.property_ids.length} existing properties; refusing to create a duplicate.`,
+        domain,
+        address,
+        candidates: amb.property_ids.map((id) => ({ property_id: id })),
+      };
+      console.warn(`[upsertDomainProperty] Address-equivalence ambiguous for "${address}" (${amb.property_ids.join(',')}) — refusing create (${domain}).`);
+      return null;
+    }
+  }
+
   // SIDEBAR2-b (2026-09-18) — before falling through to CREATE a new
   // property, check for a near-miss range/civic-number twin on the SAME
   // street/city/state (see detectRangeAddressCollision above + the doc
@@ -5447,7 +5650,7 @@ export async function upsertDomainProperty(domain, entity, metadata) {
     // SIDEBAR3-c: a merge-ledger attach lands a RANGE capture on the kept
     // property whose own address was the human-chosen canonical one; never
     // let this PATCH overwrite it back to the range the merge retired.
-    if (attachedViaMergeLedger) {
+    if (attachedViaMergeLedger || attachedViaEquivalence) {
       delete propertyData.address;
       delete propertyData.normalized_address;
     }
@@ -13413,8 +13616,15 @@ async function _processSidebarExtractionOnce(entityId, workspaceId, userId, opts
   // entity.domain column / single-domain consumers; classifyAll-
   // ApplicableDomains returns the full set so multi-domain captures
   // (Centralia: dialysis + government) propagate to both DBs.
-  const domain = await classifyAndUpdateDomain(entity, metadata, workspaceId);
-  const allDomains = classifyAllApplicableDomains(metadata, entity);
+  // GOV-CLASSIFY1: existing-record-first. When a domain DB already holds this
+  // address, the domains that hold it ARE the domain set (a pattern hit for a
+  // domain with no record does not add it); otherwise the pattern set stands.
+  const existingRecords = await findExistingDomainPropertiesForCapture(entity, metadata)
+    .catch(() => ({ matches: [], ambiguous: [], checked: [] }));
+  const domain = await classifyAndUpdateDomain(entity, metadata, workspaceId, { existing: existingRecords });
+  const allDomains = resolveDomainsWithExistingRecords(
+    domain, classifyAllApplicableDomains(metadata, entity), existingRecords,
+  ).all;
   // Belt-and-suspenders: if the primary classifier picked something
   // (preserve-existing path), make sure it's in the list too.
   if (domain && !allDomains.includes(domain)) allDomains.unshift(domain);

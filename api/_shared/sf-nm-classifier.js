@@ -34,6 +34,8 @@
 // docs/architecture/salesforce_nm_authoritative_sync.md for the dry-run numbers.
 // ============================================================================
 
+import { stripPrivateFinancialNames } from './private-financial-names.js';
+
 // ── 1. DIALYSIS operator dictionary ─────────────────────────────────────────
 // Canonical operator → match patterns (lowercased substring/regex, tested
 // against each split tenant token). DaVita rolls up Total Renal Care + Renal
@@ -258,7 +260,8 @@ export function classifyVertical(deal) {
     || signals.includes('deal_name:dialysis');
 
   // ── gov signals ──
-  const govHay = `${d.tenant || ''} ${d.deal_name || ''} ${d.seller_company || ''}`.toLowerCase();
+  // GOV-CU1: strip private federally-chartered lender names before the agency patterns run.
+  const govHay = stripPrivateFinancialNames(`${d.tenant || ''} ${d.deal_name || ''} ${d.seller_company || ''}`.toLowerCase());
   let gov = false;
   if (truthyFlag(d.is_government)) { signals.push('flag:is_government'); gov = true; }
   if (GOV_AGENCY_PATTERNS.some((p) => p.test(govHay))) { signals.push('tenant_agency'); gov = true; }
@@ -266,7 +269,7 @@ export function classifyVertical(deal) {
     signals.push('lease_number:gov'); gov = true;
   }
   if (d.gov_property_id) { signals.push('linked:gov_property_id'); gov = true; }
-  if (/\bgsa\b|\bfederal\b|\bgovernment\b/.test(useLc)) { signals.push('property_use:gov'); gov = true; }
+  if (/\bgsa\b|\bfederal\b|\bgovernment\b/.test(stripPrivateFinancialNames(useLc))) { signals.push('property_use:gov'); gov = true; }
 
   // ── resolve ──
   // Inclusive-dia rule: a real dialysis-operator tenant wins even when a gov

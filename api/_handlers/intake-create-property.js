@@ -32,6 +32,7 @@ import { upsertDomainProperty } from './sidebar-pipeline.js';
 import { normalizeState } from '../_shared/entity-link.js';
 import { splitMultiAddress } from '../_shared/normalize-street-address.js';
 import { firstOf } from '../_shared/intake-classify.js';
+import { isOnlyPrivateFinancialName } from '../_shared/private-financial-names.js';
 
 // Modest confidence: AI-extracted from an OM, no county-records confirmation.
 const OM_CREATE_CONFIDENCE = 0.6;
@@ -40,7 +41,15 @@ const OM_CREATE_CONFIDENCE = 0.6;
 // the domain. Before this, a dia OM whose tenant the model returned as null fell
 // through to 'government' — the same default that put the Findlay dialysis OM
 // on the gov Available list.
+//
+// GOV-CU1 (2026-09-23): a tenant that is ONLY a private federally-chartered lender
+// ("Navy Federal Credit Union", "Third Federal Savings & Loan") returns null — no dia/gov
+// vertical exists for a bank-branch net lease, and the old non-dialysis → 'government'
+// default is how 16 credit-union OMs became Federal gov properties. Checked BEFORE the
+// seed vertical: a credit union filed in a gov folder is a misfiling, not a gov tenant.
+// NCUA / Farm Credit Administration are agencies and are not matched.
 export function pickDomainForTenant(tenant, seedData = null) {
+  if (tenant && isOnlyPrivateFinancialName(tenant)) return null;
   const vertical = seedVerticalDomain(seedData);
   if (vertical) return vertical;
   return tenant && DIALYSIS_KEYWORDS.test(tenant) ? 'dialysis' : 'government';
@@ -162,6 +171,12 @@ export async function createPropertyFromIntake(intakeId, ctx = {}) {
   for (const pair of pairs) {
     const tenant = pair.tenant || firstOf(snapshot.tenant_name) || null;
     const domain = pickDomainForTenant(tenant, seedData);
+    if (!domain) {
+      // GOV-CU1: never mint a dia/gov property for a private-lender tenant.
+      out.created.push({ address: pair.address, domain: null, ok: false,
+        skipped: 'private_financial_tenant', tenant });
+      continue;
+    }
     const entity = {
       address: pair.address,
       city:    snapshot.city || null,
