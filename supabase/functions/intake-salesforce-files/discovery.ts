@@ -323,3 +323,22 @@ export function fileContentDecision(args: {
   }
   return { verdict: "ok" };
 }
+
+// ── INTAKE-RESTAGE1: ?action=requeue decision ───────────────────────────────
+// A stored file can be re-run through the stage-om pipeline by flipping its
+// sf_files row back to extraction_status='queued' (the stage-queued cron then
+// picks it up). Only a row whose bytes are in the bucket is re-queueable, and a
+// row already queued is a no-op (never reset a row a tick may be draining).
+export type RequeueVerdict = "requeue" | "already_queued" | "not_stored";
+
+export function requeueDecision(row: {
+  ingestion_status?: unknown;
+  extraction_status?: unknown;
+  storage_path?: unknown;
+}): { verdict: RequeueVerdict } {
+  if (String(row.ingestion_status ?? "") !== "stored" || !String(row.storage_path ?? "")) {
+    return { verdict: "not_stored" };
+  }
+  if (String(row.extraction_status ?? "") === "queued") return { verdict: "already_queued" };
+  return { verdict: "requeue" };
+}

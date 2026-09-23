@@ -31,6 +31,11 @@
 //                                LCC's /api/intake/stage-om pipeline (real OM extraction +
 //                                property matching). Marks rows extraction_status:"extracted"
 //                                with intake_id in process_notes.
+//   POST ?action=requeue       — INTAKE-RESTAGE1: re-run one STORED file through
+//                                stage-om (sets extraction_status:"queued"; the
+//                                sf-files-stage-queued-15m cron drains it, or pass
+//                                stage_now:true to drain this vertical immediately).
+//                                The re-stage reuses the file's existing inbox card.
 //   POST ?action=discover      — RETIRED (410). Connected-App sweep; use the PA-collector
 //                                worklist + discover-webhook above.
 //   POST ?action=fetch         — RETIRED (410). Connected-App byte mover; use file-content.
@@ -44,10 +49,10 @@ import {
   WORKLIST_OBJECTS, DEFAULT_WORKLIST_STALE_DAYS, staleCutoffIso, makeWorklistItem,
   mapDiscoveredFileToRow, filterNewVersions, fileContentDecision,
   sanitizeSfId, chunk, traversalColumnForType, normalizeVertical,
-  CDL_ID_CHUNK, type WorklistItem, type DiscoverWebhookFile,
+  CDL_ID_CHUNK, requeueDecision, type WorklistItem, type DiscoverWebhookFile,
 } from "./discovery.ts";
 
-const PAYLOAD_VERSION = "sf-files-2026-07-v7";
+const PAYLOAD_VERSION = "sf-files-2026-09-v8";
 const BUCKET = "salesforce-files";
 const MAX_INLINE_BYTES = 6 * 1024 * 1024;
 // W3.7c ?action=file-content byte cap. OMs are ~6-9MB; the stage-queued drain
@@ -179,7 +184,7 @@ Deno.serve(async (req: Request) => {
       transport: "power-automate-only (Connected-App path retired W3.7c)",
       actions: [
         "discovery-worklist (GET)", "discover-webhook", "file-content",
-        "manifest", "upload-url", "bytes", "retry-files", "stage-queued",
+        "manifest", "upload-url", "bytes", "retry-files", "stage-queued", "requeue",
       ],
       retired: ["discover", "fetch"],
     });
@@ -203,6 +208,7 @@ Deno.serve(async (req: Request) => {
     if (action === "bytes") return await handleBytes(req, body);
     if (action === "retry-files") return await handleRetryFiles(req, body);
     if (action === "stage-queued") return await handleStageQueued(req, body);
+    if (action === "requeue") return await handleRequeue(req, body);
     // W3.7c: the Connected-App sweep + byte mover are retired — the org can't
     // provision a Connected App, so these can never work. Answer 410 with the
     // PA-collector replacement rather than a silent no-op.
@@ -402,6 +408,9 @@ async function handleRetryFiles(req: Request, body: Record<string, unknown> | nu
   const b = body || {};
   const limit = Math.min(Number(b.limit) || 50, 200);
   const verticals: Vertical[] = b.vertical ? [String(b.vertical) as Vertical] : ["dia", "gov"];
+  // INTAKE-RESTAGE1: ?action=requeue&stage_now drains exactly the requeued row.
+  const onlyFileId = Number(b.file_id);
+  const fileFilter = Number.isInteger(onlyFileId) && onlyFileId > 0 ? `&file_id=eq.${onlyFileId}` : "";
   const toFetch: Record<string, unknown>[] = [];
   const report: Record<string, number> = {};
   for (const vertical of verticals) {
@@ -675,6 +684,71 @@ async function handleFileContent(req: Request, body: Record<string, unknown> | n
   });
 }
 
+// ── POST ?action=requeue ────────────────────────────────────────────────────
+// INTAKE-RESTAGE1 — the supported way to re-run an already-extracted Salesforce
+// file (no SQL). Resolves the row by content_version_id (or file_id + vertical),
+// flips it to extraction_status='queued', and optionally drains immediately.
+// LCC's stageOmIntake reuses the file's existing inbox card (same sha256) and
+// re-runs extraction + matching with forceReextract.
+//
+// body: { content_version_id? | (file_id + vertical), vertical?, reason?, stage_now? }
+async function handleRequeue(req: Request, body: Record<string, unknown> | null): Promise<Response> {
+  const b = body || {};
+  const cvid = b.content_version_id ? sanitizeSfId(b.content_version_id) : null;
+  const fileId = Number(b.file_id);
+  const hint = normalizeVertical(b.vertical);
+  if (!cvid && !(Number.isInteger(fileId) && fileId > 0 && hint)) {
+    return errorResponse(req, "Provide content_version_id (valid SF id), or file_id + vertical", 400);
+  }
+  const filter = cvid
+    ? `content_version_id=eq.${encodeURIComponent(cvid)}`
+    : `file_id=eq.${fileId}`;
+  const tryVerticals: Vertical[] = hint ? [hint] : ["gov", "dia"];
+  let vertical: Vertical | null = null;
+  let row: Record<string, unknown> | null = null;
+  for (const v of tryVerticals) {
+    const lookup = await dbFetch(v, "GET",
+      `sf_files?${filter}&source_system=eq.salesforce` +
+      `&select=file_id,content_version_id,file_name,ingestion_status,extraction_status,storage_path,process_notes&limit=1`);
+    const rows = Array.isArray(lookup.data) ? lookup.data as Record<string, unknown>[] : [];
+    if (rows.length) { vertical = v; row = rows[0]; break; }
+  }
+  if (!row || !vertical) return errorResponse(req, "No sf_files row matches", 404);
+
+  const verdict = requeueDecision(row).verdict;
+  if (verdict === "not_stored") {
+    return errorResponse(req,
+      `file_id ${row.file_id} is not stored (ingestion_status=${row.ingestion_status}) — nothing to re-run`, 409);
+  }
+  const reason = String(b.reason || "manual requeue").slice(0, 120);
+  if (verdict === "requeue") {
+    const patch = await dbFetch(vertical, "PATCH", `sf_files?file_id=eq.${row.file_id}`, {
+      extraction_status: "queued",
+      process_notes: `requeued ${isoNow()} (${reason}); prior: ${String(row.extraction_status ?? "")} ` +
+        String(row.process_notes ?? "").slice(0, 200),
+      updated_at: isoNow(),
+    });
+    if (!patch.ok) return errorResponse(req, `requeue PATCH failed: HTTP ${patch.status}`, patch.status || 500);
+  }
+
+  if (b.stage_now === true) {
+    // Drain THIS row now, through the same code path the cron runs.
+    return await handleStageQueued(req, { vertical, limit: 1, file_id: row.file_id });
+  }
+  return jsonResponse(req, {
+    ok: true,
+    vertical,
+    file_id: row.file_id,
+    content_version_id: row.content_version_id,
+    file_name: row.file_name,
+    requeued: verdict === "requeue",
+    idempotent: verdict === "already_queued",
+    extraction_status: "queued",
+    note: "Queued for ?action=stage-queued (cron sf-files-stage-queued-15m). The re-stage reuses the " +
+      "file's existing LCC inbox card and re-runs extraction + matching.",
+  });
+}
+
 // ── POST ?action=stage-queued ───────────────────────────────────────────────
 // Drains sf_files rows still at extraction_status='queued' through LCC's
 // /api/intake/stage-om pipeline. For each row:
@@ -705,6 +779,9 @@ async function handleStageQueued(req: Request, body: Record<string, unknown> | n
   // PDFs land in one tick. Body override honored, capped at 10 (was 50).
   const limit = Math.min(Number(b.limit) || 3, 10);
   const verticals: Vertical[] = b.vertical ? [String(b.vertical) as Vertical] : ["dia", "gov"];
+  // INTAKE-RESTAGE1: ?action=requeue&stage_now drains exactly the requeued row.
+  const onlyFileId = Number(b.file_id);
+  const fileFilter = Number.isInteger(onlyFileId) && onlyFileId > 0 ? `&file_id=eq.${onlyFileId}` : "";
 
   const startedAt = Date.now();
   let budgetExhausted = false;
@@ -726,7 +803,7 @@ async function handleStageQueued(req: Request, body: Record<string, unknown> | n
 
     const pending = await dbFetch(vertical, "GET",
       `sf_files?ingestion_status=eq.stored&extraction_status=eq.queued&source_system=eq.salesforce` +
-      `&extension=eq.pdf` +
+      `&extension=eq.pdf` + fileFilter +
       `&select=file_id,content_version_id,content_document_id,linked_entity_type,linked_entity_sf_id,title,file_name,extension,size_bytes,sha256,storage_path` +
       `&limit=${limit}`);
     const rows = Array.isArray(pending.data) ? pending.data as Record<string, unknown>[] : [];
