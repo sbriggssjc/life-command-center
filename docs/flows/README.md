@@ -8,7 +8,7 @@ references into stale ones, which is worse than a slightly untidy root. This fil
 
 | Flow file (repo root) | What it does | Notes |
 |---|---|---|
-| `flow-definition.json` | The Salesforce → LCC opportunity sync (`SF Deal → LCC Opportunity Sync`) | Recurrence 30 min; full refresh, **no `LastModifiedDate` filter** — that is deliberate, it is what heals a backlog (HP1-P1a-fix). Posts to `/api/pipeline/ingest-opportunities`. |
+| `flow-definition.json` | ⚠️ **Corrected 2026-09-23 (SF-BRIDGE1): this file is a Microsoft To-Do list sync** (hourly; reads `/me/todo/lists/*/tasks`). It is **not** the Salesforce → LCC opportunity sync, as this row previously said. That flow (`SF Deal → LCC Opportunity Sync`: 30-min recurrence, full refresh, posts to `/api/pipeline/ingest-opportunities`) has **no committed definition**. Export it from the tenant before editing (`SF-BRIDGE1-flow`). | |
 | `flow-sf-file-discovery.json` | Salesforce file discovery | Import package + write-up: [`FLOW_sf_file_discovery.md`](FLOW_sf_file_discovery.md), [`LCC_SF_File_Discovery_import.zip`](LCC_SF_File_Discovery_import.zip) |
 | `flow-outlook-intake-to-teams.json` · `…-hardened.json` · `…-button-to-teams.json` | Outlook intake → Teams | The `-hardened` variant supersedes the plain one; the `-button-` variant is the manual-trigger path. |
 | `flow-outlook-calendar-sync.json` · `flow-personal-calendar-sync.json` | Calendar sync (work / personal) | See `docs/architecture/calendar-system-status.md` and `calendar-tz-fix-runbook.md`. |

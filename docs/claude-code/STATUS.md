@@ -53,6 +53,17 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-23 — SF-BRIDGE1 (CC): Salesforce deals get a type + address; seeded OMs follow their deal; panel stops offering "Create the lead" on our listings
+
+- **Measured first:** 610 SF-synced `bd_opportunities` had `type IS NULL` (35 open) and **0 of 610 had an address**. The writer (`mcp/opportunity-sync.js` → `lcc_upsert_bd_opportunities`) never sent a type, and the RPC had no type column.
+- **Migration `20261102270000` applied live** (renumbered from `…260000`, which collided with GOV-UX1-D5-gate's file of the same timestamp). It extends the CHECK (`listing/bov/buy_side/sf_deal`), makes the RPC write `type` (an LCC-owned type is never overwritten), makes `property_address` fill-forward, and logs a backfill of 610 rows. Open deals are now listing 19 / bov 7 / sf_deal 9, with 0 NULL. A rolled-back RPC probe on Findlay proved the address survives an address-less payload and that `prospect` survives an incoming `listing`.
+- **Address:** Salesforce has it in dia/gov `sf_deal_staging`, and Findlay's is `1717 Medical Blvd, Findlay, OH 45840`. The sync reads it now. 12 of the 35 open deals have one; the other 21 are not staged anywhere and wait on `SF-BRIDGE1-flow`. `docs/flows/README.md` was wrong about which file is this flow, and is corrected.
+- **Seeded OM match:** `api/_shared/sf-seed-match.js` is wired into `matchIntakeToProperty` via `opts.seedData`. It covers no-address/agree/conflict/cross-vertical/multi-property, and a Decision Center disambiguation card is deferred while a seed resolves. The promoter sets `is_northmarq` only from a resolved seed on our listing.
+- **Panel:** `/api/priority-band` returns `open_deal`; the property and entity banners read "Our listing is live".
+- Guard `test/sf-bridge1.test.mjs`: 30 tests, 15/15 mutations RED.
+- **Deploy:** the migration is live now. JS needs a Railway redeploy of **both** services (`server.js` and the standalone MCP `mcp/server.js` both mount the opportunity sync). No edge function changed. Then `npm run verify:deploy`.
+- **Next (Cowork):** after the redeploy and one 30-min sync, check that Findlay `bd_opportunities.property_address` is filled. Then requeue `sf_files` 1747 (`?action=requeue`). Expect `matched` dia 51194 (reason `sf_seed_listing_*`) and a dia `available_listings` row with `is_northmarq=true`. Open the 51194 panel and expect "Our listing is live".
+
 ## 2026-09-23 — GOV-UX1-D5-gate (CC): tight seller-lead gate, review lane on the Priority tab, precision-gated auto-create (flag OFF)
 
 - **Migration `20261102260000` (applied live on LCC Opps):** `lcc_is_seller_lead_decision_role`, `lcc_seller_lead_gate_decision` (one live decision per owner), `v_lcc_seller_lead_gate_candidates`, `v_lcc_seller_lead_gate_precision`, flag `SELLER_LEAD_AUTOCREATE` = off, cron `lcc-seller-lead-autocreate` (weekdays 13:10 UTC; a named skip while locked).

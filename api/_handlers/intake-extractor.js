@@ -984,7 +984,7 @@ export async function runDownstreamPipeline(intakeId, mergedSnapshot, ctx = {}) 
   let matchError  = null;
   if (mergedSnapshot) {
     try {
-      matchResult = await matchIntakeToProperty(intakeId, mergedSnapshot);
+      matchResult = await matchIntakeToProperty(intakeId, mergedSnapshot, { seedData: ctx.seedData || null }); // SF-BRIDGE1
       console.log('[intake-matcher]', intakeId, matchResult.status, matchResult.confidence);
     } catch (err) {
       matchError = err.message;

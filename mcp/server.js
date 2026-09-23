@@ -15,7 +15,7 @@ import {
 import { makeCompsTools, makeCompsHttpRoutes, runGenerateCompsFromRequest } from "./comps-tools.js";
 import { makeDealDossierTools, makeDealDossierHttpRoutes } from "./deal-dossier-tools.js";
 import { makeSfWritebackRoutes } from "./sf-writeback.js";
-import { makeOpportunitySyncRoute } from "./opportunity-sync.js";
+import { makeOpportunitySyncRoute, lookupStagedDealsVia } from "./opportunity-sync.js";
 import { makeDealRosterRoute } from "./deal-roster.js";
 import { makeCadenceScanRoute } from "./cadence-scan.js";
 import { makeEntityReconcileRoute } from "./entity-reconcile.js";
@@ -2454,7 +2454,14 @@ app.get("/", (_req, res) => {
   app.post(prefixed("/api/sf/update-opportunity"), authenticate, __sfRoutes.updateOpportunity);
 
   // Inbound SF Opportunity -> LCC deal backbone (BUILD 01) — idempotent on (workspace_id, sf_opp_id).
-  const __oppSync = makeOpportunitySyncRoute({ opsQuery, enc, WORKSPACE_ID: PRIMARY_WORKSPACE_ID });
+  const __oppSync = makeOpportunitySyncRoute({
+    opsQuery, enc, WORKSPACE_ID: PRIMARY_WORKSPACE_ID,
+    // SF-BRIDGE1: staged SF facts; a domain with no configured client reads as empty.
+    lookupStagedDeals: (ids) => lookupStagedDealsVia((domain, path) => {
+      if (domain === "dialysis") return (DIA_SUPABASE_URL && DIA_SUPABASE_KEY) ? diaQuery("GET", path) : Promise.resolve({ ok: false, data: null });
+      return (GOV_SUPABASE_URL && GOV_SUPABASE_KEY) ? govQuery("GET", path) : Promise.resolve({ ok: false, data: null });
+    }, ids),
+  });
   app.post(prefixed("/api/pipeline/ingest-opportunity"),   authenticate, __oppSync.ingest);       // single deal
   app.post(prefixed("/api/pipeline/ingest-opportunities"), authenticate, __oppSync.ingestBatch);  // batch (PA sends whole array)
 

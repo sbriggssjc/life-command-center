@@ -21,7 +21,8 @@ import { dirname, join, extname } from 'path';
 import { authenticate } from './api/_shared/auth.js';
 import { opsQuery } from './api/_shared/ops-db.js';
 import { mountLccMcp } from './mcp/server.js';
-import { makeOpportunitySyncRoute } from './mcp/opportunity-sync.js';
+import { makeOpportunitySyncRoute, lookupStagedDealsVia } from './mcp/opportunity-sync.js';
+import { domainQuery } from './api/_shared/domain-db.js';
 import { makeDealRosterRoute } from './mcp/deal-roster.js';
 import { handleDealEmailMatchCron } from './api/_handlers/deal-email-match-cron.js';
 import { handleOperatorNoteIntake } from './api/_handlers/operator-notes-intake.js';
@@ -82,6 +83,8 @@ const opportunitySyncRoutes = makeOpportunitySyncRoute({
   opsQuery,
   enc,
   WORKSPACE_ID: PRIMARY_WORKSPACE_ID,
+  // SF-BRIDGE1: staged Salesforce address / record type / Listing__c (dia + gov).
+  lookupStagedDeals: (ids) => lookupStagedDealsVia((domain, path) => domainQuery(domain, 'GET', path), ids),
 });
 const dealRosterRoutes = makeDealRosterRoute({
   opsQuery,

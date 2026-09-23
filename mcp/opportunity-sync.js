@@ -42,6 +42,85 @@ export const STAGE_REGIME = {
 };
 export function stageRegime(stage) { return STAGE_REGIME[stage] || 'A'; }
 
+// SF-BRIDGE1 (2026-09-23) — bd_opportunities.type for a Salesforce-synced deal.
+// Before this, the sync never wrote `type`, so all 610 SF deals read NULL and
+// every LCC surface that asks "is there a deal here?" (they all key on
+// type='prospect' / 'government_buyer') saw nothing — the property panel
+// offered "Create the lead" on our own listings.
+//
+// The record type alone does not say which side we are on: every staged deal
+// is `IS CM` (Investment Sales – Capital Markets) or `D&E`. So the type is
+// derived from what IS stated, most specific first:
+//   buy_side — the record type / deal type literally says buy side
+//   bov      — SF stage BOV
+//   listing  — a listing stage (Listing Signed / Off-Market / ELA), OR a
+//              Salesforce Listing__c exists for this Opportunity (sell side,
+//              carried through escrow and close)
+//   sf_deal  — a Salesforce deal whose side is not stated. Honest, not a guess.
+// Never 'prospect' / 'government_buyer': those are LCC-owned lanes and the
+// upsert RPC refuses to overwrite them.
+export const SF_DEAL_TYPES = Object.freeze(['listing', 'bov', 'buy_side', 'sf_deal']);
+const LISTING_STAGES = new Set(['listing_signed', 'off_market_listing', 'ela']);
+export function deriveDealType({ stage, recordType, hasListing } = {}) {
+  if (/buy[\s_-]*side/i.test(String(recordType || ''))) return 'buy_side';
+  if (stage === 'bov') return 'bov';
+  if (LISTING_STAGES.has(stage)) return 'listing';
+  if (hasListing === true) return 'listing';
+  return 'sf_deal';
+}
+
+// SF-BRIDGE1 — the Salesforce property address. The PA flow's payload has never
+// carried Property2__r (0 of 610 deals had an address), but the Salesforce
+// staging tables on the domain DBs (sf_deal_staging, written by the
+// intake-salesforce edge function) DO hold the Opportunity's property address,
+// record type and the linked Listing__c. `lookupStagedDeals(ids)` (injected)
+// returns Map<sf_opp_id, {property_address, deal_type, has_listing, source}>.
+// Precedence: the payload's own address > the staged one > (the RPC keeps the
+// stored value, fill-forward). A deal that is in neither stays NULL — never
+// invented from the deal name.
+export async function loadStagedDeals(lookupStagedDeals, ids) {
+  if (typeof lookupStagedDeals !== 'function' || !ids.length) return new Map();
+  try {
+    const m = await lookupStagedDeals(ids);
+    return m instanceof Map ? m : new Map();
+  } catch (_e) {
+    return new Map();   // enrichment only; the sync must never fail on it
+  }
+}
+
+// Shared by server.js (api/_shared/domain-db.js domainQuery) and mcp/server.js
+// (its own dia/gov clients): reads BOTH domains' staging, chunked, latest row
+// per sf_deal_id. `query(domain, path)` → { ok, data }.
+export async function lookupStagedDealsVia(query, ids) {
+  const out = new Map();
+  const uniq = [...new Set(ids.filter(Boolean).map(String))];
+  for (const domain of ['dialysis', 'government']) {
+    for (let i = 0; i < uniq.length; i += 100) {
+      const inList = uniq.slice(i, i + 100).map((x) => encodeURIComponent(x)).join(',');
+      const d = await query(domain,
+        `sf_deal_staging?sf_deal_id=in.(${inList})&select=sf_deal_id,deal_type,property_address,imported_at&order=imported_at.desc`);
+      const l = await query(domain,
+        `sf_listing_staging?sf_deal_id=in.(${inList})&select=sf_deal_id`);
+      const listed = new Set((l?.ok && Array.isArray(l.data) ? l.data : []).map((r) => r.sf_deal_id));
+      for (const r of (d?.ok && Array.isArray(d.data) ? d.data : [])) {
+        const prev = out.get(r.sf_deal_id);
+        if (prev && prev.property_address) continue;     // latest-with-address wins
+        out.set(r.sf_deal_id, {
+          property_address: (r.property_address && String(r.property_address).trim()) || prev?.property_address || null,
+          deal_type: r.deal_type || prev?.deal_type || null,
+          has_listing: listed.has(r.sf_deal_id) || !!prev?.has_listing,
+          source: domain === 'dialysis' ? 'dia.sf_deal_staging' : 'gov.sf_deal_staging',
+        });
+      }
+      for (const id of listed) {
+        if (!out.has(id)) out.set(id, { property_address: null, deal_type: null, has_listing: true, source: null });
+        else out.get(id).has_listing = true;
+      }
+    }
+  }
+  return out;
+}
+
 // A5b: the property address lives on the related Property object (Opportunity.Property2__c lookup); the
 // Property_Address__c formula that concatenates it is FLS-hidden from the integration user, so we pull the
 // source relationship fields (Property2__r.Street__c / City__c / State_Province__c / Zip_Code__c) instead.
@@ -68,6 +147,8 @@ function normalizeDeal(d) {
     amount: d.amount ?? d.Amount ?? null,
     close_date: d.close_date ?? d.CloseDate ?? null,
     vertical: d.vertical ?? null,
+    // SF-BRIDGE1: record type, if the flow ever sends it (RecordType.Name).
+    record_type: d.record_type ?? d.RecordType?.Name ?? d['RecordType.Name'] ?? null,
     // A5b: address comes from the related Property object (see dealAddress) — FLS-safe.
     property_address: dealAddress(d),
   };
@@ -197,19 +278,32 @@ async function processDeal(raw, deps) {
     const e = await opsQuery('GET', `entities?id=eq.${enc(rec.entity_id)}&select=domain&limit=1`);
     vertical = e.data?.[0]?.domain || null;
   }
+  // SF-BRIDGE1: else the domain whose Salesforce staging holds the deal (the
+  // intake-salesforce crawl files it per vertical). Never guessed from the name.
+  const stagedDom = deps.stagedDeals instanceof Map ? deps.stagedDeals.get(b.sf_opp_id)?.source : null;
+  if (!vertical && stagedDom) vertical = stagedDom.startsWith('dia.') ? 'dia' : stagedDom.startsWith('gov.') ? 'gov' : null;
 
   // is_open is GENERATED = (closed_at IS NULL). 'Closed' (mapped) = won; lost/terminated = closed-lost.
   const isLost = /(lost|dead|dropped|withdrawn|terminat|cancel|expired|no[ _-]?sale)/i.test(String(b.stage_name));
   const isWon = !isLost && (stage === 'closed' || /(closed|sold|won|settled)/i.test(String(b.stage_name)));
   const isClosed = isWon || isLost;
   const meta = {};
+  // SF-BRIDGE1: staged Salesforce facts (address / record type / Listing__c).
+  const staged = (deps.stagedDeals instanceof Map ? deps.stagedDeals.get(b.sf_opp_id) : null) || null;
+  const recordType = b.record_type || staged?.deal_type || null;
+  const type = deriveDealType({ stage, recordType, hasListing: staged?.has_listing === true });
+  let propertyAddress = b.property_address || null;
+  if (propertyAddress) meta.address_source = 'sf_payload';
+  else if (staged?.property_address) { propertyAddress = staged.property_address; meta.address_source = staged.source; }
+  if (recordType) meta.sf_record_type = recordType;
   if (b.owner_sf_user_id && !owner_user_id) meta.owner_sf_user_id = b.owner_sf_user_id;
   if (unmappedStage) { meta.unmapped_stage = true; meta.sf_stage_label = b.stage_name; }
   if (rec.ambiguous) meta.ambiguous_resolution = true;
   const row = {
     workspace_id: WORKSPACE_ID, entity_id: rec.entity_id, sf_opp_id: b.sf_opp_id,
     deal_name: b.name || null,   // A4: keep the SF Opportunity Name on the backbone (was parsed then discarded)
-    property_address: b.property_address || null,   // A5b: store the property address for reconcile + matching
+    property_address: propertyAddress,   // A5b + SF-BRIDGE1: payload, else SF staging; RPC keeps a stored one
+    type,                                // SF-BRIDGE1: never NULL from this writer again
     stage,
     amount: (b.amount ?? null), expected_close_date: (b.close_date || null),
     closed_at: isClosed ? new Date().toISOString() : null,
@@ -241,6 +335,7 @@ async function processDeal(raw, deps) {
     bd_opportunity_id: saved?.id || null, stage, unmapped_stage: unmappedStage,
     ambiguous_resolution: !!rec.ambiguous, closed: isClosed, regime: stageRegime(stage),
     needs_psa_timeline: CONTRACTUAL.has(stage), sf_opp_id: b.sf_opp_id,
+    type, address_source: meta.address_source || null,
     // HP1-P1d: the RPC's own write outcome (inserted/updated), read straight
     // through so ingestBatch can log a real facts_written delta to
     // producer_runs instead of the "succeeded" tally, which counts entity
@@ -288,13 +383,15 @@ async function logIngestRun(deps, { summary, allFailed, startedAt, finishedAt })
   }
 }
 
-export function makeOpportunitySyncRoute({ opsQuery, enc, WORKSPACE_ID }) {
+export function makeOpportunitySyncRoute({ opsQuery, enc, WORKSPACE_ID, lookupStagedDeals = null }) {
   const deps = { opsQuery, enc, WORKSPACE_ID };
+  const idOf = (d) => d && (d.sf_opp_id ?? d.Id ?? d.id) || null;
   return {
     // Single deal — used by Copilot / manual calls.
     ingest: async (req, res) => {
       try {
-        const r = await processDeal(req.body || {}, deps);
+        const stagedDeals = await loadStagedDeals(lookupStagedDeals, [idOf(req.body || {})].filter(Boolean));
+        const r = await processDeal(req.body || {}, { ...deps, stagedDeals });
         return res.status(r.status).json(r.body);
       } catch (e) {
         return res.status(500).json({ ok: false, error: String(e?.message || e) });
@@ -319,19 +416,27 @@ export function makeOpportunitySyncRoute({ opsQuery, enc, WORKSPACE_ID }) {
         // but made no DB write). This is what producer_runs.facts_written reads.
         inserted: 0, updated: 0, errors: [],
       };
+      // SF-BRIDGE1: one bulk read of the staged SF facts for the whole batch.
+      const stagedDeals = await loadStagedDeals(lookupStagedDeals, deals.map(idOf).filter(Boolean));
+      summary.staged_matched = stagedDeals.size;
+      summary.address_filled = 0;
+      summary.by_type = {};
+      const batchDeps = { ...deps, stagedDeals };
       const CONC = 8;
       let i = 0;
       async function worker() {
         while (i < deals.length) {
           const d = deals[i++];
           try {
-            const r = await withTimeout(processDeal(d, deps), 20000, 'processDeal');
+            const r = await withTimeout(processDeal(d, batchDeps), 20000, 'processDeal');
             if (r.status === 200 && r.body.ok) {
               summary.succeeded++;
               if (r.body.created_entity) summary.created++; else summary.resolved++;
               if (r.body.ambiguous_resolution) summary.ambiguous++;
               if (r.body.closed) summary.closed++;
               if (r.body.unmapped_stage) summary.unmapped_stage++;
+              if (r.body.address_source) summary.address_filled++;
+              if (r.body.type) summary.by_type[r.body.type] = (summary.by_type[r.body.type] || 0) + 1;
               if (r.body.outcome === 'inserted') summary.inserted++;
               else if (r.body.outcome === 'updated') summary.updated++;
             } else {

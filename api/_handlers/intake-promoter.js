@@ -217,7 +217,10 @@ function buildGovListingRow(intakeId, snapshot, match, artifact, sourceEmailDate
   const firmJoined = joinedOf(snapshot.listing_firm);
   const brokerEmail = String(brokerEmailJoined || '').toLowerCase();
   const firm        = String(firmJoined || '').toLowerCase();
-  const isNorthmarq = brokerEmail.includes('@northmarq.com') || firm.includes('northmarq');
+  // SF-BRIDGE1: a Salesforce seed that resolved to one of OUR listings is the
+  // stronger statement — the deal is ours whether or not the OM names the firm.
+  const isNorthmarq = brokerEmail.includes('@northmarq.com') || firm.includes('northmarq')
+    || isOwnSfListingMatch(match);
 
   // gov stores cap rate as decimal (0.0644 = 6.44%). The extractor emits BOTH
   // decimal (0.055) and percent (7.75) — normalizeCapRate detects which.
@@ -332,6 +335,14 @@ function buildGovListingRow(intakeId, snapshot, match, artifact, sourceEmailDate
 // properties). We populate the fields the dia schema has and skip the rest.
 // Cap rate stored as decimal (0.0918) per chk_*_cap_rate_range check
 // constraints (valid range 0.005–0.30).
+// SF-BRIDGE1: the match came from a Salesforce seed that resolved to an open
+// deal of ours at a listing stage (sf-seed-match.js). A fact from Salesforce,
+// never inferred from the document.
+export function isOwnSfListingMatch(match) {
+  const s = match && match.sf_seed;
+  return !!(s && s.status === 'resolved' && s.own_listing === true);
+}
+
 function buildDiaListingRow(intakeId, snapshot, match, artifact, sourceEmailDate, sfCompOnMarketDate) {
   // Extractor emits decimal (0.055) OR percent (7.75); detect, don't assume.
   const capRateDecimal = normalizeCapRate(snapshot.cap_rate);
@@ -420,6 +431,9 @@ function buildDiaListingRow(intakeId, snapshot, match, artifact, sourceEmailDate
     notes:              `Staged from LCC OM intake ${intakeId}${rawCapNote}`,
     intake_artifact_path: artifact?.storage_path || null,
     intake_artifact_type: snapshot.document_type || null,
+    // SF-BRIDGE1: only asserted when Salesforce says the listing is ours; never
+    // written as false (absence of the seed is not evidence it is someone else's).
+    ...(isOwnSfListingMatch(match) ? { is_northmarq: true } : {}),
   };
 }
 
