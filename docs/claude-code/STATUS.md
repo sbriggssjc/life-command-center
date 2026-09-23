@@ -56,7 +56,7 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 ## 2026-09-23 — GOV-UX1-D4/D5 (CC): re-measured before building; both premises failed, nothing built
 
 - **D4 closed, no population.** The 35 open opportunities without a cadence are `type IS NULL` Salesforce-synced listing/escrow deals, not prospects. All 4 open `type=prospect` opps already have a cadence (trigger `bd_opportunity_auto_seed_cadence`). Follow-up `GOV-UX1-D4-sftype`: the SF sync leaves `type` NULL, so a listed property's panel may offer "Create the lead".
-- **D5 held.** Gate = 54 owners / 100 rows (not 98). 28 of 54 qualify only via a `works_at` edge (P161's weak association); named rows include an address, a bank, a pharmacy, REIT SPEs and 6 repeat buyers. Scott to choose (a) tighten then automate, or (b) review lane → `GOV-UX1-D5-gate`.
+- **D5 held.** Gate = 54 owners / 100 rows (not 98). 28 of 54 qualify only via a `works_at` edge (P161's weak association); named rows include an address, a bank, a pharmacy, REIT SPEs and 6 repeat buyers. Scott to choose (a) tighten then automate, or (b) review lane → `GOV-UX1-D5-gate`, logged as checklist **Q48** for review.
 - No code, migration, cadence or lead written. Measurements: audit `GOV_UX1_NAVIGATION_OWNER_VERIFICATION_2026-09-22.md` §D "D4 / D5 re-measured". No deploy needed.
 
 ## 2026-09-23 — SIDEBAR4-d (CC): the post-Save panel now says it is saved and up to date (extension 1.0.57)
