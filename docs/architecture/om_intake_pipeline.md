@@ -141,7 +141,7 @@ This path does NOT go through `stageOmIntake`, so it does NOT (yet) record field
 3. Resolve / create the caller's `users` row (idempotent).
 4. Ensure `workspace_memberships` exists (operator role).
 5. Upsert `connector_accounts` row keyed on `workspace + user + connector_type + external_user_id`.
-6. Insert `inbox_items` row with `source_type=<channel>_om` (e.g. `email_om`, `copilot_chat_om`).
+6. Resolve the ONE `inbox_items` card for this file (`source_type=<channel>_om`, `external_id=om_sha256:<sha>`): reuse an existing card, else insert, and on a unique violation attach to the card a concurrent call just made. See *Re-staging the same file* below.
 7. Insert `staged_intake_items` + `staged_intake_artifacts` (the artifact carries either `inline_data` base64 or `storage_path`).
 8. Race `processIntakeExtraction` against a 7-second timeout. Caller gets fast response; extraction continues async.
 9. Log `activity_events` row for entity-scoped memory.
@@ -185,6 +185,35 @@ A document's broker/contact block is not its subject property. Four guards sit b
 4. **Create-property** picks the domain from the stated vertical before the tenant heuristic.
 
 This is the only own-/brokerage-office list; `own-firm-addresses.js` re-exports it. Add an office to the table, not to code. Class detector for the mis-named-entity shape: `v_lcc_asset_entity_civic_drift`.
+
+### Re-staging the same file (INTAKE-RESTAGE1, 2026-09-23)
+
+The card is keyed `external_id = om_sha256:<sha>`. The only unique index behind it is the partial
+`inbox_items_workspace_external_id_unique (workspace_id, external_id) WHERE external_id IS NOT NULL`.
+PostgREST cannot target a partial index: `on_conflict=` emits no index predicate, and Postgres refuses
+to infer a partial arbiter without one (42P10). The old `resolution=merge-duplicates` insert therefore
+arbitrated on the primary key, and every second stage of the same file failed `inbox_item_insert_failed`.
+
+`resolveOmInboxCard` now looks the card up, inserts on a miss, and on a **23505** looks up again and
+attaches. A 409 carrying **23503** (FK) is an error, not a conflict. `planOmRestage` then decides what the
+call is:
+
+| mode | when | what happens |
+|---|---|---|
+| `restage` | the card's `staged_intake_items` row is settled (any terminal status, or `queued` untouched for 2+ min) | an atomic conditional PATCH claims the row back to `queued`; the artifact is reused when its sha256 matches; extraction + matching re-run with `forceReextract` (prior extraction rows are kept) |
+| `in_flight` | the row is freshly `queued`, or there is no row yet on a card < 2 min old, or the card was reached through a 23505 | nothing more is written; the call returns the same card with `deduplicated: true` |
+| `resume` | the card exists, has no staged row, and is older than 2 min (a first pass that died mid-stage) | stages normally onto the existing card |
+
+One card per file always. A reused card is never rolled back or re-statused, so an operator's dismiss
+or triage survives a re-stage. The response carries `deduplicated` and `restage`.
+
+**Re-running a stored Salesforce file (no SQL):** POST
+`intake-salesforce-files?action=requeue` on Dialysis_DB with `X-PA-Webhook-Secret` and
+`{"content_version_id":"068…"}` (or `{"file_id":1747,"vertical":"dia"}`). This sets the `sf_files` row
+back to `extraction_status='queued'`, and cron `sf-files-stage-queued-15m` re-stages it. Add
+`"stage_now": true` to drain that one row at once. A row that is not `stored` is refused with 409, and a
+row that is already queued is a no-op. For a non-Salesforce intake, `POST /api/intake?_route=ocr-reextract
+{intake_id}` forces a re-extraction of the existing card.
 
 ## Display surfaces
 
