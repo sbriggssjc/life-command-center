@@ -122,6 +122,7 @@ describe('SIDEBAR3-c — pipeline wiring (source shape)', () => {
   });
 
   it('a ledger attach never PATCHes the kept property\'s address back to the range', () => {
-    assert.match(src, /if \(attachedViaMergeLedger\) \{\s*delete propertyData\.address;\s*delete propertyData\.normalized_address;/);
+    // GOV-CLASSIFY1 extended the same guard to the address-equivalence attach.
+    assert.match(src, /if \(attachedViaMergeLedger(?: \|\| attachedViaEquivalence)?\) \{\s*delete propertyData\.address;\s*delete propertyData\.normalized_address;/);
   });
 });
