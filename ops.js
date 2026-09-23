@@ -3172,6 +3172,78 @@ async function renderPriorityQueueFooterV2(el) {
     + lines.join(' · ') + '</div>';
 }
 
+// GOV-UX1-D5-gate (2026-09-23): the seller-lead review lane, at the top of the
+// Priority tab. It lives HERE because the gated owners are a strict subset of the
+// seller queue this tab already renders, so Scott decides them where he already
+// works (Home's three-lane BD view is flag-OFF). Each card: Create lead (written by
+// bridgeCreateLead, the only lead writer) or Not a lead (with a reason). Every
+// decision feeds the precision meter; auto-create unlocks at >= 90% over 25.
+async function renderSellerLeadLane(el) {
+  if (!el) return;
+  var res = await opsApi('/api/seller-lead-gate');
+  if (!res.ok || !res.data) {
+    el.innerHTML = '<div class="pq-v2-footer-note">Seller-lead lane unavailable' + (res.error ? ': ' + esc(res.error) : '') + '.</div>';
+    return;
+  }
+  var d = res.data;
+  var items = Array.isArray(d.items) ? d.items : [];
+  var reasons = Array.isArray(d.reject_reasons) ? d.reject_reasons : [];
+  window._sellerLeadReasons = reasons;
+  var meter = d.meter && d.meter.label ? d.meter.label : '';
+  var html = '<div class="slg-lane"><div class="ops-header"><h3>Ready to become a lead <span class="q-badge">' + items.length + '</span></h3></div>'
+    + '<div class="rc-intro">Owners that pass the tight gate: a measured reason to sell, a linked decision-maker (not a Salesforce works-at edge), a clean owner name, not a repeat buyer, no open lead. '
+    + '<b>' + esc(meter) + '</b></div>';
+  if (!items.length) {
+    html += '<div class="ops-empty">Nothing waiting on a lead decision. ✓</div>';
+  } else {
+    var opts = reasons.map(function (r) { return '<option value="' + esc(r.key) + '">' + esc(r.label) + '</option>'; }).join('');
+    html += items.map(function (r) {
+      var c = r.gate_contact;
+      var id = String(r.entity_id);
+      return '<div class="q-item" id="slg-' + esc(id) + '">'
+        + '<div class="q-item-header"><span class="q-item-title">' + esc(r.owner_name || 'Owner') + '</span>'
+        + '<div class="q-item-badges"><span class="q-badge">' + esc(String(r.reason_to_sell || '').replace(/_/g, ' ')) + '</span></div></div>'
+        + '<div class="q-item-meta">' + esc((r.address ? r.address + (r.city ? ', ' + r.city : '') + (r.state ? ', ' + r.state : '') + ' — ' : '')
+            + (typeof _todayMoney === 'function' ? _todayMoney(r.rank_value) : String(r.rank_value || ''))
+            + (r.property_count > 1 ? ' · ' + r.property_count + ' properties' : ''))
+        + (c ? '<br>Contact: ' + esc(c.name) + ' (' + esc(String(c.role || '').replace(/_/g, ' ')) + ')' : '') + '</div>'
+        + '<div class="q-actions">'
+        + '<button class="q-action primary" onclick="sellerLeadDecide(' + jsStringArg(id) + ', \'create\')">Create lead</button>'
+        + '<select class="slg-reason" id="slg-reason-' + esc(id) + '"><option value="">Not a lead because…</option>' + opts + '</select>'
+        + '<button class="q-action" onclick="sellerLeadDecide(' + jsStringArg(id) + ', \'reject\')">Not a lead</button>'
+        + '</div></div>';
+    }).join('');
+  }
+  html += '</div>';
+  el.innerHTML = html;
+}
+window.renderSellerLeadLane = renderSellerLeadLane;
+
+async function sellerLeadDecide(entityId, decision) {
+  var body = { entity_id: entityId, decision: decision };
+  if (decision === 'reject') {
+    var sel = document.getElementById('slg-reason-' + entityId);
+    var reason = sel ? sel.value : '';
+    if (!reason) { if (typeof showToast === 'function') showToast('Pick a reason first', 'error'); return; }
+    body.reason = reason;
+  }
+  var card = document.getElementById('slg-' + entityId);
+  if (card) card.style.opacity = '0.5';
+  var res = await opsApi('/api/seller-lead-gate', { method: 'POST', body: JSON.stringify(body) });
+  if (!res.ok) {
+    if (card) card.style.opacity = '';
+    if (typeof showToast === 'function') showToast('Could not record: ' + (res.error || 'error'), 'error');
+    return;
+  }
+  if (res.data && res.data.blocked) {
+    if (typeof showToast === 'function') showToast(res.data.message || 'Repeat buyer — not a seller lead', 'info');
+  } else if (typeof showToast === 'function') {
+    showToast(decision === 'create' ? 'Lead created' : 'Marked not a lead', 'success');
+  }
+  renderSellerLeadLane(document.getElementById('sellerLeadLane'));
+}
+window.sellerLeadDecide = sellerLeadDecide;
+
 async function renderPriorityQueuePageV2() {
   var el = document.getElementById('priorityQueueContent');
   if (!el) return;
@@ -3184,6 +3256,7 @@ async function renderPriorityQueuePageV2() {
   var groups = _pqV2GroupByProperty(items);
   var html = '<div class="ops-header"><h2>Priority Queue</h2>'
     + '<button class="q-action primary" onclick="renderCadenceDashboard()">Cadence dashboard →</button></div>';
+  html += '<div id="sellerLeadLane" class="slg-lane-wrap"></div>';
   html += '<div class="rc-intro">The seller doctrine’s own ranked list — $2.5M–$25M, a newer lease or a reason to sell, an owner nobody has reached. Ordered by a recorded reason to sell first, then value. One card per property.</div>';
   if (!groups.length) {
     html += '<div class="ops-empty">Nothing in the seller queue right now. ✓</div>';
@@ -3206,6 +3279,7 @@ async function renderPriorityQueuePageV2() {
   html += '<div class="q-item-count-note">' + items.length + ' owner·property row' + (items.length === 1 ? '' : 's') + ' in ' + groups.length + ' propert' + (groups.length === 1 ? 'y' : 'ies') + '.</div>';
   html += '<div id="pqV2Footer" class="pq-v2-footer-wrap"></div>';
   el.innerHTML = html;
+  renderSellerLeadLane(document.getElementById('sellerLeadLane'));
   renderPriorityQueueFooterV2(document.getElementById('pqV2Footer'));
 }
 window.renderPriorityQueuePageV2 = renderPriorityQueuePageV2;

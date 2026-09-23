@@ -1,6 +1,6 @@
 // SF-BRIDGE1 (2026-09-23) — our own Salesforce deals carry a type and an
 // address, and an OM carrying a Salesforce seed can follow its deal to the
-// property. See supabase/migrations/20261102260000_lcc_sf_bridge1_*.sql.
+// property. See supabase/migrations/20261102270000_lcc_sf_bridge1_*.sql.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -40,7 +40,7 @@ describe('deriveDealType', () => {
     }
   });
   it('the SQL mirror in the migration agrees on the stage-only mapping', () => {
-    const sql = readFileSync(new URL('../supabase/migrations/20261102260000_lcc_sf_bridge1_opportunity_type_and_address.sql', import.meta.url), 'utf8');
+    const sql = readFileSync(new URL('../supabase/migrations/20261102270000_lcc_sf_bridge1_opportunity_type_and_address.sql', import.meta.url), 'utf8');
     const fn = sql.slice(sql.indexOf('FUNCTION public.lcc_sf_deal_type_from_stage'));
     assert.match(fn, /WHEN p_stage = 'bov' THEN 'bov'/);
     assert.match(fn, /WHEN p_stage IN \('listing_signed','off_market_listing','ela'\) THEN 'listing'/);
@@ -165,7 +165,7 @@ describe('opportunity sync — type and address', () => {
 
 // ── 3. the RPC + backfill contract (text; the live proof is in the migration header) ──
 describe('upsert RPC + backfill', () => {
-  const sql = readFileSync(new URL('../supabase/migrations/20261102260000_lcc_sf_bridge1_opportunity_type_and_address.sql', import.meta.url), 'utf8')
+  const sql = readFileSync(new URL('../supabase/migrations/20261102270000_lcc_sf_bridge1_opportunity_type_and_address.sql', import.meta.url), 'utf8')
     .replace(/--[^\n]*/g, '');
   it('fill-forward: a payload with no address keeps the stored one', () => {
     assert.match(sql, /property_address\s*=\s*COALESCE\(EXCLUDED\.property_address,\s*t\.property_address\)/);
