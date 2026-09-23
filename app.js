@@ -9612,6 +9612,18 @@ function bootApp() {
     loadFeatureFlags().then(() => {
       applyFeatureFlags();
       autoConnectCredentials().then(() => {
+        // HOME-MB-BOOT (2026-09-23): on a cold load Home is ALREADY the active
+        // page, so applyRoute() never calls navTo → handlePageLoad('pageHome'),
+        // and handlePageLoad was this widget's only caller — its spinner stayed
+        // forever. The other pageHome renderers are covered below (daily
+        // briefing + NBA render from their loaders; renderTodaySections runs
+        // after Promise.all). Rendered HERE, not from the router bootstrap,
+        // because the router runs before auth resolves (a pre-auth fetch 401s
+        // and nothing would re-render it after sign-in), and running the whole
+        // handlePageLoad there would duplicate bootApp's briefing/NBA fetches.
+        // Gated on Home being active: a cold load on another page renders it
+        // via handlePageLoad when the user navigates to Home.
+        if (typeof renderMarketBriefsWidget === 'function' && _routeIsPageActive('pageHome')) renderMarketBriefsWidget();
         Promise.all([loadActivities(), loadEmails(), loadCalendar(), loadHealth(), loadWeather(), loadMarket(), loadPersonalCalendar(), loadPersonalTasks(), loadCanonicalData(), loadDailyBriefingData(), loadNextBestActionData()])
           .then(() => { updateGreeting(); if (typeof renderTodaySections === 'function') renderTodaySections(); if (typeof renderHomeThreeLanes === 'function') renderHomeThreeLanes(); if (checkFlag('auto_sync_on_load')) triggerCanonicalSync(); })
           .catch(() => { updateGreeting(); if (typeof renderTodaySections === 'function') renderTodaySections(); if (typeof renderHomeThreeLanes === 'function') renderHomeThreeLanes(); if (checkFlag('auto_sync_on_load')) triggerCanonicalSync(); });
