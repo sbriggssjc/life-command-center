@@ -14,6 +14,7 @@ import { handleCors, jsonResponse, errorResponse } from "../_shared/cors.ts";
 import { authenticateUser, authenticateWebhook, requireRole, primaryWorkspaceId } from "../_shared/auth.ts";
 import { queryParams, parseBody } from "../_shared/utils.ts";
 import { parseKnownIps, uaClass, ipClass, requestIp } from "../_shared/caller-class.ts";
+import { countPreferMode } from "./count-mode.ts";
 
 // ── EDGE-GATES1 ──────────────────────────────────────────────────────────────
 // `authenticateUser()` always resolves a transitional user regardless of the
@@ -795,8 +796,6 @@ Deno.serve(async (req: Request) => {
     // Large tables/heavy views now default to a PLANNER estimate (no scan).
     // Callers may still force accuracy by passing count=exact, or select
     // count=planned / count=estimated explicitly; count=false skips it.
-    const countParam = (params.get("count") || "").toLowerCase();
-    const wantCount = countParam !== "false";
     const HEAVY_COUNT = new Set([
       "v_crm_client_rollup", "v_sf_tasks_contact_rollup",
       "properties", "contacts", "ownership_history", "sales_transactions",
@@ -810,18 +809,21 @@ Deno.serve(async (req: Request) => {
       Authorization: `Bearer ${dbKey}`,
       "Content-Type": "application/json",
     };
-    if (wantCount) {
-      const explicit = (countParam === "exact" || countParam === "planned" || countParam === "estimated")
-        ? countParam
-        : null;
-      const mode = explicit ?? (HEAVY_COUNT.has(table) ? "planned" : "exact");
-      fetchHeaders["Prefer"] = `count=${mode}`;
-    }
+    // GOV-COMPS-CAP (2026-09-23): see count-mode.ts — a page after the first
+    // never gets an implicit count, and a 416 on a counted read is retried
+    // once without the count (a planner estimate is a range bound to PostgREST).
+    const countMode = countPreferMode(table, params.get("count"), offset, HEAVY_COUNT);
+    if (countMode) fetchHeaders["Prefer"] = `count=${countMode}`;
 
-    const response = await fetch(url.toString(), {
+    let response = await fetch(url.toString(), {
       method: "GET",
       headers: fetchHeaders,
     });
+    if (response.status === 416 && fetchHeaders["Prefer"]) {
+      await response.text().catch(() => "");
+      delete fetchHeaders["Prefer"];
+      response = await fetch(url.toString(), { method: "GET", headers: fetchHeaders });
+    }
 
     const text = await response.text();
     const contentRange = response.headers.get("content-range");
