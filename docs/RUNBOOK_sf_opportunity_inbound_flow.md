@@ -1,5 +1,7 @@
 # RETRACTED — there is no Salesforce Opportunity object
 
+> **⚠️ Clarification added 2026-09-23 (Cowork round 71). Read this before the retraction below.** The retraction is about **BD opportunities**: prospect/buyer pursuits, which in Salesforce are open **Tasks** with NM Type "Opportunity". The Salesforce **Opportunity object DOES exist** and holds Team Briggs **deals** (listings, BOVs, escrows; six record types). The live Power Automate flow **"SF Deal → LCC Opportunity Sync"** (`eb1181ba…`, every 30 min) reads it and posts to `/api/pipeline/ingest-opportunities`, which feeds `bd_opportunities` with `type` = listing / bov / sf_deal (SF-BRIDGE1). The current edit guide is `docs/setup/SF-DEAL-SYNC-FLOW-EDIT-2026-09-23.md`. Don't read this page as "there is no Opportunity object".
+
 **This runbook described a flow that cannot work. Do not build it.**
 Superseded 2026-08-17 by P124. Kept, rather than deleted, so the wrong path is
 not re-derived.
