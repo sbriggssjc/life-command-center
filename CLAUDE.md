@@ -2567,6 +2567,13 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
   `20260903120000` (manual@1 → salesforce@20 → `domain_owner_contact`@55 → costar_sidebar@60), so every
   writer to them was invisible to the provenance doctrine. Register a row when you add another.
   (`v_field_provenance_unranked` returns **29** rows for other tables — pre-existing drift; it is a 30-day rolling window, so re-measure rather than quoting this number. It has read 35, 22 and 30 on different days.)
+- **⚠️ A CoStar subject address comes from the page HEADER only — never from a body walk (SIDEBAR5, 2026-09-23).**
+  Saving #1014478 from its Contacts tab minted gov 41083 at the Primary Leasing Company's office: `Fwy` was not a
+  street type, so the header failed, and the line walk ran before `document.title` and into a section it did not
+  know. Order is now headings → title → lines ABOVE the first contact section (`extension/content/_subject-address.js`),
+  with no fallback — nothing found blocks Save. The server refuses a capture whose street differs from its
+  `_page_title`. **When a street type is missing, the fix is the regex AND the order; either alone re-opens it.**
+  The same class had 5 live instances in 30 days (backlog SIDEBAR5-residue).
 - **TrafficMetrix table-as-contact-list misparse (Prompt 89).** A CoStar/sidebar capture once parsed a
   property page's TrafficMetrix traffic-count TABLE as a contact list — street names / column labels
   ("Collection Street", "Traffic Vol", "Made with TrafficMetrix") minted as PERSON entities, all stamped

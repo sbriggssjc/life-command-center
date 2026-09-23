@@ -26,6 +26,7 @@ import { fetchSharepointBytes } from '../_shared/storage-adapter.js';
 import { ensureEntityLink } from '../_shared/entity-link.js';
 import { sendTeamsAlert } from '../_shared/teams-alert.js';
 import { applySubjectAddressGuard, BUILTIN_BROKERAGE_OFFICES } from '../_shared/intake-address-guard.js';
+import { loadBrokerageOfficeRegistry } from '../_shared/brokerage-office-registry.js';
 import { createRequire } from 'module';
 
 // Document types worth signalling to Teams. These are the ones the PDF
@@ -917,23 +918,9 @@ async function markInboxDisposition(intakeId, { status, metadata } = {}) {
 // which is why this path is safe to retry after the 7s Copilot race killed
 // downstream work on the first attempt.
 // ============================================================================
-// GOV-AVAIL1: brokerage-office registry = the builtin own-office rows plus the
-// active rows of LCC Opps lcc_brokerage_office_address. Cached 10 minutes; a
-// failed read falls back to the builtin rows (our own office is never a subject).
-let _officeRegistryCache = null;
-let _officeRegistryAt = 0;
-export async function loadBrokerageOfficeRegistry() {
-  if (_officeRegistryCache && Date.now() - _officeRegistryAt < 10 * 60 * 1000) return _officeRegistryCache;
-  let rows = [];
-  try {
-    const r = await opsQuery('GET',
-      'lcc_brokerage_office_address?is_active=eq.true&select=firm_name,address,city,state,source&limit=1000');
-    if (r.ok && Array.isArray(r.data)) rows = r.data;
-  } catch { /* fall back to builtin */ }
-  _officeRegistryCache = [...BUILTIN_BROKERAGE_OFFICES, ...rows];
-  _officeRegistryAt = Date.now();
-  return _officeRegistryCache;
-}
+// GOV-AVAIL1 brokerage-office registry — lives in _shared since SIDEBAR5 so the
+// sidebar pipeline shares it; re-exported so existing importers are unchanged.
+export { loadBrokerageOfficeRegistry } from '../_shared/brokerage-office-registry.js';
 
 export async function runDownstreamPipeline(intakeId, mergedSnapshot, ctx = {}) {
   const resolvedWorkspaceId = ctx.workspaceId || null;

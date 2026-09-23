@@ -120,9 +120,13 @@
 
   function rememberAction(entityId, info, nowMs) {
     if (!entityId) return;
+    const at = nowMs == null ? Date.now() : nowMs;
     recent.set(String(entityId), {
       kind: info.kind || 'saved',
-      at: nowMs == null ? Date.now() : nowMs,
+      at,
+      // SIDEBAR5: when the action was TAKEN (before its request), so a stored
+      // run that finished after it can be recognised as this action's result.
+      actionAt: info.actionAt == null ? at : info.actionAt,
       pipeline: info.pipeline || null, // { status: 'success'|'failed'|'processing', text }
     });
   }
@@ -144,14 +148,61 @@
     return null;
   }
 
+  // SIDEBAR5: the identity of the latest pipeline run stored on the entity.
+  // Every run (success or failure) appends to _pipeline_run_log; records that
+  // predate the log only carry _pipeline_processed_at (set on success).
+  function lastRunStamp(meta) {
+    return lastRunFinishedAt(meta) || (meta && meta._pipeline_processed_at) || null;
+  }
+
+  // Server and client clocks differ; a run stamp this far before the action
+  // still counts as after it. Keyed with the prior-stamp check below, so a
+  // PREVIOUS run can never be mistaken for this one, whatever the skew.
+  const CLOCK_SKEW_MS = 2 * 60 * 1000;
+
+  // SIDEBAR5 (2026-09-23): the terminal outcome of the run started by an
+  // action, or null while it has not finished. A stored status counts only
+  // when its run stamp is NEW relative to the stamp read before the action
+  // (priorStamp) and not older than the action itself (sinceMs). Before this,
+  // pollPipelineStatus treated any _pipeline_summary as this run's success —
+  // on an Update that is the PREVIOUS run's summary.
+  function pipelineOutcomeSince(meta, opts) {
+    const m = meta || {};
+    const o = opts || {};
+    const status = m._pipeline_status;
+    if (status !== 'success' && status !== 'failed') return null;
+    const stamp = lastRunStamp(m);
+    if (!stamp) return null;
+    if (o.priorStamp && stamp === o.priorStamp) return null;
+    const t = toMs(stamp);
+    if (o.sinceMs != null && (t == null || t < o.sinceMs - CLOCK_SKEW_MS)) return null;
+    return { status, stamp, at: t };
+  }
+
+  // SIDEBAR5: the post-action memo only speaks while the database has nothing
+  // newer to say. A terminal stored run that finished after the action
+  // overrides the memo's pipeline line (e.g. the memo's "processing" written
+  // when the poll gave up at 35 s, for a run that finished at 55 s).
+  function memoSupersededByStored(rec, meta) {
+    if (!rec || !rec.pipeline) return false;
+    const m = meta || {};
+    if (m._pipeline_status !== 'success' && m._pipeline_status !== 'failed') return false;
+    const t = toMs(lastRunStamp(m));
+    const since = rec.actionAt == null ? rec.at : rec.actionAt;
+    return t != null && since != null && t > since;
+  }
+
   // Everything the matched render needs, decided from data.
   //   liveHashes  — captureFieldHashes of the page as rendered now
   //   meta        — the stored entity.metadata
   //   updatedAt   — entity.updated_at (fallback "last saved" time)
   //   sourceLabel — "CoStar", "CREXi", …
   //   recent      — recentAction(entityId) or null
-  function computeMatchedView({ liveHashes, meta, updatedAt, sourceLabel, recent: rec, nowMs }) {
+  function computeMatchedView({ liveHashes, meta, updatedAt, sourceLabel, recent: recIn, nowMs }) {
     const m = meta || {};
+    // SIDEBAR5: a stored terminal run newer than the action drops the memo's
+    // pipeline claim; the "Saved to LCC …" line from the memo stays.
+    const rec = recIn && memoSupersededByStored(recIn, m) ? { ...recIn, pipeline: null, superseded: true } : recIn;
     const now = nowMs == null ? Date.now() : nowMs;
     const stored = m._capture_field_hashes && typeof m._capture_field_hashes === 'object'
       ? m._capture_field_hashes : null;
@@ -166,7 +217,7 @@
     const processedAt = m._pipeline_processed_at || null;
     const runFinishedAt = lastRunFinishedAt(m);
     const hasRunHistory = !!(processedAt || runFinishedAt || status);
-    const recentPending = !!(rec && (!rec.pipeline || rec.pipeline.status === 'processing'));
+    const recentPending = !!(rec && !rec.superseded && (!rec.pipeline || rec.pipeline.status === 'processing'));
 
     // ── Update button ──
     let update;
@@ -256,6 +307,10 @@
     rememberAction,
     recentAction,
     computeMatchedView,
+    lastRunStamp,
+    pipelineOutcomeSince,
+    memoSupersededByStored,
+    CLOCK_SKEW_MS,
     RECENT_TTL_MS,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

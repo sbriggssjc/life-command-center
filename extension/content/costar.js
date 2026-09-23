@@ -168,38 +168,43 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     let headingEl = null;
     let headingOccupant = null;
 
-    for (const sel of ['h1', 'h2', 'h3']) {
-      const el = document.querySelector(sel);
-      if (el) {
-        const parsed = parseAddress(el.textContent?.trim());
-        if (parsed) {
-          address = parsed;
-          headingEl = el;
-          break;
-        }
-      }
-    }
-
-    let lines = null;
-    if (!address) {
-      lines = getPageLines();
-      address = findAddressInLines(lines);
-      // Round 76dj diagnostic: log when the address-finder runs and
-      // what it returns, so we can see in the page console whether the
-      // split-line fallback is firing at all on the live page.
-      console.log('[LCC CoStar] findAddressInLines →', address, '(of', lines.length, 'lines)');
-    }
-
-    if (!address) {
-      address = parseAddress(document.title);
-      if (address) console.log('[LCC CoStar] parseAddress(title) →', address);
-    }
-
-    if (!address) {
-      console.log('[LCC CoStar] address still null. title=', document.title, 'firstNumLines=',
-        (lines || []).filter(l => /^\d/.test(l)).slice(0, 3));
+    // SIDEBAR5 (2026-09-23): the subject address comes from the property
+    // HEADER only — headings, then document.title, then the page lines ABOVE
+    // the first contact/party section (content/_subject-address.js). The old
+    // order ran a body-wide line walk before document.title, and on the
+    // Contacts tab of CoStar #1014478 ("2600 Central Fwy N", whose "Fwy" was
+    // not a known street type) it walked down to the Primary Leasing Company
+    // block and captured "4005 Call Field Rd, Suite 100" as the property.
+    // No contact-block fallback: when the header yields nothing, address stays
+    // null and the side panel refuses to save.
+    const headingEls = ['h1', 'h2', 'h3'].map((sel) => document.querySelector(sel)).filter(Boolean);
+    let lines = getPageLines();
+    const SA = globalThis.__lccSubjectAddress;
+    let subject;
+    if (SA) {
+      subject = SA.resolveSubjectAddress({
+        headingTexts: headingEls.map((el) => el.textContent || ''),
+        title: document.title,
+        lines,
+        parse: parseAddress,
+        findInLines: findAddressInLines,
+      });
     } else {
-      console.log('[LCC CoStar] resolved address:', address);
+      // Guard module missing (should not happen — manifest loads it first):
+      // headings and title only, never the body-wide walk.
+      let a = null;
+      for (const el of headingEls) { a = parseAddress((el.textContent || '').trim()); if (a) break; }
+      if (!a) a = parseAddress(document.title);
+      subject = a ? { address: a, source: 'heading_or_title', status: 'ok' }
+        : { address: null, source: null, status: 'header_not_found' };
+    }
+    address = subject.address;
+    if (subject.source === 'heading') {
+      headingEl = headingEls.find((el) => parseAddress((el.textContent || '').trim()) === address) || null;
+    }
+    console.log('[LCC CoStar] subject address →', address, `(source=${subject.source || 'none'})`);
+    if (!address) {
+      console.log('[LCC CoStar] header address not found — capture will be blocked. title=', document.title);
     }
 
     // Round 76 (2026-06-25): capture the OCCUPANT suffix of the
@@ -642,7 +647,7 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       domain: 'costar',
       entity_type: 'property',
       _version: 32,
-      address: address || parseAddress(document.title),
+      address: address,
       page_url: url,
       city: accumulated.city,
       state: accumulated.state,
@@ -650,8 +655,16 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
       ...accumulated,
       contacts: accumulated.contacts,
       sales_history: accumulated.sales_history,
-      tenants: accumulated.tenants,
+      // SIDEBAR5 / LEASEJUNK1: never send a panel header ("Office/Ret Avail",
+      // "Total Avail") as a tenant — lock-step list in _subject-address.js.
+      tenants: SA ? SA.filterHeaderTenants(accumulated.tenants) : accumulated.tenants,
       source_property_key: propertyKey,
+      // SIDEBAR5: where the subject address came from, and the page title the
+      // server compares it against. Underscore keys: not part of the capture
+      // fingerprint or the field provenance map.
+      _subject_address_source: subject.source,
+      _subject_address_status: subject.status,
+      _page_title: document.title || null,
       costar_property_id: window.LccPropertyIdentity?.costarPropertyId(url) || null,
     };
     snapshot._source_field_provenance = {};
@@ -1124,7 +1137,7 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     // number is required, so a bare "Park Ave" style false-match on a
     // broker line is not a new risk (that case already matches via
     // "ave"/"pl"/etc regardless).
-    const STREET_RE = /\b(st|street|ave|avenue|blvd|boulevard|dr|drive|rd|road|ln|lane|ct|court|pl|place|way|hwy|highway|interstate\s+\d+|i-\d+|ih-\d+|pkwy|parkway|pky|pike|tpke|turnpike|byp|bypass|xing|crossing|crossings|cir|circle|loop|terr|terrace|ter|trail|trl|expy|expressway|speedway|spdwy|sq|square|cv|cove|crk|creek|hill|bnd|bend|run|plaza|plz|route|rt|us\s+route|state\s+route|sr|fm|cr|camino|paseo|calle|alameda|avenida|arroyo|rancho|mesa|vista|park|commons|center|centre|corners|village|pointe|point|landing|junction|gateway|campus|complex)\b/i;
+    const STREET_RE = /\b(st|street|ave|avenue|blvd|boulevard|dr|drive|rd|road|ln|lane|ct|court|pl|place|way|hwy|highway|fwy|freeway|frwy|interstate\s+\d+|i-\d+|ih-\d+|pkwy|parkway|pky|pike|tpke|turnpike|byp|bypass|xing|crossing|crossings|cir|circle|loop|terr|terrace|ter|trail|trl|expy|expressway|speedway|spdwy|sq|square|cv|cove|crk|creek|hill|bnd|bend|run|plaza|plz|route|rt|us\s+route|state\s+route|sr|fm|cr|camino|paseo|calle|alameda|avenida|arroyo|rancho|mesa|vista|park|commons|center|centre|corners|village|pointe|point|landing|junction|gateway|campus|complex)\b/i;
     // Salt Lake City-style grid addresses have no street-type word.
     // Form: <building#> <dir> <grid#> <dir> — e.g. "3854 W 5400 S",
     // "3000 E 7800 S". Without this branch, Taylorsville/SLC properties
@@ -1225,7 +1238,7 @@ console.log('[LCC CoStar] content script loaded at', new Date().toISOString(), '
     // Pointe/Point/Landing/Junction/Gateway/Campus/Complex to mirror
     // parseAddress's STREET_RE fix for "483 Gateway Industrial Park" (Jenkins,
     // KY) — see that regex's comment for the full incident.
-    const STREET_RE = /^\d+(?:-\d+)?\s+(?:[A-Za-z][\w&'.\- ]{0,80}\b(?:St|Ave|Avenue|Rd|Road|Hwy|Highway|Pkwy|Parkway|Pky|Blvd|Boulevard|Way|Dr|Drive|Ln|Lane|Pl|Place|Ct|Court|Cir|Circle|Trl|Trail|Expy|Expressway|Speedway|Spdwy|Sq|Square|Ter|Terrace|Loop|Tpke|Turnpike|Byp|Bypass|Xing|Crossing|Crossings|Camino|Paseo|Calle|Alameda|Avenida|Arroyo|Rancho|Mesa|Vista|Park|Commons|Center|Centre|Corners|Village|Pointe|Point|Landing|Junction|Gateway|Campus|Complex)|(?:Route|Rt|US\s+Route|State\s+Route|SR|FM|CR|Interstate|I|IH)[\s-]+\d+|(?:N|S|E|W|NE|NW|SE|SW)\s+\d+\s+(?:N|S|E|W|NE|NW|SE|SW))\b\.?/i;
+    const STREET_RE = /^\d+(?:-\d+)?\s+(?:[A-Za-z][\w&'.\- ]{0,80}\b(?:St|Ave|Avenue|Rd|Road|Hwy|Highway|Fwy|Freeway|Frwy|Pkwy|Parkway|Pky|Blvd|Boulevard|Way|Dr|Drive|Ln|Lane|Pl|Place|Ct|Court|Cir|Circle|Trl|Trail|Expy|Expressway|Speedway|Spdwy|Sq|Square|Ter|Terrace|Loop|Tpke|Turnpike|Byp|Bypass|Xing|Crossing|Crossings|Camino|Paseo|Calle|Alameda|Avenida|Arroyo|Rancho|Mesa|Vista|Park|Commons|Center|Centre|Corners|Village|Pointe|Point|Landing|Junction|Gateway|Campus|Complex)|(?:Route|Rt|US\s+Route|State\s+Route|SR|FM|CR|Interstate|I|IH)[\s-]+\d+|(?:N|S|E|W|NE|NW|SE|SW)\s+\d+\s+(?:N|S|E|W|NE|NW|SE|SW))\b\.?/i;
     const CITY_RE = /^[A-Z][A-Za-z.\- ]{1,40},\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?$/;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];

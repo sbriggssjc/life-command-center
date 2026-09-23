@@ -225,6 +225,64 @@ export function applySubjectAddressGuard(snapshot, { text = null, registry = BUI
   return { rejected: true, reason, office: office || null };
 }
 
+// ── SIDEBAR5 (2026-09-23): capture address vs the page title's street ────────
+// CoStar #1014478 was saved from its Contacts tab and the extension captured the
+// Primary Leasing Company's office ("4005 Call Field Rd, Suite 100") while the
+// page title named the property ("2600 Central Fwy N - Wichita Falls Shopping
+// Center"). The extension now reads the header only; this is the server-side
+// belt: a capture whose address names a different street than its own page
+// title is refused before a domain property is matched or minted.
+//
+// titleStreet: the first segment of a page title (split on | • · and spaced
+// dashes, with a "Something Sold:"-style prefix removed) that starts with a
+// civic number followed by a word. Null when the title carries no street.
+// A segment only counts when it also carries a street-type word — so "1 of 2,000
+// Records", "9 min drive" or "40 Retail Properties Sold" never become a street
+// and never refuse a capture. Mirrors (a subset of) costar.js STREET_RE.
+const TITLE_STREET_TYPE_RE = /\b(st|street|ave|avenue|blvd|boulevard|dr|drive|rd|road|ln|lane|ct|court|pl|place|way|hwy|highway|fwy|freeway|frwy|interstate|i-\d+|ih-\d+|pkwy|parkway|pky|pike|tpke|turnpike|byp|bypass|xing|crossing|cir|circle|loop|ter|terrace|trl|trail|expy|expressway|speedway|sq|square|cv|cove|plaza|plz|route|rt|sr|fm|cr|camino|paseo|calle|avenida|park|commons|center|centre|village|pointe|point|landing|gateway|campus)\b/i;
+const TITLE_NOT_STREET_RE = /^\d+\s+(of|min|mins|minutes?|records?|results?|properties|property|sf|acres?)\b/i;
+
+export function titleStreet(title) {
+  const segs = String(title || '').split(/\s*[•·|]\s*|\s+[-–—]\s+/).map(s => s.trim()).filter(Boolean);
+  for (const raw of segs) {
+    const seg = raw.replace(/^[A-Za-z &/]{0,40}:\s*/, '');
+    if (!/^\d+(?:\s*-\s*\d+)?\s+[A-Za-z]/.test(seg)) continue;
+    if (TITLE_NOT_STREET_RE.test(seg)) continue;
+    if (!TITLE_STREET_TYPE_RE.test(seg)) continue;
+    return seg;
+  }
+  return null;
+}
+
+// First street-name word after the civic number and any directional.
+function streetNameWord(address) {
+  const civic = parseCivicNumberSpan(String(address || '').split(',')[0]);
+  if (!civic) return null;
+  const words = civic.rest.replace(/[.,#]/g, ' ').split(/\s+/).filter(Boolean);
+  const w = words.find(t => DIRECTIONAL_ABBR[t] === undefined && !/^(n|s|e|w|ne|nw|se|sw)$/.test(t));
+  return w || null;
+}
+
+// Returns null when there is no opinion (no title, no street in it, or no civic
+// number on either side) or when the two agree; else
+// { captured_address, title_street, reason } — civic numbers disjoint, or the
+// same number on a different street name.
+export function captureTitleStreetMismatch(address, title) {
+  const ts = titleStreet(title);
+  if (!ts || !address) return null;
+  const agree = civicNumbersAgree(address, ts);
+  if (agree === null) return null;
+  if (agree === false) {
+    return { captured_address: address, title_street: ts, reason: 'civic_number_differs' };
+  }
+  const a = streetNameWord(address);
+  const b = streetNameWord(ts);
+  if (a && b && a !== b) {
+    return { captured_address: address, title_street: ts, reason: 'street_name_differs' };
+  }
+  return null;
+}
+
 // ── Legacy own-firm API (api/_shared/own-firm-addresses.js re-exports these) ──
 // The legacy test was a punctuation-insensitive SUBSTRING match on the exact
 // string "6120 s yale ave ste 300" — so the spelled-out "6120 South Yale

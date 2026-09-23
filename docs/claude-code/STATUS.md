@@ -53,6 +53,26 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-23 — SIDEBAR5: CoStar Contacts-tab address, stuck "still processing", header tenants (CC)
+
+- **Address.** CoStar #1014478 was saved from its Contacts tab and captured the Primary Leasing Company office
+  (`4005 Call Field Rd, Suite 100`) as the property. Two defects: `Fwy` was not a street type (so the header
+  failed in the `<h1>` and the title), and the body-wide line walk ran before the title. The subject address
+  now comes from headings → title → lines above the first contact section, with no fallback; nothing found
+  blocks Save with a re-scan prompt. Server: `upsertDomainProperty` refuses a capture whose street differs from
+  its `_page_title`, and consults the GOV-AVAIL1 DB office registry.
+- **Stuck status.** The poll backs off to ~180 s and ends only on a run stamped after the action; a stored
+  terminal run newer than the memo overrides it. An Update's previous summary is no longer read as success.
+- **Tenants.** The extension filters LEASEJUNK1's header list, lock-step with the server (drift test).
+- **Residue (live):** entity `2f90e232…` → `2600 Central Fwy N` (logged on the row); gov 41083 corrected in
+  place (7 values logged, restore proven in a rolled-back round trip); 41083/31048/31796 in
+  `gov_property_twin_review`, nothing merged. 30-day census: 5 confirmed same-class captures of 363
+  (SIDEBAR5-residue), a floor.
+- Tests: `sidebar5-subject-address-and-header-tenants` (19), `sidebar5-pipeline-status` (11); full suite
+  7,022 pass / 0 fail. Manifest 1.0.58. **Next:** merge both PRs, redeploy both Railway services, Scott reloads
+  the extension, Cowork re-verifies with a Save from a Contacts tab.
+
+
 ## 2026-09-23 — Round 69 (Cowork): D5 gate + SF-BRIDGE1 reconciled; the Findlay listing is live end to end; `SIDEBAR5`, `GOV-COMPS-CAP` and `GOV-UX1-D5-gate-2` prompted
 
 **Deploy:** `verify:deploy` shows `tranquil-delight` on **`ec1d81df`** (#2646 + #2647). The 56 new tests pass on `main`. SF-BRIDGE1's opportunity sync lives in `mcp/opportunity-sync.js`, so the standalone MCP service must be redeployed too → **Q52**. Findlay's deal is already `type=listing`, but `property_address` was still null after the 19:00 UTC sync.
