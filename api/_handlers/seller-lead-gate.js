@@ -22,7 +22,7 @@ import {
   SELLER_LEAD_AUTOCREATE_FLAG, SELLER_LEAD_AUTOCREATE_SOURCE, SELLER_LEAD_LANE_SOURCE,
   SELLER_LEAD_REJECT_REASONS, isValidRejectReason, applySellerLeadGate,
   autoCreateEligibility, precisionMeterLabel, buildCreateLeadBody,
-  loadGateCandidates, loadPrecision,
+  loadGateCandidates, loadPrecision, findGateCard, clusterBatchTag,
 } from '../_shared/seller-lead-gate.js';
 
 const PRODUCER = 'seller_lead_autocreate';
@@ -57,6 +57,9 @@ async function recordDecision(row, fields) {
       rank_value: row.rank_value, reason_to_sell: row.reason_to_sell,
       linked_roles: row.linked_roles, contact: row.gate_contact || null,
       point_person_user_id: row.point_person_user_id,
+      likely_spe_of: row.likely_spe_of || null,
+      cluster_rep_entity_id: row.cluster_rep_entity_id || null,
+      cluster_sibling_entity_ids: Array.isArray(row.cluster_siblings) ? row.cluster_siblings.map((x) => x.entity_id) : [],
     },
     ...fields,
   });
@@ -64,6 +67,31 @@ async function recordDecision(row, fields) {
   // click or a re-run). Idempotent by design, never a second decision.
   if (!r.ok && r.status === 409) return { ok: true, duplicate: true };
   return { ok: !!r.ok, duplicate: false, detail: r.ok ? null : r.data };
+}
+
+/**
+ * GOV-UX1-D5-gate-2 (sponsor): a card's sibling owners share its decision-maker,
+ * so one decision on the card is recorded for each of them too — under
+ * decided_via = 'cluster', which the precision meter (lane-only) never counts.
+ * Tagged clusterBatchTag(rep) (or the auto batch) so a lane "Not a lead"
+ * reversal brings the whole card back. Exported for tests.
+ */
+export async function recordClusterSiblings(card, fields, deps = {}) {
+  const record = deps.recordDecision || recordDecision;
+  const out = [];
+  for (const sib of Array.isArray(card.cluster_siblings) ? card.cluster_siblings : []) {
+    const r = await record({
+      ...sib, workspace_id: card.workspace_id, reason_to_sell: card.reason_to_sell,
+      linked_roles: card.linked_roles, gate_contact: card.gate_contact,
+      point_person_user_id: card.point_person_user_id, cluster_rep_entity_id: card.entity_id,
+    }, {
+      ...fields, decided_via: 'cluster',
+      batch_tag: fields.batch_tag || clusterBatchTag(card.entity_id),
+      lead_id: null, bd_opportunity_id: null,
+    });
+    out.push({ entity_id: sib.entity_id, ok: r.ok, duplicate: r.duplicate });
+  }
+  return out;
 }
 
 async function loadGated(workspaceId) {
@@ -113,13 +141,15 @@ export async function handleSellerLeadGate(req, res) {
   // gained an open opp, been decided by someone else, or become a repeat buyer).
   const gate = await loadGated(workspaceId);
   if (!gate.ok) return res.status(502).json({ error: 'gate_query_failed', detail: gate.detail });
-  const row = gate.gated.find((r) => r.entity_id === entityId);
+  // The card, whether the id is the card itself or one of its sibling owners.
+  const row = findGateCard(gate.gated, entityId);
   if (!row) return res.status(409).json({ error: 'not_in_gate', message: 'This owner no longer passes the seller-lead gate (already decided, has an open lead, or a guard now fails).' });
 
   if (decision === 'reject') {
     const rec = await recordDecision(row, { decision: 'reject', reason, decided_via: 'lane', decided_by: user.id });
     if (!rec.ok) return res.status(500).json({ error: 'decision_write_failed', detail: rec.detail });
-    return res.status(200).json({ ok: true, decision: 'reject', duplicate: rec.duplicate, meter: await loadEligibility() });
+    const siblings = await recordClusterSiblings(row, { decision: 'reject', reason, decided_by: user.id });
+    return res.status(200).json({ ok: true, decision: 'reject', duplicate: rec.duplicate, siblings, meter: await loadEligibility() });
   }
 
   const created = await invokeCreateLead(buildCreateLeadBody(row, SELLER_LEAD_LANE_SOURCE), user, workspaceId);
@@ -134,9 +164,10 @@ export async function handleSellerLeadGate(req, res) {
     lead_id: created.body.lead_id != null ? String(created.body.lead_id) : null,
     bd_opportunity_id: created.body.bd_opportunity_id || null,
   });
+  const siblings = await recordClusterSiblings(row, { decision: 'create', decided_by: user.id });
   return res.status(201).json({
     ok: true, decision: 'create', lead: created.body, decision_recorded: rec.ok, duplicate: rec.duplicate,
-    meter: await loadEligibility(),
+    siblings, meter: await loadEligibility(),
   });
 }
 
@@ -195,6 +226,12 @@ async function reverseDecisions(req, res, user) {
       reversed_at: now, reversed_by: user.id, reversed_note: note || null,
     });
     step.reversed = !!u.ok;
+    // A lane "Not a lead" on a collapsed card also brings its sibling owners back.
+    if (u.ok && d.decided_via === 'lane' && d.decision === 'reject') {
+      const sib = await opsQuery('PATCH', 'lcc_seller_lead_gate_decision?decided_via=eq.cluster&reversed_at=is.null&batch_tag=eq.'
+        + encodeURIComponent(clusterBatchTag(d.entity_id)), { reversed_at: now, reversed_by: user.id, reversed_note: note || null });
+      step.cluster_siblings_reversed = !!sib.ok;
+    }
     out.push(step);
   }
   return res.status(200).json({ ok: true, reversed: out.filter((s) => s.reversed).length, steps: out });
@@ -220,7 +257,8 @@ async function closeRun(runId, patch) {
  */
 export function planAutoCreate(gated, elig, max = AUTO_MAX_PER_TICK) {
   if (!elig || !elig.eligible) return [];
-  return (Array.isArray(gated) ? gated : []).slice(0, Math.max(0, max));
+  // GOV-UX1-D5-gate-2 (buyerspe): a likely SPE of a repeat buyer is left to the lane.
+  return (Array.isArray(gated) ? gated : []).filter((r) => !r.likely_spe_of).slice(0, Math.max(0, max));
 }
 
 export async function handleSellerLeadAutocreateTick(req, res) {
@@ -239,7 +277,9 @@ export async function handleSellerLeadAutocreateTick(req, res) {
   if (!isApply) {
     return res.status(200).json({
       ok: true, mode: 'dry_run', eligibility: elig, gated: gate.funnel.qualifies, funnel: gate.funnel,
-      would_create: plan.map((r) => ({ entity_id: r.entity_id, owner_name: r.owner_name, rank_value: r.rank_value })),
+      would_create: plan.map((r) => ({ entity_id: r.entity_id, owner_name: r.owner_name, rank_value: r.rank_value, cluster_size: r.cluster_size || 1 })),
+      held_for_lane_likely_spe: gate.gated.filter((r) => r.likely_spe_of)
+        .map((r) => ({ entity_id: r.entity_id, owner_name: r.owner_name, likely_spe_of: r.likely_spe_of })),
     });
   }
 
@@ -264,6 +304,9 @@ export async function handleSellerLeadAutocreateTick(req, res) {
       decision: 'create', decided_via: 'auto', decided_by: row.point_person_user_id, batch_tag: batchTag,
       lead_id: created.body.lead_id != null ? String(created.body.lead_id) : null,
       bd_opportunity_id: created.body.bd_opportunity_id || null,
+    });
+    item.siblings = await recordClusterSiblings(row, {
+      decision: 'create', decided_by: row.point_person_user_id, batch_tag: batchTag,
     });
     Object.assign(item, { created: true, lead_id: created.body.lead_id, bd_opportunity_id: created.body.bd_opportunity_id, decision_recorded: rec.ok });
     results.push(item);
