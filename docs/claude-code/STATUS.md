@@ -63,6 +63,13 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 - Guard `test/sf-bridge1.test.mjs`: 30 tests, 15/15 mutations RED.
 - **Deploy:** the migration is live now. JS needs a Railway redeploy of **both** services (`server.js` and the standalone MCP `mcp/server.js` both mount the opportunity sync). No edge function changed. Then `npm run verify:deploy`.
 - **Next (Cowork):** after the redeploy and one 30-min sync, check that Findlay `bd_opportunities.property_address` is filled. Then requeue `sf_files` 1747 (`?action=requeue`). Expect `matched` dia 51194 (reason `sf_seed_listing_*`) and a dia `available_listings` row with `is_northmarq=true`. Open the 51194 panel and expect "Our listing is live".
+## 2026-09-23 — GOV-UX1-D5-gate (CC): tight seller-lead gate, review lane on the Priority tab, precision-gated auto-create (flag OFF)
+
+- **Migration `20261102260000` (applied live on LCC Opps):** `lcc_is_seller_lead_decision_role`, `lcc_seller_lead_gate_decision` (one live decision per owner), `v_lcc_seller_lead_gate_candidates`, `v_lcc_seller_lead_gate_precision`, flag `SELLER_LEAD_AUTOCREATE` = off, cron `lcc-seller-lead-autocreate` (weekdays 13:10 UTC; a named skip while locked).
+- **Live funnel:** 217 candidates → **20 qualify**. The decision-maker role cuts 191; repeat buyers cut 6 more. Graded all 20: **10 keep / 10 reject**, so the first page is ~50%. Auto-create stays locked by design. Details and gaps are in `responses/GOV-UX1-D5-gate.response.md`, and the gaps are filed as `GOV-UX1-D5-gate-bank/-buyerspe/-sponsor`.
+- **JS (needs the Railway redeploy of both services + `npm run verify:deploy`):** `api/_shared/seller-lead-gate.js`, `api/_handlers/seller-lead-gate.js` (`/api/seller-lead-gate`, `/api/seller-lead-autocreate-tick`), the Priority-tab lane in `ops.js`, `bridgeCreateLead` exported (still the only lead writer), and cache busters `2026092301 → 2026092302`.
+- **Tests:** `test/gov-ux1-d5-gate.test.mjs` 26 tests, 19/19 mutations RED; full suite 6,962 pass / 0 fail.
+- **Next:** Scott works the lane (checklist **Q51**) and flips the flag when the meter reads eligible.
 
 ## 2026-09-23 — Round 68 (Cowork): 1.0.57 Save verified (one run); Q49 edge function verified; Findlay linked to dia 51194; Q48 → hybrid gate prompted; `SF-BRIDGE1` prompted; STATUS archived
 

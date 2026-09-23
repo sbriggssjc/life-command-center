@@ -2281,7 +2281,10 @@ async function resolveBuyerParent(entityId) {
   return null;
 }
 
-async function bridgeCreateLead(req, res, user, workspaceId) {
+// GOV-UX1-D5-gate: exported so the seller-lead review lane and auto-create tick
+// write THROUGH this function — it stays the only lead writer (guarded by
+// test/gov-ux1-d5-gate.test.mjs).
+export async function bridgeCreateLead(req, res, user, workspaceId) {
   const {
     domain, property_id, entity_id, owner_name, true_owner_name,
     true_owner_is_operator, owner_role, label, property_address, notes, source,
