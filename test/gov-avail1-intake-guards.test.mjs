@@ -263,15 +263,7 @@ describe('wiring', () => {
   });
 });
 
-describe('gov Available tab (display only)', () => {
-  const src = readFileSync(new URL('../gov.js', import.meta.url), 'utf8');
-  it('Available rows render the canonical agency and the stripped address, raw on hover', () => {
-    assert.match(src, /agency_display:\s*r\.agency_code \|\| r\.agency/);
-    assert.match(src, /address_display:\s*r\.address_display \|\| r\.address/);
-    assert.match(src, /td\(r\.agency_display, true, r\.agency_title\)/);
-    assert.match(src, /r\.address_conflict \? '⚠ ' : ''/);
-  });
-  it('Comps rows keep the raw cells (the change is scoped to Available)', () => {
-    assert.match(src, /if \(isComps\) \{\s*html \+= td\(r\.agency, true\);\s*html \+= td\(r\.address, true\);/);
-  });
-});
+// The gov Available / Sales Comps / Leases display mapping moved to one shared function in
+// GOV-AVAIL2 (2026-09-23); its behavioural guards live in test/gov-avail2-display.test.mjs.
+// The old "Comps keep the raw cells" pin was retired on purpose: GOV-AVAIL2 asked for all three
+// tables to read one way.

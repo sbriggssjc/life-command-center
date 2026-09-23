@@ -9125,6 +9125,8 @@ async function renderGovSales() {
         address: r.address,
         city: r.city,
         state: r.state,
+        // GOV-AVAIL2: display columns from v_sales_comps (one SQL owner, gov_display_*).
+        ...govDisplayFields(r),
         land_acres: r.land_acres,
         year_built: r.year_built,
         rba: r.rba,
@@ -9170,18 +9172,9 @@ async function renderGovSales() {
         seller: r.seller,
         listing_broker: r.listing_broker,
         dom: r.days_on_market != null ? parseInt(r.days_on_market, 10) : null,
-        // GOV-AVAIL1 (2026-09-22): display-only columns from v_available_listings.
-        // agency_code = canonical short name via the ID3a resolver (gov_resolve_agency);
-        // address_display = the address with its trailing city/state/ZIP stripped ONLY when
-        // they equal the row's own. The raw strings stay in agency/address (search, sort,
-        // detail panel) and are shown on hover.
-        agency_display: r.agency_code || r.agency || r.agency_full || '',
-        agency_title: r.agency_code
-          ? (r.agency_canonical_full || r.agency_code) + (r.agency && r.agency !== r.agency_code ? ' — listed as “' + r.agency + '”' : '')
-          : (r.agency ? r.agency + ' (not resolved to a canonical agency)' : ''),
-        address_display: r.address_display || r.address,
-        address_title: r.address || '',
-        address_conflict: r.address_locality_conflict === true,
+        // GOV-AVAIL1/2: display-only columns from v_available_listings (one SQL owner,
+        // gov_display_*). The raw strings stay in agency/address (search, sort, detail).
+        ...govDisplayFields(r),
         // Marketing collateral — passed through so the Actions cell can
         // render the same icon set the Listings table shows (2026-04-23).
         intake_artifact_path: r.intake_artifact_path || null,
@@ -9381,15 +9374,10 @@ async function renderGovSales() {
     const rowData = JSON.stringify({ property_id: r.property_id, lease_number: r.lease_number, agency: r.agency, address: r.address, city: r.city, state: r.state }).replace(/'/g, '&#39;');
     const _zebra = _ri % 2 === 0 ? '' : 'background:rgba(255,255,255,0.02);';
     html += '<tr class="clickable-row" onclick=\'showDetail(' + rowData + ', "gov-ownership")\' style="cursor: pointer;' + _zebra + '">';
-    if (isComps) {
-      html += td(r.agency, true);
-      html += td(r.address, true);
-    } else {
-      html += td(r.agency_display, true, r.agency_title);
-      html += td((r.address_conflict ? '⚠ ' : '') + (r.address_display || ''), true,
-                 r.address_conflict ? r.address_title + ' — city/state in the address disagree with this row' : r.address_title);
-    }
-    html += td(r.city);
+    html += govAgencyCellHTML(r);
+    html += td((r.address_conflict ? '⚠ ' : '') + (r.address_display || ''), true,
+               r.address_conflict ? r.address_title + ' — city/state in the address disagree with this row' : r.address_title);
+    html += td(r.city_display || r.city);
     html += td(r.state);
     html += tdr(fmtAcres(r.land_acres));
     html += tdr(r.year_built || '—');
@@ -9499,6 +9487,67 @@ async function renderGovSales() {
 // ============================================================================
 let govLeasesData = null; // lazy-loaded
 
+// GOV-AVAIL2 (2026-09-23): one display mapping for every gov list that reads the
+// gov_display_* columns (v_available_listings, v_sales_comps) or the gov_display
+// computed column on properties (Leases). All casing / abbreviation / agency
+// resolution happens in SQL (government-lease sql/20260923_gov_avail2_*); this only
+// picks the columns, so the three tables read one way.
+function govDisplayFields(r) {
+  const d = r.gov_display || {};
+  const code = r.agency_code != null ? r.agency_code : d.agency_code;
+  const full = r.agency_canonical_full != null ? r.agency_canonical_full : d.agency_full;
+  const resolution = r.agency_resolution != null ? r.agency_resolution : d.agency_resolution;
+  const rawDisplay = r.agency_raw_display != null ? r.agency_raw_display : d.agency_raw;
+  const raw = r.agency || r.agency_full || r.agency_full_name || '';
+  const label = r.agency_display || d.agency || code || rawDisplay || raw;
+  return {
+    agency_display: label || '',
+    agency_resolved: resolution === 'matched',
+    agency_title: code
+      ? (full || code) + (raw && raw !== code ? ' — listed as “' + raw + '”' : '')
+      : (raw ? raw + ' — not matched to a canonical agency' : ''),
+    address_display: r.address_display || d.address || r.address || '',
+    address_title: r.address || '',
+    address_conflict: r.address_locality_conflict === true,
+    city_display: r.city_display || d.city || r.city || ''
+  };
+}
+
+// Agency cell: canonical short name when it resolves (full name on hover); otherwise the
+// title-cased source string with a dotted underline, so it reads as a known gap, not data.
+function govAgencyCellHTML(r, style) {
+  const label = r.agency_display || '—';
+  const inner = r.agency_resolved || !r.agency_display
+    ? esc(label)
+    : '<span class="gov-agency-unresolved" style="border-bottom:1px dotted var(--text3);color:var(--text2)">' + esc(label) + '</span>';
+  return '<td style="' + (style || 'padding: 8px; border-bottom: 1px solid var(--border); white-space: nowrap; max-width: 180px; overflow: hidden; text-overflow: ellipsis;') + '"' +
+    (r.agency_title ? ' title="' + esc(r.agency_title) + '"' : '') + '>' + inner + '</td>';
+}
+
+// Leases reads properties directly (~20k rows) but shows 50. gov_display (the GOV-AVAIL2
+// computed column) costs ~0.5 ms a row, so it is fetched for the displayed rows only, once,
+// and the table re-renders when it lands.
+const _govDisplayRequested = new Set();
+function govEnsureDisplay(rows) {
+  const ids = rows.filter(p => p && p.property_id != null && !p.gov_display && !_govDisplayRequested.has(p.property_id))
+    .map(p => p.property_id);
+  if (!ids.length) return;
+  ids.forEach(id => _govDisplayRequested.add(id));
+  govQuery('properties', 'property_id,gov_display', { filter: 'property_id=in.(' + ids.join(',') + ')', limit: 1000 })
+    .then(res => {
+      const byId = new Map((res.data || []).map(x => [x.property_id, x.gov_display]));
+      let changed = false;
+      for (const p of rows) {
+        if (byId.has(p.property_id)) { p.gov_display = byId.get(p.property_id); changed = true; }
+      }
+      const el = document.getElementById('bizPageInner');
+      if (changed && el && typeof govData !== 'undefined') {
+        if (el.querySelector('.gov-leases-urgent')) el.innerHTML = buildGovLeasesHTML();
+      }
+    })
+    .catch(e => console.warn('gov_display fetch failed', e));
+}
+
 function renderGovLeases() {
   const el = document.getElementById('bizPageInner');
   if (!el) return '';
@@ -9509,14 +9558,16 @@ function renderGovLeases() {
     // Trigger portfolio load if not done
     (async () => {
       try {
+        // PostgREST caps a response at 1,000 rows whatever `limit` says, so the stride is
+        // 1,000 (a 2,000 stride stopped after the first page).
         let allProps = [], pg = 0;
         while (true) {
           const batch = await govQuery('properties',
             'property_id,agency,agency_full_name,address,city,state,firm_term_remaining,gross_rent,gross_rent_psf,sf_leased,noi,lease_expiration,lease_commencement,government_type',
-            { limit: 2000, offset: pg * 2000 }
+            { limit: 1000, offset: pg * 1000 }
           );
           allProps = allProps.concat(batch.data || []);
-          if (!batch.data || batch.data.length < 2000) break;
+          if (!batch.data || batch.data.length < 1000) break;
           pg++;
         }
         govData.portfolioProperties = allProps;
@@ -9612,17 +9663,19 @@ function buildGovLeasesHTML() {
   if (urgentLeases.length === 0) {
     html += '<div style="color:var(--text2);font-size:13px;padding:12px 0">No leases expiring within 2 years.</div>';
   } else {
-    html += '<div class="gov-table-card"><table class="gov-table"><thead><tr>';
+    html += '<div class="gov-table-card gov-leases-urgent"><table class="gov-table"><thead><tr>';
     html += '<th>Agency</th><th>Address</th><th>City</th><th>State</th><th style="text-align:right">Firm Term</th><th>Expiration</th><th style="text-align:right">Rent</th><th style="text-align:right">SF</th><th style="text-align:center;min-width:130px">Actions</th>';
     html += '</tr></thead><tbody>';
+    govEnsureDisplay(urgentLeases.slice(0, 50));
     for (const p of urgentLeases.slice(0, 50)) {
       const termColor = (p.firm_term_remaining || 0) < 0 ? 'var(--red)' : (p.firm_term_remaining || 0) <= 1 ? '#f87171' : '#fb923c';
       const termLabel = p.firm_term_remaining != null ? (p.firm_term_remaining < 0 ? 'Expired' : p.firm_term_remaining.toFixed(1) + ' yrs') : '—';
       const expDate = p.lease_expiration ? new Date(p.lease_expiration).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) : '—';
       html += `<tr class="clickable-row" onclick='showDetail(${safeJSON(p)}, "gov-lead")'>`;
-      html += `<td>${esc(p.agency || p.agency_full_name || '—')}</td>`;
-      html += `<td>${esc(p.address || '—')}</td>`;
-      html += `<td>${esc(p.city || '—')}</td>`;
+      const _pd = govDisplayFields(p);
+      html += govAgencyCellHTML(_pd, ' ');
+      html += `<td title="${esc(_pd.address_title)}">${esc(_pd.address_display || '—')}</td>`;
+      html += `<td>${esc(_pd.city_display || '—')}</td>`;
       html += `<td>${esc(p.state || '—')}</td>`;
       html += `<td style="text-align:right;color:${termColor};font-weight:600">${termLabel}</td>`;
       html += `<td>${expDate}</td>`;
@@ -9650,15 +9703,17 @@ function buildGovLeasesHTML() {
   if (recentLeases.length === 0) {
     html += '<div style="color:var(--text2);font-size:13px;padding:12px 0">No lease effective dates available.</div>';
   } else {
-    html += '<div class="gov-table-card"><table class="gov-table"><thead><tr>';
+    html += '<div class="gov-table-card gov-leases-urgent"><table class="gov-table"><thead><tr>';
     html += '<th>Agency</th><th>Address</th><th>State</th><th>Effective</th><th>Expiration</th><th style="text-align:right">Firm Term</th><th style="text-align:right">Rent</th>';
     html += '</tr></thead><tbody>';
+    govEnsureDisplay(recentLeases);
     for (const p of recentLeases) {
       const eff = p.lease_commencement ? new Date(p.lease_commencement).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
       const exp = p.lease_expiration ? new Date(p.lease_expiration).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) : '—';
       const term = p.firm_term_remaining != null ? p.firm_term_remaining.toFixed(1) + ' yrs' : '—';
       html += `<tr class="clickable-row" onclick='showDetail(${safeJSON(p)}, "gov-lead")'>`;
-      html += `<td>${esc(p.agency || '—')}</td><td>${esc(p.address || '—')}</td><td>${esc(p.state || '—')}</td>`;
+      const _rd = govDisplayFields(p);
+      html += govAgencyCellHTML(_rd, ' ') + `<td title="${esc(_rd.address_title)}">${esc(_rd.address_display || '—')}</td><td>${esc(p.state || '—')}</td>`;
       html += `<td>${eff}</td><td>${exp}</td><td style="text-align:right">${term}</td><td style="text-align:right">${p.gross_rent ? fmt(p.gross_rent) : '—'}</td>`;
       html += '</tr>';
     }
