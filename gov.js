@@ -110,6 +110,12 @@ async function govQuery(table, select, params = {}) {
   if (params.limit !== undefined) url.searchParams.set('limit', params.limit);
   if (params.offset !== undefined) url.searchParams.set('offset', params.offset);
   if (params.count === false) url.searchParams.set('count', 'false');
+  // GOV-COMPS-CAP: a caller that needs a TRUE total (a pill, a "loaded N of M")
+  // asks for it explicitly; the edge otherwise sends a planner estimate for
+  // heavy views, which is a guess, not a count.
+  else if (params.count === 'exact' || params.count === 'planned' || params.count === 'estimated') {
+    url.searchParams.set('count', params.count);
+  }
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
@@ -4461,15 +4467,9 @@ function renderGovOverview() {
     govSalesLoading = true;
     (async () => {
       try {
-        let all = [], offset = 0;
-        while (true) {
-          const res = await govQuery('v_sales_comps', '*', { order: 'sale_date.desc.nullslast', limit: 1000, offset });
-          const rows = res.data || [];
-          all = all.concat(rows);
-          if (rows.length < 1000) break;
-          offset += 1000;
-        }
-        govSalesComps = all;
+        const loaded = await govLoadSalesComps();
+        govSalesComps = loaded.rows;
+        govSalesCompsTotal = loaded.total;
       } catch(e) { console.warn('Gov sales comps load failed:', e.message); govSalesComps = []; }
       govSalesLoading = false;
       const el = document.getElementById('govOverviewSales');
@@ -8942,6 +8942,44 @@ function saveGovDetailLead(leadId) {
 
 let govSalesView = 'comps'; // 'comps' | 'available'
 let govSalesComps = null;   // lazy-loaded from v_sales_comps
+let govSalesCompsTotal = null; // EXACT row count of v_sales_comps (null = unknown)
+
+// GOV-COMPS-CAP (2026-09-23): the single loader for v_sales_comps, shared by the
+// Overview metrics and the Sales tab. The list used to stop at exactly 2,000:
+// the edge sent `Prefer: count=planned`, the planner estimated 1,817 rows, and
+// PostgREST answers 416 for any offset past its OWN estimate — the proxy turned
+// that into [] and the "short page" read as the end of the data. The edge no
+// longer counts pages after the first (supabase/functions/data-query), and this
+// loader asks for an EXACT total on page 0 and keeps paging until it has it, so
+// a short page can never again pass for "done" without the gap being visible.
+// Returns { rows, total } — total is null only when the count itself failed.
+async function govLoadSalesComps() {
+  const PAGE = 1000;
+  const q = { order: 'sale_date.desc.nullslast', limit: PAGE };
+  const first = await govQuery('v_sales_comps', '*', Object.assign({}, q, { offset: 0, count: 'exact' }));
+  let rows = (first && first.data) || [];
+  const c = first && first.count;
+  const total = (typeof c === 'number' && c >= rows.length && (c > 0 || rows.length === 0)) ? c : null;
+  let offset = PAGE, last = rows.length;
+  while (last === PAGE && (total === null || rows.length < total)) {
+    const res = await govQuery('v_sales_comps', '*', Object.assign({}, q, { offset, count: false }));
+    const page = (res && res.data) || [];
+    rows = rows.concat(page);
+    last = page.length;
+    offset += PAGE;
+  }
+  return { rows, total };
+}
+
+// Pill text for "Sales Comps (…)". The number is the EXACT total from the DB,
+// never the loaded array's length — a partial load says so ("N of M") instead
+// of silently presenting N as the whole population.
+function govSalesCompsCountLabel(rows, total) {
+  if (!rows) return '\u2026';
+  if (typeof total !== 'number') return fmtN(rows.length) + ' loaded';
+  if (rows.length < total) return fmtN(rows.length) + ' of ' + fmtN(total);
+  return fmtN(total);
+}
 let govAvailListings = null; // lazy-loaded from v_available_listings
 let govSalesLoading = false;
 let govSalesSearch = '';
@@ -9052,15 +9090,9 @@ async function renderGovSales() {
     govSalesLoading = true;
     inner.innerHTML = '<div style="text-align:center;padding:48px;color:var(--text2)"><span class="spinner"></span><p style="margin-top:12px">Loading sales comps...</p></div>';
     try {
-      let all = [], offset = 0;
-      while (true) {
-        const res = await govQuery('v_sales_comps', '*', { order: 'sale_date.desc.nullslast', limit: 1000, offset });
-        const rows = res.data || [];
-        all = all.concat(rows);
-        if (rows.length < 1000) break;
-        offset += 1000;
-      }
-      govSalesComps = all;
+      const loaded = await govLoadSalesComps();
+      govSalesComps = loaded.rows;
+      govSalesCompsTotal = loaded.total;
     } catch (e) { console.error('Gov sales comps load error:', e); govSalesComps = []; }
     govSalesLoading = false;
   }
@@ -9211,7 +9243,7 @@ async function renderGovSales() {
 
   // Sub-tab toggle
   html += '<div class="pills" style="margin-bottom: 16px;">';
-  html += '<button class="pill' + (isComps ? ' active' : '') + '" data-gov-sales-view="comps">Sales Comps (' + (govSalesComps ? fmtN(govSalesComps.length) : '…') + ')</button>';
+  html += '<button class="pill' + (isComps ? ' active' : '') + '" data-gov-sales-view="comps">Sales Comps (' + govSalesCompsCountLabel(govSalesComps, govSalesCompsTotal) + ')</button>';
   html += '<button class="pill' + (!isComps ? ' active' : '') + '" data-gov-sales-view="available">Available (' + (govAvailListings ? fmtN(govAvailListings.length) : '…') + ')</button>';
   html += '</div>';
 
@@ -9927,7 +9959,7 @@ function renderGovPlayers() {
     return n;
   }
 
-  // Prefer the full lazy-loaded v_sales_comps (2155 rows) over govData.salesComps (500-row limit)
+  // Prefer the full lazy-loaded v_sales_comps (~4,850 rows 2026-09-23 — see govLoadSalesComps) over govData.salesComps (500-row limit)
   const sales = (govSalesComps && govSalesComps.length > 0) ? govSalesComps : (govData.salesComps || []);
   const ownership = govData.ownership || [];
   const listings = govData.listings || [];
