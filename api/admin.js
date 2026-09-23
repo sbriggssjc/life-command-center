@@ -23,6 +23,7 @@
 
 import { authenticate, requireRole, primaryWorkspace, handleCors, authReadiness } from './_shared/auth.js';
 import { opsQuery, pgFilterVal, requireOps, withErrorHandler, fetchWithTimeout } from './_shared/ops-db.js';
+import { SF_DEAL_TYPES } from '../mcp/opportunity-sync.js';
 import { ROLES } from './_shared/lifecycle.js';
 import { domainQuery } from './_shared/domain-db.js';
 import { isTrueOwnerOperator, trueOwnerOperatorSelectFields } from './_shared/true-owner-operator-guard.js';
@@ -4436,6 +4437,10 @@ async function handlePriorityBand(req, res) {
   const oppState = effectiveEntityId
     ? await resolveOwnerOppState(effectiveEntityId)
     : { open_opportunity: false, bd_opportunity_id: null, cadence_next_touch_due: null };
+  // SF-BRIDGE1: our own Salesforce deal on this property (or entity). The owner
+  // lane above only ever counts type='prospect', so a live listing/BOV/escrow of
+  // ours read as "no lead" and the banner offered "Create the lead" on it.
+  const openDeal = await resolveOpenSfDeal({ domain, propertyId, entityId: effectiveEntityId });
 
   if (!row) {
     // No queue row: still surface the opportunity/cadence truth (the owner may
@@ -4446,6 +4451,7 @@ async function handlePriorityBand(req, res) {
       open_opportunity: oppState.open_opportunity,
       bd_opportunity_id: oppState.bd_opportunity_id,
       cadence_next_touch_due: oppState.cadence_next_touch_due,
+      open_deal: openDeal,
     });
   }
 
@@ -4465,6 +4471,7 @@ async function handlePriorityBand(req, res) {
     open_opportunity: oppState.open_opportunity,
     bd_opportunity_id: oppState.bd_opportunity_id,
     cadence_next_touch_due: oppState.cadence_next_touch_due,
+    open_deal: openDeal,
     // R6 ownership-resolution context (drives the banner's "Resolve ownership
     // & control" step when the owner isn't yet connected).
     resolve_reason: row.resolve_reason || null,
@@ -4502,6 +4509,35 @@ async function resolveOwnerOppState(entityId) {
     }
   } catch (_e) { /* soft-fail */ }
   return out;
+}
+
+// SF-BRIDGE1: an OPEN Salesforce deal of ours (listing / BOV / buy side / deal
+// of unstated side) on the property's asset entity, or on the entity itself.
+// The property's asset entities come from the canonical by-ID join
+// external_identities(<dia|gov>, 'asset', property_id) — never a name match.
+// Soft-fails to null (the banner falls back to today's behaviour).
+export async function resolveOpenSfDeal({ domain, propertyId, entityId }, q = opsQuery) {
+  try {
+    const ids = new Set();
+    if (entityId) ids.add(String(entityId));
+    if ((domain === 'dia' || domain === 'gov') && propertyId != null && propertyId !== '') {
+      const x = await q('GET',
+        'external_identities?select=entity_id&source_type=eq.asset&source_system=eq.' + domain
+        + '&external_id=eq.' + pgFilterVal(String(propertyId)) + '&limit=20');
+      if (x && x.ok && Array.isArray(x.data)) for (const r of x.data) if (r && r.entity_id) ids.add(String(r.entity_id));
+    }
+    if (!ids.size) return null;
+    const r = await q('GET',
+      'bd_opportunities?select=id,sf_opp_id,deal_name,stage,type'
+      + '&is_open=is.true&type=in.(' + SF_DEAL_TYPES.join(',') + ')'
+      + '&entity_id=in.(' + [...ids].join(',') + ')&order=updated_at.desc&limit=1');
+    const d = r && r.ok && Array.isArray(r.data) ? r.data[0] : null;
+    if (!d) return null;
+    return { bd_opportunity_id: d.id, sf_opp_id: d.sf_opp_id || null, deal_name: d.deal_name || null,
+             stage: d.stage || null, type: d.type || null };
+  } catch (_e) {
+    return null;
+  }
 }
 
 // Batch-resolve open-prospect-opportunity state for a page of priority-queue

@@ -138,7 +138,7 @@ export async function createPropertyFromIntake(intakeId, ctx = {}) {
   //    created/matched the property, just promote what exists and return —
   //    never double-create.
   try {
-    const preMatch = await matchIntakeToProperty(intakeId, snapshot);
+    const preMatch = await matchIntakeToProperty(intakeId, snapshot, { seedData }); // SF-BRIDGE1
     if (preMatch?.status === 'matched' && preMatch?.property_id != null) {
       const downstream = await runDownstreamPipeline(intakeId, snapshot, {
         workspaceId, actorId: ctx.actorId || null, seedData,

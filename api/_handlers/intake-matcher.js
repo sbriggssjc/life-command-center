@@ -21,6 +21,7 @@
 import { opsQuery } from '../_shared/ops-db.js';
 import { domainQuery } from '../_shared/domain-db.js';
 import { normalizeAddress, stripDirectional, normalizeState } from '../_shared/entity-link.js';
+import { resolveSfSeed, translateLccMatch, reconcileSeedWithAddressMatch } from '../_shared/sf-seed-match.js';
 import {
   normalizeStreetAddress,
   stripDirectionalTokens,
@@ -551,7 +552,32 @@ async function matchAgainstLcc(address, state, city) {
  * @param {object} extractionSnapshot — merged extraction result
  * @returns {{ status: string, confidence: number, property_id: string|null, domain?: string }}
  */
-export async function matchIntakeToProperty(intakeId, extractionSnapshot) {
+export async function matchIntakeToProperty(intakeId, extractionSnapshot, opts = {}) {
+  // SF-BRIDGE1: a Salesforce seed (Listing__c / Opportunity) resolves by ID to
+  // its deal's domain property; the address match is reconciled against it
+  // (sf-seed-match.js). No seed → the address matcher's verdict, unchanged.
+  let seed = null;
+  if (opts && opts.seedData) {
+    try {
+      seed = await resolveSfSeed(opts.seedData, { opsQuery, domainQuery });
+    } catch (err) {
+      seed = { status: 'unresolved', reason: 'seed_lookup_failed', detail: String(err?.message || err).slice(0, 200) };
+    }
+  }
+  const seedResolved = seed?.status === 'resolved';
+  let match = await computeAddressMatch(intakeId, extractionSnapshot, { deferDisambiguation: seedResolved });
+  if (seed) {
+    const am = seedResolved ? await translateLccMatch(match, { opsQuery }) : match;
+    const addr = typeof extractionSnapshot?.address === 'string' ? extractionSnapshot.address : null;
+    match = reconcileSeedWithAddressMatch({ seed, addressMatch: am, extractedAddress: addr });
+  }
+  await writeMatchResult(intakeId, match);
+  return match;
+}
+
+// The address/tenant matcher. Returns the verdict WITHOUT persisting it (the
+// caller writes once, after any seed reconciliation).
+async function computeAddressMatch(intakeId, extractionSnapshot, { deferDisambiguation = false } = {}) {
   // AI extractors commonly emit "Ohio" while domain DBs and LCC entities
   // store "OH". Normalize at the top so every downstream filter uses the
   // canonical 2-letter code.
@@ -571,9 +597,7 @@ export async function matchIntakeToProperty(intakeId, extractionSnapshot) {
   const anyAddress = pairs.some((p) => p.address);
   const anyTenant  = pairs.some((p) => p.tenant) || extractionSnapshot.tenant_name;
   if (!anyAddress && !anyTenant) {
-    const noData = { status: 'no_data', confidence: 0, property_id: null };
-    await writeMatchResult(intakeId, noData);
-    return noData;
+    return { status: 'no_data', confidence: 0, property_id: null };
   }
 
   // Multi-address intake: match each, attach to the first matched property,
@@ -595,18 +619,17 @@ export async function matchIntakeToProperty(intakeId, extractionSnapshot) {
   if (match.status === 'unmatched' && address && state) {
     const top = await collectAmbiguousCandidates(address, state, primaryDomain);
     if (top.length >= DISAMBIG_MIN_CANDIDATES) {
-      await emitMatchDisambiguation(intakeId, address, tenant, top);
-      const ambiguous = {
+      // SF-BRIDGE1: a resolved Salesforce seed decides first; no Decision
+      // Center card for a question the seed may already answer.
+      if (!deferDisambiguation) await emitMatchDisambiguation(intakeId, address, tenant, top);
+      return {
         status: 'review_required', reason: 'ambiguous_candidates', confidence: 0,
         property_id: null, domain: null, candidate_count: top.length,
         candidates: top,
       };
-      await writeMatchResult(intakeId, ambiguous);
-      return ambiguous;
     }
   }
 
-  await writeMatchResult(intakeId, match);
   return match;
 }
 
@@ -898,7 +921,6 @@ async function matchMultiAddress(intakeId, pairs, state, city, snapshot) {
         all_addresses: perAddress,
       };
 
-  await writeMatchResult(intakeId, aggregate);
   return aggregate;
 }
 

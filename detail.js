@@ -6763,6 +6763,8 @@ async function _udFetchPriorityBand() {
       if (data && data.entity_id && data.open_opportunity != null) {
         _udCache.ownerOpp = { open: !!data.open_opportunity, cadence_next_touch_due: data.cadence_next_touch_due || null };
       }
+      // SF-BRIDGE1: our own open Salesforce deal on this property.
+      if (data && data.open_deal) _udCache.openDeal = data.open_deal;
     } else { _udCache.priorityBand = null; }
   } catch (_e) { _udCache.priorityBand = null; }
   // Fallback: if the property's owner has dropped out of the priority queue
@@ -6777,6 +6779,7 @@ async function _udFetchPriorityBand() {
         const r2 = await doFetch2('/api/priority-band?entity_id=' + encodeURIComponent(eid));
         if (r2 && r2.ok) {
           const d2 = await r2.json();
+          if (d2 && d2.open_deal && !_udCache.openDeal) _udCache.openDeal = d2.open_deal;
           if (d2 && d2.open_opportunity != null) {
             _udCache.ownerOpp = { open: !!d2.open_opportunity, cadence_next_touch_due: d2.cadence_next_touch_due || null };
           } else { _udCache.ownerOpp = null; }
@@ -6839,8 +6842,18 @@ function _udRenderNextStep() {
   })();
   // First unmet step in the spine = the single next action.
   let step;
+  // SF-BRIDGE1: this is OUR deal (a Salesforce listing / BOV / escrow on this
+  // property). Prospecting its owner is not the next action, so never offer
+  // "Create the lead" here — show the live deal instead.
+  const ourDeal = _udCache.openDeal || null;
   if (_sigUI.step) {
     step = _sigUI.step;
+  } else if (ourDeal) {
+    const kind = ourDeal.type === 'listing' ? 'listing' : ourDeal.type === 'bov' ? 'BOV'
+      : ourDeal.type === 'buy_side' ? 'buy-side deal' : 'deal';
+    const stageLbl = ourDeal.stage ? String(ourDeal.stage).replace(/_/g, ' ') : '';
+    step = { label: 'Our ' + kind + ' is live', sub: (ourDeal.deal_name || 'Salesforce deal')
+      + (stageLbl ? ' \u2014 ' + stageLbl : '') + '.', cta: null, onclick: null };
   } else if (!recordedOwner) {
     step = { label: 'Pull the recorded owner', sub: 'No deed owner on file yet.', cta: 'Resolve owner',
       onclick: pid ? '_udBtnGuard(this,function(){_udResolveOwner(' + pid + ')})' : null };
@@ -13498,7 +13511,15 @@ function _entityRenderNextStep() {
   const connected = band ? band.resolve_is_connected : null;
 
   let step;
-  if (pb === 'P0.4' || reason === 'resolve_ownership_control') {
+  // SF-BRIDGE1: an open Salesforce deal of ours on this entity (an asset entity
+  // carrying our listing / BOV / escrow) — never "Open a BD opportunity".
+  const ourDeal = band && band.open_deal ? band.open_deal : null;
+  if (ourDeal) {
+    const kind = ourDeal.type === 'listing' ? 'listing' : ourDeal.type === 'bov' ? 'BOV'
+      : ourDeal.type === 'buy_side' ? 'buy-side deal' : 'deal';
+    step = { label: 'Our ' + kind + ' is live', sub: (ourDeal.deal_name || 'Salesforce deal')
+      + (ourDeal.stage ? ' \u2014 ' + String(ourDeal.stage).replace(/_/g, ' ') : '') + '.', cta: null, onclick: null };
+  } else if (pb === 'P0.4' || reason === 'resolve_ownership_control') {
     step = {
       label: 'Resolve ownership & control',
       sub: trueOwner ? ('True owner: ' + trueOwner + ' — link a Salesforce account / contact.')
