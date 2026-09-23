@@ -115,6 +115,13 @@ Of the 1,644 underlying (property, lease) rows:
   ("GSA" vs "DHS") is one of these. **340** have a lease string the canonicalizer does not recognise. **4** properties
   are genuinely multi-tenant.
 
+> ⚠️ **Correction, 2026-09-23 (GOV-UX1-D1..D3, built in `government-lease`).** "272 have the property saying GSA" and
+> "46 / 45" are **not** current-lease counts. In the 654, "live" meant only *unsuperseded*, and GSA-vs-unrecognised pairs
+> were counted too. Measured over the current lease only (unsuperseded and unexpired), the rule D2 can decide is
+> **21 properties** and D3 is **4**. The screenshot case (Omaha, property 9272) is on a DHS lease superseded 2026-04-28;
+> its current lease names "NEBRASKA OFFICE". The detector itself now reads 646 rows / 555 properties (was 1,481 / 1,239).
+> Full numbers: backlog rows `GOV-UX1-D1`, `-D2`, `-D3`, `-D1-registry`.
+
 ### Ranked recommendation (build is a follow-up prompt)
 
 | # | rule | acts on | false-positive risk | verdict |
