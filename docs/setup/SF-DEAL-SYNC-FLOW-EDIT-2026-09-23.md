@@ -22,10 +22,13 @@ The standard **Get records** action can't pull fields from a related object. Rep
    SELECT Id, Name, StageName, Amount, CloseDate, OwnerId, RecordTypeId, RecordType.Name, CreatedDate, Property2__c, Property2__r.Street__c, Property2__r.City__c, Property2__r.State_Province__c, Property2__r.Zip_Code__c FROM Opportunity WHERE RecordTypeId IN ('0128W0000007XGKQA2','0121I000000NnKgQAK','0128W000000ibTiQAI','0128W000000ibTlQAI','0128W000000ibTjQAI','0128W000000ibTkQAI')
    ```
    The query box must start with `SELECT`. If the run still fails, open the failed step's **Show raw inputs** and check that `queryParameters/query` starts with `SELECT`.
-3. In the **HTTP** action, set the body to this expression (the records now sit under `body/records`):
-   ```
-   @json(concat('{"deals":', string(outputs('Get_deals_soql')?['body/records']), '}'))
-   ```
+3. In the **HTTP** action, replace the **Body** with an expression. The records sit under `body/records`, **not** `body`:
+   - Clear the Body box, click **fx** (Insert expression), and paste this, **without a leading `@`**:
+     ```text
+     json(concat('{"deals":', string(outputs('Get_deals_soql')?['body/records']), '}'))
+     ```
+   - ⚠️ Scott's second test (2026-09-23) failed at HTTP with **BadRequest**, and the run's input showed `deals.totalSize = 608`. The body had sent the whole SOQL result object (`{totalSize, done, records}`) as `deals`, and LCC's endpoint returns 400 `expected { deals: [ ... ] }` for anything that isn't an array. In the failed run's HTTP input, `deals` must be a **list** of records, not an object with `totalSize`.
+   - `Get_deals_soql` is the action's internal name: the display name "Get deals soql" with spaces turned into underscores. If you named the action differently, use that name.
 4. Delete the old **Get records** action. Nothing else references it.
 5. **Save**, then **Test → Manually**. Check that the run's HTTP step returns 200.
 
