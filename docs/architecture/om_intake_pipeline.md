@@ -175,6 +175,17 @@ After `stageOmIntake` returns, the extraction race triggers:
   - Logs `staged_intake_promotions` row with full pipeline_result blob.
   - **Records field-level provenance** via `recordOmFieldsProvenance` for each field written. Source = `om_extraction`, source_run_id = intake_id. (Phase 2.1, 2026-04-25, record-only mode.)
 
+### Subject-address and identity guards (GOV-AVAIL1, 2026-09-22)
+
+A document's broker/contact block is not its subject property. Four guards sit between extraction and a domain write:
+
+1. **Extractor** (`callAiExtraction`) runs `applySubjectAddressGuard` from `api/_shared/intake-address-guard.js` against the document text. It rejects a known brokerage office (built-in list + `lcc_brokerage_office_address` on LCC Opps, matched on civic number + normalized street) and an address that only ever appears inside a contact block. A rejection nulls the address and records `_address_guard`.
+2. **Before the matcher** (`runDownstreamPipeline`) the same guard runs again with the DB registry, so a stale extraction cannot match on an office.
+3. **Promoter** (`checkPromotionIdentityGuards`) refuses `vertical_domain_mismatch` (seed `source_vertical` dia ↔ target gov, either direction) and `civic_number_mismatch` (subject vs the matched domain property's own address; an unreadable property reads `civic_check='unverified'` and proceeds).
+4. **Create-property** picks the domain from the stated vertical before the tenant heuristic.
+
+This is the only own-/brokerage-office list; `own-firm-addresses.js` re-exports it. Add an office to the table, not to code. Class detector for the mis-named-entity shape: `v_lcc_asset_entity_civic_drift`.
+
 ## Display surfaces
 
 | Surface | File | Renders |

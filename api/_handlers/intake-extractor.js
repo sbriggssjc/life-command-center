@@ -25,6 +25,7 @@ import { isNonDealSnapshot, normalizeCapRate, firstOf } from '../_shared/intake-
 import { fetchSharepointBytes } from '../_shared/storage-adapter.js';
 import { ensureEntityLink } from '../_shared/entity-link.js';
 import { sendTeamsAlert } from '../_shared/teams-alert.js';
+import { applySubjectAddressGuard, BUILTIN_BROKERAGE_OFFICES } from '../_shared/intake-address-guard.js';
 import { createRequire } from 'module';
 
 // Document types worth signalling to Teams. These are the ones the PDF
@@ -457,7 +458,17 @@ async function callAiExtraction(base64Data, mediaType) {
   }
 
   const parsed = parseExtractionJson(text);
-  if (parsed) return parsed;
+  if (parsed) {
+    // GOV-AVAIL1 (a)+(b): the model may return the listing broker's / firm's
+    // contact-block address as the subject (Findlay OM → our Tulsa office).
+    // The document text is only available here, so the contact-block check
+    // runs here; the brokerage-office registry is re-checked downstream (it
+    // also covers cached snapshots). A rejection nulls the address and is
+    // recorded on the snapshot as _address_guard — never silently.
+    const guard = applySubjectAddressGuard(parsed, { text: pdfText, registry: BUILTIN_BROKERAGE_OFFICES });
+    globalThis.__lastPdfParseInfo.address_guard = guard.rejected ? guard.reason : null;
+    return parsed;
+  }
 
   // If we're here, no JSON was found. Throw with a rich diagnostic so the
   // per-artifact diagnostics log shows WHAT the model actually returned.
@@ -694,6 +705,8 @@ export async function processIntakeExtraction(intakeId, context = {}) {
         // F8: surface the OCR-vision fallback outcome for zero-text PDFs.
         diag.ocr_attempted = globalThis.__lastPdfParseInfo.ocr_attempted || false;
         diag.ocr_ok = globalThis.__lastPdfParseInfo.ocr_ok || false;
+        // GOV-AVAIL1: which subject-address guard fired on this artifact, if any.
+        diag.address_guard = globalThis.__lastPdfParseInfo.address_guard || null;
       }
       // Surface multi-model fallback info — lets the SQL audit see when
       // primary 429s pushed extraction onto the OpenAI backup pool.
@@ -904,6 +917,24 @@ async function markInboxDisposition(intakeId, { status, metadata } = {}) {
 // which is why this path is safe to retry after the 7s Copilot race killed
 // downstream work on the first attempt.
 // ============================================================================
+// GOV-AVAIL1: brokerage-office registry = the builtin own-office rows plus the
+// active rows of LCC Opps lcc_brokerage_office_address. Cached 10 minutes; a
+// failed read falls back to the builtin rows (our own office is never a subject).
+let _officeRegistryCache = null;
+let _officeRegistryAt = 0;
+export async function loadBrokerageOfficeRegistry() {
+  if (_officeRegistryCache && Date.now() - _officeRegistryAt < 10 * 60 * 1000) return _officeRegistryCache;
+  let rows = [];
+  try {
+    const r = await opsQuery('GET',
+      'lcc_brokerage_office_address?is_active=eq.true&select=firm_name,address,city,state,source&limit=1000');
+    if (r.ok && Array.isArray(r.data)) rows = r.data;
+  } catch { /* fall back to builtin */ }
+  _officeRegistryCache = [...BUILTIN_BROKERAGE_OFFICES, ...rows];
+  _officeRegistryAt = Date.now();
+  return _officeRegistryCache;
+}
+
 export async function runDownstreamPipeline(intakeId, mergedSnapshot, ctx = {}) {
   const resolvedWorkspaceId = ctx.workspaceId || null;
   const resolvedActorId     = ctx.actorId     || null;
@@ -934,6 +965,18 @@ export async function runDownstreamPipeline(intakeId, mergedSnapshot, ctx = {}) 
     if (!mergedSnapshot.city && sh.city) mergedSnapshot.city = sh.city;
     if (!mergedSnapshot.state && sh.state) mergedSnapshot.state = sh.state;
     if (!mergedSnapshot.tenant_name && sh.tenant_brand) mergedSnapshot.tenant_name = sh.tenant_brand;
+  }
+
+  // GOV-AVAIL1 (b): reject a subject address that is a known brokerage office
+  // before the matcher sees it. Runs on BOTH the fresh and the cached path
+  // (four email-body intakes re-matched our Tulsa office weekly since June).
+  if (mergedSnapshot) {
+    try {
+      const registry = await loadBrokerageOfficeRegistry();
+      applySubjectAddressGuard(mergedSnapshot, { text: null, registry });
+    } catch (err) {
+      console.warn('[intake-extractor] address guard failed (non-fatal):', err?.message);
+    }
   }
 
   // Run property matcher
@@ -1164,6 +1207,13 @@ export async function runDownstreamPipeline(intakeId, mergedSnapshot, ctx = {}) 
           extraction_result: {
             ...prevExtraction,
             // Don't clobber the OM extraction snapshot; just add downstream summary.
+            // GOV-AVAIL1: a rejected subject address is removed from the summary
+            // too (cached path), with the reason kept beside it.
+            ...(mergedSnapshot?._address_guard
+              ? { address: null, city: null, state: null,
+                  addresses: mergedSnapshot.addresses ?? null,
+                  address_guard: mergedSnapshot._address_guard }
+              : {}),
             match_status:        matchResult?.status || null,
             match_confidence:    matchResult?.confidence || null,
             match_property_id:   matchResult?.property_id || null,
@@ -1207,6 +1257,7 @@ export async function runDownstreamPipeline(intakeId, mergedSnapshot, ctx = {}) 
               document_type:     d.document_type,
               pdf_text_len:      d.pdf_text_len,
               pdf_parse_error:   d.pdf_parse_error,
+              address_guard:     d.address_guard || null,
               // Round 76bw: persist failure-cause fields so failed intakes
               // are diagnosable from the SQL audit. Without these, failed
               // rows show ai_ok=false with no clue why (PDF parse vs AI

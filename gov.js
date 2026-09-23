@@ -9138,6 +9138,18 @@ async function renderGovSales() {
         seller: r.seller,
         listing_broker: r.listing_broker,
         dom: r.days_on_market != null ? parseInt(r.days_on_market, 10) : null,
+        // GOV-AVAIL1 (2026-09-22): display-only columns from v_available_listings.
+        // agency_code = canonical short name via the ID3a resolver (gov_resolve_agency);
+        // address_display = the address with its trailing city/state/ZIP stripped ONLY when
+        // they equal the row's own. The raw strings stay in agency/address (search, sort,
+        // detail panel) and are shown on hover.
+        agency_display: r.agency_code || r.agency || r.agency_full || '',
+        agency_title: r.agency_code
+          ? (r.agency_canonical_full || r.agency_code) + (r.agency && r.agency !== r.agency_code ? ' — listed as “' + r.agency + '”' : '')
+          : (r.agency ? r.agency + ' (not resolved to a canonical agency)' : ''),
+        address_display: r.address_display || r.address,
+        address_title: r.address || '',
+        address_conflict: r.address_locality_conflict === true,
         // Marketing collateral — passed through so the Actions cell can
         // render the same icon set the Listings table shows (2026-04-23).
         intake_artifact_path: r.intake_artifact_path || null,
@@ -9152,6 +9164,7 @@ async function renderGovSales() {
   const q = govSalesSearch.toLowerCase();
   const filtered = q ? normalized.filter(r =>
     (r.agency || '').toLowerCase().includes(q) ||
+    (r.agency_display || '').toLowerCase().includes(q) ||
     (r.address || '').toLowerCase().includes(q) ||
     (r.city || '').toLowerCase().includes(q) ||
     (r.state || '').toLowerCase().includes(q) ||
@@ -9322,7 +9335,7 @@ async function renderGovSales() {
 
   // Body
   html += '<tbody>';
-  const td = (val, trunc) => '<td style="padding: 8px; border-bottom: 1px solid var(--border); white-space: nowrap;' + (trunc ? ' max-width: 180px; overflow: hidden; text-overflow: ellipsis;' : '') + '">' + esc(val || '—') + '</td>';
+  const td = (val, trunc, title) => '<td style="padding: 8px; border-bottom: 1px solid var(--border); white-space: nowrap;' + (trunc ? ' max-width: 180px; overflow: hidden; text-overflow: ellipsis;' : '') + '"' + (title ? ' title="' + esc(title) + '"' : '') + '>' + esc(val || '—') + '</td>';
   const tdr = (val) => '<td style="padding: 8px; border-bottom: 1px solid var(--border); white-space: nowrap; text-align: right; font-family: \'JetBrains Mono\', monospace; font-size: 11px;">' + (val || '—') + '</td>';
   const fmtMoney = (v) => v != null && v > 0 ? '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—';
   const fmtCap = (v) => v != null && v > 0 ? (v < 1 ? (v * 100).toFixed(2) : parseFloat(v).toFixed(2)) + '%' : '—';
@@ -9336,8 +9349,14 @@ async function renderGovSales() {
     const rowData = JSON.stringify({ property_id: r.property_id, lease_number: r.lease_number, agency: r.agency, address: r.address, city: r.city, state: r.state }).replace(/'/g, '&#39;');
     const _zebra = _ri % 2 === 0 ? '' : 'background:rgba(255,255,255,0.02);';
     html += '<tr class="clickable-row" onclick=\'showDetail(' + rowData + ', "gov-ownership")\' style="cursor: pointer;' + _zebra + '">';
-    html += td(r.agency, true);
-    html += td(r.address, true);
+    if (isComps) {
+      html += td(r.agency, true);
+      html += td(r.address, true);
+    } else {
+      html += td(r.agency_display, true, r.agency_title);
+      html += td((r.address_conflict ? '⚠ ' : '') + (r.address_display || ''), true,
+                 r.address_conflict ? r.address_title + ' — city/state in the address disagree with this row' : r.address_title);
+    }
     html += td(r.city);
     html += td(r.state);
     html += tdr(fmtAcres(r.land_acres));

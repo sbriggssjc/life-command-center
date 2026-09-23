@@ -53,6 +53,14 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-22 — GOV-AVAIL1 (Claude Code): the Findlay OM → gov Available chain fixed link by link; residue quarantined
+
+- **Trace (measured):** a dia OM (Findlay OH, seed `source_vertical=dia`) was extracted as our Tulsa office block, matched 0.97 via an LCC asset entity *named* `6120 South Yale Ave` but bridged to gov 11255 (`5110 South Yale Ave`), and promoted as gov listing `c04dc749…`. That entity had absorbed 124 match rows from 5 intakes since June.
+- **Fixed (LCC, JS — ships on Railway redeploy):** one own-/brokerage-office list + contact-block detector (`intake-address-guard.js`, extractor and pre-matcher), DB registry `lcc_brokerage_office_address`, promoter refusals `vertical_domain_mismatch` / `civic_number_mismatch`, create-property honours the stated vertical, gov.js Available agency/address cells.
+- **Fixed (DB, live):** LCC entity renamed to its property's address (ledgered); drift view `v_lcc_asset_entity_civic_drift` (115). gov: 2 office listings quarantined (reversible), `v_available_listings` 496 → 494 with display/canonical-agency columns (106 addresses stripped, 273/494 agencies resolve), twin view (18 pairs, 2 in the existing lane).
+- **Not done, stated:** Findlay re-run (no bytes retained, 3 candidate dia properties — re-send from SF). Property 11255 and 36662 untouched. Follow-ups filed: `GOV-AVAIL1-postoak / -agency-tail / -twins / -govtype / -civic-drift`.
+- **Deploy:** redeploy BOTH Railway services (tranquil-delight + the standalone MCP), then `npm run verify:deploy`. `npm test` 6,850 pass / 0 fail.
+
 ## 2026-09-22 — GOV-UX1 (Claude Code): gov Available navigation jump, owner panel, one verification component, automation audit
 
 - **A (SBN-24):** the router caused the jump, not the panel. The Business sub-tabs never wrote the hash, and

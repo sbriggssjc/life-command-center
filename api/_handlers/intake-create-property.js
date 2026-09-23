@@ -26,7 +26,8 @@
 
 import { opsQuery } from '../_shared/ops-db.js';
 import { matchIntakeToProperty, DIALYSIS_KEYWORDS } from './intake-matcher.js';
-import { runDownstreamPipeline } from './intake-extractor.js';
+import { runDownstreamPipeline, loadBrokerageOfficeRegistry } from './intake-extractor.js';
+import { applySubjectAddressGuard, seedVerticalDomain } from '../_shared/intake-address-guard.js';
 import { upsertDomainProperty } from './sidebar-pipeline.js';
 import { normalizeState } from '../_shared/entity-link.js';
 import { splitMultiAddress } from '../_shared/normalize-street-address.js';
@@ -35,7 +36,13 @@ import { firstOf } from '../_shared/intake-classify.js';
 // Modest confidence: AI-extracted from an OM, no county-records confirmation.
 const OM_CREATE_CONFIDENCE = 0.6;
 
-function pickDomainForTenant(tenant) {
+// GOV-AVAIL1 (d): a stated seed vertical (source_vertical='dia'|'gov') decides
+// the domain. Before this, a dia OM whose tenant the model returned as null fell
+// through to 'government' — the same default that put the Findlay dialysis OM
+// on the gov Available list.
+export function pickDomainForTenant(tenant, seedData = null) {
+  const vertical = seedVerticalDomain(seedData);
+  if (vertical) return vertical;
   return tenant && DIALYSIS_KEYWORDS.test(tenant) ? 'dialysis' : 'government';
 }
 
@@ -111,6 +118,12 @@ export async function createPropertyFromIntake(intakeId, ctx = {}) {
     };
   }
 
+  // GOV-AVAIL1 (b): never create a property at a known brokerage office (the
+  // subject address may be a stored snapshot from before the extractor guard).
+  try {
+    applySubjectAddressGuard(snapshot, { registry: await loadBrokerageOfficeRegistry() });
+  } catch { /* guard is best-effort; the no_address check below still runs */ }
+
   // 2. Guard: need at least one street address to create from.
   const pairs = splitMultiAddress(
     snapshot.addresses ?? snapshot.address,
@@ -148,7 +161,7 @@ export async function createPropertyFromIntake(intakeId, ctx = {}) {
   const state = normalizeState(snapshot.state);
   for (const pair of pairs) {
     const tenant = pair.tenant || firstOf(snapshot.tenant_name) || null;
-    const domain = pickDomainForTenant(tenant);
+    const domain = pickDomainForTenant(tenant, seedData);
     const entity = {
       address: pair.address,
       city:    snapshot.city || null,
