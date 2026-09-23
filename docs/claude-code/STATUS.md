@@ -53,6 +53,13 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-23 — GOV-UX1-D1/D2/D3: agency-drift detector fixed; GSA occupant + blank agency auto-resolved (government-lease)
+
+- **D1 live:** `v_gap_agency_drift` now reads the current lease only and compares canonical occupying agencies. `agency_disagreement` 1,481 rows / 1,239 props → **646 / 555**; the null kind 46 / 45 → **6 / 6**. Same columns and kinds, so no LCC change. ⚠️ The first version called `canonicalize_agency()` per row and made `v_next_best_action` take 45 s for ~5 min; it was replaced with the stored columns (2.3 s), and a guard now forbids the call.
+- **D2/D3 live, batch `gov_ux1_20260923`:** 21 GSA properties got an occupying agency (`using_agency_canonical`) and 4 blank properties got `agency`. Everything is ledgered and restorable (a rolled-back round trip was exact), and cron 52 keeps it true daily at 04:40 UTC. The brief's ~272 / ~45 counted superseded and expired leases. The Omaha GSA-vs-DHS case is one: its DHS lease was superseded, and it stays human.
+- Residue (571 of the 646) is mostly GSA field-office strings in `leases.tenant_agency` → **GOV-UX1-D1-registry**. Tests: 14 behavioural on a throwaway Postgres, 8/8 mutations RED, gov suite 1,072 passed. No Railway deploy (no LCC code).
+
+
 ## 2026-09-23 — RATINGS-CQM-CIRCUIT-BREAKER / HCRIS-TIMEOUT-10: first post-merge run is a split verdict — `ratings` clean for the first time ever, `clinic_quality_metrics` still fully broken via a new `.upsert()`-based failure; `ingestion_tracker` rows not reliably closing even when Railway shows "completed" (Cowork)
 
 **Background:** all three merges from this saga (`HCRIS-TIMEOUT-10` #7423, `RATINGS-CQM-CIRCUIT-BREAKER` #7424, `RATINGS-CQM-CIRCUIT-BREAKER-2` #7425) were in place before this run started — the first genuine live test of all three together.
