@@ -3206,7 +3206,13 @@ async function renderSellerLeadLane(el) {
         + '<div class="q-item-meta">' + esc((r.address ? r.address + (r.city ? ', ' + r.city : '') + (r.state ? ', ' + r.state : '') + ' — ' : '')
             + (typeof _todayMoney === 'function' ? _todayMoney(r.rank_value) : String(r.rank_value || ''))
             + (r.property_count > 1 ? ' · ' + r.property_count + ' properties' : ''))
-        + (c ? '<br>Contact: ' + esc(c.name) + ' (' + esc(String(c.role || '').replace(/_/g, ' ')) + ')' : '') + '</div>'
+        + (c ? '<br>Contact: ' + esc(c.name) + ' (' + esc(String(c.role || '').replace(/_/g, ' ')) + ')' : '')
+        + (Array.isArray(r.cluster_siblings) && r.cluster_siblings.length
+            ? '<br>Same decision-maker also controls ' + r.cluster_siblings.length + ' more owner' + (r.cluster_siblings.length === 1 ? '' : 's') + ': '
+              + esc(r.cluster_siblings.map(function (x) { return x.owner_name; }).join(', ')) + ' — one conversation, one decision'
+            : '')
+        + (r.likely_spe_of ? '<br><b>Likely SPE of ' + esc(r.likely_spe_of) + '</b> (a repeat buyer) — kept off auto-create' : '')
+        + '</div>'
         + '<div class="q-actions">'
         + '<button class="q-action primary" onclick="sellerLeadDecide(' + jsStringArg(id) + ', \'create\')">Create lead</button>'
         + '<select class="slg-reason" id="slg-reason-' + esc(id) + '"><option value="">Not a lead because…</option>' + opts + '</select>'

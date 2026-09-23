@@ -2085,6 +2085,7 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
   (can't run in a migration tx; takes ACCESS EXCLUSIVE) — drain the backlog FIRST, then VACUUM FULL. A
   disabled maintenance/offload cron is watched by `lcc_check_disabled_critical_crons` (folded into
   `lcc-cron-health-check`).
+- **⚠️ A PLANNER COUNT IS A RANGE BOUND — `Prefer: count=planned` makes PostgREST 416 any offset past its ESTIMATE (GOV-COMPS-CAP, 2026-09-23).** gov `v_sales_comps` holds 4,849 rows, the planner guesses 1,817, so `offset=2000` returned 416; the proxy surfaced `[]` and every paging loop "finished" at exactly 2,000. `data-query` now sends no implicit count on a page after the first and retries a 416 without the count (`supabase/functions/data-query/count-mode.ts`). **A total you DISPLAY must be `count=exact`** — the planned figure is a guess; and a loop that stops on a short page must compare against that exact total.
 - **PostgREST caps every response at 1000 rows regardless of `limit`.** Any cross-DB sync/pull that pages must
   stride at **1000/page** — a larger stride silently SKIPS rows. This bit the dia owner-facts sync (loaded only
   6,196 of 12,196).
