@@ -37,7 +37,7 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-reconcile-2, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT, CANON-OWNERSHIP1 | 2026-09-16 | Arc complete through GOVDEED3 (gov #406); **the gov deed writer runs from GitHub Actions (weekly Mon 06:00 UTC) — verify 09-21 dateless = 0**; CANON-OWNERSHIP1 👤 confirmation open; sale-party conflicts 1,290 a review queue |
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k LIVE** (LCC PR #2506): 218 attested supersessions, 40/43 pairs to sponsor, 16/16 controls untouched, reversible; sponsor-as-edge = future work |
 | **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, -harris-b/-c/-d, -ledger-order, MCP1 | 2026-09-17 | **41 assessor-sourced owners live** (Philadelphia 20, Harris 21 of 50); Harris is done except the 27 situs-gap properties → §P10a is the lane's next unit; next free-bulk jurisdiction after that |
-| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS-consolidate-lcc, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift, RECON1, RECON1-b, RECON2, RECON2-b, RECON2-render, RECON3, RECON3-b, SIDEBAR3, SIDEBAR3-b, SIDEBAR3-c, SIDEBAR3-d, EXT-HOST-2, SIDEBAR4, LEASEJUNK1, PERF-SPQ2, HOME2-fix, HOME2-b, HOME2-c, HOME2-d, HOME2-e, PERF-SPQ1, PERF-SPQ1-b, PERF-SPQ1-c, RECON2-c, RECON2-d, RECON2-d-reconcile, RECON2-d-render, RESOLVER1, SIDEBAR-LEASE1, SIDEBAR2, DIA-PROPAGATOR1, VERCEL-LIVE1, GOV-AVAIL1, GOV-UX1, SIDEBAR4-b, SIDEBAR4-c, RECON2-render-spa, RECON2-render-dossier, SIDEBAR3-d-orient, GOV-UX1-D1, GOV-UX1-D2, GOV-UX1-D3, GOV-UX1-D4, GOV-UX1-D5, GOV-UX1-D4-sftype, GOV-UX1-D5-gate, GOV-AVAIL1-postoak, GOV-AVAIL1-agency-tail, GOV-AVAIL1-twins, GOV-AVAIL1-govtype, GOV-AVAIL1-civic-drift, RECON2-render-views, HOME-MB-BOOT, SIDEBAR4-d, INTAKE-RESTAGE1 | 2026-09-23 | **Current (round 66, 2026-09-23):** `tranquil-delight` live on `15de8524`. **Closed and live today:** SIDEBAR4-c (action guard, extension 1.0.56), HOME-MB-BOOT, plus everything from rounds 63–65 (GOV-AVAIL1, GOV-UX1 A–C, RECON2-render/-spa, PERF-SPQ2, SIDEBAR4, LEASEJUNK1). **Built by CC, awaiting merge + extension reload:** `SIDEBAR4-d` (extension 1.0.57: honest "in LCC, up to date" state after Save, Update only when the page changed, Re-run behind ⋯). **Prompted, waiting on CC:** `INTAKE-RESTAGE1` built by CC 2026-09-23 (awaiting deploy + Cowork requeue check), `GOV-UX1-D1..D3` (government-lease repo) and `GOV-UX1-D4..D5` (LCC); Q46 approved. **Waiting on Scott:** Q45 (Findlay listing street address, re-run done), Q47 (reload 1.0.56 + one Save, Home hard refresh). **Filed, not prompted:** GOV-AVAIL1 follow-ups, RECON2-render-views, SIDEBAR4-b, SIDEBAR3-b, SIDEBAR3-d-orient, FLOWS1 SF Listing spike (SBN-18). Older narrative: [`docs/history/STATUS_open-threads_SBN-row_to_2026-09-22.md`](../history/STATUS_open-threads_SBN-row_to_2026-09-22.md) + dated entries below. |
+| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS-consolidate-lcc, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift, RECON1, RECON1-b, RECON2, RECON2-b, RECON2-render, RECON3, RECON3-b, SIDEBAR3, SIDEBAR3-b, SIDEBAR3-c, SIDEBAR3-d, EXT-HOST-2, SIDEBAR4, LEASEJUNK1, PERF-SPQ2, HOME2-fix, HOME2-b, HOME2-c, HOME2-d, HOME2-e, PERF-SPQ1, PERF-SPQ1-b, PERF-SPQ1-c, RECON2-c, RECON2-d, RECON2-d-reconcile, RECON2-d-render, RESOLVER1, SIDEBAR-LEASE1, SIDEBAR2, DIA-PROPAGATOR1, VERCEL-LIVE1, GOV-AVAIL1, GOV-UX1, SIDEBAR4-b, SIDEBAR4-c, RECON2-render-spa, RECON2-render-dossier, SIDEBAR3-d-orient, GOV-UX1-D1, GOV-UX1-D2, GOV-UX1-D3, GOV-UX1-D4, GOV-UX1-D5, GOV-UX1-D4-sftype, GOV-UX1-D5-gate, GOV-AVAIL1-postoak, GOV-AVAIL1-agency-tail, GOV-AVAIL1-twins, GOV-AVAIL1-govtype, GOV-AVAIL1-civic-drift, RECON2-render-views, HOME-MB-BOOT, SIDEBAR4-d, INTAKE-RESTAGE1, GOV-UX1-D1-registry | 2026-09-23 | **Current (round 67, 2026-09-23):** `tranquil-delight` live on `2967920a`. **Closed and live today:** GOV-UX1-D1–D3 (drift detector canonical + current-lease; 21 GSA→occupant + 4 blank-fill writes, ledgered, daily cron 52), GOV-UX1-D4 (closed, no population), INTAKE-RESTAGE1 stage-om fix (live-verified on the Findlay file), SIDEBAR4-c/-d (extension 1.0.57), HOME-MB-BOOT, and everything from rounds 63–66. **Waiting on Scott:** Q45 (Findlay street address; Salesforce has none either), Q47 (reload 1.0.57 + one Save; Home hard refresh), Q48 (GOV-UX1-D5: tighten the gate then automate, or review lane), Q49 (deploy `intake-salesforce-files`). **Filed, not prompted:** GOV-UX1-D1-registry (571 unrecognised lease strings, mostly GSA field-office names; Scott's rule call), GOV-UX1-D4-sftype (SF deals synced with type NULL), GOV-AVAIL1 follow-ups, RECON2-render-views, SIDEBAR4-b, SIDEBAR3-b, SIDEBAR3-d-orient, FLOWS1 SF Listing spike (SBN-18). Older narrative: [`docs/history/STATUS_open-threads_SBN-row_to_2026-09-22.md`](../history/STATUS_open-threads_SBN-row_to_2026-09-22.md) + dated entries below. |
 | **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–5, INVENTORY1, INVENTORY1b, INVENTORY2, INVENTORY-process, REMEDIATION-2026-05, REPO1, ROADMAP, PROCESS-CC-DOCS, PROCESS-MERGE-CLOBBER, GUARD-CLOBBER1, PROCESS-ROW-CELLS, PROCESS-PARKING-LOT, DEPLOY2-coverage, DEPLOY2-stale-body | 2026-09-18 | **PR #2563 reverted STATUS + backlog to a week-old snapshot (7 entries / 11 rows lost) — restored round 26; `GUARD-CLOBBER1` live on `main` (PR #2566), manual per-turn diff retired round 28**; DEPLOY2 live + CI; parking lot triaged; EDGE-GATES1 live |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
 | **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
@@ -52,6 +52,39 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
 
 ---
+
+## 2026-09-23 — Round 67 (Cowork): Q46 builds reconciled (D1–D3 live, D4 closed, D5 held → Q48); SIDEBAR4-d merged; INTAKE-RESTAGE1 live-verified on the Findlay file
+
+**Deploy:** `verify:deploy` shows `tranquil-delight` on **`2967920a`** (= `main`, with #2638–#2642). government-lease #409 is merged. The `intake-salesforce-files` edge function is still **v30** on Dialysis_DB, so `?action=requeue` is not live → **Q49**.
+
+**GOV-UX1-D1–D3 ✅, live-verified on the gov DB:**
+- `v_gap_agency_drift` = 625 rows / 534 props `agency_disagreement` + 2 null. It was 1,481 / 1,239 before D1.
+- Ledger `gov_ux1_agency_write_log` holds batch `gov_ux1_20260923`: 46 field writes (21 D2 + 4 D3). Cron job 52 (`gov-ux1-agency-autoresolve`, 04:40 UTC) is active.
+- `v_next_best_action` is back to **2.29 s** (EXPLAIN ANALYZE). CC's first view version had pushed it to 45 s for about 5 min.
+- D2 hit 21, not the audit's ~272. The audit counted superseded and expired leases. Scott's Omaha example is one of those: its DHS lease was superseded, and the current lease names a GSA field office, so it stays human.
+- Residue → `GOV-UX1-D1-registry`: 571 unrecognised strings, mostly GSA field-office names. How to treat them is Scott's rule call, filed but not yet on the checklist.
+
+**GOV-UX1-D4 closed, D5 held.**
+- CC re-measured and built nothing, correctly. The 35 "open opps with no cadence" are our own Salesforce listing and escrow deals (type NULL → `GOV-UX1-D4-sftype`), and every real prospect already gets a cadence from `bd_opportunity_auto_seed_cadence`.
+- The D5 gate is 54 owners. 28 of them qualify only through a `works_at` link, and the first page includes an address filed as the owner, a bank, REIT SPEs and repeat buyers.
+- Scott's decision → **Q48**: (a) tighten the gate, then automate (~25 owners), or (b) a review lane.
+
+**SIDEBAR4-d ✅ merged (#2638).** Extension-only; manifest 1.0.57. 19/19 tests pass on `main`. It goes live when Scott reloads the extension → **Q47**.
+
+**INTAKE-RESTAGE1 ✅ stage-om half, live-verified.**
+- `sf_files` 1747 (Findlay) was requeued by SQL, and the 17:30 UTC cron drained it to `extracted` on the **same** intake `3605ee76…`: 1 staged row, 2 extraction rows, no new card, no failure. The card shows `archived`.
+- 12/12 tests pass.
+
+**Q45 (Findlay):** Salesforce has no address either. Opportunity `006Vs00000hhYfCIAU` has `property_address` null, and its LCC asset `084897cc…` is orphan-flagged with city only. The address has to come from Scott.
+
+**Other session's work, noted and not touched:** the HCRIS lane merged #2641. `prompts/RATINGS-CQM-CIRCUIT-BREAKER-3-cqm-upsert-still-23505s.md` is that lane's open prompt.
+
+**Docs:**
+- Backlog: INTAKE-RESTAGE1, SIDEBAR4-d and GOV-UX1-D1..D3 annotated.
+- Checklist: Q45 extended, Q49 added.
+- 3 prompts and 4 responses moved to `done/`.
+- SBN Open-threads row rewritten to current state.
+
 
 ## 2026-09-23 — GOV-UX1-D1/D2/D3: agency-drift detector fixed; GSA occupant + blank agency auto-resolved (government-lease)
 
