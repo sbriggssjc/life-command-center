@@ -54,6 +54,18 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-23 — GOV-AVAIL2 (CC): one display normalization for gov Available, Sales Comps and Leases
+
+**DB live on gov (`scknotsqkcheojiaewwh`); the JS ships on the next Railway redeploy.** Record: government-lease `sql/20260923_gov_avail2_display_normalization.sql`.
+
+- **The resolver was never case-sensitive.** `gov_agency_alias_key` uppercases (now committed; it had been live-only). The screenshot's `GENERAL SERVICES ADMINI…` was `properties.agency_full_name` on 2 listings with no agency, shown raw. The views now resolve it as the last fallback.
+- **Agency tail:** 26 reviewed single-agency spellings promoted through the ID3a path (only where `canonicalize_agency` agrees and the spelling is still unresolved), and MSHA + NARA registered. Available **271 → 294 matched, 206 → 168 unresolved**; Sales Comps **3,410 → 3,476 matched**. Left unresolved on purpose: state agencies (`GOV-AVAIL2-state-registry`: the `ST-*` rows carry no state), multi-agency strings (`GOV-AVAIL2-multi-agency`), generic "US Government", and non-government tenants (GOV-CU1).
+- **Display:** ALL CAPS on Available went from **address 60 → 5** (route-only, correct), **city 40 → 0** and **agency 16 → 0**. Stored values are untouched. Readers touched: gov.js Available and Sales Comps (`renderGovSales`), and both Leases tables (`buildGovLeasesHTML`). Leases paging was also fixed: a 2,000 stride stopped at page one under PostgREST's 1,000 cap.
+- ⚠️ **A display function took `v_sales_comps` down for ~15 minutes.** The first cut built regex patterns inside loops, so Postgres recompiled ~150 patterns on every call: 23 ms a row, and the view could not answer inside 60 s. Rewritten word by word with static patterns: 1.3 s for all 4,859 comps. There is now a guard for it. **Time a view over its full population before and after adding a per-row function.**
+- ⚠️ **`initcap()` depends on the locale provider.** Production is ICU en-US (`'u.s.'` → `U.s.`); a libc test cluster gives `U.S.`. The test cluster is built with ICU, or the dotted-initials rule is untestable.
+- Guards: government-lease `tests/unit/test_gov_avail2_display_normalization.py` (18 tests, 10 mutations red) and `test/gov-avail2-display.test.mjs` (10 tests, 10 mutations red). GOV-AVAIL1's two text pins ("Comps keep raw cells") were retired on purpose.
+- **Next:** redeploy both Railway services, run `verify:deploy`, then Scott re-checks Gov › Deals › Sales › Available.
+
 ## 2026-09-23 — GOV-CU1 (Claude Code): private "federal" lenders out of the gov universe
 
 - **Shipped.** One strip rule (JS + Deno mirror + gov SQL) removes private federally-chartered lender names before any gov classifier reads "federal". Wired into the sidebar classifier, credit-tier resolver, SF deal classifier, both SF routers, and the OM create path. The OM path had been sending every non-dialysis tenant to gov by default.
@@ -83,7 +95,7 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 Prompted as a docs-only CC round: first a verbatim shipped-row archive with a guard exemption, then `git mv` by topic with link fixes and a "where to start" index.
 
-**In flight with CC:** GOV-CLASSIFY1, GOV-CU1, GOV-AVAIL2. Next up for CC: DOCMAP3, sent after those three merge so the doc moves don't collide with their backlog edits.
+**In flight with CC:** GOV-CLASSIFY1, GOV-CU1. (GOV-AVAIL2 built 2026-09-23, see below.) Next up for CC: DOCMAP3, sent after those three merge so the doc moves don't collide with their backlog edits.
 
 
 ## 2026-09-23 — Round 70 (Cowork): SIDEBAR5, GOV-COMPS-CAP and D5-gate-2 reconciled live; Q52 closed; SF Deal sync flow read and edit written; SBN-26–29 → `GOV-CLASSIFY1`, `GOV-CU1`, `GOV-AVAIL2`
