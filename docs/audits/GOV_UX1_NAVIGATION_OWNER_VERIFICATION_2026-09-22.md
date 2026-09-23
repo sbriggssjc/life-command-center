@@ -130,6 +130,70 @@ Of the 1,644 underlying (property, lease) rows:
 Lead creation must reuse the existing BD opportunity writer, `operations.js::bridgeCreateLead` (`create_lead`, which
 already seeds the cadence). A second writer would be the two-writers-one-fact defect.
 
+### D4 / D5 re-measured before building (2026-09-23): both premises failed, nothing built
+
+Scott approved D4 and D5 (Q46). Before writing either, the populations were re-measured live on LCC Opps
+(`xengecqvemvfknjvbvrq`). Neither survived, so **no code, migration, cadence or lead was written.**
+
+**D4 — "35 of 43 open opportunities have no cadence" is true, and the 35 are not prospect leads.**
+
+| open `bd_opportunities` | count | has a cadence |
+|---|---:|---|
+| `type IS NULL` (Salesforce-synced deals) | 35 | none |
+| `type='prospect'` | 4 | **4 of 4** |
+| `type='government_buyer'` | 4 | 4 on the entity (2 keyed to the opp) |
+
+- The 35 have `type` NULL, `opened_at` NULL, `metadata` `{}` or `{sf_stage_label: 'Qualified Lead', unmapped_stage: true}`,
+  an `asset` entity, and stages `listing_signed`, `bov`, `in_escrow`, `loi_executed`, `non_refundable`,
+  `off_market_listing`, `qualified_lead`. They are **our own listings and escrows** (The Villages DaVita, Findlay US Renal,
+  Zapata, Snellville …), written 2026-07-28 → 2026-09-09 and re-touched 2026-09-23 16:00 by the Salesforce opportunity sync.
+  Two are junk: `Test Property SN 05032024` and a second `Action Behavior Centers - Duncanville - TX` row on the same entity.
+- **Seeding them would put signed clients on a seller-prospecting onboarding cadence.** `cadenceSeedDecision()`'s value and
+  reachability gate cannot see that; it answers *can we reach this party*, not *is this a prospect*.
+- **The forward path already exists for real prospects.** Trigger `bd_opportunity_auto_seed_cadence` calls
+  `lcc_seed_onboarding_cadence` on every `INSERT` with `is_open AND type='prospect'`, and `bridgeCreateLead` relies on it.
+  All 4 open prospects carry a cadence.
+- **The 35 cannot produce the panel's "Add to cadence" step.** `api/admin.js::resolveOwnerOppState` counts only
+  `type=eq.prospect`, so a property whose only open opp is one of these reads "no open opportunity" and the spine offers
+  **"Create the lead"** instead — a separate defect, filed as `GOV-UX1-D4-sftype`.
+- Verdict: **D4 closed, no build.** The population the audit sized was the wrong class, which the §D table could not show
+  because it counted open opportunities without their `type`.
+
+**D5 — the gate is 54 owners / 100 property rows, not 98, and its first page is not a seller list.**
+
+`v_lcc_seller_prospect_queue`: 502 rows / 438 owners · `reason_measured` 217 owners · `+ has_linked_person` 55 ·
+`+ no open bd_opportunity` **54 owners / 100 rows** (0 without a `source_property_id`). The 98 in §D was a row count on a
+different day; the owner count is the grain a lead is created at, the row count is the grain `bridgeCreateLead` writes at
+(one domain lead row per property).
+
+| reason_to_sell | domain | owners | rows | repeat buyers (writer refuses) |
+|---|---|---:|---:|---:|
+| value_creation_developer | gov | 37 | 53 | 1 |
+| debt | gov | 7 | 20 | 1 |
+| value_creation_developer | dia | 5 | 22 | 1 |
+| debt | dia | 4 | 4 | 3 |
+| debt+value_creation_developer | gov | 1 | 1 | 0 |
+
+Why it must not auto-mint yet:
+- **`has_linked_person` is mostly the weak association P161 already gated out.** Linked-person roles per gated owner:
+  `works_at` only **28 (52%)**, `prospecting_contact` 9, `institution_decision_maker` 9, `decision_maker` 3,
+  `prospecting_contact,works_at` 2, `parent_of` only 1, `manager,works_at` 1, `economic_owner_contact,works_at` 1.
+  `works_at` is the bare Salesforce-account org edge; P161 does not count it as reach above $500k.
+- **Named rows include non-sellers:** `4238 Washington Street` (an address filed as the owner), `Truist Bank`
+  (`value_creation_developer`), `Homestead Community Pharmacy` (`debt`), and a run of `ARC GS…001, LLC` REIT-family SPEs.
+- **6 are repeat buyers** (Realty Income, ExchangeRight, Capital Square 1031 among them). `bridgeCreateLead`'s R5 gate
+  would refuse them, so an automated run would report 6 refusals every time it ran.
+- **A scheduled caller has no user.** `bridgeCreateLead` stamps `bd_opportunities.owner_user_id = user.id`, and the seed
+  trigger passes it to the cadence. An automated path needs the point person via `lcc_cadence_point_person` (the
+  `lcc_users` → `users` email bridge), never a hard-coded id.
+- Verdict: **D5 held.** Options for Scott: (a) tighten the gate — require a person role other than `works_at`/`parent_of`
+  and an owner name that passes the junk/person-shape guards, grade the named rows, dry-run, then automate (≈25 owners by
+  today's roles, before the name guard); or (b) make it a review lane with a one-click "Create lead" and no automatic writes.
+  Filed as `GOV-UX1-D5-gate`.
+
+Queries (all read-only) are reproducible from the columns named above; re-measure before quoting, since both populations
+move daily.
+
 ## 4. Mutations (each turns the guard RED)
 
 A1 hash-first slug · A2 last-slug-wins map · A3 sub-tab without hash write · B1 planner counts a twin separately ·
