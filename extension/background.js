@@ -1,4 +1,5 @@
 import './shared/property-identity.js';
+import './shared/action-guard.js';
 
 // ============================================================================
 // LCC Assistant — Background Service Worker (Manifest V3)
@@ -266,12 +267,10 @@ async function callLCCApi(endpoint, body) {
 
   const url = `${baseUrl.replace(/\/+$/, '')}${endpoint}`;
 
-  const headers = {
+  // SIDEBAR4-c: stamped like the side panel's apiCall (request id + build).
+  const headers = globalThis.LccActionGuard.lccRequestHeaders(apiKey, {
     'Content-Type': 'application/json',
-  };
-  if (apiKey) {
-    headers['X-LCC-Key'] = apiKey;
-  }
+  });
 
   try {
     const res = await fetch(url, {

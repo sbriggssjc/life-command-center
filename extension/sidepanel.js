@@ -157,8 +157,7 @@ async function pollPipelineStatus(entityId, container) {
   const baseUrl = config.LCC_RAILWAY_URL;
   if (!baseUrl) return;
   const url = `${baseUrl.replace(/\/+$/, '')}/api/entities?id=${entityId}&fields=metadata`;
-  const headers = {};
-  if (config.LCC_API_KEY) headers['X-LCC-Key'] = config.LCC_API_KEY;
+  const headers = window.LccActionGuard.lccRequestHeaders(config.LCC_API_KEY);
 
   let lastMeta = null;
   for (const waitMs of POLL_WAITS_MS) {
@@ -218,12 +217,9 @@ async function apiCall(endpoint, body, method = 'POST') {
     }
 
     const url = `${baseUrl.replace(/\/+$/, '')}${endpoint}`;
-    const headers = { 'Content-Type': 'application/json' };
-    if (apiKey) headers['X-LCC-Key'] = apiKey;
-    // SIDEBAR4: one id per user action, so a server-side pipeline run can be
-    // traced back to the request (and a second request for the same click is
-    // distinguishable from a retry of the same one).
-    try { headers['X-LCC-Request-Id'] = crypto.randomUUID(); } catch { /* best-effort */ }
+    // SIDEBAR4 / SIDEBAR4-c: one request id per user action + the extension
+    // build, so a server-side pipeline run traces back to the click that made it.
+    const headers = window.LccActionGuard.lccRequestHeaders(apiKey, { 'Content-Type': 'application/json' });
 
     const fetchOpts = { method, headers };
     if (method !== 'GET' && method !== 'HEAD') {
@@ -1643,6 +1639,8 @@ async function loadPropertyTab(opts) {
     } else {
       actions.innerHTML = `<button class="btn btn-sm btn-success" id="saveLccBtn">Save Property to LCC</button>`;
     }
+    // SIDEBAR4-c: one property action at a time for this render.
+    window.LccActionGuard.resetGroup(actions);
     wirePropertyActions(ctx, lccEntity);
     wireAscResearchAction(ctx, actions).catch((err) => console.warn('[ASC research action]', err?.message || err));
   }
@@ -1665,6 +1663,8 @@ async function loadPropertyTab(opts) {
       pipelineLabel = 'Re-run Pipeline';
     }
 
+    const actionGroup = window.LccActionGuard.groupFor(actions);
+    const actionStatus = () => window.LccActionGuard.statusSlot(actions);
     const rerunBtn = document.createElement('button');
     rerunBtn.className = 'btn btn-sm btn-secondary';
     rerunBtn.id = 'rerunPipelineBtn';
@@ -1682,7 +1682,9 @@ async function loadPropertyTab(opts) {
       rerunBtn.style.cursor = 'not-allowed';
     }
 
-    rerunBtn.addEventListener('click', async () => {
+    // SIDEBAR4-c: guarded — a click here while Update/Save/Verify is in flight
+    // (the misclick the run log caught 0.5–1.0 s after every Update) is swallowed.
+    rerunBtn.addEventListener('click', actionGroup.wrap(rerunBtn, async () => {
       rerunBtn.disabled = true;
       rerunBtn.textContent = 'Running...';
 
@@ -1717,11 +1719,10 @@ async function loadPropertyTab(opts) {
         const toast = document.createElement('div');
         toast.className = 'update-toast updated';
         toast.textContent = 'Pipeline re-ran successfully';
-        actions.prepend(toast);
-        pollPipelineStatus(lccEntity.id, actions).then(() => {
-          rerunBtn.textContent = 'Re-run Pipeline';
-          rerunBtn.disabled = false;
-        });
+        actionStatus().prepend(toast);
+        await pollPipelineStatus(lccEntity.id, actionStatus());
+        rerunBtn.textContent = 'Re-run Pipeline';
+        rerunBtn.disabled = false;
       } else if (result.ok && pipelineFailed) {
         const reason = toErrorMessage(result.data?.pipeline_reason)
           || 'no domain classified — nothing was written';
@@ -1730,7 +1731,7 @@ async function loadPropertyTab(opts) {
         toast.style.background = 'var(--red, #dc2626)';
         toast.style.color = '#fff';
         toast.textContent = `Promote failed — ${reason}. Rescan the page and retry.`;
-        actions.prepend(toast);
+        actionStatus().prepend(toast);
         rerunBtn.textContent = 'Retry Pipeline (Failed)';
         rerunBtn.disabled = false;
       } else {
@@ -1740,11 +1741,11 @@ async function loadPropertyTab(opts) {
         const toast = document.createElement('div');
         toast.className = 'update-toast';
         toast.textContent = errMsg;
-        actions.prepend(toast);
+        actionStatus().prepend(toast);
         rerunBtn.textContent = 'Re-run Pipeline';
         rerunBtn.disabled = false;
       }
-    });
+    }));
 
     // Round 76cx Phase 3: "Verify still available" button. Only shown when
     // the property is matched in LCC and resolves to a dialysis/government
@@ -1910,7 +1911,7 @@ async function loadPropertyTab(opts) {
       verifyBtn.style.marginLeft = '6px';
       actions.appendChild(verifyBtn);
 
-      verifyBtn.addEventListener('click', async () => {
+      verifyBtn.addEventListener('click', actionGroup.wrap(verifyBtn, async () => {
         verifyBtn.disabled = true;
         verifyBtn.textContent = 'Verifying…';
         // Pull the latest captured price + cap rate from the live page
@@ -1976,10 +1977,10 @@ async function loadPropertyTab(opts) {
           const hint = result.data?.hint;
           toast.textContent = hint ? `${errMsg} — ${hint}` : errMsg;
         }
-        actions.prepend(toast);
+        actionStatus().prepend(toast);
         verifyBtn.textContent = 'Verify still available';
         verifyBtn.disabled = false;
-      });
+      }));
 
       // Round 76cx Phase 3b (2026-04-29): "Mark as off market" button.
       // Counterpart to "Verify still available" — when the user knows the
@@ -1997,7 +1998,7 @@ async function loadPropertyTab(opts) {
       offMarketBtn.style.marginLeft = '6px';
       actions.appendChild(offMarketBtn);
 
-      offMarketBtn.addEventListener('click', async () => {
+      offMarketBtn.addEventListener('click', actionGroup.wrap(offMarketBtn, async () => {
         // Round 76cx Phase 3b: light-weight reason picker via window.prompt.
         // A custom dropdown is overkill given how rarely this button is used;
         // the prompt's free-text fallback also captures one-off reasons we
@@ -2048,10 +2049,10 @@ async function loadPropertyTab(opts) {
           const hint = result.data?.hint;
           toast.textContent = hint ? `${errMsg} — ${hint}` : errMsg;
         }
-        actions.prepend(toast);
+        actionStatus().prepend(toast);
         offMarketBtn.textContent = 'Mark off market';
         offMarketBtn.disabled = false;
-      });
+      }));
     }
   }
 
@@ -2498,6 +2499,11 @@ function renderLccFields(entity, data, ctx) {
 }
 
 function wirePropertyActions(ctx, lccEntity) {
+  // SIDEBAR4-c: Update/Save share the render's action group with Re-run and
+  // Verify — one in flight at a time, widths frozen, status below the buttons.
+  const actionsEl = $('#propertyActions');
+  const actionGroup = window.LccActionGuard.groupFor(actionsEl);
+  const actionStatus = () => window.LccActionGuard.statusSlot(actionsEl);
   const updateBtn = $('#updateLccBtn');
   const saveBtn = $('#saveLccBtn');
   const domain = ctx.domain || 'source';
@@ -2520,7 +2526,7 @@ function wirePropertyActions(ctx, lccEntity) {
   }
 
   if (updateBtn) {
-    updateBtn.addEventListener('click', async () => {
+    updateBtn.addEventListener('click', actionGroup.wrap(updateBtn, async () => {
       updateBtn.disabled = true;
       updateBtn.textContent = 'Updating...';
 
@@ -2554,10 +2560,10 @@ function wirePropertyActions(ctx, lccEntity) {
         const toast = document.createElement('div');
         toast.className = 'update-toast updated';
         toast.textContent = `Property data synced from ${domainLabel}`;
-        $('#propertyActions').prepend(toast);
-        pollPipelineStatus(lccEntity.id, $('#propertyActions')).then(() => {
-          updateBtn.textContent = 'Updated!';
-        });
+        actionStatus().prepend(toast);
+        // Hold the group until the pipeline this PATCH started has reported.
+        await pollPipelineStatus(lccEntity.id, actionStatus());
+        updateBtn.textContent = 'Updated!';
       } else {
         updateBtn.disabled = false;
         updateBtn.textContent = 'Update Failed — Retry';
@@ -2569,13 +2575,13 @@ function wirePropertyActions(ctx, lccEntity) {
         const toast = document.createElement('div');
         toast.className = 'update-toast';
         toast.textContent = errMsg;
-        $('#propertyActions').prepend(toast);
+        actionStatus().prepend(toast);
       }
-    });
+    }));
   }
 
   if (saveBtn) {
-    saveBtn.addEventListener('click', async () => {
+    saveBtn.addEventListener('click', actionGroup.wrap(saveBtn, async () => {
       saveBtn.disabled = true;
       saveBtn.textContent = 'Saving...';
 
@@ -2636,16 +2642,15 @@ function wirePropertyActions(ctx, lccEntity) {
         const toast = document.createElement('div');
         toast.className = 'update-toast updated';
         toast.textContent = 'Property added to LCC';
-        $('#propertyActions').prepend(toast);
-        pollPipelineStatus(newEntityId, $('#propertyActions')).then(() => {
-          saveBtn.textContent = 'Saved!';
-          // Round 76ek: hand the just-created entity id to loadPropertyTab so
-          // it doesn't have to guess via a string-match address lookup. This
-          // closes the "Save button reappears after refresh" loop where small
-          // address-spelling differences caused the rehydration to come back
-          // empty and the sidebar to offer Save again (creating duplicates).
-          setTimeout(() => loadPropertyTab({ prefetchEntityId: newEntityId }), 1500);
-        });
+        actionStatus().prepend(toast);
+        await pollPipelineStatus(newEntityId, actionStatus());
+        saveBtn.textContent = 'Saved!';
+        // Round 76ek: hand the just-created entity id to loadPropertyTab so
+        // it doesn't have to guess via a string-match address lookup. This
+        // closes the "Save button reappears after refresh" loop where small
+        // address-spelling differences caused the rehydration to come back
+        // empty and the sidebar to offer Save again (creating duplicates).
+        setTimeout(() => loadPropertyTab({ prefetchEntityId: newEntityId }), 1500);
       } else {
         saveBtn.disabled = false;
         saveBtn.textContent = 'Save Failed — Retry';
@@ -2657,9 +2662,9 @@ function wirePropertyActions(ctx, lccEntity) {
         const toast = document.createElement('div');
         toast.className = 'update-toast';
         toast.textContent = errMsg;
-        $('#propertyActions').prepend(toast);
+        actionStatus().prepend(toast);
       }
-    });
+    }));
   }
 }
 
