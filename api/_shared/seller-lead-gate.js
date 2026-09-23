@@ -21,6 +21,13 @@
 //   * lcc_resolve_buyer_parent (SQL) — the same test bridgeCreateLead refuses on
 //   * lcc_cadence_point_person (SQL) — the lead owner for an unattended write
 //
+// GOV-UX1-D5-gate-2 (2026-09-23) adds two things that are NOT gate conditions:
+//   * likelyBuyerSpeParent — every decision-maker also decides for a repeat
+//     buyer (view: dm_people[].shared_buyer_parent): stays in the lane with a
+//     note, kept off the auto path.
+//   * collapseSharedDecisionMakers — owners sharing a decision-maker are ONE
+//     card (one conversation = one lead); siblings are ledgered as 'cluster'.
+//
 // Pure: no I/O in the gate or eligibility functions (the loaders take opsQuery
 // as a dependency so tests can stub it).
 // ============================================================================
@@ -100,20 +107,113 @@ export function evaluateSellerLeadGate(row) {
   return { qualifies: failed.length === 0, failed, contact: dm[0] || null };
 }
 
-/** Split candidates into the gated list (value-ranked) and a per-condition funnel. */
+/**
+ * GOV-UX1-D5-gate-2 (buyerspe): the repeat buyer this owner is likely an SPE of.
+ * True only when EVERY surviving decision-maker also decides for an entity that
+ * lcc_resolve_buyer_parent resolves to a repeat buyer (the view's
+ * dm_people[].shared_buyer_parent). An owner with one independent decision-maker
+ * is not flagged. Not a gate condition: the owner stays in the lane with a
+ * "likely SPE of <parent>" note and is kept off the auto path.
+ */
+export function likelyBuyerSpeParent(row) {
+  const dm = decisionMakerPeople(row);
+  if (!dm.length) return null;
+  if (!dm.every((p) => p.shared_buyer_parent)) return null;
+  return dm[0].shared_buyer_parent;
+}
+
+function siblingSummary(r) {
+  return {
+    entity_id: r.entity_id, owner_name: r.owner_name, rank_value: r.rank_value,
+    source_domain: r.source_domain, source_property_id: r.source_property_id,
+    address: r.address, city: r.city, state: r.state, likely_spe_of: r.likely_spe_of || null,
+  };
+}
+
+/**
+ * GOV-UX1-D5-gate-2 (sponsor): one conversation = one lead. Gated owners that
+ * share a decision-maker (any surviving person_id, transitively) collapse into
+ * ONE card: the highest-value owner is the card, the rest ride along as
+ * cluster_siblings. The card's contact is the shared person. No name pattern.
+ */
+export function collapseSharedDecisionMakers(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  const parent = list.map((_, i) => i);
+  const find = (i) => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+  const byPerson = new Map();
+  list.forEach((r, i) => {
+    for (const p of decisionMakerPeople(r)) {
+      const key = String(p.person_id || '');
+      if (!key) continue;
+      if (byPerson.has(key)) parent[find(i)] = find(byPerson.get(key));
+      else byPerson.set(key, i);
+    }
+  });
+  const groups = new Map();
+  list.forEach((r, i) => {
+    const g = find(i);
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(r);
+  });
+  const cards = [];
+  for (const members of groups.values()) {
+    members.sort((a, b) => (Number(b.rank_value) || 0) - (Number(a.rank_value) || 0));
+    const [rep, ...sibs] = members;
+    if (!sibs.length) { cards.push({ ...rep, cluster_siblings: [], cluster_size: 1, cluster_rank_value: Number(rep.rank_value) || 0 }); continue; }
+    // The shared person: the decision-maker present on the most members.
+    const tally = new Map();
+    for (const m of members) for (const p of decisionMakerPeople(m)) {
+      const t = tally.get(p.person_id) || { p, n: 0 }; t.n += 1; tally.set(p.person_id, t);
+    }
+    const shared = [...tally.values()].sort((a, b) => b.n - a.n)[0];
+    cards.push({
+      ...rep,
+      gate_contact: shared ? shared.p : rep.gate_contact,
+      cluster_siblings: sibs.map(siblingSummary),
+      cluster_size: members.length,
+      cluster_rank_value: members.reduce((s, m) => s + (Number(m.rank_value) || 0), 0),
+      // A card is a likely buyer SPE if any member is (they share the person).
+      likely_spe_of: rep.likely_spe_of || (sibs.find((s) => s.likely_spe_of) || {}).likely_spe_of || null,
+    });
+  }
+  cards.sort((a, b) => (Number(b.rank_value) || 0) - (Number(a.rank_value) || 0));
+  return cards;
+}
+
+/**
+ * Split candidates into the lane's cards (value-ranked, shared-decision-maker
+ * owners collapsed) and a per-condition funnel. funnel.qualifies counts OWNERS;
+ * funnel.cards counts what the lane shows.
+ */
 export function applySellerLeadGate(rows) {
-  const funnel = { candidates: 0, qualifies: 0, failed_by: {} };
+  const funnel = { candidates: 0, qualifies: 0, failed_by: {}, likely_buyer_spe: 0, collapsed_siblings: 0, cards: 0 };
   GATE_CONDITIONS.forEach((k) => { funnel.failed_by[k] = 0; });
-  const gated = [];
+  const owners = [];
   for (const row of Array.isArray(rows) ? rows : []) {
     funnel.candidates += 1;
     const v = evaluateSellerLeadGate(row);
     v.failed.forEach((k) => { funnel.failed_by[k] += 1; });
-    if (v.qualifies) { funnel.qualifies += 1; gated.push({ ...row, gate_contact: v.contact }); }
+    if (v.qualifies) {
+      funnel.qualifies += 1;
+      const spe = likelyBuyerSpeParent(row);
+      if (spe) funnel.likely_buyer_spe += 1;
+      owners.push({ ...row, gate_contact: v.contact, likely_spe_of: spe });
+    }
   }
-  gated.sort((a, b) => (Number(b.rank_value) || 0) - (Number(a.rank_value) || 0));
+  const gated = collapseSharedDecisionMakers(owners);
+  funnel.cards = gated.length;
+  funnel.collapsed_siblings = owners.length - gated.length;
   return { gated, funnel };
 }
+
+/** Find the card an entity belongs to (as the card itself or a sibling). */
+export function findGateCard(gated, entityId) {
+  return (Array.isArray(gated) ? gated : []).find((c) => c.entity_id === entityId
+    || (Array.isArray(c.cluster_siblings) && c.cluster_siblings.some((s) => s.entity_id === entityId))) || null;
+}
+
+/** The ledger tag that ties a card's sibling rows to its representative. */
+export function clusterBatchTag(repEntityId) { return 'cluster:' + repEntityId; }
 
 /**
  * Is auto-create allowed right now? BOTH must hold: the flag is on, and the lane's
@@ -165,7 +265,10 @@ export function buildCreateLeadBody(row, source) {
     property_address: [row.address, row.city, row.state].filter(Boolean).join(', ') || null,
     source,
     notes: 'Seller-lead gate: ' + String(row.reason_to_sell || '').replace(/_/g, ' ')
-      + (row.gate_contact ? ' · contact ' + row.gate_contact.name + ' (' + row.gate_contact.role + ')' : ''),
+      + (row.gate_contact ? ' · contact ' + row.gate_contact.name + ' (' + row.gate_contact.role + ')' : '')
+      + (Array.isArray(row.cluster_siblings) && row.cluster_siblings.length
+        ? ' · same decision-maker also controls ' + row.cluster_siblings.map((s) => s.owner_name).join('; ') : '')
+      + (row.likely_spe_of ? ' · likely SPE of ' + row.likely_spe_of : ''),
   };
 }
 
