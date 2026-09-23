@@ -155,7 +155,7 @@ async function pollPipelineStatus(entityId, container) {
 
   const config = await getLCCConfig();
   const baseUrl = config.LCC_RAILWAY_URL;
-  if (!baseUrl) return;
+  if (!baseUrl) return { status: 'processing', text: 'Pipeline status unavailable — LCC URL not configured' };
   const url = `${baseUrl.replace(/\/+$/, '')}/api/entities?id=${entityId}&fields=metadata`;
   const headers = window.LccActionGuard.lccRequestHeaders(config.LCC_API_KEY);
 
@@ -179,14 +179,14 @@ async function pollPipelineStatus(entityId, container) {
         line.className = 'update-toast';
         line.textContent = `→ Pipeline error: ${toErrorMessage(lastError) || 'unknown'}`;
         container.prepend(line);
-        return;
+        return { status: 'failed', text: line.textContent };
       }
       if (summary) {
         const line = document.createElement('div');
         line.className = 'update-toast updated';
         line.textContent = formatPipelineSummary(summary);
         container.prepend(line);
-        return;
+        return { status: 'success', text: `Pipeline ✓ ${line.textContent.replace(/^→\s*/, '')}` };
       }
       // No summary yet — keep polling.
     } catch (_) {
@@ -204,6 +204,7 @@ async function pollPipelineStatus(entityId, container) {
   line.style.borderColor = '#FCD34D';
   line.textContent = '→ Pipeline still processing — refresh in a moment';
   container.prepend(line);
+  return { status: 'processing', text: 'Pipeline still processing for the latest save…' };
 }
 
 async function apiCall(endpoint, body, method = 'POST') {
@@ -1632,10 +1633,15 @@ async function loadPropertyTab(opts) {
   });
 
   // Action buttons
+  let matchedView = null; // SIDEBAR4-d
   if (ctx && ctx.address) {
     const sourceLabel = escapeHtml(domainLabel);
     if (matched) {
-      actions.innerHTML = `<button class="btn btn-sm btn-confirm" id="updateLccBtn">Update LCC with ${sourceLabel} Data</button>`;
+      // SIDEBAR4-d: an honest "in LCC" state. Update is only offered when the
+      // live page differs from the stored capture; Re-run is secondary unless
+      // the last run failed (Update already runs the pipeline server-side).
+      matchedView = computeMatchedCaptureView(ctx, lccEntity, domainLabel);
+      actions.innerHTML = matchedActionsHtml(matchedView);
     } else {
       actions.innerHTML = `<button class="btn btn-sm btn-success" id="saveLccBtn">Save Property to LCC</button>`;
     }
@@ -1649,26 +1655,37 @@ async function loadPropertyTab(opts) {
     'entity_type:', lccEntity?.entity_type,
     'pipeline_status:', lccEntity?.metadata?._pipeline_status);
 
-  // Pipeline button — always available on matched assets
+  // Pipeline button — always available on matched assets. SIDEBAR4-d: it is
+  // a primary action only when the last run failed or none has ever run;
+  // otherwise it sits behind the "⋯" overflow, because Update already runs
+  // the pipeline and a Re-run after it is always a second, redundant run.
   if (matched && lccEntity.entity_type === 'asset') {
     const meta = lccEntity.metadata || {};
-    let pipelineLabel;
-    if (meta._pipeline_status === 'success') {
-      pipelineLabel = 'Re-run Pipeline';
-    } else if (meta._pipeline_status === 'failed') {
-      pipelineLabel = 'Retry Pipeline (Failed)';
-    } else if (!meta._pipeline_processed_at) {
-      pipelineLabel = 'Run Pipeline';
-    } else {
-      pipelineLabel = 'Re-run Pipeline';
-    }
+    const view = matchedView || computeMatchedCaptureView(ctx, lccEntity, domainLabel);
+    const pipelineLabel = view.rerun.label;
 
     const actionGroup = window.LccActionGuard.groupFor(actions);
     const actionStatus = () => window.LccActionGuard.statusSlot(actions);
     const rerunBtn = document.createElement('button');
-    rerunBtn.className = 'btn btn-sm btn-secondary';
+    rerunBtn.className = view.rerun.prominent ? 'btn btn-sm btn-confirm' : 'btn btn-sm btn-secondary';
     rerunBtn.id = 'rerunPipelineBtn';
     rerunBtn.textContent = pipelineLabel;
+    if (!view.rerun.prominent) {
+      rerunBtn.style.display = 'none';
+      rerunBtn.title = 'Update already runs the pipeline — use this only to force a fresh run';
+      const moreBtn = document.createElement('button');
+      moreBtn.className = 'btn btn-sm btn-secondary';
+      moreBtn.id = 'moreActionsBtn';
+      moreBtn.title = 'More actions';
+      moreBtn.setAttribute('aria-expanded', 'false');
+      moreBtn.textContent = '⋯';
+      moreBtn.addEventListener('click', () => {
+        const open = rerunBtn.style.display === 'none';
+        rerunBtn.style.display = open ? '' : 'none';
+        moreBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      });
+      actions.appendChild(moreBtn);
+    }
     actions.appendChild(rerunBtn);
 
     // W1.4-L3b: don't let a promote fire on an empty capture. Allow when the
@@ -1720,7 +1737,8 @@ async function loadPropertyTab(opts) {
         toast.className = 'update-toast updated';
         toast.textContent = 'Pipeline re-ran successfully';
         actionStatus().prepend(toast);
-        await pollPipelineStatus(lccEntity.id, actionStatus());
+        const outcome = await pollPipelineStatus(lccEntity.id, actionStatus());
+        window.LccCaptureState.rememberAction(lccEntity.id, { kind: 'rerun', pipeline: outcome });
         rerunBtn.textContent = 'Re-run Pipeline';
         rerunBtn.disabled = false;
       } else if (result.ok && pipelineFailed) {
@@ -2498,6 +2516,39 @@ function renderLccFields(entity, data, ctx) {
   return html;
 }
 
+// SIDEBAR4-d: the matched render's state, from the live page vs the stored
+// capture fingerprint. Same domain expression as wirePropertyActions so the
+// hashes a render computes match the ones Save/Update stored.
+function liveCaptureHashes(ctx) {
+  const domain = ctx.domain || 'source';
+  return window.LccCaptureState.captureFieldHashes(extractSourceFields(ctx), buildMetadata(ctx, domain));
+}
+
+function computeMatchedCaptureView(ctx, lccEntity, sourceLabel) {
+  return window.LccCaptureState.computeMatchedView({
+    liveHashes: ctx ? liveCaptureHashes(ctx) : {},
+    meta: (lccEntity && lccEntity.metadata) || {},
+    updatedAt: lccEntity && lccEntity.updated_at,
+    sourceLabel,
+    recent: window.LccCaptureState.recentAction(lccEntity && lccEntity.id),
+  });
+}
+
+// The "in LCC" status block + the Update button for a matched render.
+function matchedActionsHtml(view) {
+  const toneColor = { ok: '#047857', bad: '#B91C1C', warn: '#92400E', info: 'var(--text-secondary)' };
+  const stateHtml = view.statusLines.map((l) =>
+    `<div class="lcc-capture-line" data-tone="${l.tone}" style="font-size:11px;color:${toneColor[l.tone] || toneColor.info};">${escapeHtml(l.text)}</div>`).join('');
+  return `<div class="lcc-capture-state" id="lccCaptureState" style="display:flex;flex-direction:column;gap:2px;margin-bottom:6px;">${stateHtml}</div>`
+    + `<button class="btn btn-sm btn-confirm" id="updateLccBtn"${view.update.disabled ? ' disabled' : ''} title="${escapeHtml(view.update.title)}">${escapeHtml(view.update.label)}</button>`;
+}
+
+function stampCaptureFingerprint(metadata, fields, freshMeta) {
+  metadata._capture_field_hashes = window.LccCaptureState.captureFieldHashes(fields, freshMeta);
+  metadata._capture_saved_at = new Date().toISOString();
+  return metadata;
+}
+
 function wirePropertyActions(ctx, lccEntity) {
   // SIDEBAR4-c: Update/Save share the render's action group with Re-run and
   // Verify — one in flight at a time, widths frozen, status below the buttons.
@@ -2542,7 +2593,11 @@ function wirePropertyActions(ctx, lccEntity) {
 
       // PATCH the existing entity — merge new CRE data into metadata
       const fields = extractSourceFields(liveCtx);
-      const metadata = mergeMetadataPreservingArrays(lccEntity.metadata, buildMetadata(liveCtx, domain));
+      const freshMeta = buildMetadata(liveCtx, domain);
+      const metadata = mergeMetadataPreservingArrays(lccEntity.metadata, freshMeta);
+      // SIDEBAR4-d: fingerprint what this update SENDS so the next render can
+      // tell "nothing new on this page" from "N fields changed".
+      stampCaptureFingerprint(metadata, fields, freshMeta);
       // Clear pipeline gate so re-ingestion triggers a fresh pipeline run
       delete metadata._pipeline_processed_at;
       delete metadata._pipeline_status;
@@ -2562,8 +2617,12 @@ function wirePropertyActions(ctx, lccEntity) {
         toast.textContent = `Property data synced from ${domainLabel}`;
         actionStatus().prepend(toast);
         // Hold the group until the pipeline this PATCH started has reported.
-        await pollPipelineStatus(lccEntity.id, actionStatus());
+        window.LccCaptureState.rememberAction(lccEntity.id, { kind: 'updated' });
+        const outcome = await pollPipelineStatus(lccEntity.id, actionStatus());
+        window.LccCaptureState.rememberAction(lccEntity.id, { kind: 'updated', pipeline: outcome });
         updateBtn.textContent = 'Updated!';
+        // SIDEBAR4-d: re-render into the honest "in LCC, up to date" state.
+        setTimeout(() => loadPropertyTab({ prefetchEntityId: lccEntity.id }), 1500);
       } else {
         updateBtn.disabled = false;
         updateBtn.textContent = 'Update Failed — Retry';
@@ -2596,6 +2655,8 @@ function wirePropertyActions(ctx, lccEntity) {
 
       const fields = extractSourceFields(liveCtx);
       const metadata = buildMetadata(liveCtx, domain);
+      // SIDEBAR4-d: fingerprint the capture this save sends.
+      stampCaptureFingerprint(metadata, fields, metadata);
 
       const result = await apiCall('/api/entities', {
         entity_type: 'asset',
@@ -2643,7 +2704,11 @@ function wirePropertyActions(ctx, lccEntity) {
         toast.className = 'update-toast updated';
         toast.textContent = 'Property added to LCC';
         actionStatus().prepend(toast);
-        await pollPipelineStatus(newEntityId, actionStatus());
+        // SIDEBAR4-d: remember the save BEFORE polling, so a pageContext
+        // re-render mid-poll already shows "Saved just now", not a fresh page.
+        window.LccCaptureState.rememberAction(newEntityId, { kind: 'saved' });
+        const outcome = await pollPipelineStatus(newEntityId, actionStatus());
+        window.LccCaptureState.rememberAction(newEntityId, { kind: 'saved', pipeline: outcome });
         saveBtn.textContent = 'Saved!';
         // Round 76ek: hand the just-created entity id to loadPropertyTab so
         // it doesn't have to guess via a string-match address lookup. This
