@@ -53,6 +53,14 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-23 — GOV-UX1-D5-gate (CC): tight seller-lead gate, review lane on the Priority tab, precision-gated auto-create (flag OFF)
+
+- **Migration `20261102260000` (applied live on LCC Opps):** `lcc_is_seller_lead_decision_role`, `lcc_seller_lead_gate_decision` (one live decision per owner), `v_lcc_seller_lead_gate_candidates`, `v_lcc_seller_lead_gate_precision`, flag `SELLER_LEAD_AUTOCREATE` = off, cron `lcc-seller-lead-autocreate` (weekdays 13:10 UTC; a named skip while locked).
+- **Live funnel:** 217 candidates → **20 qualify**. The decision-maker role cuts 191; repeat buyers cut 6 more. Graded all 20: **10 keep / 10 reject**, so the first page is ~50%. Auto-create stays locked by design. Details and gaps are in `responses/GOV-UX1-D5-gate.response.md`, and the gaps are filed as `GOV-UX1-D5-gate-bank/-buyerspe/-sponsor`.
+- **JS (needs the Railway redeploy of both services + `npm run verify:deploy`):** `api/_shared/seller-lead-gate.js`, `api/_handlers/seller-lead-gate.js` (`/api/seller-lead-gate`, `/api/seller-lead-autocreate-tick`), the Priority-tab lane in `ops.js`, `bridgeCreateLead` exported (still the only lead writer), and cache busters `2026092301 → 2026092302`.
+- **Tests:** `test/gov-ux1-d5-gate.test.mjs` 26 tests, 19/19 mutations RED; full suite 6,962 pass / 0 fail.
+- **Next:** Scott works the lane (checklist **Q51**) and flips the flag when the meter reads eligible.
+
 ## 2026-09-23 — Round 68 (Cowork): 1.0.57 Save verified (one run); Q49 edge function verified; Findlay linked to dia 51194; Q48 → hybrid gate prompted; `SF-BRIDGE1` prompted; STATUS archived
 
 **SIDEBAR4-c/-d ✅ closed (live).**

@@ -26,6 +26,7 @@ import { makeDealRosterRoute } from './mcp/deal-roster.js';
 import { handleDealEmailMatchCron } from './api/_handlers/deal-email-match-cron.js';
 import { handleOperatorNoteIntake } from './api/_handlers/operator-notes-intake.js';
 import { handleOperatorTriageTick } from './api/_handlers/operator-triage-tick.js';
+import { handleSellerLeadGate, handleSellerLeadAutocreateTick } from './api/_handlers/seller-lead-gate.js';
 import { handleDealCommsPropagateTick } from './api/_handlers/deal-comms-propagate-tick.js';
 import { handleCommsOwnerAttributionTick } from './api/_handlers/comms-owner-attribution-tick.js';
 import { handleMarketBriefPsqlTick } from './api/_handlers/market-brief-psql-tick.js';
@@ -439,6 +440,9 @@ app.all('/api/intake-tagged-comm', (req, res) => { req.query._route = 'tagged-co
 // _route dispatch) — each handler is its own auth boundary.
 app.all('/api/operator-notes', handleOperatorNoteIntake);
 app.all('/api/operator-triage-tick', handleOperatorTriageTick);
+// GOV-UX1-D5-gate: seller-lead review lane + auto-create tick (writes via bridgeCreateLead only).
+app.all('/api/seller-lead-gate', handleSellerLeadGate);
+app.all('/api/seller-lead-autocreate-tick', handleSellerLeadAutocreateTick);
 // MB-a — market brief producers, dialysis lane first (spec EXEC-BRIEFS-SPEC.md
 // §2, MB1/MB2). Flag-gated (MARKET_BRIEF_PSQL / MARKET_BRIEF_PRSS), both off
 // until live-verified. GET is always a dry run.

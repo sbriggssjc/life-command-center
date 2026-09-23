@@ -751,7 +751,7 @@ The registry is the authority; **seed migrations and older docs have drifted fro
 side the flag names, so **confirm the flag before quoting any contact count**) ·
 `RESOLVER_RETRAIN_LOOP`.
 
-**OFF (27) — grouped by WHY, because "off" is not one thing.**
+**OFF (28) — grouped by WHY, because "off" is not one thing.**
 
 | Why it is off | Flags | What it would take |
 |---|---|---|
@@ -759,6 +759,7 @@ side the flag names, so **confirm the flag before quoting any contact count**) �
 | **Paused by doctrine** | `OWNER_ENRICH_WEBSEARCH_URL` | Nothing — contact acquisition is public-records-only by decision. |
 | **Third-party key / URL not provisioned** | `GEOCODIO_API_KEY`, `GOOGLE_MAPS_API_KEY`, `CM_TREASURY_REFRESH_URL`, `SF_LIST_IMPORT_URL`, `SF_LIST_SEED_INSTITUTION` | Provision the key/webhook; the code no-ops honestly meanwhile. |
 | **Held pending a dry-run grade** (built, deliberately not flipped) | `OWNERSHIP_CHAIN_ROLE_LABELS` (→ open Prompt 140), `LISTING_PAGE_PROACTIVE_EXTRACT`, `DEED_IMPLIED_PRICE_FILL`, `CADENCE_TEMPLATE_AUTOSELECT`, `CADENCE_OPEN_TRACKING_ACTIVE`, `DECISION_PROVENANCE_LEARN`, `DECISION_OWNER_DEED_WINS`, `DECISION_GOV_WRITEBACK`, `GOV_EVIDENCE_WORKBENCH`, `SF_CONTACT_WRITEBACK`, `TEAMS_COLD_ALERTS_ENABLED` | Pull a dry-run sample, eyeball 10–20 proposals, flip. **Grade before flipping** — `OLLAMA_CLEAN_ASSIST` failed its first grade (6/12 content-free) and needed P134 context enrichment before it passed. |
+| **Unlocks on measured precision** (GOV-UX1-D5-gate, 2026-09-23) | `SELLER_LEAD_AUTOCREATE` | Scott works the Priority-tab "Ready to become a lead" lane; once `v_lcc_seller_lead_gate_precision` reads ≥ 0.90 over 25 lane decisions, flip it. Flag ON alone does nothing (the tick also checks precision). First page graded 10/20 keep, so it stays locked for now. → `docs/claude-code/responses/GOV-UX1-D5-gate.response.md` |
 | **Producer gate, deliberately closed** | `ENABLE_OWNERSHIP_RESEARCH_QUEUE` | A decision, not a defect — it gates 9 gov insert sites. |
 | **Operator/tenant step outstanding** | `PA_OUTLOOK_DRAFT_FLOW` (`off_since` 2026-08-21 — ⚠️ the same day the draft seam was proven working end-to-end; **re-measure before acting on either reading**) | Confirm the PA flow + `PA_OUTLOOK_DRAFT_URL` against the tenant. |
 
