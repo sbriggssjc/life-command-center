@@ -59,6 +59,11 @@ const EXTRACT_RACE_MS = (() => {
   return 25000; // sensible default for Vercel Pro
 })();
 
+// INTAKE-RESTAGE1: how long a freshly-minted card / freshly-queued staged row
+// is presumed to belong to a stage still running (inline extraction race is
+// ≤ EXTRACT_RACE_MS; the call as a whole finishes well inside this).
+const IN_FLIGHT_GRACE_MS = 2 * 60 * 1000;
+
 /**
  * @typedef {object} StageOmInput
  * @property {string}  [bytes_base64]       — raw base64 PDF/doc bytes (EITHER this OR data_uri is required)
@@ -416,17 +421,64 @@ export async function stageOmIntake(input, auth, workspaceId) {
     received_at: nowIso,
   };
 
-  const itemRes = await opsQuery('POST', 'inbox_items', itemPayload, {
-    Prefer: 'return=representation,resolution=merge-duplicates',
-  });
-  if (!itemRes.ok) {
+  // INTAKE-RESTAGE1 (2026-09-23): resolve the card through
+  // resolveOmInboxCard instead of a bare merge-duplicates POST. That POST
+  // carried no on_conflict, so PostgREST arbitrated on the PRIMARY KEY only,
+  // and the partial unique index inbox_items_workspace_external_id_unique
+  // (workspace_id, external_id) WHERE external_id IS NOT NULL raised 23505 on
+  // any re-stage of the same file (same om_sha256:<sha>) — so the dedup that
+  // exists to stop a second CARD blocked every re-stage of a stored file
+  // (Findlay OM, sf_files 1747). on_conflict cannot fix it: PostgREST sends
+  // `ON CONFLICT (cols)` with no index predicate, and Postgres can only infer a
+  // PARTIAL unique index as the arbiter when the predicate is stated (42P10
+  // otherwise). So: look up, insert on a miss, and on a 23505 (a concurrent
+  // stage won the race) look up again and attach.
+  const card = await resolveOmInboxCard({ wsId, externalId: dedupExternalId, itemPayload });
+  if (!card.ok) {
     return {
-      status: itemRes.status || 500,
-      body: { error: 'inbox_item_insert_failed', detail: itemRes.data },
+      status: card.status || 500,
+      body: { error: 'inbox_item_insert_failed', detail: card.detail },
     };
   }
-  const item = Array.isArray(itemRes.data) ? itemRes.data[0] : itemRes.data;
+  const item = card.item;
   const inboxItemId = item?.id;
+  const reusedCard = card.reused === true;
+
+  // A reused card already owns its staged_intake_items row (PK intake_id =
+  // inbox_items.id, 1:1). Decide whether this call is a deliberate RE-STAGE
+  // (staged row settled → re-run extraction + matching with forceReextract) or
+  // a CONCURRENT duplicate of a stage still in flight (do not start a second
+  // extraction; the first call, or the stranded-extraction retry cron, owns
+  // it) — see planOmRestage. Never touch the card's status: an operator's dismiss/archive is
+  // a verdict a re-stage must not silently undo.
+  let restage = null;
+  if (reusedCard) {
+    restage = await planOmRestage(inboxItemId, input.sha256 ?? null,
+      { via: card.via, cardCreatedAt: item?.created_at ?? null });
+    if (!restage.ok) {
+      return { status: 500, body: { error: 'restage_lookup_failed', detail: restage.detail, intake_id: inboxItemId } };
+    }
+    if (restage.mode === 'in_flight') {
+      return inFlightResponse({ inboxItemId, item, bytesLen, fileName: input.file_name });
+    }
+    if (restage.mode === 'restage') {
+      // Atomic claim: flip the settled row back to 'queued' ONLY if it is not
+      // already freshly queued. Two concurrent re-stages both read "settled";
+      // exactly one PATCH matches, the other gets 0 rows and stands down, so a
+      // re-stage never runs two forced extractions side by side.
+      const staleBefore = new Date(Date.parse(nowIso) - IN_FLIGHT_GRACE_MS).toISOString();
+      const claim = await opsQuery('PATCH',
+        `staged_intake_items?intake_id=eq.${pgFilterVal(inboxItemId)}` +
+        `&or=(status.neq.queued,updated_at.lt.${staleBefore})`,
+        { status: 'queued', updated_at: nowIso });
+      if (!claim.ok) {
+        return { status: claim.status || 500, body: { error: 'restage_claim_failed', detail: claim.data, intake_id: inboxItemId } };
+      }
+      if (!Array.isArray(claim.data) || claim.data.length === 0) {
+        return inFlightResponse({ inboxItemId, item, bytesLen, fileName: input.file_name });
+      }
+    }
+  }
 
   // ---- 7. Bridge to staged_intake_items + staged_intake_artifacts on LCC Opps
   //     intake_id reuses inbox_items.id for 1:1 correlation.
@@ -443,7 +495,10 @@ export async function stageOmIntake(input, auth, workspaceId) {
   const sourceEmailDate = input.channel === 'email'
     ? (emailCtx.received_at_raw || emailCtx.sent_at_raw || null)
     : null;
-  const stageRes = await opsQuery('POST', 'staged_intake_items', {
+  // A re-stage already claimed (and reset) its existing staged row above.
+  const stageRes = (reusedCard && restage?.mode === 'restage')
+    ? { ok: true, data: null }
+    : await opsQuery('POST', 'staged_intake_items', {
     intake_id:           inboxItemId,
     workspace_id:        wsId,
     source_type:         input.channel === 'email' ? 'email' : 'copilot',
@@ -463,8 +518,9 @@ export async function stageOmIntake(input, auth, workspaceId) {
   });
 
   if (!stageRes.ok) {
-    // Roll back the inbox_item to avoid orphans.
-    await opsQuery('DELETE', `inbox_items?id=eq.${pgFilterVal(inboxItemId)}`);
+    // Roll back the inbox_item to avoid orphans — but NEVER a reused card: it
+    // predates this call and carries the first pass's history.
+    if (!reusedCard) await opsQuery('DELETE', `inbox_items?id=eq.${pgFilterVal(inboxItemId)}`);
     return {
       status: stageRes.status || 500,
       body: {
@@ -493,7 +549,11 @@ export async function stageOmIntake(input, auth, workspaceId) {
   let ingestStorageBackend = hasSharepointRef ? 'sharepoint_pa' : (hasStoragePath ? 'supabase' : null);
   let ingestStorageRef     = hasSharepointRef ? input.storage_ref : (hasStoragePath ? input.storage_path : null);
   let storeInline          = (hasStoragePath || hasSharepointRef) ? null : input.bytes_base64;
-  if (!hasStoragePath && !hasSharepointRef && bytesLen > OM_INGEST_STORAGE_MIN_BYTES) {
+  // INTAKE-RESTAGE1: a re-stage of the SAME bytes (the reused card already
+  // holds an artifact with this sha256) writes no second artifact and no second
+  // storage object — the extractor reads the artifact it already has.
+  const reuseArtifact = reusedCard && restage?.artifactExists === true;
+  if (!reuseArtifact && !hasStoragePath && !hasSharepointRef && bytesLen > OM_INGEST_STORAGE_MIN_BYTES) {
     const opsUrlEnv = process.env.OPS_SUPABASE_URL;
     const opsKeyEnv = process.env.OPS_SUPABASE_KEY;
     if (opsUrlEnv && opsKeyEnv) {
@@ -522,7 +582,7 @@ export async function stageOmIntake(input, auth, workspaceId) {
     }
   }
 
-  const artRes = await opsQuery('POST', 'staged_intake_artifacts', {
+  const artRes = reuseArtifact ? { ok: true, data: null } : await opsQuery('POST', 'staged_intake_artifacts', {
     intake_id:       inboxItemId,
     file_name:       input.file_name,
     file_type:       fileExt,
@@ -535,8 +595,10 @@ export async function stageOmIntake(input, auth, workspaceId) {
     sha256:          input.sha256 ?? null,
   });
   if (!artRes.ok) {
-    await opsQuery('DELETE', `staged_intake_items?intake_id=eq.${pgFilterVal(inboxItemId)}`);
-    await opsQuery('DELETE', `inbox_items?id=eq.${pgFilterVal(inboxItemId)}`);
+    if (!reusedCard) {
+      await opsQuery('DELETE', `staged_intake_items?intake_id=eq.${pgFilterVal(inboxItemId)}`);
+      await opsQuery('DELETE', `inbox_items?id=eq.${pgFilterVal(inboxItemId)}`);
+    }
     return {
       status: artRes.status || 500,
       body: { error: 'staged_intake_artifact_insert_failed', detail: artRes.data },
@@ -563,7 +625,11 @@ export async function stageOmIntake(input, auth, workspaceId) {
     raceTimedOut = true;
   } else {
     try {
-      const extraction = processIntakeExtraction(inboxItemId)
+      // A deliberate re-stage bypasses the cached-extraction short-circuit —
+      // otherwise the extractor would hand back the first pass's snapshot and
+      // the re-run would change nothing. Prior extraction rows are kept.
+      const extraction = processIntakeExtraction(inboxItemId,
+        restage?.mode === 'restage' ? { forceReextract: true } : undefined)
         .catch((err) => {
           console.error('[intake-om-pipeline] extraction failed:', inboxItemId, err?.message);
           return { ok: false, extraction_snapshot: null, error: err?.message || 'extraction_error' };
@@ -720,12 +786,141 @@ export async function stageOmIntake(input, auth, workspaceId) {
       matched_domain:       matchedDomain || (matchResult?.domain && matchResult.domain !== 'lcc' ? matchResult.domain : null),
       entity_match_status:  matchedEntityId ? 'matched' : (snapshot ? 'unmatched' : 'pending'),
       size_bytes:           bytesLen,
+      // INTAKE-RESTAGE1: true when this call attached to an existing card for
+      // the same file instead of minting one ('restage' = extraction re-run).
+      deduplicated:         reusedCard,
+      restage:              reusedCard ? restage.mode : null,
       message: buildMessage({
         fileName: input.file_name,
         extractionStatus,
         classifiedDomain,
         matchedEntityId,
       }),
+    },
+  };
+}
+
+// ============================================================================
+// INTAKE-RESTAGE1 helpers
+// ============================================================================
+
+function isUniqueViolation(res) {
+  // PostgREST maps BOTH 23505 and 23503 to HTTP 409 — only the DB's own code
+  // proves a unique violation (see CLAUDE.md "a 409 is NOT necessarily a
+  // conflict"). A 409 without a code is treated as unique only when the body
+  // names the dedup index, never on the status alone.
+  const code = res?.data?.code;
+  if (code === '23505') return true;
+  if (code) return false;
+  const msg = JSON.stringify(res?.data || '');
+  return res?.status === 409 && /inbox_items_workspace_external_id_unique|duplicate key/i.test(msg);
+}
+
+async function findOmInboxCard(wsId, externalId) {
+  const res = await opsQuery('GET',
+    `inbox_items?workspace_id=eq.${pgFilterVal(wsId)}&external_id=eq.${pgFilterVal(externalId)}` +
+    `&select=id,entity_id,status,created_at&limit=1`,
+    undefined, { countMode: 'none' });
+  if (!res.ok) return { ok: false, detail: res.data };
+  const row = Array.isArray(res.data) ? res.data[0] : null;
+  return { ok: true, row: row || null };
+}
+
+/**
+ * Resolve the ONE inbox card for an OM dedup key: reuse an existing card,
+ * else insert; a unique violation on the insert means a concurrent stage won
+ * the race, so look up again and attach to its card.
+ * @returns {Promise<{ok:boolean, item?:object, reused?:boolean, status?:number, detail?:any}>}
+ */
+export async function resolveOmInboxCard({ wsId, externalId, itemPayload }) {
+  const existing = await findOmInboxCard(wsId, externalId);
+  if (existing.ok && existing.row) return { ok: true, item: existing.row, reused: true, via: 'lookup' };
+
+  const ins = await opsQuery('POST', 'inbox_items', itemPayload, {
+    Prefer: 'return=representation',
+  });
+  if (ins.ok) {
+    const row = Array.isArray(ins.data) ? ins.data[0] : ins.data;
+    return { ok: true, item: row, reused: false, via: 'insert' };
+  }
+  if (isUniqueViolation(ins)) {
+    const again = await findOmInboxCard(wsId, externalId);
+    if (again.ok && again.row) return { ok: true, item: again.row, reused: true, via: 'conflict' };
+  }
+  return { ok: false, status: ins.status || 500, detail: ins.data };
+}
+
+/**
+ * For a reused card, decide what this call is:
+ *   'restage'   — the staged row exists and is settled (any terminal status,
+ *                 or 'queued' but stale) → reset it to queued and re-run
+ *                 extraction + matching with forceReextract
+ *   'in_flight' — the staged row is 'queued' and was touched inside the grace
+ *                 window → a stage is still running; do nothing more
+ *   'resume'    — no staged row at all AND the card is old enough that no
+ *                 stage can still be running (a first pass that died between
+ *                 the card and the staged row) → stage normally onto it
+ * A card reached via a unique-violation ('conflict') was minted by a concurrent
+ * call moments ago, and a card younger than IN_FLIGHT_GRACE_MS with no staged
+ * row is the same situation seen a few ms later — both are 'in_flight': the
+ * winning call owns the staged row, the artifact and the extraction.
+ * Also reports whether the card already holds an artifact with this sha256.
+ */
+export async function planOmRestage(intakeId, sha256, { via = 'lookup', cardCreatedAt = null, now = Date.now() } = {}) {
+  const id = pgFilterVal(intakeId);
+  const [staged, artifact] = await Promise.all([
+    opsQuery('GET', `staged_intake_items?intake_id=eq.${id}&select=intake_id,status,updated_at,created_at&limit=1`,
+      undefined, { countMode: 'none' }),
+    sha256
+      ? opsQuery('GET', `staged_intake_artifacts?intake_id=eq.${id}&sha256=eq.${pgFilterVal(sha256)}&select=intake_id&limit=1`,
+        undefined, { countMode: 'none' })
+      : Promise.resolve({ ok: true, data: [] }),
+  ]);
+  // Fail closed: guessing wrong here either strands a re-stage or runs a
+  // second extraction beside one in flight.
+  if (!staged.ok || !artifact.ok) {
+    return { ok: false, detail: (!staged.ok ? staged : artifact).data };
+  }
+  const stagedExists     = Array.isArray(staged.data) && staged.data.length > 0;
+  const artifactExists   = Array.isArray(artifact.data) && artifact.data.length > 0;
+  const ageMs = (iso) => {
+    const t = iso ? Date.parse(iso) : NaN;
+    return Number.isFinite(t) ? now - t : Infinity;
+  };
+  const stagedRow = stagedExists ? staged.data[0] : null;
+  // 'queued' is the only in-flight staged status: the extractor moves a row
+  // straight from queued to a terminal one (review_required / matched /
+  // finalized / discarded / failed). A queued row untouched past the grace is
+  // stranded, not running — a deliberate re-stage may take it over.
+  const stagedActive = stagedRow?.status === 'queued'
+    && ageMs(stagedRow.updated_at || stagedRow.created_at) < IN_FLIGHT_GRACE_MS;
+  let mode;
+  if (via === 'conflict') mode = 'in_flight';
+  else if (stagedActive) mode = 'in_flight';
+  else if (stagedExists) mode = 'restage';
+  else if (ageMs(cardCreatedAt) < IN_FLIGHT_GRACE_MS) mode = 'in_flight';
+  else mode = 'resume';
+  return { ok: true, mode, stagedExists, artifactExists };
+}
+
+function inFlightResponse({ inboxItemId, item, bytesLen, fileName }) {
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      status: 'received',
+      deduplicated: true,
+      restage: 'in_flight',
+      intake_id: inboxItemId,
+      staged_intake_item_id: inboxItemId,
+      inbox_item_id: inboxItemId,
+      extraction_status: 'processing',
+      classified_domain: null,
+      matched_entity_id: item?.entity_id ?? null,
+      matched_domain: null,
+      entity_match_status: 'pending',
+      size_bytes: bytesLen,
+      message: `"${fileName}" is already being staged on this card — no second card or extraction started.`,
     },
   };
 }
