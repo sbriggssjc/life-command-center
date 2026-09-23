@@ -16,6 +16,7 @@
 //   - On-demand via POST /api/entities?action=process_sidebar_extraction
 // ============================================================================
 
+import { stripPrivateFinancialNames } from '../_shared/private-financial-names.js';
 import { randomUUID } from 'node:crypto';
 import { ensureEntityLink, normalizeCanonicalName, normalizeAddress, stripStreetSuffix, stripListingStatusPrefix, canonicalIdentitySystem, canonicalEntityDomain, isJunkEntityName, normalizeEmail, isGenericInboxEmail, looksLikeContactPhone, recordContactFieldWrites, hasFirmSuffix } from '../_shared/entity-link.js';
 import { isCompetitorBroker } from '../_shared/sf-nm-classifier.js';
@@ -1603,7 +1604,9 @@ function selectPrimaryTenant(metadata, domain) {
       || null;
   }
   const priorityRe = domain === 'government' ? GOV_TENANT_PRIORITY : MEDICAL_TENANT_PRIORITY;
-  const match = tenants.find(t => t.name && priorityRe.test(t.name));
+  // GOV-CU1: a credit union is never the gov PRIMARY tenant of a multi-tenant building.
+  const match = tenants.find(t => t.name && priorityRe.test(
+    domain === 'government' ? stripPrivateFinancialNames(t.name) : t.name));
   if (match) return match.name;
   // Fall back to first (largest by SF) tenant
   return tenants[0]?.name
@@ -2062,8 +2065,11 @@ export function classifyDomain(metadata, entityFields) {
     console.log(`[classifyDomain] → government (asset_type=government_leased)`);
     return 'government';
   }
+  // GOV-CU1: a private federally-chartered lender ("Navy Federal Credit Union") is not a
+  // government tenant — strip its name before the gov patterns read the word "federal".
+  const govSearchText = stripPrivateFinancialNames(searchText);
   for (const rx of GOV_TENANT_PATTERNS) {
-    if (rx.test(searchText)) {
+    if (rx.test(govSearchText)) {
       console.log(`[classifyDomain] → government (matched ${rx})`);
       return 'government';
     }
@@ -2141,7 +2147,7 @@ function classifyAllApplicableDomains(metadata, entityFields) {
   // Government — either explicit asset_type tag OR keyword match.
   if (entityFields.asset_type === 'government_leased') {
     if (!all.includes('government')) all.push('government');
-  } else if (GOV_TENANT_PATTERNS.some((rx) => rx.test(searchText))) {
+  } else if (GOV_TENANT_PATTERNS.some((rx) => rx.test(stripPrivateFinancialNames(searchText)))) { // GOV-CU1
     if (!all.includes('government')) all.push('government');
   }
   return all;
@@ -2160,7 +2166,8 @@ function classifyAllApplicableDomains(metadata, entityFields) {
 function isTenantForDomain(tenantName, domain) {
   if (!tenantName || typeof tenantName !== 'string') return false;
   const name = tenantName.toLowerCase();
-  const isGov = GOV_TENANT_PATTERNS.some((rx) => rx.test(name));
+  const govName = stripPrivateFinancialNames(name); // GOV-CU1
+  const isGov = GOV_TENANT_PATTERNS.some((rx) => rx.test(govName));
   const isDia = DIALYSIS_TENANT_PATTERNS.some((rx) => rx.test(name));
   if (domain === 'government') return isGov;
   if (domain === 'dialysis') return !(isGov && !isDia);
@@ -2195,8 +2202,9 @@ function detectDomainMismatch(domain, metadata, entityFields) {
 
   // domain='dialysis' but primary tenant is government → likely misroute
   if (domain === 'dialysis') {
+    const govPrimaryText = stripPrivateFinancialNames(primaryText); // GOV-CU1
     for (const rx of GOV_TENANT_PATTERNS) {
-      if (rx.test(primaryText)) {
+      if (rx.test(govPrimaryText)) {
         // Suppress when the dialysis signal is ALSO in the primary tenant
         // (hybrid like "DaVita Dialysis | VA Clinic"). Only warn when no
         // dialysis pattern matches the primary slot — that's the "pure
@@ -2274,7 +2282,7 @@ function classifyDomainWithDiag(metadata, entityFields) {
   let matchedPattern = null;
   for (const rx of DIALYSIS_TENANT_PATTERNS) { if (rx.test(searchText)) { matchedPattern = `DIA:${rx}`; break; } }
   if (!matchedPattern && entityFields.asset_type === 'government_leased') matchedPattern = 'asset_type=government_leased';
-  if (!matchedPattern) { for (const rx of GOV_TENANT_PATTERNS) { if (rx.test(searchText)) { matchedPattern = `GOV:${rx}`; break; } } }
+  if (!matchedPattern) { const govSearchText = stripPrivateFinancialNames(searchText); for (const rx of GOV_TENANT_PATTERNS) { if (rx.test(govSearchText)) { matchedPattern = `GOV:${rx}`; break; } } } // GOV-CU1
 
   // Round 76cr-Phase 2: detect and log primary-tenant/domain mismatches.
   // Surfaced into the response via _lastClassifierDiag.mismatchWarning so
