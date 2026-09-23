@@ -144,14 +144,20 @@ function hasExtractableContent(src) {
   return false;
 }
 
-async function pollPipelineStatus(entityId, container) {
-  // Round 76af 2026-04-28: poll up to 4 times (3.5s, 6s, 10s, 16s) before
-  // giving up. The previous single-poll-at-3.5s would frequently render
-  // 'Domain: not matched' just because the server pipeline wasn't done yet,
-  // even on captures that classified perfectly. Now we only show 'no domain'
-  // after every poll missed — and even then we say 'still processing' rather
-  // than the misleading 'not matched' diagnostic.
-  const POLL_WAITS_MS = [3500, 6000, 10000, 16000];
+// SIDEBAR5 (2026-09-23): runs of 55–70 s are normal, so the poll backs off
+// out to ~3 minutes (was 35.5 s, which gave up before a 55 s run finished and
+// left "still processing" pinned by the post-action memo for 10 minutes).
+const PIPELINE_POLL_WAITS_MS = [3500, 6000, 10000, 16000, 20000, 25000, 30000, 35000, 35000];
+
+// opts.actionAt   — client ms when the Save/Update/Re-run request was sent;
+// opts.priorStamp — LccCaptureState.lastRunStamp(metadata) read BEFORE it.
+// Only a run stamped after the action counts; a previous run's summary on an
+// Update is NOT this run's success.
+async function pollPipelineStatus(entityId, container, opts = {}) {
+  const POLL_WAITS_MS = opts.waitsMs || PIPELINE_POLL_WAITS_MS;
+  const sleep = opts.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const actionAt = opts.actionAt == null ? Date.now() : opts.actionAt;
+  const priorStamp = opts.priorStamp || null;
 
   const config = await getLCCConfig();
   const baseUrl = config.LCC_RAILWAY_URL;
@@ -159,52 +165,45 @@ async function pollPipelineStatus(entityId, container) {
   const url = `${baseUrl.replace(/\/+$/, '')}/api/entities?id=${entityId}&fields=metadata`;
   const headers = window.LccActionGuard.lccRequestHeaders(config.LCC_API_KEY);
 
-  let lastMeta = null;
   for (const waitMs of POLL_WAITS_MS) {
     try {
-      await new Promise((r) => setTimeout(r, waitMs));
+      await sleep(waitMs);
       const res = await fetch(url, { method: 'GET', headers });
       if (!res.ok) continue;
       const data = await res.json().catch(() => null);
       const meta = data?.entity?.metadata || data?.metadata || {};
-      lastMeta = meta;
 
-      const summary = meta._pipeline_summary;
-      const status  = meta._pipeline_status;
-      const lastError = meta._pipeline_last_error;
+      const outcome = window.LccCaptureState.pipelineOutcomeSince(meta, { sinceMs: actionAt, priorStamp });
+      if (!outcome) continue; // this action's run has not finished yet
 
-      // Terminal states — render and stop polling.
-      if (status === 'failed') {
+      if (outcome.status === 'failed') {
         const line = document.createElement('div');
         line.className = 'update-toast';
-        line.textContent = `→ Pipeline error: ${toErrorMessage(lastError) || 'unknown'}`;
+        line.textContent = `→ Pipeline error: ${toErrorMessage(meta._pipeline_last_error) || 'unknown'}`;
         container.prepend(line);
-        return { status: 'failed', text: line.textContent };
+        return { status: 'failed', text: line.textContent, stamp: outcome.stamp };
       }
-      if (summary) {
-        const line = document.createElement('div');
-        line.className = 'update-toast updated';
-        line.textContent = formatPipelineSummary(summary);
-        container.prepend(line);
-        return { status: 'success', text: `Pipeline ✓ ${line.textContent.replace(/^→\s*/, '')}` };
-      }
-      // No summary yet — keep polling.
+      const line = document.createElement('div');
+      line.className = 'update-toast updated';
+      line.textContent = meta._pipeline_summary ? formatPipelineSummary(meta._pipeline_summary) : '→ Pipeline ✓';
+      container.prepend(line);
+      return { status: 'success', text: `Pipeline ✓ ${line.textContent.replace(/^→\s*/, '')}`, stamp: outcome.stamp };
     } catch (_) {
       // best-effort — keep polling on transient errors
     }
   }
 
-  // All polls exhausted without a summary. Render a neutral "still processing"
-  // message — NOT 'Domain: not matched' (which was misleading; the classifier
-  // ran fine, the pipeline summary just hadn't landed yet on slow runs).
+  // All polls exhausted. Neutral, and NOT frozen: the next render compares the
+  // stored run against this action (LccCaptureState.memoSupersededByStored),
+  // so a run that finishes later replaces this line on its own.
   const line = document.createElement('div');
   line.className = 'update-toast';
   line.style.background = '#FEF3C7';
   line.style.color = '#92400E';
   line.style.borderColor = '#FCD34D';
-  line.textContent = '→ Pipeline still processing — refresh in a moment';
+  line.textContent = '→ Pipeline still running — check back in a minute';
   container.prepend(line);
-  return { status: 'processing', text: 'Pipeline still processing for the latest save…' };
+  return { status: 'processing', text: 'Pipeline still running — check back in a minute' };
 }
 
 async function apiCall(endpoint, body, method = 'POST') {
@@ -255,7 +254,20 @@ async function getActiveTabUrl() {
 async function validateCostarContext(ctx) {
   if (!ctx || ctx.domain !== 'costar') return { ok: true, reasons: [] };
   const activeUrl = await getActiveTabUrl();
-  return window.LccPropertyIdentity.contextIntegrity(ctx, activeUrl);
+  const integrity = window.LccPropertyIdentity.contextIntegrity(ctx, activeUrl);
+  // SIDEBAR5: a CoStar capture whose subject address did not come from the
+  // property header is never saved — there is no contact-block fallback.
+  if (subjectAddressBlocked(ctx)) {
+    return { ...integrity, ok: false, reasons: [...integrity.reasons, 'subject_address_header_not_found'] };
+  }
+  return integrity;
+}
+
+// SIDEBAR5 (2026-09-23): costar.js marks a capture whose header yielded no
+// address with _subject_address_status='header_not_found' (address=null).
+function subjectAddressBlocked(ctx) {
+  return !!(ctx && ctx.domain === 'costar'
+    && (ctx._subject_address_status === 'header_not_found' || !ctx.address));
 }
 
 async function getFreshAscTenantContext(ctx) {
@@ -1054,6 +1066,23 @@ async function loadPropertyTab(opts) {
 
   // Determine data source: page context or selected entity from search
   const ctx = await getPageContext();
+
+  // SIDEBAR5: the CoStar header was not found on this tab. Say so and offer a
+  // re-scan instead of falling back to an address from a contact block.
+  if (ctx && ctx.domain === 'costar' && ctx._subject_address_status === 'header_not_found') {
+    header.innerHTML = `<div class="property-title">${escapeHtml(ctx._page_title || 'CoStar property')}</div>
+      <div class="property-source">CoStar — property header not found</div>`;
+    body.innerHTML = `<div class="domain-mismatch-banner" style="background:#FEF2F2;border:1px solid #DC2626;border-radius:6px;padding:10px;margin:8px;font-size:12px;color:#991B1B;">
+      <div style="font-weight:700;margin-bottom:5px;">Save blocked — property address not found in the page header</div>
+      <div>The subject address is only read from the CoStar property header, never from a Contacts, Leasing Company, Owner or Architect block. The header was not in the page when it was scanned.</div>
+      <div style="margin-top:6px;">Open the property's Summary tab (or wait for the header to load), then re-scan.</div>
+      <button class="btn btn-sm btn-primary" id="scanPageBtn" style="margin-top:8px;">Re-scan This Page</button>
+    </div>`;
+    actions.innerHTML = '<button class="btn btn-sm btn-danger" disabled>Save blocked — no header address</button>';
+    wireScanButton();
+    return;
+  }
+
   const source = ctx && (ctx.address || ctx.name) ? ctx : selectedEntity;
 
   if (!source) {
@@ -1705,6 +1734,8 @@ async function loadPropertyTab(opts) {
       rerunBtn.disabled = true;
       rerunBtn.textContent = 'Running...';
 
+      const rerunActionAt = Date.now();
+      const rerunPriorStamp = window.LccCaptureState.lastRunStamp(lccEntity.metadata);
       const result = await apiCall('/api/entities?action=process_sidebar_extraction', {
         entity_id: lccEntity.id,
         force: true,
@@ -1737,8 +1768,9 @@ async function loadPropertyTab(opts) {
         toast.className = 'update-toast updated';
         toast.textContent = 'Pipeline re-ran successfully';
         actionStatus().prepend(toast);
-        const outcome = await pollPipelineStatus(lccEntity.id, actionStatus());
-        window.LccCaptureState.rememberAction(lccEntity.id, { kind: 'rerun', pipeline: outcome });
+        const outcome = await pollPipelineStatus(lccEntity.id, actionStatus(),
+          { actionAt: rerunActionAt, priorStamp: rerunPriorStamp });
+        window.LccCaptureState.rememberAction(lccEntity.id, { kind: 'rerun', pipeline: outcome, actionAt: rerunActionAt });
         rerunBtn.textContent = 'Re-run Pipeline';
         rerunBtn.disabled = false;
       } else if (result.ok && pipelineFailed) {
@@ -2598,6 +2630,10 @@ function wirePropertyActions(ctx, lccEntity) {
       // SIDEBAR4-d: fingerprint what this update SENDS so the next render can
       // tell "nothing new on this page" from "N fields changed".
       stampCaptureFingerprint(metadata, fields, freshMeta);
+      // SIDEBAR5: identify the run stored BEFORE this update, so the poll can
+      // tell this update's run from the previous one.
+      const updateActionAt = Date.now();
+      const updatePriorStamp = window.LccCaptureState.lastRunStamp(lccEntity.metadata);
       // Clear pipeline gate so re-ingestion triggers a fresh pipeline run
       delete metadata._pipeline_processed_at;
       delete metadata._pipeline_status;
@@ -2617,9 +2653,10 @@ function wirePropertyActions(ctx, lccEntity) {
         toast.textContent = `Property data synced from ${domainLabel}`;
         actionStatus().prepend(toast);
         // Hold the group until the pipeline this PATCH started has reported.
-        window.LccCaptureState.rememberAction(lccEntity.id, { kind: 'updated' });
-        const outcome = await pollPipelineStatus(lccEntity.id, actionStatus());
-        window.LccCaptureState.rememberAction(lccEntity.id, { kind: 'updated', pipeline: outcome });
+        window.LccCaptureState.rememberAction(lccEntity.id, { kind: 'updated', actionAt: updateActionAt });
+        const outcome = await pollPipelineStatus(lccEntity.id, actionStatus(),
+          { actionAt: updateActionAt, priorStamp: updatePriorStamp });
+        window.LccCaptureState.rememberAction(lccEntity.id, { kind: 'updated', pipeline: outcome, actionAt: updateActionAt });
         updateBtn.textContent = 'Updated!';
         // SIDEBAR4-d: re-render into the honest "in LCC, up to date" state.
         setTimeout(() => loadPropertyTab({ prefetchEntityId: lccEntity.id }), 1500);
@@ -2657,6 +2694,7 @@ function wirePropertyActions(ctx, lccEntity) {
       const metadata = buildMetadata(liveCtx, domain);
       // SIDEBAR4-d: fingerprint the capture this save sends.
       stampCaptureFingerprint(metadata, fields, metadata);
+      const saveActionAt = Date.now(); // SIDEBAR5: a new entity has no prior run
 
       const result = await apiCall('/api/entities', {
         entity_type: 'asset',
@@ -2706,9 +2744,9 @@ function wirePropertyActions(ctx, lccEntity) {
         actionStatus().prepend(toast);
         // SIDEBAR4-d: remember the save BEFORE polling, so a pageContext
         // re-render mid-poll already shows "Saved just now", not a fresh page.
-        window.LccCaptureState.rememberAction(newEntityId, { kind: 'saved' });
-        const outcome = await pollPipelineStatus(newEntityId, actionStatus());
-        window.LccCaptureState.rememberAction(newEntityId, { kind: 'saved', pipeline: outcome });
+        window.LccCaptureState.rememberAction(newEntityId, { kind: 'saved', actionAt: saveActionAt });
+        const outcome = await pollPipelineStatus(newEntityId, actionStatus(), { actionAt: saveActionAt });
+        window.LccCaptureState.rememberAction(newEntityId, { kind: 'saved', pipeline: outcome, actionAt: saveActionAt });
         saveBtn.textContent = 'Saved!';
         // Round 76ek: hand the just-created entity id to loadPropertyTab so
         // it doesn't have to guess via a string-match address lookup. This
@@ -2948,6 +2986,10 @@ function buildMetadata(ctx, domain) {
     source: domain || 'extension',
     source_url: ctx.page_url || null,
     _version: ctx._version || null,
+    // SIDEBAR5: the server checks the saved address against the page title's
+    // street (api/_shared/intake-address-guard.js captureTitleStreetMismatch).
+    _page_title: ctx._page_title || null,
+    _subject_address_source: ctx._subject_address_source || null,
     costar_comp_id: ctx.costar_comp_id || null,
     extracted_at: new Date().toISOString(),
     // Financials

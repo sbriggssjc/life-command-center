@@ -63,7 +63,8 @@ export { deriveListingDate };
 import { cleanLenderName } from '../_shared/lender-name.js';
 import { looksLikeRawSalesforceId } from '../_shared/sf-account-name-resolver.js';
 import { deriveGovernmentCreditTier } from '../_shared/gov-credit-tier.js';
-import { parseCivicNumberSpan } from '../_shared/intake-address-guard.js';
+import { parseCivicNumberSpan, matchBrokerageOffice, captureTitleStreetMismatch } from '../_shared/intake-address-guard.js';
+import { loadBrokerageOfficeRegistry } from '../_shared/brokerage-office-registry.js';
 
 // ============================================================================
 // FIELD-LEVEL PROVENANCE RECORDER (Phase 2.2, 2026-04-25)
@@ -4915,6 +4916,33 @@ export async function upsertDomainProperty(domain, entity, metadata) {
   if (isOwnFirmAddress(address)) {
     _lastDomainPropertyError = `own_firm_address_rejected:${address}`;
     console.warn(`[upsertDomainProperty] Refusing to write firm office address: "${address}" (${domain})`);
+    return null;
+  }
+
+  // SIDEBAR5 (2026-09-23): the GOV-AVAIL1 brokerage-office registry (builtin
+  // own office + LCC Opps lcc_brokerage_office_address), not just our own
+  // office — a captured address that IS a known brokerage office is never a
+  // subject property.
+  const officeRegistry = await loadBrokerageOfficeRegistry().catch(() => null);
+  const office = officeRegistry ? matchBrokerageOffice(address, entity.state, officeRegistry) : null;
+  if (office) {
+    _lastDomainPropertyError = `known_brokerage_office_rejected:${address}`;
+    console.warn(`[upsertDomainProperty] Refusing brokerage office address "${address}" (${office.firm_name || 'registry'}) (${domain})`);
+    return null;
+  }
+
+  // SIDEBAR5: a CoStar capture whose address names a different street than its
+  // own page title was read from a contact/party block (CoStar #1014478: the
+  // Contacts tab's Primary Leasing Company office became the property and
+  // minted gov 41083). Refuse before any match or mint; captures that predate
+  // the extension sending _page_title carry no title and get no opinion.
+  const titleMismatch = captureTitleStreetMismatch(address, metadata?._page_title);
+  if (titleMismatch) {
+    _lastDomainPropertyError = `subject_address_title_mismatch:${address}|title=${titleMismatch.title_street}`;
+    console.warn(
+      `[upsertDomainProperty] Refusing address "${address}" — page title names "${titleMismatch.title_street}" ` +
+      `(${titleMismatch.reason}) (${domain})`,
+    );
     return null;
   }
 

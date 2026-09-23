@@ -1,5 +1,6 @@
 import './shared/property-identity.js';
 import './shared/action-guard.js';
+import './content/_subject-address.js';
 
 // ============================================================================
 // LCC Assistant — Background Service Worker (Manifest V3)
@@ -194,7 +195,7 @@ chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
 const SCRAPER_INJECTIONS = [
   {
     match: /^https:\/\/[^/]*\.costar\.com\//i,
-    files: ['shared/property-identity.js', 'content/_sale-merge.js', 'content/costar.js'],
+    files: ['shared/property-identity.js', 'content/_sale-merge.js', 'content/_subject-address.js', 'content/costar.js'],
     allFrames: true,
   },
   {
@@ -622,7 +623,21 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
           // Preserve sale_notes_raw from whichever tab captured it
           sale_notes_raw: incoming.sale_notes_raw || existing.sale_notes_raw || null,
         };
+        // SIDEBAR5: the subject address and where it came from are ONE unit.
+        // A tab whose header did not render (address null,
+        // status 'header_not_found') must not overwrite the header address an
+        // earlier tab of the same record resolved — and must not leave the
+        // earlier address paired with its own "not found" status either.
+        const subjectSide = incoming.address ? incoming : (existing.address ? existing : incoming);
+        merged.address = subjectSide.address || null;
+        merged._subject_address_source = subjectSide._subject_address_source ?? null;
+        merged._subject_address_status = subjectSide._subject_address_status ?? null;
       }
+
+      // SIDEBAR5 / LEASEJUNK1: panel headers never travel as tenants, even
+      // when an older content script already stored them for this record.
+      const SA = globalThis.__lccSubjectAddress;
+      if (SA && Array.isArray(merged.tenants)) merged.tenants = SA.filterHeaderTenants(merged.tenants);
 
       // Final sanitization: filter garbage contacts on all paths
       if (merged.contacts && Array.isArray(merged.contacts)) {

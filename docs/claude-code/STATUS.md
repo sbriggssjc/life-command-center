@@ -54,6 +54,25 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-23 — SIDEBAR5: CoStar Contacts-tab address, stuck "still processing", header tenants (CC)
+
+- **Address.** CoStar #1014478 was saved from its Contacts tab and captured the Primary Leasing Company office
+  (`4005 Call Field Rd, Suite 100`) as the property. Two defects: `Fwy` was not a street type (so the header
+  failed in the `<h1>` and the title), and the body-wide line walk ran before the title. The subject address
+  now comes from headings → title → lines above the first contact section, with no fallback; nothing found
+  blocks Save with a re-scan prompt. Server: `upsertDomainProperty` refuses a capture whose street differs from
+  its `_page_title`, and consults the GOV-AVAIL1 DB office registry.
+- **Stuck status.** The poll backs off to ~180 s and ends only on a run stamped after the action; a stored
+  terminal run newer than the memo overrides it. An Update's previous summary is no longer read as success.
+- **Tenants.** The extension filters LEASEJUNK1's header list, lock-step with the server (drift test).
+- **Residue (live):** entity `2f90e232…` → `2600 Central Fwy N` (logged on the row); gov 41083 corrected in
+  place (7 values logged, restore proven in a rolled-back round trip); 41083/31048/31796 in
+  `gov_property_twin_review`, nothing merged. 30-day census: 5 confirmed same-class captures of 363
+  (SIDEBAR5-residue), a floor.
+- Tests: `sidebar5-subject-address-and-header-tenants` (19), `sidebar5-pipeline-status` (11); full suite
+  7,022 pass / 0 fail. Manifest 1.0.58. **Next:** merge both PRs, redeploy both Railway services, Scott reloads
+  the extension, Cowork re-verifies with a Save from a Contacts tab.
+
 ## 2026-09-23 — GOV-UX1-D5-gate-2 (CC): bank rule, buyer-SPE note, one card per decision-maker — lane 20 → 15 cards, projected 50% → 67%
 
 - **bank ✅ live:** `lcc_owner_name_is_plain_bank` OR-ed into `lcc_owner_name_is_bank_or_trustee`. Seller queue 502 → 498. The only rows removed are Truist Bank's 4 ($27.6M). Graded 32/42 bank-ish names; SPEs named for a bank building (`BANK BUILDING INVESTORS, LIMITED`, `Bank of America Plaza`) and `Food Bank of Delaware` stay out. Universe −48, top-seller −26, Tier 0 −16; the other four consumers are unchanged.
@@ -69,6 +88,7 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 - **Deploy state:** edge live now (so even the old client already loads all rows); the exact-count pill ships on the Railway redeploy of **both** services. 👤 Scott: Gov › Sales pill should read **4,849**.
 - **Why 4,849 ≠ 15,177:** `v_sales_comps` = `transaction_state='live' AND exclude_from_market_metrics IS NOT TRUE`. The rest: 5,211 `duplicate_superseded` twins, 3,313 `ownership_stub` (ownership changes, 17 priced), 919 `needs_review` (0 priced), 886 live but excluded — 741 with a DQ reason, **145 with none** → filed `GOV-COMPS-SCOPE-reason`.
 - **Guard:** `test/gov-comps-cap.test.mjs` (18 tests; 5 mutations against the shipped files all RED). Suite 7,010 pass / 0 fail.
+
 
 ## 2026-09-23 — Round 69 (Cowork): D5 gate + SF-BRIDGE1 reconciled; the Findlay listing is live end to end; `SIDEBAR5`, `GOV-COMPS-CAP` and `GOV-UX1-D5-gate-2` prompted
 
