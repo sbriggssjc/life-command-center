@@ -37,7 +37,7 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **Deed / owner-conflict (DEED/GOVDEED)** | DEED1, DEED1-reconcile-2, DEED1-emptycompare, DEED2, GOVDEED1–5, GOVDEED5b, GOVDEED-478, DEED-DIA-LATENT, CANON-OWNERSHIP1 | 2026-09-16 | Arc complete through GOVDEED3 (gov #406); **the gov deed writer runs from GitHub Actions (weekly Mon 06:00 UTC) — verify 09-21 dateless = 0**; CANON-OWNERSHIP1 👤 confirmation open; sale-party conflicts 1,290 a review queue |
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k LIVE** (LCC PR #2506): 218 attested supersessions, 40/43 pairs to sponsor, 16/16 controls untouched, reversible; sponsor-as-edge = future work |
 | **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, -harris-b/-c/-d, -ledger-order, MCP1 | 2026-09-17 | **41 assessor-sourced owners live** (Philadelphia 20, Harris 21 of 50); Harris is done except the 27 situs-gap properties → §P10a is the lane's next unit; next free-bulk jurisdiction after that |
-| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS-consolidate-lcc, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift, RECON1, RECON1-b, RECON2, RECON2-b, RECON2-render, RECON3, RECON3-b, SIDEBAR3, SIDEBAR3-b, SIDEBAR3-c, SIDEBAR3-d, EXT-HOST-2, SIDEBAR4, LEASEJUNK1, PERF-SPQ2, HOME2-fix, HOME2-b, HOME2-c, HOME2-d, HOME2-e, PERF-SPQ1, PERF-SPQ1-b, PERF-SPQ1-c, RECON2-c, RECON2-d, RECON2-d-reconcile, RECON2-d-render, RESOLVER1, SIDEBAR-LEASE1, SIDEBAR2, DIA-PROPAGATOR1, VERCEL-LIVE1, GOV-AVAIL1, GOV-UX1, SIDEBAR4-b, SIDEBAR4-c, RECON2-render-spa, RECON2-render-dossier, SIDEBAR3-d-orient | 2026-09-22 | **Current (round 64, 2026-09-22):** SBN-1…25 triaged (ledger: `docs/claude-code/SB notes/TRIAGE.md`). **Live and verified today:** RECON3 + RECON3-b, SIDEBAR3 + SIDEBAR3-c, LEASEJUNK1, SIDEBAR3-d (37 review rows, nothing merged), SIDEBAR4 (code + unique index), PERF-SPQ2 (summary single-pass; cold-load probe owed, Q44), RECON2-render (`tranquil-delight` live; MCP-service redeploy unconfirmed, Q44). **Prompted, waiting on CC:** `GOV-AVAIL1` (our Tulsa office promoted as a gov listing, addresses, 270 agency spellings; SBN-21–23), `GOV-UX1` (row click jumps to Dialysis, owner panel, verification parity, automation table; SBN-23–25), `RECON2-render-spa` (+dossier). **Filed, not yet prompted:** `SIDEBAR4-c` (a second `process_sidebar_extraction` request follows every Update; needs the Q43 extension reload first), `SIDEBAR4-b` (78 pre-existing twin-person groups), `SIDEBAR3-b`, `SIDEBAR3-d-orient`, FLOWS1 SF Listing spike (SBN-18, needs a failed-run screenshot). Rounds 45–63 narrative: [`docs/history/STATUS_open-threads_SBN-row_to_2026-09-22.md`](../history/STATUS_open-threads_SBN-row_to_2026-09-22.md) + the dated entries below. |
+| **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS-consolidate-lcc, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift, RECON1, RECON1-b, RECON2, RECON2-b, RECON2-render, RECON3, RECON3-b, SIDEBAR3, SIDEBAR3-b, SIDEBAR3-c, SIDEBAR3-d, EXT-HOST-2, SIDEBAR4, LEASEJUNK1, PERF-SPQ2, HOME2-fix, HOME2-b, HOME2-c, HOME2-d, HOME2-e, PERF-SPQ1, PERF-SPQ1-b, PERF-SPQ1-c, RECON2-c, RECON2-d, RECON2-d-reconcile, RECON2-d-render, RESOLVER1, SIDEBAR-LEASE1, SIDEBAR2, DIA-PROPAGATOR1, VERCEL-LIVE1, GOV-AVAIL1, GOV-UX1, SIDEBAR4-b, SIDEBAR4-c, RECON2-render-spa, RECON2-render-dossier, SIDEBAR3-d-orient, GOV-UX1-D1, GOV-UX1-D2, GOV-UX1-D3, GOV-UX1-D4, GOV-UX1-D5, GOV-AVAIL1-postoak, GOV-AVAIL1-agency-tail, GOV-AVAIL1-twins, GOV-AVAIL1-govtype, GOV-AVAIL1-civic-drift, RECON2-render-views, HOME-MB-BOOT | 2026-09-23 | **Current (round 65, 2026-09-23):** SBN-1…25 triaged (ledger: `docs/claude-code/SB notes/TRIAGE.md`). `tranquil-delight` live on `06faa4f3`; MCP service on #2630 code (no `mcp/` change since). **Closed and live:** GOV-AVAIL1 (Tulsa-office chain fixed, both office listings quarantined), GOV-UX1 A–C (navigation, owner panel, shared verification card), RECON2-render + -spa + -dossier, PERF-SPQ2, SIDEBAR4, LEASEJUNK1, SIDEBAR3/-c/-d, RECON3/-b. **Prompted, waiting on CC:** `SIDEBAR4-c` (the second pipeline run after every Update comes from the side panel's own Re-run handler, likely a layout-shift second click), `HOME-MB-BOOT` (Market Briefs widget never renders on a cold load). **Waiting on Scott:** Q45 (re-send the Findlay OM from Salesforce), Q46 (pick GOV-UX1-D1…D5 automation rules). **Filed, not prompted:** GOV-AVAIL1 follow-ups (postoak, agency-tail, twins, govtype, civic-drift), RECON2-render-views, SIDEBAR4-b, SIDEBAR3-b, SIDEBAR3-d-orient, FLOWS1 SF Listing spike (SBN-18). Older narrative: [`docs/history/STATUS_open-threads_SBN-row_to_2026-09-22.md`](../history/STATUS_open-threads_SBN-row_to_2026-09-22.md) + the dated entries below. |
 | **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–5, INVENTORY1, INVENTORY1b, INVENTORY2, INVENTORY-process, REMEDIATION-2026-05, REPO1, ROADMAP, PROCESS-CC-DOCS, PROCESS-MERGE-CLOBBER, GUARD-CLOBBER1, PROCESS-ROW-CELLS, PROCESS-PARKING-LOT, DEPLOY2-coverage, DEPLOY2-stale-body | 2026-09-18 | **PR #2563 reverted STATUS + backlog to a week-old snapshot (7 entries / 11 rows lost) — restored round 26; `GUARD-CLOBBER1` live on `main` (PR #2566), manual per-turn diff retired round 28**; DEPLOY2 live + CI; parking lot triaged; EDGE-GATES1 live |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
 | **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
@@ -52,6 +52,54 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
 
 ---
+
+## 2026-09-23 — Round 65 (Cowork): GOV-AVAIL1, GOV-UX1 and RECON2-render-spa reconciled live; Q43/Q44 closed; `SIDEBAR4-c` narrowed to the side panel; `HOME-MB-BOOT` found
+
+**Deploy state (verified):**
+- `npm run verify:deploy` shows `tranquil-delight` live on **`06faa4f3`** (= `main`, which includes #2631, #2632 and #2633).
+- Scott reports the standalone MCP service is on #2630 code. No `mcp/` file changed between #2630 and `06faa4f3`, so the MCP is current.
+- government-lease #408 is merged (local clone at `ee72fcc`).
+
+**Closed operator items:**
+- **Q44:** the MCP half is above. Scott's cold hard refresh of Home painted Today and every lane (screenshots), so `PERF-SPQ2` and `RECON2-render` are closed.
+- **Q43:** Scott reloaded the extension to 1.0.55 and sent captures. 9 persons have been created since the SIDEBAR4 index cutoff, with 0 twin groups.
+
+**SIDEBAR4-c, narrowed.**
+- Post-reload run logs show both requests of each pair carry the extension's own UUID request id. Example, Lewistown MT: PATCH `8a6e001c…`, then `process_sidebar_extraction` `79acf84d…` 0.7 s later, coalesced.
+- So the second run comes from the side panel's only call site, the Re-run click handler. A deliberate Re-run (Yucca Valley, 10 min later, not coalesced) looks different.
+- Leading hypothesis: the Update button's label shrinks to "Updating…", the Re-run button slides under the cursor, and a double-click's second click lands on it.
+- One capture (St. Louis `entities.post`) carried a non-UUID id, so there is a second writer outside `apiCall`.
+- Prompted: `SIDEBAR4-c-rerun-button-layout-shift-second-click.md`.
+
+**HOME-MB-BOOT (new, from Scott's screenshots).**
+- The Market Briefs widget is filled only from `handlePageLoad('pageHome')`.
+- On a cold load, Home is already active, so the router never calls `handlePageLoad`, and `bootApp()` doesn't render the widget. It spins forever.
+- This is pre-existing since MB-b (`71fccd05`), not a GOV-UX1 regression.
+- Prompted: `HOME-MB-BOOT-market-briefs-widget-cold-load.md`.
+
+**GOV-AVAIL1 ✅ (LCC #2633 + gov #408), verified live:**
+- Both office listings (`c04dc749…` Tulsa, `6cdda883…` Post Oak) are `off_market` and absent from `v_available_listings` (495 rows today).
+- The quarantine log exists, and the view carries `address_display` / `address_locality_conflict` / `agency_code` / `agency_canonical_full` / `agency_resolution`.
+- LCC entity `658c4713…` is renamed to `5110 South Yale Ave` (logged), and the `lcc_brokerage_office_address` registry is present.
+- 19-test guard file passes. My mutation (`civicNumbersAgree` → always true) turned 2 red.
+- Five follow-up rows were filed by CC (postoak, agency-tail, twins, govtype, civic-drift). The Findlay OM needs a Salesforce re-send → **Q45**.
+
+**GOV-UX1 ✅ A–C (#2632):**
+- 22-test file passes, and `listing-verification.js` is served (verify:deploy script check).
+- §D was only described inside the GOV-UX1 row, so it is split into rows `GOV-UX1-D1`…`D5` for prompting. The decision is Scott's → **Q46**.
+- Cross-check: `v_gap_agency_drift` today = 1,239 disagreement + 45 null-agency rows. CC's 1,481 came from a broader query, so D1 must state its denominator.
+
+**RECON2-render-spa + -dossier ✅ (#2631).** 12-test file passes, and the active-lease selectors are pinned unchanged. `RECON2-render-views` (two views lack the column) is open.
+
+**Noted, not a defect:** CC's GOV-AVAIL1 session kept an hourly "watch PR #2633" check-in running after the merge. Scott can end that session.
+
+**Docs:**
+- Backlog states updated for 8 rows, plus new rows `GOV-UX1-D1`…`D5` and `HOME-MB-BOOT`.
+- TRIAGE SBN-21…25 outcomes filled.
+- Checklist: Q43–Q44 archived verbatim, Q45–Q46 added.
+- 3 prompts and 3 responses moved to `done/`.
+- The SBN Open-threads row is rewritten to current state.
+
 
 ## 2026-09-22 — GOV-AVAIL1 (Claude Code): the Findlay OM → gov Available chain fixed link by link; residue quarantined
 
