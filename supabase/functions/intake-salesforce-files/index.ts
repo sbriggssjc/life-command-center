@@ -44,6 +44,7 @@
 
 import { handleCors, jsonResponse, errorResponse } from "../_shared/cors.ts";
 import { authenticateWebhook } from "../_shared/auth.ts";
+import { stripPrivateFinancialNames } from "../_shared/private-financial-names.ts";
 import { queryParams, parseBody, isoNow } from "../_shared/utils.ts";
 import {
   WORKLIST_OBJECTS, DEFAULT_WORKLIST_STALE_DAYS, staleCutoffIso, makeWorklistItem,
@@ -73,7 +74,9 @@ function routeFileVertical(f: Record<string, unknown>): Vertical {
     f.linked_entity_tenant, f.linked_entity_property_type, f.linked_entity_name, f.title, f.file_name,
   ].filter((v) => v).join(" ").toLowerCase();
   if (DIA_SIGNALS.some((s) => hay.includes(s))) return "dia";
-  if (GOV_SIGNALS.some((s) => hay.includes(s))) return "gov";
+  // GOV-CU1: "Navy Federal Credit Union" must not read as a "federal" gov signal.
+  const govHay = stripPrivateFinancialNames(hay);
+  if (GOV_SIGNALS.some((s) => govHay.includes(s))) return "gov";
   return "dia";
 }
 

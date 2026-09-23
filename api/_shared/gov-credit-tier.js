@@ -1,4 +1,6 @@
 // Government credit-tier resolver.
+
+import { stripPrivateFinancialNames } from './private-financial-names.js';
 //
 // The domain classifier decides whether something belongs in the government
 // vertical. This resolver answers a narrower reporting question: which credit
@@ -136,7 +138,9 @@ function cleanText(value) {
 }
 
 function splitTenantText(value) {
-  const raw = cleanText(value);
+  // GOV-CU1: drop private federally-chartered lender names ("Navy Federal Credit Union")
+  // before the FEDERAL patterns read "federal".
+  const raw = cleanText(stripPrivateFinancialNames(cleanText(value)));
   if (!raw) return [];
   return raw
     .split(/\s*(?:\||;|\/|\band\b|\+|,)\s*/i)
@@ -164,7 +168,7 @@ function firstPatternMatch(text, patterns) {
 
 function bucketsFromText(value, source) {
   const chunks = splitTenantText(value);
-  const candidates = chunks.length ? chunks : [cleanText(value)];
+  const candidates = chunks.length ? chunks : [cleanText(stripPrivateFinancialNames(cleanText(value)))];
   const out = [];
   for (const text of candidates) {
     const federal = firstPatternMatch(text, FEDERAL_PATTERNS);
