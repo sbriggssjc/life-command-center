@@ -17,15 +17,11 @@ It never selects the related Property's address fields, `CreatedDate`, or `Recor
 The standard **Get records** action can't pull fields from a related object. Replace it with **Execute a SOQL query**, from the same Salesforce connector and connection.
 
 1. Open the flow → **Edit**. Above **Get records**, click **+** → **Salesforce** → **Execute a SOQL query**, and rename the new action `Get_deals_soql`.
-2. Paste this query:
-   ```sql
-   SELECT Id, Name, StageName, Amount, CloseDate, OwnerId, RecordTypeId, RecordType.Name, CreatedDate,
-          Property2__c, Property2__r.Street__c, Property2__r.City__c,
-          Property2__r.State_Province__c, Property2__r.Zip_Code__c
-   FROM Opportunity
-   WHERE RecordTypeId IN ('0128W0000007XGKQA2','0121I000000NnKgQAK','0128W000000ibTiQAI',
-                          '0128W000000ibTlQAI','0128W000000ibTjQAI','0128W000000ibTkQAI')
+2. Paste this query **exactly as one line**. Copy only the text inside the grey box: no backticks, and **not the word `sql`**. (Scott's first test on 2026-09-23 failed with `unexpected token: 'sql'` because the code-block language tag was pasted in front of `SELECT`.)
+   ```text
+   SELECT Id, Name, StageName, Amount, CloseDate, OwnerId, RecordTypeId, RecordType.Name, CreatedDate, Property2__c, Property2__r.Street__c, Property2__r.City__c, Property2__r.State_Province__c, Property2__r.Zip_Code__c FROM Opportunity WHERE RecordTypeId IN ('0128W0000007XGKQA2','0121I000000NnKgQAK','0128W000000ibTiQAI','0128W000000ibTlQAI','0128W000000ibTjQAI','0128W000000ibTkQAI')
    ```
+   The query box must start with `SELECT`. If the run still fails, open the failed step's **Show raw inputs** and check that `queryParameters/query` starts with `SELECT`.
 3. In the **HTTP** action, set the body to this expression (the records now sit under `body/records`):
    ```
    @json(concat('{"deals":', string(outputs('Get_deals_soql')?['body/records']), '}'))
