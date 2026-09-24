@@ -184,6 +184,11 @@ export const GOV_SIGNALS = [
   "united states of america",
   "u.s. government",
   "u.s. department",
+  // Independent federal agencies whose names carry none of the terms above (GOV-REGISTRY2,
+  // absorbing GOV-CU1-fca). Full names only: "credit union" / "farm credit" alone are lenders,
+  // and stripPrivateFinancialNames() protects exactly these two names before it strips lenders.
+  "national credit union administration",
+  "farm credit administration",
   // State/local (Topic 1 vocabulary; each has a sidebar-pipeline.js
   // GOV_TENANT_PATTERNS precedent — see the header note above)
   "state of ",
