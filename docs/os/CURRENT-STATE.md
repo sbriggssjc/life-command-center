@@ -741,6 +741,10 @@ so a 🔴/🚨 word in it describes the problem as it was found. The State cell 
 archive for the full row.
 
 - **GOV-CU1-edge-deploy** — ✅ done 2026-09-24 — SF routers `intake-salesforce` v36 / `intake-salesforce-files` v32 carry the private-lender strip (`_shared/private-financial-names.ts`); both deployed read-back byte-identical to `main` (archived round 74).
+- **GOV-CU1** — ✅ fully live 2026-09-24 — private federally-chartered lenders (credit unions, thrifts, farm credit) are not gov tenants: one strip rule in the app, the SF edge routers and the gov DB (`gov_classify_agency`), plus an insert guard; 702 lender rows archived with `government_type` null; NCUA stays Federal. Scott 2026-09-24: keep them archived until a lender lane is opened (archived round 75).
+- **GOV-AVAIL2** — ✅ shipped 2026-09-23, accepted by Scott 2026-09-24 — one SQL display layer (`gov_display_*`) for gov Available / Sales Comps / Leases: title case with acronyms, USPS street types, canonical agency code with full name on hover, unresolved agencies marked (archived round 75).
+- **SF-BRIDGE1-opened-at** — ✅ live 2026-09-24 — the SF Deal → LCC sync maps `CreatedDate` → `bd_opportunities.opened_at` fill-forward and accepts the `{deals:{records}}` envelope; 610/612 SF deals dated (archived round 75).
+- **DOCMAP3** — ✅ shipped 2026-09-24 — docs filed by topic (`docs/` root empty, 6 required root `.md`), shipped-row archive rule + guard exemption, `DOCUMENTATION-MAP.md` §0 "Where to start" (archived round 75).
 - **GOV-CLASSIFY1-rerun** — ✅ closed 2026-09-24 — 7 of 8 no_domain entities linked to their existing dia/gov property (Jellico 16334, Tulelake 16268 by Scott's re-save), Saginaw held for twin review, 0 properties minted (archived round 74).
 
 - **EDGE-GATES1** — ✅ 8 gated log-only — The other 18 Dialysis_DB edge functions with `verify_jwt:false` have no reviewed gate — `prompts/EDGE-GATES1-the-other-eight-ungated-edge-functions.md`…
