@@ -47,7 +47,7 @@ const BACKLOG_PATH = 'docs/os/PLANNED-BACKLOG.md';
 const ARCHIVE_DIR_PREFIX = 'docs/history/STATUS_claude-code_';
 
 function git(args) {
-  return execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' });
+  return execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
 }
 
 function tryGit(args) {
