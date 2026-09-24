@@ -199,6 +199,11 @@ growing); the gov copy is a **frozen pre-cutover snapshot**, 30,709 rows, last w
 **2026-09-24 01:53 UTC**, so some service-role writer still mints contacts into the retired copy. The
 sentence above was true on the day it was written. Backlog **CONTACTS-GOV-WRITER** tracks the
 producer hunt; until it closes, a gov `unified_contacts` count is neither "frozen" nor canonical.
+✅ **CLOSED 2026-09-24 (CONTACTS-GOV-WRITER):** the writers were gov cron 17 `unify_owners_tick` and the
+`unified_contacts` repoint inside gov `apply_owner_merge`. Both are retired; the tick now runs on the hub
+(`lcc_unify_gov_owners_tick`, which also follows gov owner merges). Gov's three contacts tables carry a
+statement-level guard that logs any write and alerts `retired_contacts_copy_written`. Last gov write was
+2026-09-24 11:53 UTC. **A NEW gov-owner→contact rule belongs on the hub, never in a gov function.**
 
 **⚠️ The function that reads them is called `govQuery()` REGARDLESS** — it does path-based
 routing internally, so the NAME tells you nothing about which database a contact write lands

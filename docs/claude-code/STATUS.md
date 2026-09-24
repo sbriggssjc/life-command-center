@@ -53,6 +53,16 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-24 — CONTACTS-GOV-WRITER (CC): the retired gov contacts copy had two in-DB writers; both retired, the owner tick ported to the hub
+
+**Writers (measured).** There were no REST writers: `edge_logs` showed only 50 GETs (UA `node`) on gov `unified_contacts` in 24h. (1) gov **cron 17 `unify-owners-incremental` → `unify_owners_tick(200)`** created 215 contacts and linked 98 since the cutover, and had no hub counterpart. (2) gov **`apply_owner_merge`** repointed `recorded_owner_id` on the gov copy only, which accounts for the 708-row single statement on 2026-09-12 (ID3b).
+
+**Fix (Scott: port to LCC Opps, and follow merges on the hub).** Gov `v_gov_recorded_owner_identity` (anon; the positive control confirmed 17,593/17,593 visible) feeds hub `lcc_gov_recorded_owner_mirror` (crons 263/264), which feeds `lcc_unify_gov_owners_tick` (cron 265, :23/:53). The tick does merge-follow first. **Reconcile** (dry-run → rolled-back probe → live, batch `contacts_gov_writer_reconcile_20260924`): 655 repointed, **53 Conflict** (left as-is and logged), 51 linked, 580 created (hub 34,369 → 34,949), 728 to review. The re-run does 0. **Gov cutover:** cron 17 unscheduled, and the `apply_owner_merge` UPDATE removed (md5 proves it was the only change). A statement-level guard on 3 tables logs any write and alerts via the hub pull (`retired_contacts_copy_written`). Mode is `log`; `refuse` has been probed.
+
+**Deploy.** DB-only, live now. No `api/` change, so no Railway redeploy is needed. **Baseline** 13:04 UTC: last gov write 11:53, guard log 0.
+**Next:** Cowork re-measures new gov writes at +24h (`select * from v_gov_retired_contacts_writes` on gov, and `max(updated_at)` on gov `unified_contacts`). Flip the guard to `refuse` after a quiet week. The review lane and the 53 conflicts have no consumer yet.
+
+
 ## 2026-09-24 — Round 75 (Cowork): CONSOLIDATE-REVERSIBLE + diag-race reconciled live; Saginaw merged into gov 16297 (Scott's call); lenders stay archived; `SIDEBAR-AGENCY-OVERWRITE` + `CONTACTS-GOV-WRITER` prompted
 
 **Deploy.** `verify:deploy`: `tranquil-delight` is on `a0fe34ab` (#2663 diag-race, #2664 CONSOLIDATE-REVERSIBLE). The MCP doesn't import `admin.js`. `test/consolidate-reversible.test.mjs` and `test/gov-classify1-diag-race.test.mjs` pass 16/16 on `main`.
