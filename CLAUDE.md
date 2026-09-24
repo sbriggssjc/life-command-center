@@ -2585,6 +2585,12 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
   with no fallback — nothing found blocks Save. The server refuses a capture whose street differs from its
   `_page_title`. **When a street type is missing, the fix is the regex AND the order; either alone re-opens it.**
   The same class had 5 live instances in 30 days (backlog SIDEBAR5-residue).
+- **⚠️ The complete dia merge ledger is `dia_property_redirects`, not the two the reconcile used to read (MERGELOG-GAP, 2026-09-24).**
+  `dia_merge_property` writes a redirect on every merge; the geospatial cron (jobid 16) writes nothing else, so 6 LCC
+  entities were left on deleted rows. Read survivors through `v_dia_property_redirect_resolved.final_survivor_id`
+  (chain-resolved). The daily guard `lcc_check_dangling_asset_links` counts what is still dangling; its first run found
+  dia `v_property_id_census` answering anon `200 []`. **When you add a merge path, it must write a redirect, or the guard
+  will be the first to notice.**
 - **⚠️ A sidebar Save on an EXISTING gov property must not downgrade it (SIDEBAR-AGENCY-OVERWRITE, 2026-09-24).**
   The UPDATE path used to PATCH the CoStar tenant into `agency` and the lowercased lookup key into `address`
   (Saginaw 16297: SCCMHA → "Max System Of Care", `1040 n towerline rd`). Rule now: a tenant string fills a blank
