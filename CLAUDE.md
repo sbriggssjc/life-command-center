@@ -2585,6 +2585,13 @@ Fix: capture the durable copy **while authenticated**, into each domain's `prope
   with no fallback — nothing found blocks Save. The server refuses a capture whose street differs from its
   `_page_title`. **When a street type is missing, the fix is the regex AND the order; either alone re-opens it.**
   The same class had 5 live instances in 30 days (backlog SIDEBAR5-residue).
+- **⚠️ A sidebar Save on an EXISTING gov property must not downgrade it (SIDEBAR-AGENCY-OVERWRITE, 2026-09-24).**
+  The UPDATE path used to PATCH the CoStar tenant into `agency` and the lowercased lookup key into `address`
+  (Saginaw 16297: SCCMHA → "Max System Of Care", `1040 n towerline rd`). Rule now: a tenant string fills a blank
+  agency, or replaces an unresolved one only when it resolves in `gov_resolve_agency`. ⚠️ **"Resolved" cannot be
+  the only test:** SCCMHA itself doesn't resolve. A `sales_history` row with only a `sale_date` is CoStar's
+  "updated on" line, not a transfer; use `saleHistoryRowIsTransfer` at every most-recent-sale pick
+  (`sale_type`/`cap_rate` are not evidence).
 - **TrafficMetrix table-as-contact-list misparse (Prompt 89).** A CoStar/sidebar capture once parsed a
   property page's TrafficMetrix traffic-count TABLE as a contact list — street names / column labels
   ("Collection Street", "Traffic Vol", "Made with TrafficMetrix") minted as PERSON entities, all stamped
