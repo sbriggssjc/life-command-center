@@ -53,6 +53,21 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-24 — CC: GOV-REGISTRY2-FOLLOWTHROUGH — agency_id recomputes on write, promoter scheduled, SF edge redeployed
+
+**Gov DB (government-lease `052ff68`, live).**
+- **Recompute on write.** `trg_gov_r2_recompute_agency_id` recomputes `agency_id` through `gov_resolve_agency(text, state, type)` when its inputs change. A property's state/type change re-resolves its `property_agencies` rows.
+- **Pins.** A pinned id (`field_value_provenance.manual_override`, set with `gov_set_agency_id_manual`) is left alone by the trigger, the sweep and the promoter.
+- **Schedule.** Cron 53 runs the sweep and then the promoter at 04:50 daily. Live: 0/0 dry run; after the code aliases, 9 + 13 Treasury fills; a second run wrote 0.
+- **Found while testing.** 98 of 157 active registry rows didn't resolve from their own code, so a sidebar `agency_code` write would have been cleared. Added 97 `registry_code` aliases; `DOC` left out as ambiguous.
+- **Sweep.** 0 of 20,534 properties and 0 of 140,273 property_agencies disagree with the resolver.
+- **Guard.** 16 tests, 9/9 mutations RED.
+
+**Edge (Dialysis_DB).**
+- Live v37/v33 were `main` minus the GOV-REGISTRY2 lines. Their version bumps came before the merge, so no one had deployed this change.
+- Redeployed: `intake-salesforce` **v38** and `intake-salesforce-files` **v35**, both byte-identical to `main`, `verify_jwt:false`, both GET 200. NCUA/FCA routing is live.
+- No Railway deploy: this round changed no LCC code.
+
 ## 2026-09-24 — CMS-PIPELINE-STAGE-STARVATION-2 answered (CC): a real self-lock fixed, two things I'd flagged as bugs turn out to be correct behavior, `ratings` closes to ✅, and the original `HCRIS-TIMEOUT` mystery may finally be solved
 
 **Round 2 of the CMS pipeline live-test cycle: the 13:55-15:08 UTC run (documented in the prior dated entry) left five gaps; CC traced all five to concrete causes.** Three were real bugs, now fixed; two were this session's own evidence misread as problems, corrected here rather than silently dropped.
