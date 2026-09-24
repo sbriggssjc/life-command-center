@@ -63,6 +63,7 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
   - 31111's 2016-05-26 $965,000 sale and its ownership row moved to 16297.
   - 1 re-derivable `investment_scores` row was dropped.
   - Undo: `gov_unmerge_property(7)`.
+  - The `lcc-merge-log-reconcile` cron marked backup 7 reconciled at 10:10:58 UTC with 0 entities to repoint (none pointed at 31111), so the reconcile now sees reversible merges.
   - `gov_property_twin_review` id 2 → `merged`, with the full decision note.
 - **The LCC link:** Cowork force-re-ran LCC `6c85fe57…` (`lcc_cron_post` → `/api/entities?action=process_sidebar_extraction`, run `6455bbd9…`). It linked to **16297**, and its stored diag now describes Saginaw rather than 910 4th Ave, so the diag-race fix is proven live.
 - **New defect (`SIDEBAR-AGENCY-OVERWRITE`, prompted).** That same Save:
