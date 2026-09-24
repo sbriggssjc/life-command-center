@@ -445,3 +445,22 @@ Deploy: 👤 Scott, `supabase functions deploy salesforce-enrichment --project-r
 zqzrriwuavgrquhisnoa --no-verify-jwt` → v27. Verify with one `curl POST .../salesforce-enrichment/run?dry_run=true`
 with no header (expect the dry-run body plus a `DENY-WOULD` line in the function log) and one with
 `X-PA-Webhook-Secret` set (expect no `DENY-WOULD` line).
+
+## 2026-09-24 — POSTSHIP-R73: `intake-salesforce` + `intake-salesforce-files` redeployed for GOV-CU1
+
+Both carried pre-GOV-CU1 source after #2655 merged (the private-lender strip in `sf-config.ts` /
+`intake-salesforce-files/index.ts` + the new `_shared/private-financial-names.ts`). The procedure this
+page asks for, in order:
+
+1. **Diff live vs repo before deploying.** `get_edge_function` on each: every live file equals
+   `git show abc5ff2^:<path>` (the commit before GOV-CU1) once CRLF is normalised, so redeploying from
+   `main` could not roll back anything that only lived in production.
+2. **Deploy from `main` via the Supabase MCP**, `verify_jwt=false` kept (both bodies carry their own
+   `authenticateWebhook` door). Dashboard labels: `intake-salesforce` 34 → 37 (`ezbr_sha256` e1906418… →
+   54c5742b…), `intake-salesforce-files` 31 → 33 (09618cc3… → f641d046…). The labels are not content
+   identity (see the 2026-09-10 note above); the sha and the diff below are.
+3. **Read back and diff.** 10/10 and 7/7 deployed files byte-identical to the repo.
+4. **Behavioural smoke from LCC Opps `pg_net`** (the sandbox cannot reach `*.supabase.co` functions):
+   no-secret `POST intake-salesforce-files?action=requeue` → 401, `POST intake-salesforce?action=retry` →
+   401, both info GETs → 200.
+
