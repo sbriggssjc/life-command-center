@@ -6,6 +6,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   planDealSalePromotion,
   isClosedWonStage,
@@ -201,6 +202,25 @@ describe('routeVertical — state-government cues (DRIFT1-routing-gap, RESOLVED 
     const r = routeVertical({ deal_name: 'Regional Used Motor Vehicles Superstore', property_type: 'Retail' });
     assert.equal(r.vertical, null);
     assert.equal(r.resolved, false);
+  });
+  it('routes NCUA and the Farm Credit Administration to gov (GOV-REGISTRY2, was GOV-CU1-fca)', () => {
+    // Mutation: drop either full name from GOV_SIGNALS → that agency returns no_match → RED.
+    for (const tenant of ['National Credit Union Administration', 'Farm Credit Administration']) {
+      const r = routeVertical({ tenant_names: tenant, property_type: 'Office' });
+      assert.equal(r.vertical, 'gov', tenant);
+    }
+  });
+  it('a credit union or a Farm Credit lender still does not route to gov', () => {
+    for (const tenant of ['Navy Federal Credit Union', 'Farm Credit Services of America', 'Local Credit Union']) {
+      const r = routeVertical({ tenant_names: tenant, property_type: 'Retail' });
+      assert.notEqual(r.vertical, 'gov', tenant);
+    }
+  });
+  it('the Salesforce files router carries the same two agency names', () => {
+    const src = readFileSync(new URL('../supabase/functions/intake-salesforce-files/index.ts', import.meta.url), 'utf8');
+    const list = src.slice(src.indexOf('const GOV_SIGNALS = ['), src.indexOf('];', src.indexOf('const GOV_SIGNALS = [')));
+    assert.match(list, /"national credit union administration"/);
+    assert.match(list, /"farm credit administration"/);
   });
   it('GOV_SIGNALS is the single exported list — GOV_STATE_SIGNALS no longer exists', async () => {
     const mod = await import('../supabase/functions/_shared/sf-deal-promotion.ts');

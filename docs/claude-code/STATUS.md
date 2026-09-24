@@ -99,6 +99,35 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-24 — GOV-REGISTRY2 (CC): state, county and city agencies get a jurisdiction in the ID3a registry
+
+**Model.** A registry row is an identity in a jurisdiction: `government_agencies` gains `jurisdiction_level`
+(`federal|state|county|city|type`), `jurisdiction_state/name`, `agency_type_code`, `short_name`. One row per
+state/local agency (an `agency_id` must name one counterparty); the generic `ST-*`/`MUN-*` rows become `type` and
+can never resolve or be written. Aliases carry `jurisdiction_state` and a `type_gate`. One resolver:
+`gov_resolve_agency(text, state, government_type)`; the 1-arg form wraps it with no state (federal only).
+government-lease `sql/20260924_gov_registry2_jurisdiction_model.sql`, applied live as `gov_registry2_a..h`; guard
+`tests/unit/test_gov_registry2_jurisdiction_model.py` (22 tests, 12/12 mutations RED).
+
+**Contamination found and repaired:** federal HHS held `Health & Human Services Commission` (+3 variants, **212 TX
+properties**), `Calaveras County Health & Human Services`, `DE/HHS`; DOT held `NY State Department of
+Transportation`; DOJ/DOL/DHS/DOS held state compounds (`DOJ/SBI`, `DOL/DNR`, `DHS/PSS`, bare `State`). 6 re-pointed,
+7 deleted, 21 ambiguous federal names gated off State/Municipal rows (`DHS` on 10 State rows was the state DHS).
+
+**Live:** 95 registry rows (80 state / 11 county / 2 city / FCA + NCUA), 180 aliases. Sweep 849 writes (375 properties,
+474 property_agencies; HHS→TX-HHSC 212, ST-DFPS→TX-DFPS 123, 25 cleared to review). Backfill 1,197 properties +
+8,309 property_agencies (47 + 7,818 federal of those were a standing backlog of existing aliases — the promoter is
+unscheduled). `government_type` filled on 625 NULL rows. Available: State no-id 59→22, Municipal 14→3, NULL-typed
+61→39 (16 no agency, 23 commercial strings — not typed, no guess), Federal 51→41. Active unresolved: State
+859→329, Municipal 74→61. Restore round trip proven in a rolled-back transaction (849/849).
+
+**LCC:** `GOV_SIGNALS` (shared + files router) gain `national credit union administration` / `farm credit
+administration`; `test/sf-deal-promotion.test.mjs` +3 (2/2 mutations RED). ⚠️ Edge functions `intake-salesforce`
+and `intake-salesforce-files` are **not redeployed** — the routing change is not live until they are. No SPA JS
+changed (gov.js already shows `agency_display` with the full name on hover), so no cache bump and no Railway deploy
+is needed for the display. **Open:** 33519 reads "State of TX" because its current string is "State of Texas" (the
+sidebar overwrite); the earlier HHSC value is more specific — not restored here.
+
 ## 2026-09-24 — CMS-PIPELINE-STAGE-STARVATION answered (CC): the real cause of both `facility_patient_counts` inertness and pipeline starvation, plus a correction of this session's own prior "properties deceleration" reading
 
 **Prompted 2026-09-24 after a full CMS-ingestion table-health sweep (Cowork) found `facility_patient_counts` untouched since 2026-08-31, `facility_cost_reports` frozen since 2026-03-16, `facility_deficiencies`/`qip_scores` frozen since 2026-05-16, and `facility_payer_mix` at zero rows ever. CC's response overturns two of this session's own prior working theories — documented here explicitly rather than silently corrected.**
