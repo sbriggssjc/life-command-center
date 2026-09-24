@@ -2384,20 +2384,18 @@ function detectDomainMismatch(domain, metadata, entityFields) {
   return null;
 }
 
-// Expose last classifier diagnostic for pipeline summary (debugging)
-let _lastClassifierDiag = null;
-
-// Round 76fg (2026-05-15): capture the actual PostgREST error response when
-// upsertDomainProperty's POST/PATCH fails. Without this, every gov/dia
-// property_upsert_failed surfaces to the sidebar UI as just the reason string
-// — Vercel function logs hold the body but the user has no visibility, and
-// repeat captures of the same property keep failing for the same opaque
-// reason. Surfacing the error response in entity.metadata._pipeline_last_
-// error_detail (and the sidebar status line) makes the fix path
-// self-service. Populated inside upsertDomainProperty; read once by
-// propagateToDomainDbDirect into the propagation result, then reset on the
-// next call.
-let _lastDomainPropertyError = null;
+// GOV-CLASSIFY1-diag-race (2026-09-24): the classifier diagnostic and the
+// domain-property upsert error used to live in two module-level globals
+// (`_lastClassifierDiag`, `_lastDomainPropertyError`). Sidebar runs are
+// serialized per ENTITY only, so runs over different entities interleave at
+// every await — and one run read another's value. Measured in POSTSHIP-R73:
+// Saginaw 6c85fe57 stored a _classifier_diag whose existingRecord/fieldSources
+// belonged to the concurrent Asbury Park run (gov 16239), and that diag also
+// drives shouldAlertPipelineFailure + domain_mismatch_warning. Both are now
+// per-run values: classifyDomainWithDiag / classifyAndUpdateDomain RETURN the
+// diag, and upsertDomainProperty writes its refusal reason into a sink object
+// the caller owns. Do not reintroduce module state for per-run data — guarded
+// by test/gov-classify1-diag-race.test.mjs.
 
 // ADDR1 (2026-09-03): count of contact-office-address-bleed refusals since
 // process start — read-only observability, never reset (mirrors no other
@@ -2433,7 +2431,7 @@ function classifyDomainWithDiag(metadata, entityFields) {
   if (!matchedPattern) { const govSearchText = stripPrivateFinancialNames(searchText); for (const rx of GOV_TENANT_PATTERNS) { if (rx.test(govSearchText)) { matchedPattern = `GOV:${rx}`; break; } } } // GOV-CU1
 
   // Round 76cr-Phase 2: detect and log primary-tenant/domain mismatches.
-  // Surfaced into the response via _lastClassifierDiag.mismatchWarning so
+  // Surfaced into the response via the run's classifierDiag.mismatchWarning so
   // the sidebar UI can show a "this looks like a government property —
   // route to gov DB instead?" banner.
   const mismatch = detectDomainMismatch(result, metadata, entityFields);
@@ -2441,7 +2439,7 @@ function classifyDomainWithDiag(metadata, entityFields) {
     console.warn(`[classifyDomain] DOMAIN MISMATCH WARNING: classified=${result}, suggested=${mismatch.suggested_domain}, matched=${mismatch.matched}, primary="${mismatch.primary_tenant_text}"`);
   }
 
-  _lastClassifierDiag = {
+  const diag = {
     result,
     matchedPattern: matchedPattern || 'none',
     searchTextLen: searchText.length,
@@ -2451,7 +2449,7 @@ function classifyDomainWithDiag(metadata, entityFields) {
     fieldSources: textParts.filter(Boolean).map((v, i) => `[${i}]${String(v).substring(0, 40)}`),
     mismatchWarning: mismatch,
   };
-  return result;
+  return { result, diag };
 }
 
 // ── Step 1: Unpack Contacts ─────────────────────────────────────────────────
@@ -3201,15 +3199,17 @@ async function writeExtractionSignal(propertyEntityId, metadata, domain, userId,
 
 // ── Step 4: Domain classification + update ──────────────────────────────────
 
-async function classifyAndUpdateDomain(entity, metadata, workspaceId, opts = {}) {
-  const patternClassified = classifyDomainWithDiag(metadata, entity);
+// Returns { domain, classifierDiag } — the diag belongs to THIS run and is
+// threaded to the pipeline summary / alert decision by the caller.
+export async function classifyAndUpdateDomain(entity, metadata, workspaceId, opts = {}) {
+  const { result: patternClassified, diag: classifierDiag } = classifyDomainWithDiag(metadata, entity);
   // GOV-CLASSIFY1 — an existing dia/gov property at this address decides the
   // domain before any text pattern does (see findExistingDomainPropertiesForCapture).
   const existing = opts.existing || { matches: [], ambiguous: [], checked: [] };
   const resolved = resolveDomainsWithExistingRecords(patternClassified, [], existing);
   const classified = resolved.primary;
-  if (_lastClassifierDiag) {
-    _lastClassifierDiag.existingRecord = {
+  {
+    classifierDiag.existingRecord = {
       source: resolved.source,
       matches: existing.matches,
       ambiguous: existing.ambiguous,
@@ -3217,8 +3217,8 @@ async function classifyAndUpdateDomain(entity, metadata, workspaceId, opts = {})
       pattern_result: patternClassified || null,
     };
     if (resolved.source === 'existing_record') {
-      _lastClassifierDiag.result = classified;
-      _lastClassifierDiag.matchedPattern = `EXISTING:${existing.matches.map((m) => `${m.domain}#${m.property_id}`).join(',')}`;
+      classifierDiag.result = classified;
+      classifierDiag.matchedPattern = `EXISTING:${existing.matches.map((m) => `${m.domain}#${m.property_id}`).join(',')}`;
     }
   }
 
@@ -3238,7 +3238,7 @@ async function classifyAndUpdateDomain(entity, metadata, workspaceId, opts = {})
         { domain: canonicalDomain, updated_at: new Date().toISOString() }
       );
     }
-    return classified;
+    return { domain: classified, classifierDiag };
   }
 
   // No keyword match found — this usually means the page view didn't
@@ -3247,10 +3247,10 @@ async function classifyAndUpdateDomain(entity, metadata, workspaceId, opts = {})
   // based on absence of evidence. Only a POSITIVE match for a different
   // domain should cause a reclassification.
   if (entity.domain) {
-    return entity.domain;  // preserve existing
+    return { domain: entity.domain, classifierDiag };  // preserve existing
   }
 
-  return null;
+  return { domain: null, classifierDiag };
 }
 
 // ── Step 5: Domain database propagation ────────────────────────────────────
@@ -4399,14 +4399,15 @@ async function propagateToDomainDbDirect(domain, entity, metadata, opts = {}) {
   const provCollect = [];
 
   // Step 5a: Upsert property record
-  const propertyId = await upsertDomainProperty(domain, entity, metadata);
+  const upsertErr = { error: null };
+  const propertyId = await upsertDomainProperty(domain, entity, metadata, upsertErr);
   if (!propertyId) {
     console.error(`[Sidebar pipeline] ${domain} property upsert failed for:`, entity.address);
     // Round 76fg: surface the captured PostgREST error so the sidebar
     // status line and entity metadata show the actual reason (column /
     // constraint / type) instead of the bare 'property_upsert_failed'
     // sentinel that was indistinguishable across all failure modes.
-    const err = _lastDomainPropertyError;
+    const err = upsertErr.error;
     const errSummary = err
       ? [err.message, err.details, err.hint]
           .filter(Boolean)
@@ -5049,11 +5050,15 @@ async function linkDialysisMedicareIdInline(propertyId, entity) {
   }
 }
 
-export async function upsertDomainProperty(domain, entity, metadata) {
+// `errSink` (optional) is a per-call object the caller owns; on a refusal or
+// a true write failure its `.error` is set to the reason (string or
+// PostgREST error object). GOV-CLASSIFY1-diag-race: this replaced a
+// module-level `_lastDomainPropertyError` that concurrent runs overwrote.
+export async function upsertDomainProperty(domain, entity, metadata, errSink = {}) {
   // Round 76fg: reset captured error each call. Set on the true-failure
   // path (POST 4xx + retry-lookup miss) so propagateToDomainDbDirect can
   // surface it into the entity metadata.
-  _lastDomainPropertyError = null;
+  errSink.error = null;
 
   // Strip CoStar/LoopNet listing-status prefixes ("For Sale | ",
   // "For Lease | ", "Reduced | ", …) off the incoming address before any
@@ -5077,7 +5082,7 @@ export async function upsertDomainProperty(domain, entity, metadata) {
   // the canonical record manually. Better to skip the write entirely so
   // the canonical address path runs against the next CoStar capture.
   if (isJunkAddress(address)) {
-    _lastDomainPropertyError = `junk_address_rejected:${address}`;
+    errSink.error = `junk_address_rejected:${address}`;
     console.warn(`[upsertDomainProperty] Refusing to write OM-junk address: "${address}" (${domain})`);
     return null;
   }
@@ -5088,7 +5093,7 @@ export async function upsertDomainProperty(domain, entity, metadata) {
   // Ave case created 11 mis-located dia properties. Skip the write so the
   // canonical subject-address path runs against the next/better capture.
   if (isOwnFirmAddress(address)) {
-    _lastDomainPropertyError = `own_firm_address_rejected:${address}`;
+    errSink.error = `own_firm_address_rejected:${address}`;
     console.warn(`[upsertDomainProperty] Refusing to write firm office address: "${address}" (${domain})`);
     return null;
   }
@@ -5100,7 +5105,7 @@ export async function upsertDomainProperty(domain, entity, metadata) {
   const officeRegistry = await loadBrokerageOfficeRegistry().catch(() => null);
   const office = officeRegistry ? matchBrokerageOffice(address, entity.state, officeRegistry) : null;
   if (office) {
-    _lastDomainPropertyError = `known_brokerage_office_rejected:${address}`;
+    errSink.error = `known_brokerage_office_rejected:${address}`;
     console.warn(`[upsertDomainProperty] Refusing brokerage office address "${address}" (${office.firm_name || 'registry'}) (${domain})`);
     return null;
   }
@@ -5112,7 +5117,7 @@ export async function upsertDomainProperty(domain, entity, metadata) {
   // the extension sending _page_title carry no title and get no opinion.
   const titleMismatch = captureTitleStreetMismatch(address, metadata?._page_title);
   if (titleMismatch) {
-    _lastDomainPropertyError = `subject_address_title_mismatch:${address}|title=${titleMismatch.title_street}`;
+    errSink.error = `subject_address_title_mismatch:${address}|title=${titleMismatch.title_street}`;
     console.warn(
       `[upsertDomainProperty] Refusing address "${address}" — page title names "${titleMismatch.title_street}" ` +
       `(${titleMismatch.reason}) (${domain})`,
@@ -5131,7 +5136,7 @@ export async function upsertDomainProperty(domain, entity, metadata) {
     address, entity.city, entity.state, metadata?.contacts,
   );
   if (bleedContact) {
-    _lastDomainPropertyError = `contact_office_address_bleed_rejected:${address}`;
+    errSink.error = `contact_office_address_bleed_rejected:${address}`;
     _contactOfficeAddressBleedRefusals++;
     console.warn(
       `[upsertDomainProperty] Refusing property address "${address}" — matches contact ` +
@@ -5251,7 +5256,7 @@ export async function upsertDomainProperty(domain, entity, metadata) {
         console.log(`[upsertDomainProperty] Prompt31 DB-normalized fallback matched property_id=${p31Data.property_id} (${domain})`);
         lookup = { ok: true, data: [{ property_id: p31Data.property_id, [sizeCol]: null }] };
       } else if (p31Lookup.ok && p31Data?.status === 'ambiguous') {
-        _lastDomainPropertyError = {
+        errSink.error = {
           status: 'ambiguous_property_match',
           message: `Prompt31 DB-normalized lookup found ${p31Data.candidate_count || 'multiple'} candidates; refusing to create a duplicate property.`,
           domain,
@@ -5282,7 +5287,7 @@ export async function upsertDomainProperty(domain, entity, metadata) {
       attachedViaEquivalence = hit;
     } else if (eq.ambiguous.some((a) => a.domain === domain)) {
       const amb = eq.ambiguous.find((a) => a.domain === domain);
-      _lastDomainPropertyError = {
+      errSink.error = {
         status: 'ambiguous_property_match',
         reason: 'address_equivalence_ambiguous',
         message: `Address "${address}" is equivalent to ${amb.property_ids.length} existing properties; refusing to create a duplicate.`,
@@ -5350,7 +5355,7 @@ export async function upsertDomainProperty(domain, entity, metadata) {
           }
 
           if (collision && !attachedViaMergeLedger) {
-            _lastDomainPropertyError = {
+            errSink.error = {
               status: 'ambiguous_property_match',
               reason: 'range_address_collision',
               message: `Captured address "${address}" is a near-miss (${collision.hit.kind}) of existing ` +
@@ -5770,7 +5775,7 @@ export async function upsertDomainProperty(domain, entity, metadata) {
   // upstream payload — "column 'foo' does not exist", "violates check
   // constraint 'bar'", etc.
   const errBody = result?.data && typeof result.data === 'object' ? result.data : null;
-  _lastDomainPropertyError = {
+  errSink.error = {
     status:        result?.status || null,
     message:       errBody?.message || (typeof result?.data === 'string' ? result.data.substring(0, 240) : null),
     details:       errBody?.details || null,
@@ -13621,7 +13626,7 @@ async function _processSidebarExtractionOnce(entityId, workspaceId, userId, opts
   // domain with no record does not add it); otherwise the pattern set stands.
   const existingRecords = await findExistingDomainPropertiesForCapture(entity, metadata)
     .catch(() => ({ matches: [], ambiguous: [], checked: [] }));
-  const domain = await classifyAndUpdateDomain(entity, metadata, workspaceId, { existing: existingRecords });
+  const { domain, classifierDiag } = await classifyAndUpdateDomain(entity, metadata, workspaceId, { existing: existingRecords });
   const allDomains = resolveDomainsWithExistingRecords(
     domain, classifyAllApplicableDomains(metadata, entity), existingRecords,
   ).all;
@@ -13730,7 +13735,7 @@ async function _processSidebarExtractionOnce(entityId, workspaceId, userId, opts
       domain_records: propagation.records || null,
       domain_records_note: 'writes_this_run_only — see domain_records_current for live DB state',
       domain_records_current: await fetchDomainRecordsCurrent(domain, propagation.property_id).catch(() => null),
-      _classifier_diag: _lastClassifierDiag,
+      _classifier_diag: classifierDiag,
       // SIDEBAR4: which request/trigger produced this run.
       run_trace: runTrace,
     },
@@ -13757,11 +13762,11 @@ async function _processSidebarExtractionOnce(entityId, workspaceId, userId, opts
   });
   let thinNoDomainSuppressed = false;
   if (promoteOutcome.pipeline_failed) {
-    if (shouldAlertPipelineFailure({ reason: propagation.reason, classifierDiag: _lastClassifierDiag })) {
+    if (shouldAlertPipelineFailure({ reason: propagation.reason, classifierDiag })) {
       recordSidebarPipelineFailure({
         entityId, workspaceId, domain,
         reason: promoteOutcome.pipeline_reason,
-        classifierDiag: _lastClassifierDiag,
+        classifierDiag,
         propagation,
       }).catch((e) => console.warn('[sidebar-pipeline] alert record failed (suppressed):', e?.message || e));
     } else {
@@ -13769,7 +13774,7 @@ async function _processSidebarExtractionOnce(entityId, workspaceId, userId, opts
       // out-of-scope page. Count it (surfaced in the response diagnostics)
       // instead of opening a per-capture warn alert that would bury real signal.
       thinNoDomainSuppressed = true;
-      console.log(`[Sidebar pipeline] thin no_domain capture — alert suppressed (entity=${entityId}, searchTextLen=${_lastClassifierDiag?.searchTextLen ?? 'n/a'})`);
+      console.log(`[Sidebar pipeline] thin no_domain capture — alert suppressed (entity=${entityId}, searchTextLen=${classifierDiag?.searchTextLen ?? 'n/a'})`);
     }
   }
 
@@ -13788,8 +13793,8 @@ async function _processSidebarExtractionOnce(entityId, workspaceId, userId, opts
     // Round 76cr-Phase 2: surface domain-mismatch warning at top level
     // so the sidebar UI can show a "looks misclassified — switch DB?"
     // banner without parsing the nested diagnostic.
-    domain_mismatch_warning: (_lastClassifierDiag && _lastClassifierDiag.mismatchWarning) || null,
-    _classifier_diag: _lastClassifierDiag,
+    domain_mismatch_warning: (classifierDiag && classifierDiag.mismatchWarning) || null,
+    _classifier_diag: classifierDiag,
     // W1.4-L3b: explicit promote status so the sidebar can render a failure
     // inline instead of a false "success" toast on a no-domain / no-write run.
     ...promoteOutcome,
