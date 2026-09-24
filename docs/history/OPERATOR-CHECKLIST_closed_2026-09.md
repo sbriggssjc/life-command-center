@@ -59,3 +59,5 @@ Rows moved **verbatim** out of `docs/claude-code/OPERATOR-CHECKLIST.md` once clo
 | # | tier | step | why / state | rows |
 |---|---|---|---|---|
 | ~~Q54~~ | **B** | ✅ **Done 2026-09-23 (retest #3 green).** Verified live by Cowork round 73: open deals with an address **12 → 29 of 43**. The 8 still blank have no Property record in Salesforce. `opened_at` mapping → CC (`POSTSHIP-R73`). | SF deal addresses reach LCC | SF-BRIDGE1-flow |
+| ~~Q56~~ | **A** | ✅ **Done 2026-09-24.** Scott re-saved Jellico and Tulelake on 1.0.58. Cowork confirmed live in round 74: both LCC entities read `domain=gov` (→ gov 16334 / 16268) and the gov property count (20,533) and max id (41,097) are unchanged, so nothing was minted. | proves existing-record-first on a real Save | GOV-CLASSIFY1 |
+| ~~Q57~~ | **A** | ✅ **Done 2026-09-24.** Scott: Gov Available "is rendering … and looks great". MCP redeployed; `tranquil-delight` is live on `4fd92810`. | GOV-AVAIL2 + GOV-CU1 acceptance | GOV-AVAIL2, GOV-CU1 |
