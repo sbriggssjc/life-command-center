@@ -1459,6 +1459,14 @@ function _entityTabOverview() {
   html += _row('Role', rm.label);
   html += _row('Type', e.entity_type);
   html += _row('Domain', e.domain);
+  // MERGELOG-GAP: the linked domain property no longer exists and no merge
+  // ledger or evidence names its survivor. Say so rather than open a dead id.
+  const _missingProp = e.metadata && e.metadata.domain_property_missing;
+  if (e.entity_type === 'asset' && _missingProp) {
+    html += _row('Domain Property', 'Not on file'
+      + (_missingProp.property_id ? ' (record #' + _missingProp.property_id + ' no longer exists'
+        + (_missingProp.verdict === 'candidate' ? '; possible match in Research' : '') + ')' : ''));
+  }
   html += _row('Org Type', e.org_type);
   if (e.email) html += _rowLink('Email', e.email, 'mailto:' + e.email);
   if (e.phone) html += _rowLink('Phone', e.phone, 'tel:' + e.phone);
