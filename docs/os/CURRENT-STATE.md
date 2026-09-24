@@ -740,6 +740,9 @@ one line below: the id, its final State cell, and its headline. The headline is 
 so a 🔴/🚨 word in it describes the problem as it was found. The State cell is what is true now. Read the
 archive for the full row.
 
+- **GOV-CU1-edge-deploy** — ✅ done 2026-09-24 — SF routers `intake-salesforce` v36 / `intake-salesforce-files` v32 carry the private-lender strip (`_shared/private-financial-names.ts`); both deployed read-back byte-identical to `main` (archived round 74).
+- **GOV-CLASSIFY1-rerun** — ✅ closed 2026-09-24 — 7 of 8 no_domain entities linked to their existing dia/gov property (Jellico 16334, Tulelake 16268 by Scott's re-save), Saginaw held for twin review, 0 properties minted (archived round 74).
+
 - **EDGE-GATES1** — ✅ 8 gated log-only — The other 18 Dialysis_DB edge functions with `verify_jwt:false` have no reviewed gate — `prompts/EDGE-GATES1-the-other-eight-ungated-edge-functions.md`…
 - **HCRIS-START-RUN-HEADER-BUG** — ✅ fixed+deployed, live-confirmed working — Found 2026-09-16 during `HCRIS-TIMEOUT-4`'s triage — repo-wide, not CMS/HCRIS-specific, and the actual reason `HCRIS-TIMEOUT-3`'s fix produced zero output.
 - **HCRIS-AUX-CMS-TIMEOUT-SWALLOWED** — ✅ fixed+deployed, live-confirmed working — Found 2026-09-16 during `HCRIS-TIMEOUT-4`'s triage — the actual reason the pipeline never reached HCRIS at all.

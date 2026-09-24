@@ -53,3 +53,9 @@ Rows moved **verbatim** out of `docs/claude-code/OPERATOR-CHECKLIST.md` once clo
 |---|---|---|---|---|
 | Q52 | **A** | ☐ **Redeploy the standalone MCP Railway service** (`life-command-center`, port 3100). SF-BRIDGE1's opportunity sync (the job that fills deal type and address) runs in `mcp/opportunity-sync.js`, so it runs on the MCP service, not `tranquil-delight`. `tranquil-delight` is already live on `ec1d81df`. After one 30-minute sync, Cowork checks that Findlay's deal reads `1717 Medical Blvd, Findlay, OH 45840`. | ✅ 2026-09-23 — MCP redeployed; Findlay deal address filled at the 20:00 UTC sync (Cowork verified) | SF-BRIDGE1 |
 | Q53 | **B** | ☐ **Two Salesforce-side cleanups for SF-BRIDGE1** (they must be done in Salesforce, because the sync reloads every deal every 30 min). (1) Delete or close **"Test Property SN 05032024"** and the **duplicate Action Behavior Centers** opportunity. (2) Export the **"SF Deal → LCC Opportunity Sync"** Power Automate flow (Export → Package .zip) into `docs/claude-code/SB notes/`. It isn't in the repo, and it needs to also send the property address fields + CreatedDate for the other 21 open deals (`SF-BRIDGE1-flow`); Cowork will read the export and write the exact edit. | ✅ answered 2026-09-23 — Scott can't delete in Salesforce → LCC-side `SF-BRIDGE1-suppress` filed; flow exported → exact edit written (Q54) | SF-BRIDGE1-flow |
+
+## Archived 2026-09-24 (Cowork round 74)
+
+| # | tier | step | why / state | rows |
+|---|---|---|---|---|
+| ~~Q54~~ | **B** | ✅ **Done 2026-09-23 (retest #3 green).** Verified live by Cowork round 73: open deals with an address **12 → 29 of 43**. The 8 still blank have no Property record in Salesforce. `opened_at` mapping → CC (`POSTSHIP-R73`). | SF deal addresses reach LCC | SF-BRIDGE1-flow |
