@@ -605,6 +605,17 @@ one alone is a no-op:
   just the body** (ADDR1b: the rename landed without re-applying the revoke).
 - ✅ **Enforced since 2026-09-05 by `test/sql-definer-privilege-stanza.test.mjs`** — see the
   SEC1-definer-default note at the end of the next section.
+- 🚨 **A TABLE LOCK DOES NOT CLOSE A DEFINER VIEW OVER IT, AND AN INSERT IGNORES `USING` (SEC7-LEDGERS, 2026-09-24).**
+  A single-table view without `security_invoker` is **auto-updatable**, and the write runs as the view
+  **owner**, past the base table's RLS. Proven live, rolled back: anon `UPDATE` through gov
+  `v_ownership_history_portfolio` matched all **12,697** `ownership_history` rows, and through dia
+  `v_sales_feed_portfolio` all **5,009** `sales_transactions` rows. `v_dia_property_redirect_resolved` was
+  the same hole next to the ledger being locked. **When you lock a table, list its views**
+  (`information_schema.views.is_updatable`) and revoke their writes, keeping SELECT. Separately, a
+  policy `USING (auth.role()='service_role') WITH CHECK (true)` refuses reads and updates but **admits
+  every INSERT**. Anon wrote a CMS `watermark` row into dia `ingestion_tracker` that way. **Census all
+  three paths (RLS-off grants, anon-write policies, updatable definer views), never just the first.**
+  Audit: `docs/audits/SEC7_LEDGERS_PHASE1_2026-09-24.md`; backlog `SEC7-views`, `SEC7-policy-withcheck`.
 
 **Instances, in order:** B6d `compute_feed_cadence` (2026-08-29) → OCR2
 `<dom>_merge_document_extracted_data` (09-02) → ADDR1b `gov_merge_property_apply` (09-04) →

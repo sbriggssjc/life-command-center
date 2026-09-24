@@ -44,6 +44,7 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **Broker identity (BR) / BROKER1** | BR1, BR2, BR3, BR4, BR4-b, BR5, BR1-misparse-handoff, BROKER1, BROKER1-sf | 2026-09-17 | **BR4 live**: 3 true duplicates merged, 52 firms minted with evidence, `broker_company_id` 14.4% → **25.0%** (641/2,566); residue → BR4-b (123 firm-shaped broker rows, 468 review); BR5 display next |
 | **gov agency canonicalization (ID3a\*)** | ID3a, ID3a-b, ID3a-c, ID3a-d, ID3e, I14, I16 | 2026-09-12 | ID3a-b/c/d/e all shipped and live-verified; repo-ownership hazard (I16) found and closed — `government-lease` owns the gov DB's migrations, LCC's copy retired |
 | **CI / producer health (B6d/B6e)** | B6d-cms-*, B6d-assessor-*, B6d-pri-*, B6e-ci-*, B6e-fred-* | archived 2026-09-11 | Suite is a real merge gate (`Run Tests` unmasked, green once on `main`); `pip-audit`/secrets-grep/ruff still masked; full detail in the 2026-08-29→09-11 archive and `docs/architecture/producer-health-and-ci-enforcement.md` |
+| **Security / RLS (SEC7)** | SEC7, SEC7-views, SEC7-policy-withcheck, SEC7-phase-2, SEC7-gov-invoker-views, DIA-REDIRECTS-ANON-WRITE | 2026-09-24 | Phase 1 live: the 4 identity ledgers + the redirect view locked, guarded, and writers proven. Phase 2 inventoried: anon can UPDATE all gov `ownership_history` and dia `sales_transactions` rows through definer views (`SEC7-views`) |
 
 > **📦 ARCHIVE (2026-09-08):** entries for **2026-08-31 → 2026-09-01** (the CMS-ingestion restart,
 > DOC1–DOC18 document pipeline, C13/C14 entity-role work, and the trailing pointers for two earlier
@@ -52,6 +53,19 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 > Nothing was dropped; every still-open item was already in `PLANNED-BACKLOG.md` and the canonical pages.
 
 ---
+
+## 2026-09-24 — SEC7-LEDGERS (CC): the four identity ledgers locked on dia + gov; the redirect view was a second write path; the 15 broken chains are not bad writes
+
+**Locked live, both DBs.** Tables: dia `dia_property_redirects`, `dia_property_merge_backup`; gov `gov_property_merge_backup`, `gov_agency_aliases`. For each: client grants revoked (sequences too), RLS on with a `service_role` policy, and the migration asserts on `has_table_privilege()` rather than on its own REVOKE. Migrations: LCC `supabase/migrations/dialysis/20261013130000_dia_sec7_ledgers_lock.sql` and government-lease `sql/20260924_gov_sec7_ledgers_lock.sql`. Standing guard `<dom>_sec7_ledger_privilege_violations()` reads **0** on both DBs.
+
+- **Writers first.** Sources: the live catalog, 7 days of `edge_logs`, and all three repos. Every REST hit was Railway as service_role (dia 961 + 591 PATCH on 09-24); anon/authenticated made **zero** requests. Every writer was exercised after the lock (rolled back) and still writes: `dia_merge_property_reversible` / `dia_unmerge_property` / `dia_consolidate_property_reviewed` / `merge_dialysis_dup_property`, `dia_merge_property` as postgres (cron 16), `gov_merge_property_reversible` / `gov_unmerge_property`, the reconcile stamp PATCHes, `gov_resolve_agency`, and cron 53's tick.
+- ⚠️ **`v_dia_property_redirect_resolved` was a second write path.** It is a single-table definer view, so Postgres makes it auto-updatable, and the write runs as the owner past RLS. Anon wrote a redirect through it (rolled back). It is locked in the same change. The dia test's view-only mutation shows the table lock alone would have left it open.
+- **Tests:** throwaway Postgres, real migration file. LCC `test/sec7-dia-ledgers-lock.test.mjs` 12/12, 8 mutations. gov `tests/unit/test_gov_sec7_ledgers_lock.py` 28/28, 7 mutations. Finding from the mutations: removing only the REVOKE does **not** let anon write, because RLS alone refuses it (and the sequence revoke stops INSERTs). The layers are independent, so the red signal for a missing revoke is the guard.
+- **Broken chains (15):** all are PDR14a's 2026-09-11 backfill, and each matches `property_merge_log` exactly, so none is a bad write. They break because 11 kept rows were deleted 2026-04-29..05-15 with no record in any ledger. None was repaired: 3 have a single address match (23551 / 29456 / 24821), which is below the two-signal rule.
+- **Inventory (not flipped):** RLS-off anon-writable tables now dia **58** / gov **48** / LCC **124**. The census moved by exactly the 2 + 2 predicted. The census undercounts, and the worst items sit outside it. Proven (rolled back): anon UPDATE through gov `v_ownership_history_portfolio` hit **12,697** `ownership_history` rows, and through dia `v_sales_feed_portfolio` **5,009** `sales_transactions` rows (`SEC7-views`). Anon INSERT of a `watermark` row into dia `ingestion_tracker` passes a `WITH CHECK (true)` policy and can silence CMS ingestion (`SEC7-policy-withcheck`). Top 20: `docs/audits/SEC7_LEDGERS_PHASE1_2026-09-24.md` §4.
+- No Railway deploy: no LCC code changed.
+
+**Next:** `SEC7-views` (revoke writes on dia 9 / gov 7 / LCC 21 views, keep SELECT; check `edge_logs` for view writes first), then `SEC7-policy-withcheck`.
 
 ## 2026-09-24 — CC: GOV-REGISTRY2-FOLLOWTHROUGH — agency_id recomputes on write, promoter scheduled, SF edge redeployed
 
