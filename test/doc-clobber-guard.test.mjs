@@ -28,9 +28,16 @@
  *   re-apply your edit on top of the current file, and re-run this guard before pushing. See
  *   `docs/os/BUILD-TURN-PROTOCOL.md` ⑤-CC and `docs/claude-code/README.md`.
  *
- * THE FIX IF A ROW GENUINELY NEEDS TO GO: strike it (`~~text~~`) with a one-line reason instead
- * of deleting it — see backlog-id-uniqueness.test.mjs's own repair procedure for the collision
- * vs. restatement distinction. A genuinely archived STATUS span moves verbatim into
+ * THE FIX IF A ROW GENUINELY NEEDS TO GO:
+ *   - SHIPPED (✅, nothing owed): move the row VERBATIM (byte-identical line) into a
+ *     `docs/history/PLANNED-BACKLOG_shipped_<date>.md` archive in the SAME commit that removes it,
+ *     and make sure CURRENT-STATE.md describes it or carries a one-line pointer (DOCMAP3,
+ *     2026-09-24; DOCUMENTATION-MAP.md §3/§4). That is the one form of "row id disappeared" this
+ *     guard allows (see BACKLOG_ARCHIVE_PREFIX). A reworded or truncated archive copy does NOT
+ *     count — the exemption compares the whole table line.
+ *   - Anything else (retired, refuted, duplicate): strike it (`~~text~~`) with a one-line reason
+ *     instead of deleting it — see backlog-id-uniqueness.test.mjs's own repair procedure for the
+ *     collision vs. restatement distinction. A genuinely archived STATUS span moves verbatim into
  * `docs/history/STATUS_claude-code_*.md` in the SAME commit that removes it from STATUS.md —
  * that is the one form of "heading disappeared" this guard allows (see ARCHIVE_HEADING_EXEMPT).
  */
@@ -45,6 +52,8 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const STATUS_PATH = 'docs/claude-code/STATUS.md';
 const BACKLOG_PATH = 'docs/os/PLANNED-BACKLOG.md';
 const ARCHIVE_DIR_PREFIX = 'docs/history/STATUS_claude-code_';
+// DOCMAP3 (2026-09-24): the one legitimate way a backlog row id disappears — moved verbatim here.
+const BACKLOG_ARCHIVE_PREFIX = 'PLANNED-BACKLOG_shipped_';
 
 function git(args) {
   return execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
@@ -120,6 +129,42 @@ function parseBacklogRows(text) {
     if (!rows.has(idText)) rows.set(idText, (cells[2] || '').trim());
   }
   return rows;
+}
+
+// id -> the full table line of its first occurrence (for the verbatim-archive exemption).
+function parseBacklogRowLines(text) {
+  const rows = new Map();
+  for (const line of text.split('\n')) {
+    if (!line.startsWith('|')) continue;
+    const cells = line.split('|');
+    if (cells.length < 3) continue;
+    const firstCell = cells[1].trim();
+    const m = ID_CELL_RE.exec(firstCell);
+    if (!m) continue;
+    const idText = m[2] + (m[3] ? m[3].trim() : '');
+    if (HEADER_CELL_NAMES.has(idText.toLowerCase())) continue;
+    if (!rows.has(idText)) rows.set(idText, line);
+  }
+  return rows;
+}
+
+export function listBacklogArchiveFiles(root = ROOT) {
+  const dir = join(root, 'docs', 'history');
+  try {
+    return readdirSync(dir)
+      .filter((f) => f.startsWith(BACKLOG_ARCHIVE_PREFIX) && f.endsWith('.md'))
+      .map((f) => `docs/history/${f}`);
+  } catch {
+    return [];
+  }
+}
+
+// Returns the ids from `missing` that are NOT archived verbatim (whole base line present as a
+// line of some archive text). Exported for the positive control below.
+export function unarchivedBacklogIds(missing, baseLines, archiveTexts) {
+  const archivedLines = new Set();
+  for (const t of archiveTexts) for (const l of t.split('\n')) archivedLines.add(l);
+  return missing.filter((id) => !archivedLines.has(baseLines.get(id)));
 }
 
 function listArchiveFiles() {
@@ -205,19 +250,33 @@ describe('STATUS.md / PLANNED-BACKLOG.md cannot be silently reverted (GUARD-CLOB
     );
   });
 
-  it('every PLANNED-BACKLOG.md row id present at the base is still present at HEAD', () => {
+  it('every PLANNED-BACKLOG.md row id present at the base is still present at HEAD (or was archived verbatim)', () => {
     const baseRows = parseBacklogRows(baseBacklog);
     const headRows = parseBacklogRows(headBacklog);
     const missing = [...baseRows.keys()].filter((id) => !headRows.has(id));
+    const archiveTexts = listBacklogArchiveFiles()
+      .map((p) => readAtCommit('HEAD', p))
+      .filter((t) => t !== null);
+    const stillMissing = unarchivedBacklogIds(missing, parseBacklogRowLines(baseBacklog), archiveTexts);
     assert.deepEqual(
-      missing,
+      stillMissing,
       [],
-      `${BACKLOG_PATH} lost ${missing.length} row id(s) between the base commit (${baseSha}) and ` +
-      `HEAD:\n${missing.map((id) => `  ${id}`).join('\n')}\n\n` +
-      `A backlog row must never be deleted outright. If it genuinely needs to go, strike it ` +
-      `(~~text~~) with a one-line reason instead — see backlog-id-uniqueness.test.mjs's repair ` +
-      `procedure. See this file's header for the GUARD-CLOBBER1 fix (rebase onto origin/main).`,
+      `${BACKLOG_PATH} lost ${stillMissing.length} row id(s) between the base commit (${baseSha}) and ` +
+      `HEAD, and none was found VERBATIM in a docs/history/${BACKLOG_ARCHIVE_PREFIX}*.md archive:\n` +
+      `${stillMissing.map((id) => `  ${id}`).join('\n')}\n\n` +
+      `A shipped row moves byte-identically into docs/history/${BACKLOG_ARCHIVE_PREFIX}<date>.md in the ` +
+      `same commit (DOCUMENTATION-MAP.md §3). Any other row must never be deleted outright — strike it ` +
+      `(~~text~~) with a one-line reason instead. If you did neither, this is GUARD-CLOBBER1: rebase ` +
+      `onto origin/main and re-apply your edit on the CURRENT file.`,
     );
+  });
+
+  it('the verbatim-archive exemption accepts an exact copy and rejects an edited one (positive control)', () => {
+    const line = '| X1 | **Shipped thing** — long enough text | ✅ live | src |';
+    const base = new Map([['X1', line], ['X2', '| X2 | other | ✅ | s |']]);
+    assert.deepEqual(unarchivedBacklogIds(['X1'], base, [`# a\n${line}\n`]), []);
+    assert.deepEqual(unarchivedBacklogIds(['X1'], base, [line.replace('long', 'short')]), ['X1']);
+    assert.deepEqual(unarchivedBacklogIds(['X2'], base, []), ['X2']);
   });
 
   it('no PLANNED-BACKLOG.md row\'s Item text was truncated back to an older snapshot', () => {

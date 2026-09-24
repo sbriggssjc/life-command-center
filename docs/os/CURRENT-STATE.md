@@ -731,6 +731,82 @@ shipped row belongs in CURRENT-STATE, not PLANNED-BACKLOG. Nothing here was rewo
 | ✅ **C13g-min-lane-mutation** | **DONE 2026-09-09 — `test/c13g-min-lane.test.mjs` is now 14 tests / 46 mutations RED / 46.** Added 2 assertions (candidate-view migration reads the OWN-T0e cache not the slow view; `p_decision_id` bigint matching `lcc_decisions.id`, old uuid overload dropped — the repo-side twins of the two same-day hotfixes' apply-time DO blocks). Two assertions survived their first mutation and were rewritten: the ordering test's own row names happened to sort the same by name as by rent (renamed anti-alphabetically); the registry-membership regex matched the unrelated `research_type: 'entity_type_review',` literal in the verdict branch instead of the `FEDERATED_DECISION_TYPES` entry (re-anchored on the `sponsor_family_confirm` adjacency). Both unmeasured items closed, rolled back: `v_lcc_entity_role_ambiguity` is 0 rows for Foulger Pratt in either type (not every retype moves that view); the Tier 0 bench gained **10 cards across 3 of the 11 non-tombstoned retyped entities** (UIRC 7, Global Net Lease 2, Foulger Pratt 1) that could not exist while person-typed — §9f's Gardner/MassMutual-only corroboration check was right for those two, incomplete as a claim about the lane. owner-role-classification.md §9g. | ✅ | C13g-min-lane |
 | ✅ **C13g-min-lane-placeholder** | **DONE 2026-09-10 — `Research In Progress` is a placeholder ENTITY holding 2 current portfolio facts; it no longer reaches the retype lane.** Measured live first that none of the three existing name guards fires on it (`lcc_is_placeholder_owner_name`/`lcc_p131_is_document_row_label`/`lcc_a2_is_placeholder_party` all `false`); widened `lcc_is_placeholder_owner_name`'s exact-match list with the one literal after a blast-radius check (2 entities fleet-wide, both genuine placeholders). `v_lcc_entity_retype_candidates` restated (migration `20261101150000`) to exclude it from both population sources; candidates **4 → 3** (exact predicted delta). New `v_lcc_entity_retype_placeholder_excluded` view + one-shot `api/admin.js?action=entity-retype-placeholder-seed` route the excluded row to `junk_entity_review` (retire, never merge) — seeded live, review_id 386, `dismiss`, naming the 2 held facts. | ✅ | C13g-min-lane |
 
+### 2b. Shipped rows archived from `PLANNED-BACKLOG.md` (DOCMAP3, 2026-09-24)
+
+DOCMAP3 moved **101** closed (`✅`, no open marker) backlog rows verbatim to
+[`docs/history/PLANNED-BACKLOG_shipped_2026-09-24.md`](../history/PLANNED-BACKLOG_shipped_2026-09-24.md).
+35 of them are already described elsewhere in this file. The other **66** had no mention here, so each gets
+one line below: the id, its final State cell, and its headline. The headline is the row's **original** framing,
+so a 🔴/🚨 word in it describes the problem as it was found. The State cell is what is true now. Read the
+archive for the full row.
+
+- **EDGE-GATES1** — ✅ 8 gated log-only — The other 18 Dialysis_DB edge functions with `verify_jwt:false` have no reviewed gate — `prompts/EDGE-GATES1-the-other-eight-ungated-edge-functions.md`…
+- **HCRIS-START-RUN-HEADER-BUG** — ✅ fixed+deployed, live-confirmed working — Found 2026-09-16 during `HCRIS-TIMEOUT-4`'s triage — repo-wide, not CMS/HCRIS-specific, and the actual reason `HCRIS-TIMEOUT-3`'s fix produced zero output.
+- **HCRIS-AUX-CMS-TIMEOUT-SWALLOWED** — ✅ fixed+deployed, live-confirmed working — Found 2026-09-16 during `HCRIS-TIMEOUT-4`'s triage — the actual reason the pipeline never reached HCRIS at all.
+- **TIER0-flag-arity** — ✅ — SHIPPED 2026-09-12 (Cowork) — DOC-CONTRA follow-up found a live production bug, not just a stale doc.
+- **CONSOLIDATE3** — ✅ genuinely shipped 2026-09-14 (was falsely ✅ since 09-12) — SHIPPED 2026-09-12 (Cowork).
+- **ID3a-dup** — ✅ superseded — *(duplicate row, merge artifact — the pre-ship ID3a row plus Cowork's 2026-09-12 contamination-warning addendum both survived the ID3a build's merge…
+- **ID3d-reconcile** — ✅ done — The ID3d migration lives in `Dialysis` (PR #7415); Dialysis_DB schema lands here — `prompts/ID3d-reconcile-the-guarantor-migration-is-in-the-wrong-repo.md`…
+- **J13-teardown** — ✅ done 2026-09-18 — 👤 Scott. Execute `docs/history/RUNBOOK_vercel_teardown_2026-09-18_DONE.md` in order: (1) repoint the daily-briefing scheduled caller (Cowork desktop task…
+- **RO2a** — ✅ executed — SIZED 2026-09-11, merge lane NOT built.
+- **RO2b** — ✅ fixed — ✅ FIXED 2026-09-11. `granteePassesOwnerGuards` (`api/_handlers/sidebar-pipeline.js`) now rejects the 9 named capture artifacts: `RMR` / `The RMR Group` /…
+- **RO4** — ✅ root-caused — ROOT-CAUSED 2026-09-11: it's not a bug, and not the DISTINCT ON.
+- **RO5** — ✅ sized — SIZED 2026-09-11 — joined the 761 gov genuine disputes to the reconciled store.
+- **OC2** — ✅ live — Shipped 2026-09-11, flag OFF (`OPERATOR_NOTE_TRIAGE`).
+- **OC-v** — ✅ live — Make OC-a live (reconcile 2026-09-11, measured):
+- **MB2a** — ✅ — BUILT 2026-09-12 (this change) — the two feeds Cowork verified live (Federal Register ESRD + Google News dialysis-operator query) replace the three dead…
+- **FEED1** — ✅ — Three RSS feeds outside the dialysis lane are dead and have been failing silently — found by MB2a's new `market_brief_feed_health` monitor on its FIRST run,…
+- **FEED2** — ✅ — FIXED + APPLIED LIVE 2026-09-12 (Cowork) — the feed monitor FEED1 relied on was itself broken, caught before its cron had ever fired.
+- **MB2b** — ✅ — The Google News dialysis query returns noise, measured not assumed: 0 of 6 items on 2026-09-12 were market signal
+- **MB2e** — ✅ — MB2b's new `items_after_cutoff` column found its next two customers on day one (Cowork, live 2026-09-14).
+- **MB2c** — ✅ — Google News publisher parser drops any hyphenated outlet.
+- **MB9** — ✅ live — BUILT 2026-09-12 (Cowork) — collapsed `net_lease`/`broad_net_lease` into one `net_lease` lane, per Scott's explicit call (redundant for his purposes) +…
+- **XB1** — ✅ live, collector self-running — Collector — `scripts/build-brief-collector.mjs` (repo-side: branch debt, orphaned prompts, doc sizes, GENERATED-file changes) +…
+- **XB2** — ✅ live — Audit rules, scoped to what is deterministically answerable in this unit (doc contradictions, dated-blocker re-measure age and "flags ON with no consumer"…
+- **XB2-precision** — ✅ live — Two precision gaps in the first live snapshot, measured 2026-09-15 (Cowork) — both are the failure mode XB2 was scoped to avoid.
+- **DOC-TABLE3** — ✅ — SHIPPED 2026-09-15 (Cowork) — 27 backlog rows were invisible to every guard in this file AND rendered as literal text on GitHub.
+- **MISPARSE-BACKLOG1** — ✅ shipped — 44 `contact_misparse_review` items sit `new` — oldest 2026-08-10 (~36 days), average age 4.9 days (Cowork, measured 2026-09-15).
+- **BACKLOG-ids** — ✅ — ORIGINAL FINDING (2026-09-12) — 28 backlog IDs are used more than once, and at least one pair is a genuine COLLISION between two different issues.
+- **REPO1-root-clutter** — ✅ — DONE 2026-09-12 — swept by the filed method, not in bulk.
+- **RECON3** — ✅ closed 2026-09-22 (code + data + follow-ups verified live) — A second, independently-found reconciliation-gap case — 175 Righter Rd, Succasunna NJ (DaVita, `property_id=27266`), from Scott's own "Dialysis Property -…
+- **RECON3-b** — ✅ closed 2026-09-22 (redeploy done + verified, Q40; residual cleanup done round 57) — PROMPTED 2026-09-22 (Cowork) -- reconciling RECON3's response against live Dialysis_DB.
+- **SIDEBAR3-c** — ✅ shipped, verified, and live-confirmed closed — Scott's Q41 re-send (Orlando + Scranton, 2026-09-22) exposed two live defects in the `SIDEBAR2-b` range-address guard…
+- **EXT-HOST-2** — ✅ verified closed — The `EXT-HOST` failure mode is back, now against a fully-deleted Vercel project.
+- **SIDEBAR4-c** — ✅ closed 2026-09-23 (live proof via SIDEBAR4-d's 1.0.57 Save) — Something sends a second `action=process_sidebar_extraction` request 0.5–1.0 s after every sidebar Update (PATCH).
+- **SIDEBAR4-d** — ✅ closed 2026-09-23 (live-verified: a 1.0.57 Save = one run) — After Save, the side panel re-renders into a state that looks unsaved, so the user clicks Update *and* Re-run (Scott, 2026-09-23).
+- **HOME-MB-BOOT** — ✅ closed 2026-09-23 (Scott's hard refresh shows Market Briefs: Dialysis 23 live facts; gov + net lease "producer not built") — The Home "Market Briefs" widget spins forever on a cold load (Scott, 2026-09-23 screenshots).
+- **LEASEJUNK1** — ✅ shipped + live (DB since 09-22; JS live on `tranquil-delight` `881dc2b4`) — Junk lease rows — table-header text as `leases.tenant` (SHIPPED 2026-09-22, CC).
+- **LOG5** — ✅ closed 2026-09-22 (fixed live) — Gov `intake-promoter`'s materialized-view refresh has been silently failing on every promote — `"v_available_listings" is not a table or materialized view`…
+- **GOV-AVAIL1** — ✅ shipped + live 2026-09-23 (LCC PR #2633 + government-lease PR #408; DB migrations applied by CC 2026-09-22; JS live on `06faa4f3`) — Gov › Deals › Sales › Available is carrying ingestion errors: our own Tulsa office is an active gov listing, 111 addresses embed city/state/ZIP, agency…
+- **GOV-AVAIL1-agency-tail** — ✅ closed 2026-09-23 (`GOV-AVAIL2`) — Measurable part closed in `GOV-AVAIL2` (2026-09-23).
+- **INTAKE-RESTAGE1** — ✅ closed 2026-09-23 (stage-om fix live-verified round 67; `intake-salesforce-files` v31 deployed by Scott, Q49) — Re-staging an already-stored Salesforce file fails with `inbox_item_insert_failed`.
+- **SF-BRIDGE1** — ✅ closed 2026-09-23 (Findlay listing live; MCP redeployed by Scott, Q52 — Findlay deal address filled from `dia.sf_deal_staging` at the 20:00 UTC sync) — Our own Salesforce deals reach LCC without a type or address, and their OMs can't follow the Salesforce seed to the property. BUILT 2026-09-23 (CC). (1)…
+- **GOV-UX1-D1** — ✅ live 2026-09-23 — SHIPPED + LIVE 2026-09-23: the agency-drift detector reads the current lease only and compares occupying agency to occupying agency.
+- **GOV-UX1-D2** — ✅ live 2026-09-23 — SHIPPED + LIVE 2026-09-23: 21 properties, not ~272.
+- **GOV-UX1-D3** — ✅ live 2026-09-23 — SHIPPED + LIVE 2026-09-23: 4 properties, not 45–46.
+- **GOV-UX1-D4** — ✅ closed — no population (2026-09-23) — CLOSED, NOT BUILT (re-measured 2026-09-23).
+- **SF-BRIDGE1-flow** — ✅ closed 2026-09-23 (Scott retest #3 succeeded; Q54) — The SF Deal → LCC Opportunity Sync PA flow should also select `Property2__r.Street__c/City__c/State_Province__c/Zip_Code__c` and `CreatedDate` (and…
+- **GUARD-CLOBBER1-buffer** — ✅ fixed 2026-09-23 (Cowork round 73) — `test/doc-clobber-guard.test.mjs` read the base/HEAD copies with `execFileSync` at Node's default 1 MiB `maxBuffer`. `PLANNED-BACKLOG.md` crossed it (main…
+- **GOV-UX1-D5-gate-bank** — ✅ live 2026-09-23 — CLOSED 2026-09-23 (GOV-UX1-D5-gate-2).
+- **DEED1-reconcile-2** — ✅ done — PROMPTED 2026-09-15 — port the reconciliation migration into this repo and close Dialysis PR #7412.
+- **GOVDEED4** — ✅ live — 80% of the DATED gov deeds carry a date the model was TOLD to invent, and no consumer can tell (Cowork, 2026-09-16) —…
+- **GOVDEED-478** — ✅ live — The 478 manufactured owner-source conflicts need a disposition decision, and nothing will correct them on its own — 👤 Scott / `government-lease`.
+- **C1C-SPLIT** — ✅ closed both arms — PROMPTED 2026-09-16 — `prompts/C1C-SPLIT-retire-the-dia-lane-only.md`.
+- **OWNERGAP1-pilot** — ✅ — PILOT RUN 2026-09-14 (Cowork, live in the browser) — the answer is "it depends on the county," and the three failed for THREE DIFFERENT REASONS.
+- **OWNERGAP1-decision** — ✅ superseded by OWNERGAP2 (41 owners live) — REFRAMED AGAIN BY A SECOND SWEEP 2026-09-14 (Cowork, live) — and Scott's no-paid-vendor constraint looks satisfiable.
+- **OWNERGAP1-match** — ✅ — MATCH RATE MEASURED 2026-09-14 (Cowork, live) — Philadelphia returns ~68%, and the misses are a formatting bug, not missing data.
+- **OWNERGAP1-match2** — ✅ — HARRIS TX MEASURED 2026-09-15 (Cowork, live): 6 of 7 = 86%
+- **OWNERGAP2-harris-d** — ✅ live; H8 applied — `include_classes=C2` on the resolve tick, exact-arm only for admitted classes, `state_class` in the citation —…
+- **HOME1-deploy** — ✅ deployed — `daily-briefing` edge function on LCC Opps is still v25 (2026-05-12); HOME1 §C's `inferDomain` fix is merged but not running — the DaVita-under-Government…
+- **HOME2-d** — ✅ superseded by HOME2-e (live) — The three lanes overflow the TODAY card.
+- **HOME2-e** — ✅ live — HOME2-d's grid rules lose to `.widget-grid`'s desktop rule on specificity + source order
+- **PERF-SPQ2** — ✅ closed 2026-09-23 (cold-load Home paints Today without Retry — Scott, Q44) — `v_lcc_seller_prospect_queue` is ~0.85 s per pass and Home issues several passes at boot (`today_sections`, seller-prospect-queue page + counts,…
+- **DIA1b** — ✅ live — Finish DIA1: NPI tile → lane count, an "as of" on both tile sections, all 14 tiles verified incl. "45 operators" vs 21 `operator_id`, lease-backfill…
+- **INVENTORY1b** — ✅ done; decisions + rows spun out — Re-test INVENTORY1's leak lists against the live databases and the code; read the ten root reports —…
+- **INVENTORY-review-2026-09-17** — ✅ review done; queue built — The inventory reviewed against the to-do lists (Cowork, 2026-09-17, Scott's ask).
+- **FLAGS-geocode-on** — ✅ live; cap ledger applied by Cowork — Turn the Geocodio tier on with a hard daily cap and clear the 3,467 — `prompts/FLAGS-geocode-on-the-free-tier-is-free.md` (Cowork, 2026-09-16, from S3).
+- **GUARD-CLOBBER1** — ✅ shipped — SHIPPED (CC, 2026-09-17) — `test/doc-clobber-guard.test.mjs`.
+
 ## 3. Feature-flag state — LIVE registry snapshot, measured 2026-08-26
 
 `select flag, state from feature_flags_registry` on LCC Opps: **30 `on` · 27 `off` · 2 `partial`.**
