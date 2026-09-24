@@ -1,5 +1,12 @@
 # LCC — Fresh Chat Kickoff
 
+> **Every new chat starts from `docs/os/DOCUMENTATION-MAP.md` §0 "Where to start"** (DOCMAP3, 2026-09-24): the five
+> state files, `STATUS.md`'s Open-threads table, `docs/claude-code/OPERATOR-CHECKLIST.md`,
+> `docs/claude-code/SB notes/TRIAGE.md`, and the prompt/response loop in `docs/claude-code/README.md`. The block below
+> is **topic-specific** (the ASC provisional-review handoff of 2026-09-15). Use it only when picking up ASC, and
+> re-measure its numbers first. Its step 4 names `docs/os/BUILD-BACKLOG.md`, which is dated 2026-07-27; the current
+> backlog is `docs/os/PLANNED-BACKLOG.md`.
+
 *Regenerated 2026-09-15 for the ASC provisional-review handoff. Copy the block below into a fresh chat.*
 
 ---

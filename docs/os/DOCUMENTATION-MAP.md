@@ -10,6 +10,22 @@
 
 ---
 
+## 0. 🧭 Where to start (every new chat, in this order) — DOCMAP3, 2026-09-24
+
+1. **The five state files (§1)** — `CURRENT-STATE.md` (what is live), `PLANNED-BACKLOG.md` (what is open),
+   `docs/claude-code/STATUS.md` (what just happened), `CLAUDE.md` (the rules), `GITHUB-WORKFLOW.md` (how work
+   reaches `main`).
+2. **`STATUS.md`'s Open-threads table** — the top of that file. It lists every thread in flight and where it stands.
+3. **`docs/claude-code/OPERATOR-CHECKLIST.md`** — the steps only Scott can do. Anything blocked on him is here.
+4. **`docs/claude-code/SB notes/TRIAGE.md`** — Scott's in-app observations (`SBN-n`) and where each one went.
+5. **The prompt/response loop** — `docs/claude-code/README.md`: prompts in `docs/claude-code/prompts/`, replies in
+   `responses/`, both moved to `done/` once reconciled. `docs/os/BUILD-TURN-PROTOCOL.md` says when a turn is done.
+
+Then use §1a to find the one canonical page for your subsystem. **A loose file in the `docs/` root, a second
+folder for a topic that already has one, or a new `.md` at the repo root is a filing defect** (§3). DOCMAP3 moved
+the last batch out (the move table is in `docs/history/INDEX.md` under "DOCMAP3").
+`docs/claude-code/NEW-CHAT-KICKOFF.md` is a copy-paste starter that points back here.
+
 ## 1. The five files that carry state (everything else is supporting material)
 
 | file | answers | update it when |
