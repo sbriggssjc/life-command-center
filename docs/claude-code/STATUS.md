@@ -105,7 +105,7 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 - **Shipped.** One strip rule (JS + Deno mirror + gov SQL) removes private federally-chartered lender names before any gov classifier reads "federal". Wired into the sidebar classifier, credit-tier resolver, SF deal classifier, both SF routers, and the OM create path. The OM path had been sending every non-dialysis tenant to gov by default.
 - **Gov DB (live, reversible):** Available **490 → 473**; 33 lender properties archived; 702 lost a false `Federal`; the insert guard refuses new lender-only rows.
 - **Caught on the way:** the 6 NCUA properties (a real agency, carrying all 8 leases and 8 sales) had been tagged "private company" by ID3a-c; that tag is now cleared. "AOC/Federal Bankruptcy Court" nearly matched `federal bank`.
-- **Next:** edge functions need their own deploy (`GOV-CU1-edge-deploy`). JS goes live on the Railway redeploy. `GOV-CU1-home` needs Scott's decision. Backlog: GOV-CU1 updated; five follow-ups added.
+- **Next:** edge functions DEPLOYED 2026-09-24 (`intake-salesforce` v36, `intake-salesforce-files` v32, byte-verified against `origin/main`, both answer 200). JS goes live on the Railway redeploy. `GOV-CU1-home` needs Scott's decision. Backlog: GOV-CU1 updated; five follow-ups added.
 
 ## 2026-09-23 — GOV-CLASSIFY1: existing-record-first sidebar classification + numbered-route equivalence
 
