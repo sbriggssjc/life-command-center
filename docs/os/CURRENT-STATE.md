@@ -359,6 +359,19 @@ reversible (`_gov_id3ab_agency_backup_20260912`); guard `test/gov-id3ab-agency-c
 The separate `government_agencies`/`gov_agency_aliases` FK registry from ID3a is untouched by this
 change — display column and FK registry are two different systems, on purpose.
 
+✅ **GOV-REGISTRY2 (2026-09-24) gave the registry a jurisdiction.** A registry row is an identity *in a
+jurisdiction* (`jurisdiction_level` federal/state/county/city/type, `jurisdiction_state`, `jurisdiction_name`,
+`short_name`); the generic `ST-*`/`MUN-*` rows are `type` templates that never resolve and cannot be written.
+Aliases carry a `jurisdiction_state` and a `type_gate`, and the single resolver is now
+`gov_resolve_agency(text, state, government_type)` — the 1-arg form can only return a federal agency. It found
+the Texas HHSC on federal HHS (212 properties) and six more state compounds on federal rows, all repaired and
+ledgered. 95 new rows (TX-HHSC, TN-DHS, FL-FDC, MI-SAGINAW-CMH, FCA, NCUA …); Available State no-id 59→22,
+Municipal 14→3; active State unresolved 859→329. Display shows "TX HHSC" / "Saginaw Co. CMH" with the full name on
+hover. Owner: government-lease `sql/20260924_gov_registry2_jurisdiction_model.sql` + gov `CLAUDE.md` §33.
+⚠️ The retired LCC files under `supabase/migrations/government/` that insert aliases with `on conflict
+(alias_key)` no longer replay: that unique index is now `(alias_key, jurisdiction_state)`. They are historical;
+do not re-run them. Open: `GOV-REGISTRY2-tail`, `GOV-REGISTRY2-promoter-schedule`.
+
 ⚠️ **The migration file cited above (`supabase/migrations/government/20260912030000_...sql`) is
 now HISTORICAL, not live (ID3a-d, same day).** `government-lease` — not this repo — owns the
 government database's objects; that repo's own PR #398 shipped the real, currently-deployed

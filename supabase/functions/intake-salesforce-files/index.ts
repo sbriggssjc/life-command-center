@@ -65,7 +65,10 @@ type Vertical = "dia" | "gov" | "ops";
 
 // ── vertical auto-routing ───────────────────────────────────────────────────
 const DIA_SIGNALS = ["dialysis", "davita", "fresenius", "renal", "kidney", "clinic", "nephrology"];
-const GOV_SIGNALS = ["gsa", "federal", "government", "u.s.", "department of", "veterans", "social security"];
+// GOV-REGISTRY2: NCUA and the Farm Credit Administration carry none of the other terms. Full names
+// only (a bare "credit union" / "farm credit" is a lender; stripPrivateFinancialNames protects these two).
+const GOV_SIGNALS = ["gsa", "federal", "government", "u.s.", "department of", "veterans", "social security",
+  "national credit union administration", "farm credit administration"];
 
 function routeFileVertical(f: Record<string, unknown>): Vertical {
   const explicit = String(f.vertical || "").toLowerCase();
