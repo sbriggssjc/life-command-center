@@ -282,8 +282,16 @@ the review gate without publishing candidate identities or licensed payloads.
   from before this rule; do not add the seventieth. *(That is exactly how K13–K20 got lost.)*
 - **A second document about a subsystem that already has one.** Extend the canonical file and
   leave a pointer. One source per topic.
-- **A `✅ done` row left sitting in the backlog.** When a row ships, move the substance to
-  `CURRENT-STATE.md` §2 and delete the row — otherwise the backlog rots into a changelog.
+- **A `✅ done` row left sitting in the backlog.** When a row ships with nothing owed, move it
+  **verbatim** (the whole table line, byte-identical) into
+  `docs/history/PLANNED-BACKLOG_shipped_<YYYY-MM-DD>.md` **in the same commit that removes it**,
+  and make sure `CURRENT-STATE.md` describes it or carries a one-line pointer (§2b pattern).
+  Otherwise the backlog rots into a changelog. *(DOCMAP3, 2026-09-24. Before this, §3 said
+  "delete the row" while `test/doc-clobber-guard.test.mjs` failed any PR that deleted one, so
+  sessions struck rows instead and 145 done rows piled up. The guard now accepts exactly this
+  move and nothing looser: an edited or truncated archive copy still fails.)* A row that is
+  **retired or refuted**, not shipped, is struck (`~~…~~`) with its reason or moved to P12. It is
+  never archived as shipped.
 - **A "final" summary file per session.** That is what `STATUS.md` is for.
 
 ## 4. The lifecycle of a piece of work
@@ -293,7 +301,7 @@ found  → PLANNED-BACKLOG.md row (with its measurement and source)
        → prompts/<id>.md            (drafted for Claude Code)
        → responses/<id>.docx        (its reply)
 reconciled → STATUS.md entry + docs updated + both files moved to done/
-shipped    → CURRENT-STATE.md; backlog row deleted
+shipped    → CURRENT-STATE.md; backlog row moved verbatim to docs/history/PLANNED-BACKLOG_shipped_<date>.md (same commit)
 retired    → moved to backlog P12 "excluded" WITH THE REASON — never deleted
 learned    → CLAUDE.md, if the lesson outlives the change
 ```

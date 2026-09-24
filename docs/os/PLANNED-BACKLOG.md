@@ -1188,8 +1188,10 @@ part of the design, not an oversight.
 
 ### How to keep this file honest
 
-- When a row ships, **move it to `CURRENT-STATE.md` §2 and delete it here** — do not leave a ✅ row,
-  that is how a backlog rots into a changelog.
+- When a row ships, **move it verbatim to `docs/history/PLANNED-BACKLOG_shipped_<date>.md` in the same
+  commit** and make sure `CURRENT-STATE.md` describes it (or add a one-line §2b pointer). Do not leave a
+  ✅ row: that is how a backlog rots into a changelog. `test/doc-clobber-guard.test.mjs` accepts a removed id
+  only when its whole line appears in such an archive (DOCMAP3, 2026-09-24; `DOCUMENTATION-MAP.md` §3).
 - When a row is genuinely retired, **move it to P12 with the reason**, never delete it.
 - When measurement refutes a row's premise (it happens often here), **rewrite the row with the
   measurement** rather than silently dropping it — the correction is usually the more valuable artifact.
@@ -1289,6 +1291,11 @@ part of the design, not an oversight.
 > Also folded: ~9 duplicate "original filing" rows (a pointer summary plus the superseded diagnosis it
 > pointed at) into their single summary row, and 3 more "(original)"-suffixed duplicate pairs found the
 > same way.
+
+> **DOCMAP3 (2026-09-24)** moved a second batch of **101** shipped rows verbatim to
+> [`docs/history/PLANNED-BACKLOG_shipped_2026-09-24.md`](../history/PLANNED-BACKLOG_shipped_2026-09-24.md),
+> grouped by arc. Rows with any owed step stayed here. Pointers for the ones CURRENT-STATE did not already cover
+> are in its §2b.
 
 - **P0 — Verify, don't build (open loops on work already shipped)** — 5 rows. Verification loops on already-shipped work (property-twin, reachability harvest, the on-box Analyst's Take pipeline, ownership-history lane drain).
 - **P1 — In flight / next up** — 20 rows. Tier 0 owner-contact lane rounds, entity-canonical-name single-writer work (N15c/d/e), CI unmask work, and other in-flight repairs that reached completion.
