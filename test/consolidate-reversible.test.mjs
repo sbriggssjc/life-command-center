@@ -21,6 +21,7 @@ import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as acorn from 'acorn';
+import { forwardSources, runMergeLogReconcile } from '../api/_shared/merge-log-reconcile.js';
 import {
   mergePropertyReversible, consolidateBatchTag, parseBackupId, REVERSIBLE_MERGE_RPC, shortDomain,
 } from '../api/_shared/property-merge-reversible.js';
@@ -163,18 +164,33 @@ test('the Decision Center property_merge verdict merges through mergePropertyRev
 });
 
 // ── 4. The reconcile reads the reversible ledger and the short domain ───────
-test('merge-log reconcile reads <dom>_property_merge_backup, skipping unmerged rows', () => {
+// MERGELOG-GAP moved the loop to api/_shared/merge-log-reconcile.js; these
+// assert its BEHAVIOUR with injected queries rather than grepping its source.
+test('merge-log reconcile delegates to runMergeLogReconcile', () => {
   const src = stripJsComments(fnSource('handleMergeLogReconcile'));
-  assert.match(src, /table:\s*`\$\{target\}_property_merge_backup`/);
-  assert.match(src, /filter:\s*'&unmerged_at=is\.null'/);
-  assert.match(src, /table:\s*'property_merge_log'/);
-  assert.match(src, /reconciled_lcc_at:\s*new Date\(\)\.toISOString\(\)/);
+  assert.match(src, /runMergeLogReconcile\(\s*\{\s*targets\s*,\s*limit\s*,\s*dryRun\s*,\s*domainQuery\s*,\s*opsQuery\s*\}\s*\)/);
 });
 
-test('merge-log reconcile counts entities on the short domain too', () => {
-  const src = stripJsComments(fnSource('handleMergeLogReconcile'));
-  assert.match(src, /domain=in\.\(\$\{target\},\$\{dom\}\)/);
-  assert.doesNotMatch(src, /domain=eq\.\$\{pgFilterVal\(dom\)\}/);
+test('merge-log reconcile reads <dom>_property_merge_backup, skipping unmerged rows', async () => {
+  for (const target of ['dia', 'gov']) {
+    const src = forwardSources(target);
+    const bk = src.find((s) => s.key === 'merge_backup');
+    assert.equal(bk.table, `${target}_property_merge_backup`);
+    assert.equal(bk.filter, '&unmerged_at=is.null');
+    assert.ok(src.some((s) => s.table === 'property_merge_log'));
+  }
+});
+
+test('merge-log reconcile counts entities on the short domain too', async () => {
+  const opsPaths = [];
+  await runMergeLogReconcile({
+    targets: ['dia'], limit: 5, dryRun: true,
+    domainQuery: async (dom, m, path) => ({ ok: true, data: path.startsWith('dia_property_merge_backup?reconciled')
+      ? [{ backup_id: 1, kept_property_id: 10, dropped_property_id: 11 }] : [] }),
+    opsQuery: async (m, path) => { opsPaths.push(path); return { ok: true, data: [], count: 0 }; },
+  });
+  assert.ok(opsPaths.length >= 1);
+  assert.ok(opsPaths.every((p) => p.includes('domain=in.(dia,dialysis)')), opsPaths.join('\n'));
 });
 
 test('the repoint helper migration matches both domain spellings', () => {

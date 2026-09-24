@@ -111,6 +111,7 @@ import { buildSosAddressObservations, computeSosNotFoundDisposition } from './_s
 import { resolvePortalsForProperties, resolvePortalForProperty } from './_shared/county-portal-resolver.js';
 import { applyAssessorCapture, applyRecorderCapture, applySosEntityCapture } from './_shared/public-records-writeback.js';
 import { reconcilePropertyOwnership, propagateDeedGranteeToOwner, reconcileSaleAndOwnershipForNewOwner } from './_handlers/sidebar-pipeline.js';
+import { runMergeLogReconcile } from './_shared/merge-log-reconcile.js';
 import { lookupLlc } from './_shared/llc-research.js';
 import { handleFlSosEnrichLink } from './_shared/fl-sos-enrich-link.js';
 import { findSalesforceAccountByName, isSalesforceConfigured, createSalesforceTask,
@@ -14033,133 +14034,12 @@ async function handleMergeLogReconcile(req, res) {
 
   const targets = domainParam === 'both' ? ['dia','gov'] : [domainParam];
 
-  const result = {
-    mode: dryRun ? 'dry_run' : 'apply',
-    scanned: 0,
-    patched: 0,
-    by_domain: {},
-  };
-
-  // Two ledgers record a completed property merge, and the reconcile reads both
-  // (CONSOLIDATE-REVERSIBLE, 2026-09-24):
-  //   property_merge_log          — the Round 76ee log. NOTHING writes it any more:
-  //                                 dia's last row is 2026-05-17, gov has 0 rows ever.
-  //   <dom>_property_merge_backup — written by <dom>_merge_property_reversible, which
-  //                                 is now the ONLY merge path LCC calls. Rows that
-  //                                 were later unmerged (unmerged_at set) are skipped.
-  // Each source is stamped reconciled_lcc_at/_count so a cron tick never re-scans it.
-  const sources = (target) => ([
-    { key: 'merge_log', table: 'property_merge_log', idCol: 'id',
-      select: 'id,keep_id,drop_id,merged_at', filter: '',
-      keep: (r) => r.keep_id, drop: (r) => r.drop_id },
-    { key: 'merge_backup', table: `${target}_property_merge_backup`, idCol: 'backup_id',
-      select: 'backup_id,kept_property_id,dropped_property_id,merged_at', filter: '&unmerged_at=is.null',
-      keep: (r) => r.kept_property_id, drop: (r) => r.dropped_property_id },
-  ]);
-
-  for (const target of targets) {
-    const dom = target === 'dia' ? 'dialysis' : 'government';
-    const summary = { scanned: 0, patched: 0, log_rows_stamped: 0, by_source: {}, errors: [] };
-
-    for (const src of sources(target)) {
-      const srcSum = { scanned: 0, patched: 0, stamped: 0 };
-      summary.by_source[src.key] = srcSum;
-
-      // 1. Pull unreconciled rows from the domain DB.
-      const listRes = await domainQuery(dom, 'GET',
-        `${src.table}?reconciled_lcc_at=is.null${src.filter}&select=${src.select}&order=merged_at.asc&limit=${limit}`
-      );
-      if (!listRes.ok) {
-        summary.errors.push({ stage: 'list', source: src.key, status: listRes.status, detail: listRes.data });
-        continue;
-      }
-      const rows = Array.isArray(listRes.data) ? listRes.data : [];
-      srcSum.scanned = rows.length;
-      summary.scanned += rows.length;
-      result.scanned += rows.length;
-
-      // 2. For each row, repoint LCC entities and (on apply) stamp the row.
-      for (const row of rows) {
-        const rowId = row[src.idCol];
-        const keepId = String(src.keep(row));
-        const dropId = String(src.drop(row));
-        let patched = 0;
-
-        // Always do a dry-count first via SELECT — cheap and gives the user
-        // an accurate "would patch N entities" preview in GET mode.
-        const countRes = await opsQuery('GET',
-          // entities.domain is canonical short-form (dia/gov) since the domain
-          // canonicalisation; the long form is kept for transition-era rows.
-          // Filtering on the long form alone matched 0 of 1,972 dia assets.
-          `entities?entity_type=eq.asset&domain=in.(${target},${dom})` +
-          `&or=(metadata->>domain_property_id.eq.${pgFilterVal(dropId)},` +
-              `metadata->_pipeline_summary->>domain_property_id.eq.${pgFilterVal(dropId)})` +
-          `&select=id&limit=1000`,
-          null,
-          { 'Prefer': 'count=exact' }
-        );
-        if (!countRes.ok) {
-          summary.errors.push({
-            stage: 'count', source: src.key, row_id: rowId, drop_id: dropId,
-            status: countRes.status, detail: countRes.data,
-          });
-          continue;
-        }
-        const expected = countRes.count ?? (Array.isArray(countRes.data) ? countRes.data.length : 0);
-
-        if (dryRun) {
-          patched = expected;
-        } else if (expected === 0) {
-          // Nothing to patch — but still stamp the row so we don't
-          // re-scan it on every cron tick.
-          patched = 0;
-        } else {
-          // Call the SQL helper that does atomic JSONB patch on both keys.
-          const rpcRes = await opsQuery('POST', 'rpc/lcc_repoint_entity_property_id', {
-            p_domain:  dom,
-            p_keep_id: keepId,
-            p_drop_id: dropId,
-          });
-          if (!rpcRes.ok) {
-            summary.errors.push({
-              stage: 'repoint', source: src.key, row_id: rowId, drop_id: dropId,
-              status: rpcRes.status, detail: rpcRes.data,
-            });
-            continue;
-          }
-          patched = typeof rpcRes.data === 'number'
-            ? rpcRes.data
-            : (Array.isArray(rpcRes.data) ? rpcRes.data[0] : Number(rpcRes.data || 0));
-        }
-
-        srcSum.patched += patched;
-        summary.patched += patched;
-        result.patched += patched;
-
-        // 3. Stamp the source row (only on apply).
-        if (!dryRun) {
-          const stampRes = await domainQuery(dom, 'PATCH',
-            `${src.table}?${src.idCol}=eq.${encodeURIComponent(rowId)}`,
-            {
-              reconciled_lcc_at: new Date().toISOString(),
-              reconciled_lcc_count: patched,
-            }
-          );
-          if (!stampRes.ok) {
-            summary.errors.push({
-              stage: 'stamp', source: src.key, row_id: rowId,
-              status: stampRes.status, detail: stampRes.data,
-            });
-            continue;
-          }
-          srcSum.stamped += 1;
-          summary.log_rows_stamped += 1;
-        }
-      }
-    }
-
-    result.by_domain[dom] = summary;
-  }
+  // Ledgers read, direction, and the unmerge follow-through live in
+  // api/_shared/merge-log-reconcile.js (MERGELOG-GAP, 2026-09-24): the forward
+  // pass reads property_merge_log, <dom>_property_merge_backup and (dia)
+  // dia_property_redirects; the unmerge pass moves entities back to a property
+  // <dom>_unmerge_property restored.
+  const result = await runMergeLogReconcile({ targets, limit, dryRun, domainQuery, opsQuery });
 
   const httpStatus = (() => {
     const totalErrs = Object.values(result.by_domain)
