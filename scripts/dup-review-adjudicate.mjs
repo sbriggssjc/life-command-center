@@ -16,7 +16,8 @@
  *   (b) PROPERTY MERGE — where the master deal also resolved to a candidate
  *       property (candidate_property_id) distinct from the twin's
  *       matched_property_id, merge the two records via the standard
- *       public.dia_merge_property(keep,drop) RPC (FK-rewires sales/leases,
+ *       public.dia_merge_property_reversible(keep,drop,batch_tag) RPC — snapshot
+ *       first, undo via dia_unmerge_property(backup_id) — (FK-rewires sales/leases,
  *       collision-dedups, deletes the drop). Survivor = the more-complete record
  *       (more sales; tiebreak lower id), mirroring dia_auto_merge's scoring.
  *       NOTE: the dia broad auto-merge path is a no-op for these (it only merges
@@ -42,10 +43,13 @@
  *   # adjudicate only (skip property merges): add --no-merge
  *
  * Reversible: cap/term writes carry cap_rate_source/firm_term_source='master_curated'.
- * Property merges (DROP) are NOT reversible — review the dry-run plan first.
+ * Property merges go through dia_merge_property_reversible (CONSOLIDATE-REVERSIBLE):
+ * each MERGE row in dup_review_plan.json carries its backup_id; undo one with
+ * dia_unmerge_property(backup_id). Still review the dry-run plan first.
  */
 import process from 'node:process';
 import { readFileSync, writeFileSync } from 'node:fs';
+import { consolidateBatchTag, parseBackupId } from '../api/_shared/property-merge-reversible.js';
 
 const A = Object.fromEntries(process.argv.slice(2).flatMap(a => {
   if (!a.startsWith('--')) return [];
@@ -102,7 +106,7 @@ const rpc = (fn, args) => rest('POST', `rpc/${fn}`, args);
         const keep = (na > nb || (na === nb && d.candidate_property_id < d.matched_property_id)) ? d.candidate_property_id : d.matched_property_id;
         const drop = keep === d.candidate_property_id ? d.matched_property_id : d.candidate_property_id;
         out.push({ action: 'MERGE', keep, drop });
-        if (COMMIT) { await rpc('dia_merge_property', { p_keep_id: keep, p_drop_id: drop }); }
+        if (COMMIT) { const backupId = parseBackupId(await rpc('dia_merge_property_reversible', { p_keep_id: keep, p_drop_id: drop, p_batch_tag: consolidateBatchTag('dup_review_adjudicate') })); out[out.length - 1].backup_id = backupId; }
         c.merges++;
       } catch (e) { c.merge_failed++; out.push({ action: 'MERGE_FAILED', candidate: d.candidate_property_id, matched: d.matched_property_id, error: String(e.message || e) }); }
     } else if (!NO_MERGE) { c.merge_skipped++; }

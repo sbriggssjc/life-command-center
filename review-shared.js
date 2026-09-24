@@ -7,7 +7,8 @@
 //                          routing through the one canonical backend per kind
 //                          (entity → /api/entities?action=merge → lcc_merge_entity;
 //                           property → /api/admin?_route=consolidate-property →
-//                           dia_merge_property / gov_merge_property).
+//                           <dom>_merge_property_reversible, undoable via
+//                           <dom>_unmerge_property(backup_id)).
 //   2. planFollowup()    — single follow-up planner; one signature, one write
 //                          path (generic → /api/actions, or research-task
 //                          completion → /api/workflows?action=research_followup).

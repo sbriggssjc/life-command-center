@@ -26,6 +26,7 @@ import { opsQuery, pgFilterVal, requireOps, withErrorHandler, fetchWithTimeout }
 import { SF_DEAL_TYPES } from '../mcp/opportunity-sync.js';
 import { ROLES } from './_shared/lifecycle.js';
 import { domainQuery } from './_shared/domain-db.js';
+import { mergePropertyReversible } from './_shared/property-merge-reversible.js';
 import { isTrueOwnerOperator, trueOwnerOperatorSelectFields } from './_shared/true-owner-operator-guard.js';
 import {
   FEED_PAGE_SIZE, NBA_FEED_ORDER, PROBE_CHUNK_SIZE,
@@ -12426,9 +12427,11 @@ async function handleDecisionVerdict(req, res) {
     }
 
     // ---- property_merge (federated) ----------------------------------------
-    // "Are these the same property?" merge rides the existing consolidate
-    // machinery (dia_merge_property / gov_merge_property); not_duplicate +
-    // research are safe (record-only / task).
+    // "Are these the same property?" merge rides the REVERSIBLE wrappers
+    // (<dom>_merge_property_reversible via mergePropertyReversible — the bare gov
+    // merge is a RAISE stub and the bare dia merge hard-deletes with no snapshot;
+    // CONSOLIDATE-REVERSIBLE). backup_id is recorded so an unmerge is one call to
+    // <dom>_unmerge_property. not_duplicate + research are safe (record-only / task).
     if (decision.decision_type === 'property_merge') {
       const dom = c.domain === 'dia' ? 'dialysis' : c.domain === 'gov' ? 'government' : null;
       if (verdict === 'not_duplicate') {
@@ -12441,11 +12444,12 @@ async function handleDecisionVerdict(req, res) {
         if (!dom || !Number.isFinite(keepId) || !Number.isFinite(dropId) || keepId === dropId) {
           return res.status(400).json({ error: 'merge requires payload.keep_id, drop_id (distinct) on a dia/gov subject' });
         }
-        const fn = c.domain === 'dia' ? 'rpc/dia_merge_property' : 'rpc/gov_merge_property';
-        const mr = await domainQuery(dom, 'POST', fn, { p_keep_id: keepId, p_drop_id: dropId });
+        const mr = await mergePropertyReversible(domainQuery, c.domain, keepId, dropId, 'dc_property_merge');
         if (!mr.ok) { await recordEffectFailure({ merge: false, error: mr.data }); return res.status(502).json({ error: 'merge_failed', detail: mr.data }); }
-        await record('merge', 'decided', { keep_id: keepId, drop_id: dropId }, { merge: 'consolidated' });
-        return res.status(200).json({ ok: true, verdict: 'merge', keep_id: keepId, drop_id: dropId });
+        const mergeInfo = { keep_id: keepId, drop_id: dropId, backup_id: mr.backup_id, batch_tag: mr.batch_tag,
+          unmerge_rpc: c.domain + '_unmerge_property' };
+        await record('merge', 'decided', mergeInfo, { merge: 'consolidated_reversible', backup_id: mr.backup_id });
+        return res.status(200).json({ ok: true, verdict: 'merge', ...mergeInfo });
       }
       if (verdict === 'research') {
         const rt = await createResearchTask({ research_type: 'property_merge',
@@ -13930,7 +13934,10 @@ async function handleDecisionVerdict(req, res) {
 //
 // POST /api/admin?_route=consolidate-property&domain=dia
 //   Body: { keep_id, drop_id }
-//   Calls dia_merge_property() (or gov equivalent) to consolidate.
+//   Calls <dom>_merge_property_reversible() via mergePropertyReversible() —
+//   never the bare merge (gov's is a RAISE stub; dia's hard-deletes with no
+//   snapshot). Returns backup_id; undo = rpc/<dom>_unmerge_property(backup_id).
+//   (CONSOLIDATE-REVERSIBLE, 2026-09-24)
 //
 async function handleConsolidateProperty(req, res) {
   const domain = (req.query.domain || '').toLowerCase();
@@ -13957,6 +13964,10 @@ async function handleConsolidateProperty(req, res) {
   }
 
   if (req.method === 'POST') {
+    // A merge is a write: require an authenticated caller like every other
+    // write route (this branch previously had no auth check at all).
+    const user = await authenticate(req, res);
+    if (!user) return;
     const { keep_id, drop_id } = req.body || {};
     const keepId = parseInt(keep_id, 10);
     const dropId = parseInt(drop_id, 10);
@@ -13964,14 +13975,10 @@ async function handleConsolidateProperty(req, res) {
       return res.status(400).json({ error: 'keep_id and drop_id required and must differ' });
     }
     try {
-      const { domainQuery } = await import('./_shared/domain-db.js');
-      const dom = domain === 'dia' ? 'dialysis' : 'government';
-      const fnName = domain === 'dia' ? 'dia_merge_property' : 'gov_merge_property';
-      const r = await domainQuery(dom, 'POST', `rpc/${fnName}`, {
-        p_keep_id: keepId, p_drop_id: dropId
-      });
+      const r = await mergePropertyReversible(domainQuery, domain, keepId, dropId, 'panel');
       if (!r.ok) return res.status(500).json({ error: 'merge_failed', detail: r.data });
-      return res.status(200).json({ ok: true, keep_id: keepId, drop_id: dropId });
+      return res.status(200).json({ ok: true, keep_id: keepId, drop_id: dropId,
+        backup_id: r.backup_id, batch_tag: r.batch_tag, unmerge_rpc: domain + '_unmerge_property' });
     } catch (err) {
       return res.status(500).json({ error: 'merge_failed', message: err?.message });
     }
@@ -13984,7 +13991,8 @@ async function handleConsolidateProperty(req, res) {
 // MERGE-LOG RECONCILE (Round 76ee Phase 2, 2026-04-29)
 // ============================================================================
 //
-// Reads unreconciled rows from dia + gov property_merge_log and patches LCC
+// Reads unreconciled rows from dia + gov property_merge_log AND <dom>_property_merge_backup
+// (the reversible-merge ledger — CONSOLIDATE-REVERSIBLE) and patches LCC
 // entity backreferences (metadata.domain_property_id +
 // metadata._pipeline_summary.domain_property_id) so entities pointing at a
 // merged-away property_id are repointed at the canonical keep_id.
@@ -14032,98 +14040,121 @@ async function handleMergeLogReconcile(req, res) {
     by_domain: {},
   };
 
+  // Two ledgers record a completed property merge, and the reconcile reads both
+  // (CONSOLIDATE-REVERSIBLE, 2026-09-24):
+  //   property_merge_log          — the Round 76ee log. NOTHING writes it any more:
+  //                                 dia's last row is 2026-05-17, gov has 0 rows ever.
+  //   <dom>_property_merge_backup — written by <dom>_merge_property_reversible, which
+  //                                 is now the ONLY merge path LCC calls. Rows that
+  //                                 were later unmerged (unmerged_at set) are skipped.
+  // Each source is stamped reconciled_lcc_at/_count so a cron tick never re-scans it.
+  const sources = (target) => ([
+    { key: 'merge_log', table: 'property_merge_log', idCol: 'id',
+      select: 'id,keep_id,drop_id,merged_at', filter: '',
+      keep: (r) => r.keep_id, drop: (r) => r.drop_id },
+    { key: 'merge_backup', table: `${target}_property_merge_backup`, idCol: 'backup_id',
+      select: 'backup_id,kept_property_id,dropped_property_id,merged_at', filter: '&unmerged_at=is.null',
+      keep: (r) => r.kept_property_id, drop: (r) => r.dropped_property_id },
+  ]);
+
   for (const target of targets) {
     const dom = target === 'dia' ? 'dialysis' : 'government';
-    const summary = { scanned: 0, patched: 0, log_rows_stamped: 0, errors: [] };
+    const summary = { scanned: 0, patched: 0, log_rows_stamped: 0, by_source: {}, errors: [] };
 
-    // 1. Pull unreconciled merge-log rows from the domain DB.
-    const listRes = await domainQuery(dom, 'GET',
-      `property_merge_log?reconciled_lcc_at=is.null&select=id,keep_id,drop_id,merged_at,notes&order=merged_at.asc&limit=${limit}`
-    );
-    if (!listRes.ok) {
-      summary.errors.push({ stage: 'list', status: listRes.status, detail: listRes.data });
-      result.by_domain[dom] = summary;
-      continue;
-    }
-    const rows = Array.isArray(listRes.data) ? listRes.data : [];
-    summary.scanned = rows.length;
-    result.scanned += rows.length;
+    for (const src of sources(target)) {
+      const srcSum = { scanned: 0, patched: 0, stamped: 0 };
+      summary.by_source[src.key] = srcSum;
 
-    if (rows.length === 0) {
-      result.by_domain[dom] = summary;
-      continue;
-    }
-
-    // 2. For each row, repoint LCC entities and (on apply) stamp the log row.
-    for (const row of rows) {
-      const keepId = String(row.keep_id);
-      const dropId = String(row.drop_id);
-      let patched = 0;
-
-      // Always do a dry-count first via SELECT — cheap and gives the user
-      // an accurate "would patch N entities" preview in GET mode.
-      const countRes = await opsQuery('GET',
-        `entities?entity_type=eq.asset&domain=eq.${pgFilterVal(dom)}` +
-        `&or=(metadata->>domain_property_id.eq.${pgFilterVal(dropId)},` +
-            `metadata->_pipeline_summary->>domain_property_id.eq.${pgFilterVal(dropId)})` +
-        `&select=id&limit=1000`,
-        null,
-        { 'Prefer': 'count=exact' }
+      // 1. Pull unreconciled rows from the domain DB.
+      const listRes = await domainQuery(dom, 'GET',
+        `${src.table}?reconciled_lcc_at=is.null${src.filter}&select=${src.select}&order=merged_at.asc&limit=${limit}`
       );
-      if (!countRes.ok) {
-        summary.errors.push({
-          stage: 'count', merge_log_id: row.id, drop_id: dropId,
-          status: countRes.status, detail: countRes.data,
-        });
+      if (!listRes.ok) {
+        summary.errors.push({ stage: 'list', source: src.key, status: listRes.status, detail: listRes.data });
         continue;
       }
-      const expected = countRes.count ?? (Array.isArray(countRes.data) ? countRes.data.length : 0);
+      const rows = Array.isArray(listRes.data) ? listRes.data : [];
+      srcSum.scanned = rows.length;
+      summary.scanned += rows.length;
+      result.scanned += rows.length;
 
-      if (dryRun) {
-        patched = expected;
-      } else if (expected === 0) {
-        // Nothing to patch — but still stamp the log row so we don't
-        // re-scan it on every cron tick.
-        patched = 0;
-      } else {
-        // Call the SQL helper that does atomic JSONB patch on both keys.
-        const rpcRes = await opsQuery('POST', 'rpc/lcc_repoint_entity_property_id', {
-          p_domain:  dom,
-          p_keep_id: keepId,
-          p_drop_id: dropId,
-        });
-        if (!rpcRes.ok) {
-          summary.errors.push({
-            stage: 'repoint', merge_log_id: row.id, drop_id: dropId,
-            status: rpcRes.status, detail: rpcRes.data,
-          });
-          continue;
-        }
-        patched = typeof rpcRes.data === 'number'
-          ? rpcRes.data
-          : (Array.isArray(rpcRes.data) ? rpcRes.data[0] : Number(rpcRes.data || 0));
-      }
+      // 2. For each row, repoint LCC entities and (on apply) stamp the row.
+      for (const row of rows) {
+        const rowId = row[src.idCol];
+        const keepId = String(src.keep(row));
+        const dropId = String(src.drop(row));
+        let patched = 0;
 
-      summary.patched += patched;
-      result.patched += patched;
-
-      // 3. Stamp the merge_log row (only on apply).
-      if (!dryRun) {
-        const stampRes = await domainQuery(dom, 'PATCH',
-          `property_merge_log?id=eq.${encodeURIComponent(row.id)}`,
-          {
-            reconciled_lcc_at: new Date().toISOString(),
-            reconciled_lcc_count: patched,
-          }
+        // Always do a dry-count first via SELECT — cheap and gives the user
+        // an accurate "would patch N entities" preview in GET mode.
+        const countRes = await opsQuery('GET',
+          // entities.domain is canonical short-form (dia/gov) since the domain
+          // canonicalisation; the long form is kept for transition-era rows.
+          // Filtering on the long form alone matched 0 of 1,972 dia assets.
+          `entities?entity_type=eq.asset&domain=in.(${target},${dom})` +
+          `&or=(metadata->>domain_property_id.eq.${pgFilterVal(dropId)},` +
+              `metadata->_pipeline_summary->>domain_property_id.eq.${pgFilterVal(dropId)})` +
+          `&select=id&limit=1000`,
+          null,
+          { 'Prefer': 'count=exact' }
         );
-        if (!stampRes.ok) {
+        if (!countRes.ok) {
           summary.errors.push({
-            stage: 'stamp', merge_log_id: row.id,
-            status: stampRes.status, detail: stampRes.data,
+            stage: 'count', source: src.key, row_id: rowId, drop_id: dropId,
+            status: countRes.status, detail: countRes.data,
           });
           continue;
         }
-        summary.log_rows_stamped += 1;
+        const expected = countRes.count ?? (Array.isArray(countRes.data) ? countRes.data.length : 0);
+
+        if (dryRun) {
+          patched = expected;
+        } else if (expected === 0) {
+          // Nothing to patch — but still stamp the row so we don't
+          // re-scan it on every cron tick.
+          patched = 0;
+        } else {
+          // Call the SQL helper that does atomic JSONB patch on both keys.
+          const rpcRes = await opsQuery('POST', 'rpc/lcc_repoint_entity_property_id', {
+            p_domain:  dom,
+            p_keep_id: keepId,
+            p_drop_id: dropId,
+          });
+          if (!rpcRes.ok) {
+            summary.errors.push({
+              stage: 'repoint', source: src.key, row_id: rowId, drop_id: dropId,
+              status: rpcRes.status, detail: rpcRes.data,
+            });
+            continue;
+          }
+          patched = typeof rpcRes.data === 'number'
+            ? rpcRes.data
+            : (Array.isArray(rpcRes.data) ? rpcRes.data[0] : Number(rpcRes.data || 0));
+        }
+
+        srcSum.patched += patched;
+        summary.patched += patched;
+        result.patched += patched;
+
+        // 3. Stamp the source row (only on apply).
+        if (!dryRun) {
+          const stampRes = await domainQuery(dom, 'PATCH',
+            `${src.table}?${src.idCol}=eq.${encodeURIComponent(rowId)}`,
+            {
+              reconciled_lcc_at: new Date().toISOString(),
+              reconciled_lcc_count: patched,
+            }
+          );
+          if (!stampRes.ok) {
+            summary.errors.push({
+              stage: 'stamp', source: src.key, row_id: rowId,
+              status: stampRes.status, detail: stampRes.data,
+            });
+            continue;
+          }
+          srcSum.stamped += 1;
+          summary.log_rows_stamped += 1;
+        }
       }
     }
 

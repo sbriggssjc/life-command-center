@@ -761,7 +761,7 @@
   };
 
   window.consolidateMerge = async function(keepId, dropId) {
-    if (!confirm(`Merge property ${dropId} INTO ${keepId}? This rewires all FKs and deletes property ${dropId}.`)) return;
+    if (!confirm(`Merge property ${dropId} INTO ${keepId}? This rewires all FKs and removes property ${dropId}. A snapshot is taken first, so the merge can be undone.`)) return;
     const btn = document.querySelector(`[data-merge-drop="${dropId}"]`);
     if (btn) { btn.disabled = true; btn.textContent = 'Merging...'; }
     try {
@@ -771,7 +771,11 @@
         body: JSON.stringify({ keep_id: keepId, drop_id: dropId })
       });
       if (r.ok) {
+        const mj = await r.json().catch(() => ({}));
         if (btn) { btn.textContent = '✓ Merged'; btn.style.background = 'var(--success, #10b981)'; }
+        if (mj && mj.backup_id && typeof showToast === 'function') {
+          showToast(`Merged ${dropId} into ${keepId}. Undo: ${_consDb}_unmerge_property(${mj.backup_id}).`, 'success');
+        }
         setTimeout(() => openConsolidateModal(_consDb, _consPid), 800); // refresh
       } else {
         if (btn) { btn.disabled = false; btn.textContent = 'Merge'; }
