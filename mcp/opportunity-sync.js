@@ -136,8 +136,31 @@ function dealAddress(d) {
   return parts.length ? parts.join(', ') : (d.Property_Address_Line_1__c ?? null);
 }
 
+// SF-BRIDGE1-opened-at: Salesforce CreatedDate ("2024-01-15T18:22:33.000+0000") →
+// ISO timestamp, or null. Unparseable input is null, never passed through: the RPC
+// casts it to timestamptz and a bad string would fail that deal's whole upsert.
+export function sfCreatedDate(v) {
+  if (v == null || v === '') return null;
+  const t = Date.parse(String(v));
+  return Number.isNaN(t) ? null : new Date(t).toISOString();
+}
+
+// SF-BRIDGE1-opened-at: the batch body. The PA flow posts { deals: [...] }; a flow that
+// passes the whole SOQL result instead posts { deals: { totalSize, done, records: [...] } }
+// (round-72 test #2 400'd on that). Accept both, plus a bare array or { value: [...] }.
+// Anything else is null, which ingestBatch answers with a 400.
+export function extractDeals(body) {
+  if (Array.isArray(body)) return body;
+  const b = body || {};
+  const d = b.deals ?? b.value ?? b.records;
+  if (Array.isArray(d)) return d;
+  if (d && typeof d === 'object' && Array.isArray(d.records)) return d.records;
+  if (d === undefined) return [];
+  return null;
+}
+
 // Accept both the raw SF record shape (Id/Name/StageName/...) and the internal shape.
-function normalizeDeal(d) {
+export function normalizeDeal(d) {
   d = d || {};
   return {
     sf_opp_id: d.sf_opp_id ?? d.Id ?? d.id ?? null,
@@ -146,6 +169,9 @@ function normalizeDeal(d) {
     owner_sf_user_id: d.owner_sf_user_id ?? d.OwnerId ?? null,
     amount: d.amount ?? d.Amount ?? null,
     close_date: d.close_date ?? d.CloseDate ?? null,
+    // SF-BRIDGE1-opened-at: the flow sends CreatedDate; bd_opportunities.opened_at was
+    // NULL on all 610 SF deals because nothing mapped it.
+    opened_at: sfCreatedDate(d.opened_at ?? d.CreatedDate),
     vertical: d.vertical ?? null,
     // SF-BRIDGE1: record type, if the flow ever sends it (RecordType.Name).
     record_type: d.record_type ?? d.RecordType?.Name ?? d['RecordType.Name'] ?? null,
@@ -306,6 +332,7 @@ async function processDeal(raw, deps) {
     type,                                // SF-BRIDGE1: never NULL from this writer again
     stage,
     amount: (b.amount ?? null), expected_close_date: (b.close_date || null),
+    opened_at: b.opened_at,              // SF-BRIDGE1-opened-at: the RPC fills it forward, never overwrites
     closed_at: isClosed ? new Date().toISOString() : null,
     closed_won: isClosed ? isWon : null,
     owner_user_id, vertical, last_synced_at: new Date().toISOString(),
@@ -404,9 +431,9 @@ export function makeOpportunitySyncRoute({ opsQuery, enc, WORKSPACE_ID, lookupSt
     ingestBatch: async (req, res) => {
       const startedAt = Date.now();
       const body = req.body || {};
-      const deals = Array.isArray(body) ? body : (body.deals || body.value || []);
+      const deals = extractDeals(body);
       if (!Array.isArray(deals)) {
-        return res.status(400).json({ ok: false, error: 'expected { deals: [ ... ] }' });
+        return res.status(400).json({ ok: false, error: 'expected { deals: [ ... ] } or { deals: { records: [ ... ] } }' });
       }
       const summary = {
         total: deals.length, succeeded: 0, created: 0, resolved: 0,

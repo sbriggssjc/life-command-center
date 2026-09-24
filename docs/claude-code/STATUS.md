@@ -53,6 +53,37 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-24 — POSTSHIP-R73 (CC): both SF edge functions deployed and verified; GOV-CLASSIFY1 re-runs done (0 minted); Saginaw queued for twin review; SF `opened_at` mapped fill-forward
+
+**Edge deploy (GOV-CU1-edge-deploy ✅, deployed twice).** A parallel window deployed both first (`intake-salesforce` v36, `intake-salesforce-files` v32; its record is on the backlog row). I found out only when merging `main`. So this deploy was redundant: same content, not a rollback. Before deploying, I diffed the live bodies against the repo. They were the pre-GOV-CU1 source, differing only in CRLF line endings, so redeploying from `main` could not roll anything back.
+- `intake-salesforce`: dashboard label 37.
+- `intake-salesforce-files`: 33.
+- Both keep `verify_jwt=false`.
+
+Re-read with `get_edge_function` and diffed: **10/10 and 7/7 files byte-identical.** Smoke test via `net.http_*` from LCC Opps: no-secret `?action=requeue` → **401**, `intake-salesforce?action=retry` → **401**, info GETs → 200.
+
+**GOV-CLASSIFY1-rerun ✅.** Scott re-saved **both** Jellico (→ gov 16334) and Tulelake (→ gov 16268) on 1.0.58 before this ran. CC force-re-ran the other six through `lcc_cron_post`:
+- `ea3002f6` → gov 5400
+- `34195100` → gov 16527
+- `8324a3b0` → dia 31231
+- `e45ef618` → dia 27681
+- `2a4d08f9` → dia 31277
+- Saginaw `6c85fe57` → `no_domain` (as required)
+
+**0 properties minted:** gov max id 41097, dia max id 4203595, both unchanged.
+
+⚠️ **New: GOV-CLASSIFY1-diag-race.** `_lastClassifierDiag` is a process global. Saginaw's stored diagnostics belong to a concurrent 910 4th Ave save. The decision is unaffected, but the no_domain alert gate reads that global too.
+
+**GOV-CLASSIFY1-saginaw-twin.** Queued as `gov_property_twin_review` id 2 (16297 + 31111, identical geocode). Not merged: 👤 decide which row survives. Record: government-lease `sql/20260924_gov_classify1_saginaw_twin_review.sql`.
+
+**SF-BRIDGE1-opened-at (built).**
+- `normalizeDeal` maps `CreatedDate` → `opened_at`.
+- `ingestBatch` unwraps `{deals:{records}}`.
+- Migration `20261102300000` is live and makes `opened_at` fill-forward. Rolled-back positive control passed.
+- Guard `test/sf-bridge1-opened-at.test.mjs`: 10 tests, 6/6 mutations RED.
+- 👤 **Redeploy BOTH Railway services.** `server.js` (tranquil-delight, where the PA flow posts) and `mcp/server.js` both import `mcp/opportunity-sync.js`.
+- Verify: after the next 30-min sync, `opened_at` is NULL on 0 SF deals (610 / 612 today).
+
 ## 2026-09-24 — DOCMAP3 (Claude Code): shipped-row policy settled, loose docs filed by topic, four folders collapsed
 
 **Docs only. No code or behaviour change, no Railway deploy, no canon change.** Branch `claude/admiring-lamport-chb78p`.
