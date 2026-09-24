@@ -68,7 +68,7 @@ G4/G7/G13/G14/G15. Audit log 58.
 
 Framework already live in `llc-research.js` (orchestrator + `SOS_DIRECT_ADAPTERS`
 registry + uniform shape + OpenCorporates fallback). Enhanced
-`SPEC_sos_direct_scraper.md` with a turnkey **adapter contract + copy-paste
+`docs/history/SPEC_sos_direct_scraper.md` with a turnkey **adapter contract + copy-paste
 skeleton (`api/_shared/sos/<state>.js`) + registry wiring + build order +
 verify-before-enable gate**. Implementation can't be done/verified here — all 5
 target SOS endpoints (TX/FL/CA/GA/NC) return HTTP 403 from the remote env, and

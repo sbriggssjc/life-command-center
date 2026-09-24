@@ -53,7 +53,7 @@ documents. **OCR2 is re-scoped to that** (backlog row). ✅ **SHIPPED 2026-09-02
 
 | claim | evidence |
 |---|---|
-| **M365 Copilot has no batch-OCR API** | `docs/UW4_LEASE_OCR.md:46-48` |
+| **M365 Copilot has no batch-OCR API** | `docs/history/UW4_LEASE_OCR.md:46-48` |
 | **Microsoft's OCR product is Azure Document Intelligence — SEPARATELY METERED, not in the M365 subscription** | same |
 | ⚠️ **Northmarq IT BLOCKS Azure AD app registrations** | `api/sync.js:2509` · `api/_shared/todo-completion.js:6` · `docs/architecture/flows/todo-completion-poll.md:50` — three independent places |
 
@@ -113,7 +113,7 @@ first thing to measure** — see §5.
 code.** The `~$1.50/1k pages` figure is **comment-only**, in four places. `ocr_pages` is recorded as
 "what we were billed for" and **never priced**. The only guards are time budgets and byte caps.
 
-**The one whole-corpus estimate in the repo** (`docs/UW4_LEASE_OCR.md:28-30`), for ~860 leases /
+**The one whole-corpus estimate in the repo** (`docs/history/UW4_LEASE_OCR.md:28-30`), for ~860 leases /
 15k–35k pages: **Tier 1 $0 · Tier 2 (DocAI) ~$23–53 · Tier 3 (gpt-4o) ~$150–500.**
 
 **So on today's volume Google is cheap and the decision is not urgent on cost.** Scott's argument is

@@ -1,4 +1,4 @@
-// SPEC_forsale_om_and_webpage_ingest.md Part B2 — listing-page crawl worker.
+// docs/history/SPEC_forsale_om_and_webpage_ingest.md Part B2 — listing-page crawl worker.
 // Pure-fn tests (classifyAvailability, sha256Hex) + the deps-injected core
 // (performListingPageCrawl) with stubbed opsQuery / fetchImpl / storagePut.
 

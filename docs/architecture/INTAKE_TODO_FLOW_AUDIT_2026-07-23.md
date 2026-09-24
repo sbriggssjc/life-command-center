@@ -63,7 +63,7 @@ and docs `flagged-email-to-todo.md`, `flagged-email-to-todo-task.md`,
 - **Docs/tests that reference these only to DOCUMENT their retirement — CURRENT
   (leave):** `api/_shared/todo-completion.js:14,27`; `api/sync.js:2450,2515`;
   `todo-completion-poll.md`; `processing-complete-move-message.md`;
-  `closing-the-loop-overview.md:96`; `docs/EMAIL_AUTO_ARCHIVE.md`;
+  `closing-the-loop-overview.md:96`; `docs/architecture/EMAIL_AUTO_ARCHIVE.md`;
   `test/todo-completion.test.mjs:3`.
 - **⚠️ ONE live write survives — orthogonal, not the intake loop:**
   `api/operations.js:3213-3299` `createTodoTask()` is the **Copilot Studio
@@ -85,7 +85,7 @@ non-intake** features that also can't actually work in the app-registration-bloc
 tenant: `api/operations.js` (Copilot To-Do create, Outlook draft, OneDrive save,
 mailto fallback), `api/_handlers/contacts-handler.js` (Teams messaging),
 `api/admin.js:4642` (diag flag), `app.js:9155`, `.env.example:74`, and assorted
-docs (`docs/RAILWAY_DEPLOYMENT.md:64`, `docs/testing/copilot_rollout_test_plan.md`,
+docs (`docs/history/RAILWAY_DEPLOYMENT.md:64`, `docs/testing/copilot_rollout_test_plan.md`,
 `copilot_capability_map_lcc.md`, `copilot_wave1_build_plan.md`,
 `touchpoint_execution_agent_roadmap.md`, `RENDER_MIGRATION_PLAN.md:77`). **Not a
 loop inconsistency** — but a broad "Graph is unavailable in this tenant" reality
@@ -102,7 +102,7 @@ The **live-risk** ones (flows/config that could actually be called):
 - Setup guides: `docs/setup/production_readiness_checklist_2026-04-22.md:54,69`,
   `docs/setup/LCC_OneDrive_Upload_Setup_2026-04-21.md:63`,
   `docs/setup/wave0_portal_configuration_guide.md:153`,
-  `docs/MOBILE_SHARE_INGESTION.md`.
+  `docs/setup/MOBILE_SHARE_INGESTION.md`.
 - Extension + flow JSON (could be a live caller):
   `extension/background.js` (multiple), `extension/outlook/taskpane.js:3`,
   `extension/outlook/manifest.xml`, `flow-rcm-backfill.json:63`,

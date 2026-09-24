@@ -114,7 +114,7 @@ The system does not yet enrich from the team's existing file library as a compre
 
 ### 9. Documentation drift to clean up before implementation
 
-`docs/INTEGRATION_BRIDGES.md` still describes Phase 2 as `/Properties/<Letter>/<City, State>/`, while the newer Phase 2 SharePoint migration and handler use `/Properties/<TenantName>/<City, State>/`. The user's ShareFile shape adds both a top-level singular `Property` segment and a tenant-letter bucket. Any ShareFile implementation should normalize the docs around the exact canonical path grammar before code is written.
+`docs/architecture/INTEGRATION_BRIDGES.md` still describes Phase 2 as `/Properties/<Letter>/<City, State>/`, while the newer Phase 2 SharePoint migration and handler use `/Properties/<TenantName>/<City, State>/`. The user's ShareFile shape adds both a top-level singular `Property` segment and a tenant-letter bucket. Any ShareFile implementation should normalize the docs around the exact canonical path grammar before code is written.
 
 ## Preliminary Recommendation
 

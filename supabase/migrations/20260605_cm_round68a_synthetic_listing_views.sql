@@ -6,7 +6,7 @@
 -- status='sold', is_active=false, listing_date = sale_date - median DOM,
 -- off_market_date = sale_date, sale_transaction_id linked, NULL prices/caps).
 --
--- DOCTRINE (see docs/round68a/R68A_VIEW_MATRIX.md):
+-- DOCTRINE (see docs/history/round68a/R68A_VIEW_MATRIX.md):
 --   * COUNT / ACTIVE-UNIVERSE views INCLUDE synthetic rows — they represent a
 --     real marketing window (the deal WAS on the market before it sold).
 --   * PRICE / DOM / CAP views EXCLUDE synthetic rows — synthetic carries no

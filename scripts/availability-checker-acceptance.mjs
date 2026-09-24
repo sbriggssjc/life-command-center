@@ -28,7 +28,7 @@
 //   LCC_API_KEY     for Authorization: Bearer ...
 //
 // Pre-build the sample file from PostgREST:
-//   See docs/availability_checker_acceptance.md for the SQL queries.
+//   See docs/setup/availability_checker_acceptance.md for the SQL queries.
 // ============================================================================
 
 import fs from 'node:fs';

@@ -57,7 +57,7 @@
 // isArchived=true / queryAll, i.e. a custom SOQL action or the Bulk API). So the
 // deep archived prospecting history is not retrievable through the standard PA
 // "Get records" flow; LCC's reliable activity history is go-forward + whatever
-// the standard query still returns. See `docs/SF_ACTIVITY_ARCHIVED_HISTORY.md`.
+// the standard query still returns. See `docs/audits/SF_ACTIVITY_ARCHIVED_HISTORY.md`.
 // ============================================================================
 
 import { authenticate, requireRole } from '../_shared/auth.js';

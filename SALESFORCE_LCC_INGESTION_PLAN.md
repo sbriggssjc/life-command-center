@@ -1,5 +1,7 @@
 # Salesforce -> LCC Ingestion & Continuous Sync Plan
 
+> 🚨 **PARTLY STALE (DOCMAP3, 2026-09-24).** This file stays at the repo root because `intake-salesforce-files` cites it in a runtime error string (backlog J12). Three claims are no longer true. §2 says direct API access fails, but the `sf-test` SOAP login proved otherwise (backlog `SF-DIRECT`). §10's "6-month crawl" actually runs hourly. The §12 provenance tables are superseded by `docs/architecture/field-provenance-ladder.md`. Open items are J12, PA6, J7 and J8 in `docs/os/PLANNED-BACKLOG.md`.
+
 **Date:** 2026-05-14
 **Scope:** All Salesforce data, all verticals (dialysis, government, and the cross-vertical LCC layer) — initial ingestion *and* ongoing scheduled updates — delivered through Power Automate into the LCC orchestration layer and the Supabase domain databases.
 **Companion docs:** `docs/history/SALESFORCE_LCC_DOCUMENT_INGESTION_AUDIT.md` (the file/flyer slice), `docs/history/EDGE_FUNCTION_AUDIT.md`, `backend_webhook_contract.md` (the email-intake contract this plan's contract is modeled on).

@@ -111,3 +111,82 @@ Task/prompt specifications handed to Claude Code across rounds.
 | --- | --- | --- |
 | [LCC_FIX_LIST.md](LCC_FIX_LIST.md) | Fix list | — |
 | [LCC_FIX_LIST_ROUND2.md](LCC_FIX_LIST_ROUND2.md) | Fix list — round 2 | — |
+
+## DOCMAP3 (2026-09-24) — loose `docs/` root files, duplicate folders and root specs filed by topic
+
+Every move used `git mv` (history kept), and inbound path references were rewritten in the same change.
+Nothing was deleted. Each move was decided from a full read of the file by one of four read-only agents.
+Open intent they found was filed in `PLANNED-BACKLOG.md` (`CONTACTS-GOV-WRITER`, `CONSOLIDATE-REVERSIBLE`,
+`BRIDGES-DORMANT`, `SJC-BROKER-SYNC`, `DOCMAP3-shareinbox`, `DOCMAP3-sftask`, `DOCMAP3-govlinkpick`, `DOCMAP3-residue`).
+Shipped backlog rows archived the same day: [`PLANNED-BACKLOG_shipped_2026-09-24.md`](PLANNED-BACKLOG_shipped_2026-09-24.md).
+
+| old path | new path | reason |
+| --- | --- | --- |
+| `docs/AUTH_ENFORCEMENT_ROLLOUT.md` | `docs/setup/AUTH_ENFORCEMENT_ROLLOUT.md` | live runbook or procedure; stale-claim banner added |
+| `docs/BD_ENGINE_POST_WORK_AUDIT_2026-05-22.md` | `docs/history/worklogs/BD_ENGINE_POST_WORK_AUDIT_2026-05-22.md` | superseded, finished or never-activated; stale-claim banner added |
+| `docs/BRIEFING_EMAIL_ALERT_AUDIT_2026-06-05.md` | `docs/audits/BRIEFING_EMAIL_ALERT_AUDIT_2026-06-05.md` | dated measurement (evidence); stale-claim banner added |
+| `docs/BRIEFING_EMAIL_FLOW_v2.md` | `docs/architecture/flows/BRIEFING_EMAIL_FLOW_v2.md` | live reference for a subsystem; stale-claim banner added |
+| `docs/CM_CLOSEOUT_PUNCH_LIST_2026-08-09.md` | `docs/capital-markets/CM_CLOSEOUT_PUNCH_LIST_2026-08-09.md` | capital-markets specifics; stale-claim banner added |
+| `docs/CONTACTS_SPLIT_BRAIN_CUTOVER_RUNBOOK.md` | `docs/history/CONTACTS_SPLIT_BRAIN_CUTOVER_RUNBOOK.md` | superseded, finished or never-activated; stale-claim banner added |
+| `docs/CONTACTS_SPLIT_BRAIN_DELTA_2026-07-21.md` | `docs/audits/CONTACTS_SPLIT_BRAIN_DELTA_2026-07-21.md` | dated measurement (evidence); stale-claim banner added |
+| `docs/CONTACT_ENRICH_ADAPTERS.md` | `docs/setup/CONTACT_ENRICH_ADAPTERS.md` | live runbook or procedure; stale-claim banner added |
+| `docs/DRAFT_AND_LOG_ACTION_ENGINE.md` | `docs/architecture/DRAFT_AND_LOG_ACTION_ENGINE.md` | live reference for a subsystem; stale-claim banner added |
+| `docs/EMAIL_AUTO_ARCHIVE.md` | `docs/architecture/EMAIL_AUTO_ARCHIVE.md` | live reference for a subsystem; stale-claim banner added |
+| `docs/INFRA_ALERT_CLASSIFICATION.md` | `docs/architecture/INFRA_ALERT_CLASSIFICATION.md` | live reference for a subsystem; stale-claim banner added |
+| `docs/INTEGRATION_BRIDGES.md` | `docs/architecture/INTEGRATION_BRIDGES.md` | live reference for a subsystem; stale-claim banner added |
+| `docs/KNOWN_ISSUES.md` | `docs/history/KNOWN_ISSUES.md` | superseded, finished or never-activated; stale-claim banner added |
+| `docs/LCC_Copilot_Bidirectional_Plan_2026-04-21.md` | `docs/history/LCC_Copilot_Bidirectional_Plan_2026-04-21.md` | superseded, finished or never-activated; stale-claim banner added |
+| `docs/LCC_OM_Ingestion_Surfaces_2026-04-21.md` | `docs/history/LCC_OM_Ingestion_Surfaces_2026-04-21.md` | superseded, finished or never-activated; stale-claim banner added |
+| `docs/MOBILE_SHARE_INGESTION.md` | `docs/setup/MOBILE_SHARE_INGESTION.md` | live runbook or procedure |
+| `docs/Northmarq_Brand_Rollout_Plan.md` | `docs/history/Northmarq_Brand_Rollout_Plan.md` | superseded, finished or never-activated; stale-claim banner added |
+| `docs/PENDING_UPDATES_UX_FRICTION_LOG.md` | `docs/audits/PENDING_UPDATES_UX_FRICTION_LOG_2026-05-06.md` | dated measurement (evidence); stale-claim banner added |
+| `docs/PHASE1_5_USER_MAPPINGS_AND_WRITEBACK.md` | `docs/history/PHASE1_5_USER_MAPPINGS_AND_WRITEBACK.md` | superseded, finished or never-activated; stale-claim banner added |
+| `docs/PHASE1_SALESFORCE_BRIDGES.md` | `docs/history/PHASE1_SALESFORCE_BRIDGES.md` | superseded, finished or never-activated; stale-claim banner added |
+| `docs/PHASE2_5_SHAREPOINT_EXTRACT.md` | `docs/history/PHASE2_5_SHAREPOINT_EXTRACT.md` | superseded, finished or never-activated; stale-claim banner added |
+| `docs/PHASE2_SHAREPOINT_BRIDGES.md` | `docs/history/PHASE2_SHAREPOINT_BRIDGES.md` | superseded, finished or never-activated; stale-claim banner added |
+| `docs/PHASE3_5_TIMELINE_INTEGRATION.md` | `docs/architecture/PHASE3_5_TIMELINE_INTEGRATION.md` | live reference for a subsystem; stale-claim banner added |
+| `docs/PHASE3_OUTLOOK_CALENDAR_BRIDGES.md` | `docs/architecture/PHASE3_OUTLOOK_CALENDAR_BRIDGES.md` | live reference for a subsystem; stale-claim banner added |
+| `docs/PHASE4_CADENCE_ENGINE.md` | `docs/history/PHASE4_CADENCE_ENGINE.md` | superseded, finished or never-activated; stale-claim banner added |
+| `docs/PR1_APPLY_GUIDE.md` | `docs/history/worklogs/PR1_APPLY_GUIDE.md` | superseded, finished or never-activated; stale-claim banner added |
+| `docs/PR1_pending_updates_ux.patch` | `docs/history/worklogs/PR1_pending_updates_ux.patch` | superseded, finished or never-activated |
+| `docs/PR2_INTAKE.md` | `docs/history/worklogs/PR2_INTAKE.md` | superseded, finished or never-activated; stale-claim banner added |
+| `docs/R42_caprate_recompute_signoff_2026-06-18.md` | `docs/audits/R42_caprate_recompute_signoff_2026-06-18.md` | dated measurement (evidence); stale-claim banner added |
+| `docs/RAILWAY_DEPLOYMENT.md` | `docs/history/RAILWAY_DEPLOYMENT.md` | superseded, finished or never-activated; stale-claim banner added |
+| `docs/RUNBOOK_sf_opportunity_inbound_flow.md` | `docs/history/RUNBOOK_sf_opportunity_inbound_flow.md` | superseded, finished or never-activated; stale-claim banner added |
+| `docs/RUNBOOK_sf_task_compliance_ops.md` | `docs/setup/RUNBOOK_sf_task_compliance_ops.md` | live runbook or procedure |
+| `docs/SF_ACTIVITY_ARCHIVED_HISTORY.md` | `docs/audits/SF_ACTIVITY_ARCHIVED_HISTORY.md` | dated measurement (evidence) |
+| `docs/STATE_GOV_LEASE_GAP_MEMO_2026-06-23.md` | `docs/audits/STATE_GOV_LEASE_GAP_MEMO_2026-06-23.md` | dated measurement (evidence); stale-claim banner added |
+| `docs/STATE_LEASE_MULTI_STATE_ROLLOUT_PLAN.md` | `docs/architecture/STATE_LEASE_MULTI_STATE_ROLLOUT_PLAN.md` | live reference for a subsystem; stale-claim banner added |
+| `docs/T4C_RECOVERY_on_market_backfill.md` | `docs/audits/T4C_RECOVERY_on_market_backfill_2026-06-24.md` | dated measurement (evidence); stale-claim banner added |
+| `docs/UW4_LEASE_OCR.md` | `docs/history/UW4_LEASE_OCR.md` | superseded, finished or never-activated; stale-claim banner added |
+| `docs/UW6_REV_document_byte_capture.md` | `docs/history/UW6_REV_document_byte_capture.md` | superseded, finished or never-activated |
+| `docs/architecture-lease-ownership-sf.md` | `docs/history/architecture-lease-ownership-sf.md` | superseded, finished or never-activated; stale-claim banner added |
+| `docs/availability_checker_acceptance.md` | `docs/setup/availability_checker_acceptance.md` | live runbook or procedure; stale-claim banner added |
+| `docs/cm-pdf-vs-export-chart-deltas.md` | `docs/capital-markets/cm-pdf-vs-export-chart-deltas.md` | capital-markets specifics; stale-claim banner added |
+| `docs/financial_model_methodology.md` | `docs/history/financial_model_methodology.md` | superseded, finished or never-activated; stale-claim banner added |
+| `docs/ios-shortcut-send-to-lcc.md` | `docs/setup/ios-shortcut-send-to-lcc.md` | live runbook or procedure; stale-claim banner added |
+| `docs/marketing_leads_activity_taxonomy.md` | `docs/architecture/marketing_leads_activity_taxonomy.md` | live reference for a subsystem |
+| `docs/round_76be_consolidate_button_patches.md` | `docs/history/worklogs/round_76be_consolidate_button_patches.md` | superseded, finished or never-activated; stale-claim banner added |
+| `docs/round_76bi_outlook_sync_fix.md` | `docs/history/worklogs/round_76bi_outlook_sync_fix.md` | superseded, finished or never-activated |
+| `docs/round_76bj_ui_fixes.md` | `docs/history/worklogs/round_76bj_ui_fixes.md` | superseded, finished or never-activated |
+| `docs/round_76bk_om_promoter_field_gaps.md` | `docs/history/worklogs/round_76bk_om_promoter_field_gaps.md` | superseded, finished or never-activated; stale-claim banner added |
+| `docs/round_76ej_gov_property_extension.md` | `docs/history/worklogs/round_76ej_gov_property_extension.md` | superseded, finished or never-activated; stale-claim banner added |
+| `docs/round_76et_perf_dq_verification_sweep.md` | `docs/history/worklogs/round_76et_perf_dq_verification_sweep.md` | superseded, finished or never-activated |
+| `docs/runbooks/sjc_broker_contact_sync.md` | `docs/setup/sjc_broker_contact_sync.md` | live runbook or procedure; stale-claim banner added |
+| `SPEC_BOV_Lease_Extractor_Unit4.md` | `docs/history/SPEC_BOV_Lease_Extractor_Unit4.md` | superseded, finished or never-activated; stale-claim banner added |
+| `SPEC_BOV_Lease_Extractor_Unit4_BUILD.md` | `docs/history/SPEC_BOV_Lease_Extractor_Unit4_BUILD.md` | superseded, finished or never-activated; stale-claim banner added |
+| `SPEC_forsale_om_and_webpage_ingest.md` | `docs/history/SPEC_forsale_om_and_webpage_ingest.md` | superseded, finished or never-activated; stale-claim banner added |
+| `SPEC_sos_direct_scraper.md` | `docs/history/SPEC_sos_direct_scraper.md` | superseded, finished or never-activated; stale-claim banner added |
+| `docs/round68a/R68A_FINAL_REPORT.md` | `docs/history/round68a/R68A_FINAL_REPORT.md` | superseded, finished or never-activated |
+| `docs/round68a/R68A_RE_DATE_PLAN.md` | `docs/history/round68a/R68A_RE_DATE_PLAN.md` | superseded, finished or never-activated |
+| `docs/round68a/R68A_SYNTHESIS_PLAN.md` | `docs/history/round68a/R68A_SYNTHESIS_PLAN.md` | superseded, finished or never-activated |
+| `docs/round68a/R68A_TASK3_COVERAGE.md` | `docs/history/round68a/R68A_TASK3_COVERAGE.md` | superseded, finished or never-activated |
+| `docs/round68a/R68A_VIEW_MATRIX.md` | `docs/history/round68a/R68A_VIEW_MATRIX.md` | superseded, finished or never-activated |
+| `docs/round68a/README.md` | `docs/history/round68a/README.md` | superseded, finished or never-activated |
+| `docs/round68a/round68a_synthesis_plan.json` | `docs/history/round68a/round68a_synthesis_plan.json` | superseded, finished or never-activated |
+| `docs/cm/dia-master-template-chart-inventory.txt` | `docs/capital-markets/dia-master-template-chart-inventory.txt` | folder collapse: one capital-markets home |
+| `docs/cm/editable-charts-plan.md` | `docs/capital-markets/editable-charts-plan.md` | folder collapse: one capital-markets home |
+| `docs/cm/native-chart-migration-summary.md` | `docs/capital-markets/native-chart-migration-summary.md` | folder collapse: one capital-markets home |
+| `docs/claude/README.md` | `docs/history/claude-surface-instructions-legacy/README.md` | legacy surface instructions superseded by the canon (`docs/os/surfaces/`); NOT-AUTHORITATIVE banner added |
+| `docs/claude/northmarq-claude-instructions.md` | `docs/history/claude-surface-instructions-legacy/northmarq-claude-instructions.md` | legacy surface instructions superseded by the canon (`docs/os/surfaces/`); NOT-AUTHORITATIVE banner added |
+| `docs/claude/personal-claude-instructions.md` | `docs/history/claude-surface-instructions-legacy/personal-claude-instructions.md` | legacy surface instructions superseded by the canon (`docs/os/surfaces/`); NOT-AUTHORITATIVE banner added |

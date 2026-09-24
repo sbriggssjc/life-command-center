@@ -10,6 +10,22 @@
 
 ---
 
+## 0. 🧭 Where to start (every new chat, in this order) — DOCMAP3, 2026-09-24
+
+1. **The five state files (§1)** — `CURRENT-STATE.md` (what is live), `PLANNED-BACKLOG.md` (what is open),
+   `docs/claude-code/STATUS.md` (what just happened), `CLAUDE.md` (the rules), `GITHUB-WORKFLOW.md` (how work
+   reaches `main`).
+2. **`STATUS.md`'s Open-threads table** — the top of that file. It lists every thread in flight and where it stands.
+3. **`docs/claude-code/OPERATOR-CHECKLIST.md`** — the steps only Scott can do. Anything blocked on him is here.
+4. **`docs/claude-code/SB notes/TRIAGE.md`** — Scott's in-app observations (`SBN-n`) and where each one went.
+5. **The prompt/response loop** — `docs/claude-code/README.md`: prompts in `docs/claude-code/prompts/`, replies in
+   `responses/`, both moved to `done/` once reconciled. `docs/os/BUILD-TURN-PROTOCOL.md` says when a turn is done.
+
+Then use §1a to find the one canonical page for your subsystem. **A loose file in the `docs/` root, a second
+folder for a topic that already has one, or a new `.md` at the repo root is a filing defect** (§3). DOCMAP3 moved
+the last batch out (the move table is in `docs/history/INDEX.md` under "DOCMAP3").
+`docs/claude-code/NEW-CHAT-KICKOFF.md` is a copy-paste starter that points back here.
+
 ## 1. The five files that carry state (everything else is supporting material)
 
 | file | answers | update it when |
@@ -128,6 +144,8 @@ to enforce, and it applies to itself.
 - [`property-contact-deal-connectivity.md`](../architecture/property-contact-deal-connectivity.md) — Connectivity model underlying contact-owner-sidebar-design.
 - [`team-mailbox-intake-design.md`](../architecture/team-mailbox-intake-design.md) — Design spec (B2) for team mailbox intake, referenced by PLANNED-BACKLOG P13 item 2 as a live decision fork.
 - [`touchpoint_cadence_spec.md`](../architecture/touchpoint_cadence_spec.md) — Specification referenced conceptually throughout CLAUDE.
+- [`DRAFT_AND_LOG_ACTION_ENGINE.md`](../architecture/DRAFT_AND_LOG_ACTION_ENGINE.md) — `bridgeDraftAndLog` one-click Draft & Log (go-live verified 2026-07-20). Filed here by DOCMAP3.
+- [`PHASE3_OUTLOOK_CALENDAR_BRIDGES.md`](../architecture/PHASE3_OUTLOOK_CALENDAR_BRIDGES.md) / [`PHASE3_5_TIMELINE_INTEGRATION.md`](../architecture/PHASE3_5_TIMELINE_INTEGRATION.md) — the Outlook bridge + `appendActivityEvent` timeline. Only the Outlook arm is live (see their banners and backlog `BRIDGES-DORMANT`). DOCMAP3.
 
 ### Power Automate / Salesforce / Outlook / Teams integration
 
@@ -142,6 +160,11 @@ to enforce, and it applies to itself.
 - [`salesforce_nm_authoritative_sync.md`](../architecture/salesforce_nm_authoritative_sync.md) — "Status: Foundation shipped" — describes the live is_northmarq classifier.
 - [`sf_connected_app_setup.md`](../architecture/sf_connected_app_setup.md) — Setup reference for the live Salesforce Connected App server-side file fetch.
 - [`sf_daily_bulk_backfill_RUNBOOK.md`](../architecture/sf_daily_bulk_backfill_RUNBOOK.md) — Runbook for the live SF daily bulk file backfill (Flow 7).
+- [`EMAIL_AUTO_ARCHIVE.md`](../architecture/EMAIL_AUTO_ARCHIVE.md) — `processing_log` staged/filed semantics. Its mover section is superseded by the P120 move-queue executor (banner). DOCMAP3.
+- [`INFRA_ALERT_CLASSIFICATION.md`](../architecture/INFRA_ALERT_CLASSIFICATION.md) — infra-alert classifier reference, cited by `api/_shared/intake-classify.js`. DOCMAP3.
+- [`INTEGRATION_BRIDGES.md`](../architecture/INTEGRATION_BRIDGES.md) — the `connector_bridges` / `bridge_runs` / `enrichment_jobs` model (Vercel guidance bannered; most bridges never seeded, backlog `BRIDGES-DORMANT`). DOCMAP3.
+- [`flows/BRIEFING_EMAIL_FLOW_v2.md`](../architecture/flows/BRIEFING_EMAIL_FLOW_v2.md) — spec for the live **LCC Morning Briefing v2** flow (`briefing-morning-email-v2` runbook in `FLOW-REGISTRY.yaml`). DOCMAP3.
+- [`marketing_leads_activity_taxonomy.md`](../architecture/marketing_leads_activity_taxonomy.md) — `marketing_leads.activity_type` vocabulary, matches `supabase/functions/lead-ingest`. DOCMAP3.
 
 ### Daily briefing
 
@@ -258,6 +281,7 @@ the review gate without publishing candidate identities or licensed payloads.
 - [`offer-submission-process-design.md`](../architecture/offer-submission-process-design.md) — v2 process design for offer submission, grounded in the live Claude Project.
 - [`scott-pa-flows-reference.md`](../architecture/scott-pa-flows-reference.md) — Build-ready operational reference for Scott's live PA flows; correctly self-labels retired sub-items rather than being stale as a whole.
 - [`unification-changeset.md`](../architecture/unification-changeset.md) — Cited as the/an authoritative page for its topic by root CLAUDE.
+- [`STATE_LEASE_MULTI_STATE_ROLLOUT_PLAN.md`](../architecture/STATE_LEASE_MULTI_STATE_ROLLOUT_PLAN.md) — state-lease rollout plan; government-lease owns the pipeline (banner). DOCMAP3.
 
 ## 2. Where each artifact type is filed
 
@@ -278,12 +302,26 @@ the review gate without publishing candidate identities or licensed payloads.
 
 ## 3. ⛔ Do not create these
 
-- **A new `.md` at the repo root.** The root is code and config. It already carries 69 `.md` files
-  from before this rule; do not add the seventieth. *(That is exactly how K13–K20 got lost.)*
+- **A new `.md` at the repo root.** The root is code and config. *(That is exactly how K13–K20 got lost.)*
+  Since DOCMAP3 (2026-09-24) the root holds **6** `.md` files, each there for a reason: `CLAUDE.md`,
+  `AGENTS.md` and `LCC-OS.md` are the agent and architecture entry points. `BRIGGS-WRITING-VOICE.md` is read
+  by path by `api/draft-assist.js` and the briefing tick. `WRITE_SURFACE_POLICY.md` is bound by name in canon
+  invariant 4 and `docs/os/REGISTRY.md`. `SALESFORCE_LCC_INGESTION_PLAN.md` is cited in an
+  `intake-salesforce-files` runtime error string (backlog J12 keeps it at root). Do not add a seventh.
+- **A loose file in the `docs/` root.** DOCMAP3 took it from 50 to 0. Every file belongs in a topic folder
+  (§2).
 - **A second document about a subsystem that already has one.** Extend the canonical file and
   leave a pointer. One source per topic.
-- **A `✅ done` row left sitting in the backlog.** When a row ships, move the substance to
-  `CURRENT-STATE.md` §2 and delete the row — otherwise the backlog rots into a changelog.
+- **A `✅ done` row left sitting in the backlog.** When a row ships with nothing owed, move it
+  **verbatim** (the whole table line, byte-identical) into
+  `docs/history/PLANNED-BACKLOG_shipped_<YYYY-MM-DD>.md` **in the same commit that removes it**,
+  and make sure `CURRENT-STATE.md` describes it or carries a one-line pointer (§2b pattern).
+  Otherwise the backlog rots into a changelog. *(DOCMAP3, 2026-09-24. Before this, §3 said
+  "delete the row" while `test/doc-clobber-guard.test.mjs` failed any PR that deleted one, so
+  sessions struck rows instead and 145 done rows piled up. The guard now accepts exactly this
+  move and nothing looser: an edited or truncated archive copy still fails.)* A row that is
+  **retired or refuted**, not shipped, is struck (`~~…~~`) with its reason or moved to P12. It is
+  never archived as shipped.
 - **A "final" summary file per session.** That is what `STATUS.md` is for.
 
 ## 4. The lifecycle of a piece of work
@@ -293,7 +331,7 @@ found  → PLANNED-BACKLOG.md row (with its measurement and source)
        → prompts/<id>.md            (drafted for Claude Code)
        → responses/<id>.docx        (its reply)
 reconciled → STATUS.md entry + docs updated + both files moved to done/
-shipped    → CURRENT-STATE.md; backlog row deleted
+shipped    → CURRENT-STATE.md; backlog row moved verbatim to docs/history/PLANNED-BACKLOG_shipped_<date>.md (same commit)
 retired    → moved to backlog P12 "excluded" WITH THE REASON — never deleted
 learned    → CLAUDE.md, if the lesson outlives the change
 ```

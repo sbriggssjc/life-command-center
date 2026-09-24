@@ -402,7 +402,7 @@ export function hasFullDealSignature(snapshot) {
 // domain='infra' + source_system, and priority-SCORE it against the rest of
 // the open queue so its To Do task carries a scannable [HIGH]/[MED]/[LOW]
 // tier.  THIS IS THE SINGLE SOURCE OF TRUTH FOR THE SENDER/SUBJECT PATTERNS —
-// edit them here.  See docs/INFRA_ALERT_CLASSIFICATION.md.
+// edit them here.  See docs/architecture/INFRA_ALERT_CLASSIFICATION.md.
 //
 // NOTE: the score itself is produced by scoreItem() in briefing-data.js (the
 // same engine the daily briefing uses); these helpers only classify + shape

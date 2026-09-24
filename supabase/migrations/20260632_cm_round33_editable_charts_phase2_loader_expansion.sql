@@ -23,13 +23,13 @@
 --    extracts (chart_id, type, series_title, sheet, col, rows). Run
 --    locally to regenerate when the template changes.
 --
--- 2. docs/cm/editable-charts-plan.md — full inventory + phased plan
+-- 2. docs/capital-markets/editable-charts-plan.md — full inventory + phased plan
 --    covering all 6 sheets the template charts reference (Charts,
 --    Available Comps, Core Cap Chart, Market Size, Sheet1, Rent
 --    Survey, Competition) + view extensions needed for derived
 --    metrics.
 --
--- 3. docs/cm/dia-master-template-chart-inventory.txt — auto-generated
+-- 3. docs/capital-markets/dia-master-template-chart-inventory.txt — auto-generated
 --    output of the inventory script. Saved at the time of this PR
 --    so reviewers can read the chart-by-chart breakdown without
 --    re-running the script.

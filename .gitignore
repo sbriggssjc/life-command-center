@@ -12,7 +12,7 @@ __pycache__/
 .env*.local
 
 # availability-checker acceptance test — local-only, may contain
-# sensitive broker URLs and results. See docs/availability_checker_acceptance.md.
+# sensitive broker URLs and results. See docs/setup/availability_checker_acceptance.md.
 scripts/availability-checker-samples.json
 scripts/availability-checker-samples.results.json
 

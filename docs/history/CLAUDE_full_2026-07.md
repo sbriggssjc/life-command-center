@@ -31,7 +31,7 @@ retired 2026-07-20 after 40+ consecutive failed deploys (Hobby 12-function cap);
 
 ## Rules
 
-0. LCC_API_KEY auth is production-ready (Phase 6b). Frontend auth.js auto-injects X-LCC-Key via global fetch interceptor. To enforce: set LCC_API_KEY + LCC_ENV=production in the Railway env — **in that order**. Flipping LCC_ENV first (key empty, no OPS_SUPABASE_URL JWT path) 401s every request = total sign-in lockout. Verify readiness first via `GET /api/diag?kind=auth-ready` (`would_pass_in_production` must be true). Full rollout/rollback runbook + blast radius: `docs/AUTH_ENFORCEMENT_ROLLOUT.md`. A cold-start `console.error` guard in `auth.js` warns if enforcement is on with no credential source.
+0. LCC_API_KEY auth is production-ready (Phase 6b). Frontend auth.js auto-injects X-LCC-Key via global fetch interceptor. To enforce: set LCC_API_KEY + LCC_ENV=production in the Railway env — **in that order**. Flipping LCC_ENV first (key empty, no OPS_SUPABASE_URL JWT path) 401s every request = total sign-in lockout. Verify readiness first via `GET /api/diag?kind=auth-ready` (`would_pass_in_production` must be true). Full rollout/rollback runbook + blast radius: `docs/setup/AUTH_ENFORCEMENT_ROLLOUT.md`. A cold-start `console.error` guard in `auth.js` warns if enforcement is on with no credential source.
 1. Prefer adding endpoints as sub-routes of an existing handler (use `?action=` or `?_route=` query-param patterns) — good structure independent of any platform cap. A brand-new `api/*.js` is allowed (no cap), but the sub-route pattern keeps related routes in one handler.
 2. New utility/handler code goes in /api/_shared/ or /api/_handlers/
 3. Mount every new route in `server.js` (there is no vercel.json). `test/operations-subroutes.test.mjs` guards that every server.js-mounted `_route` has a matching dispatch.
@@ -677,7 +677,7 @@ Both views live on gov + dia DBs.
 ## BD Engine — Developer / Owner / Listing-Event Doctrine (2026-05-22)
 
 End-to-end BD data layer shipped in topics 10–20 across a single
-session. See `docs/BD_ENGINE_POST_WORK_AUDIT_2026-05-22.md` for the
+session. See `docs/history/worklogs/BD_ENGINE_POST_WORK_AUDIT_2026-05-22.md` for the
 post-work audit and `docs/history/DEVELOPER_BD_AUDIT_v3.md` §11.22 – §11.37 for the
 full per-topic implementation log.
 
@@ -3794,7 +3794,7 @@ The handler already ingested regardless of status; this hardens it:
 Salesforce ARCHIVES completed Activities older than ~1 year and EXCLUDES them
 from the standard SOQL/connector query (need `isArchived=true`/`queryAll`), so
 the widened watermark (now−10y) still only reaches ~89 records / ~8 owners.
-Options reported in `docs/SF_ACTIVITY_ARCHIVED_HISTORY.md`: (a) a one-time
+Options reported in `docs/audits/SF_ACTIVITY_ARCHIVED_HISTORY.md`: (a) a one-time
 `queryAll`/Bulk-API pull (the standard PA "Get records" step can't do it — needs
 a custom SOQL HTTP action) or (b) go-forward capture (reliable). Recommendation:
 ship (b); pursue (a) only as a deliberate one-shot. **Not pretended to be
@@ -4676,7 +4676,7 @@ preferred; gpt-4o reached ONLY behind the explicit flag; default zero-spend;
 `ocrCloudCheap` webhook seam) + `test/lease-ocr-backfill.test.mjs` (+Surya/Paddle
 parser cases). `node --check` clean (document-text, lease-extractor,
 lease-ocr-backfill); `ls api/*.js | wc -l`=12; full suite 1193 pass / 0 fail / 6
-skipped. JS ships on the Railway redeploy. Doc: `docs/UW4_LEASE_OCR.md` (cost
+skipped. JS ships on the Railway redeploy. Doc: `docs/history/UW4_LEASE_OCR.md` (cost
 table, engine install notes, cheap-cloud config + Google $300-credit path).
 
 ## UW#4c — wire Google Document AI as the cheap-cloud OCR (2026-06-21)
@@ -4737,7 +4737,7 @@ cloud_cheap; `ocrCloudCheap` reads back `pages` + sends `mime_type`; a wrapper
 handlers + lease-extractor); `ls api/*.js | wc -l`=12; full suite 1264 pass / 0
 fail / 6 skipped. The live deed/lease drain (routes to Document AI, gpt-4o only
 on misses, cost log shows pages) is operational — gated on Scott's GCP creds +
-the env, handed off like UW#2/R58. Doc: `docs/UW4_LEASE_OCR.md` (UW#4c wrapper +
+the env, handed off like UW#2/R58. Doc: `docs/history/UW4_LEASE_OCR.md` (UW#4c wrapper +
 GCP setup + cost telemetry).
 
 ## UW#5 — lease extractor OCRs thin-text scanned PDFs, not just zero-text (2026-06-22)
@@ -8127,7 +8127,7 @@ composing EXISTING pieces (`generateDraft` · `createOutlookDraftViaPA` ·
 `logSalesforceActivity` · `recordTemplateSend` · `advanceCadence` [single advance
 owner] · `writeSignal`), never a new pipeline. No new api/*.js; no migration;
 LCC-Opps + flagged external PA/SF writes only. Full handoff:
-`docs/DRAFT_AND_LOG_ACTION_ENGINE.md`.
+`docs/architecture/DRAFT_AND_LOG_ACTION_ENGINE.md`.
 
 - **Mode A (bd, default on cadence cards):** minimal completed Task —
   `LCC-BD · <account> · Touchpoint <N>`, status `Completed`, **NO WhatId** (pre-deal),
@@ -8268,8 +8268,8 @@ completion, then `POST /api/sf-account-import?backfill=1&limit=500` until `membe
 
 Two live diverging copies of `unified_contacts` (gov `scknotsqkcheojiaewwh` + LCC Opps
 `xengecqvemvfknjvbvrq`) — the A9b migration ran but the app cutover never did. Phase 0
-grounded + reconciled the delta; full detail in `docs/CONTACTS_SPLIT_BRAIN_DELTA_2026-07-21.md`
-+ `docs/CONTACTS_SPLIT_BRAIN_CUTOVER_RUNBOOK.md`.
+grounded + reconciled the delta; full detail in `docs/audits/CONTACTS_SPLIT_BRAIN_DELTA_2026-07-21.md`
++ `docs/history/CONTACTS_SPLIT_BRAIN_CUTOVER_RUNBOOK.md`.
 
 - **Canonical = LCC Opps** (it has `entity_id` + the `gov_contact_id`/`dia_contact_id`
   enrichments gov lacks). Delta: both 29,442 / gov-only 1,053 / ops-only 561; **zero

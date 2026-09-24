@@ -15,7 +15,7 @@
 --     layer can INCLUDE them in active-universe/turnover counts while EXCLUDING
 --     them from every price/DOM/cap chart. See the companion migration
 --     20260605_cm_round68a_synthetic_listing_views.sql and
---     docs/round68a/R68A_VIEW_MATRIX.md.
+--     docs/history/round68a/R68A_VIEW_MATRIX.md.
 --
 -- DDL only — no row writes. Safe to apply ahead of the synthesis bulk insert
 -- (which runs dry-run -> --commit from a workstation, NOT in a migration).

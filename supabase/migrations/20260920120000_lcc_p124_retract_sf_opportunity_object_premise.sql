@@ -1,7 +1,7 @@
 -- ===========================================================================
 -- P124 -- RETRACT P122/P123. There is no Salesforce Opportunity object.
 -- APPLIED LIVE to LCC Opps (xengecqvemvfknjvbvrq) 2026-08-17.
--- See docs/RUNBOOK_sf_opportunity_inbound_flow.md (now a retraction notice).
+-- See docs/history/RUNBOOK_sf_opportunity_inbound_flow.md (now a retraction notice).
 -- ===========================================================================
 -- Scott, 2026-08-17: "the Opportunities we track in Salesforce are open
 -- Activities or Tasks with the field NM Type 'Opportunity' and remain open. We

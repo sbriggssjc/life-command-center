@@ -129,7 +129,7 @@ const STYLE_PCT_2DP  = 29;
 // BI, BJ) need either derived calculations (90/180-day rolling caps,
 // pace metrics, valuation index) or cross-view joins (DOM, inventory
 // flow) or new view extensions (tenant-specific caps for FMC/DVA,
-// Rent/SF). See docs/cm/editable-charts-plan.md for the full
+// Rent/SF). See docs/capital-markets/editable-charts-plan.md for the full
 // inventory and Phase 3+ scope.
 //
 // Headers exactly match the master template's row-2 inline strings
