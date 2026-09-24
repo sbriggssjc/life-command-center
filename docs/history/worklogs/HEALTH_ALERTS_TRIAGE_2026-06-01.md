@@ -221,7 +221,7 @@ confirmed.
 `llc_research_queue: 466 rows, 0 completed — SOS enrichment not running` — open
 ~11 days on both gov and dia (severity warning). This is the OpenCorporates /
 SOS-direct enrichment backlog. It aligns with the in-progress "Free SOS-direct FL
-adapter / Sunbiz mirror" work (recent commits + `SPEC_sos_direct_scraper.md`).
+adapter / Sunbiz mirror" work (recent commits + `docs/history/SPEC_sos_direct_scraper.md`).
 No action taken here; it clears when the SOS-direct tick starts draining the
 queue. Flagging so it isn't mistaken for a new regression.
 

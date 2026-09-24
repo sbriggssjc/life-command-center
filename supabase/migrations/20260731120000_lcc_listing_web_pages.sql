@@ -1,6 +1,6 @@
 -- ============================================================================
 -- Listing web-page registry + snapshot ledger + crawl worker schedule (LCC Opps)
--- SPEC_forsale_om_and_webpage_ingest.md — Part B2
+-- docs/history/SPEC_forsale_om_and_webpage_ingest.md — Part B2
 -- 2026-07-31
 -- ----------------------------------------------------------------------------
 -- PURPOSE. The sidebar captures a listing's external property webpage (the

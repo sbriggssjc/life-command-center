@@ -43,7 +43,7 @@ outside the SQL surface.
 - 9 pg_cron jobs registered + active, will activate on vault secret seed
 
 **See:**
-- `docs/BD_ENGINE_POST_WORK_AUDIT_2026-05-22.md` — standalone post-work
+- `docs/history/worklogs/BD_ENGINE_POST_WORK_AUDIT_2026-05-22.md` — standalone post-work
   audit with validation status, gotchas, deferred items, operational
   readiness, and recommendations for the next session.
 - §11.22 – §11.37 of this document — full per-topic implementation log.

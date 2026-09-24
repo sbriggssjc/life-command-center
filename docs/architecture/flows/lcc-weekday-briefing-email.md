@@ -1,5 +1,7 @@
 # Flow Detail: LCC Weekday Briefing Email
 
+> 🚨 **THIS FLOW WAS DELETED 2026-06-05 (DOCMAP3, 2026-09-24).** `docs/audits/BRIEFING_EMAIL_ALERT_AUDIT_2026-06-05.md` §5c records deleting both old briefing flows (`90fbb308`, `6ec55229`). The live flow is **LCC Morning Briefing v2** (`63156e98`, `briefing-morning-email-v2` in `docs/os/FLOW-REGISTRY.yaml`), spec `BRIEFING_EMAIL_FLOW_v2.md` in this folder. This page is history.
+
 > 🚨 **STALE (DOCMAP3, 2026-09-08): the endpoint below (`life-command-center-nine.vercel.app`) is
 > the RETIRED Vercel deployment (retired 2026-07-20, root `CLAUDE.md`).** **It was torn down 2026-09-18 (J13-teardown): the host now returns `DEPLOYMENT_NOT_FOUND` and the service key it held was rotated the same day** — a flow still pointing there fails at its first request; this doc's endpoint is wrong;
 > the live endpoint is the Railway host (`server.js`, current route on the path shown below).

@@ -146,7 +146,7 @@ candidate, find and ingest the OM automatically, then fill the deal-stage column
    existing request-triggered **`sf-on-demand-file`** flow + `om-comp-resolver.js` (already resolves OMs on Comp and
    Deal attachments) → `stageOmIntake` → `intake-extractor`. Round 1: 3 of 24 Focused rows are Salesforce comps.
 2. **CoStar sidebar / extension.** On the CoStar For-Sale page, the existing capture path
-   (`SPEC_forsale_om_and_webpage_ingest.md`: embedded brochure → OM) grabs the brochure. Needed change: the sidebar
+   (`docs/history/SPEC_forsale_om_and_webpage_ingest.md`: embedded brochure → OM) grabs the brochure. Needed change: the sidebar
    classifier routes only dia/gov today (`unknown_domain` otherwise) → add an **engagement route** that files the OM
    + extracted fields to the client folder (Decision A: no domain DB) instead of rejecting non-dia/gov listings.
 3. **CREXi / LoopNet / broker sites.** Listing links are in the workbook; OMs are usually behind a CA → draft the

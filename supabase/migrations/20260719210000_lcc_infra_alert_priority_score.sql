@@ -20,4 +20,4 @@ COMMENT ON COLUMN public.inbox_items.priority_score IS
   'Cross-domain priority score (shared scoreItem() scale). Set by the intake '
   'infra-alert path for Vercel/GitHub CI-CD alerts; NULL otherwise. '
   'Higher = more urgent. Drives the [HIGH]/[MED]/[LOW] To Do tier '
-  '(see docs/INFRA_ALERT_CLASSIFICATION.md).';
+  '(see docs/architecture/INFRA_ALERT_CLASSIFICATION.md).';

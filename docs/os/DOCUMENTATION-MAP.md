@@ -144,6 +144,8 @@ to enforce, and it applies to itself.
 - [`property-contact-deal-connectivity.md`](../architecture/property-contact-deal-connectivity.md) — Connectivity model underlying contact-owner-sidebar-design.
 - [`team-mailbox-intake-design.md`](../architecture/team-mailbox-intake-design.md) — Design spec (B2) for team mailbox intake, referenced by PLANNED-BACKLOG P13 item 2 as a live decision fork.
 - [`touchpoint_cadence_spec.md`](../architecture/touchpoint_cadence_spec.md) — Specification referenced conceptually throughout CLAUDE.
+- [`DRAFT_AND_LOG_ACTION_ENGINE.md`](../architecture/DRAFT_AND_LOG_ACTION_ENGINE.md) — `bridgeDraftAndLog` one-click Draft & Log (go-live verified 2026-07-20). Filed here by DOCMAP3.
+- [`PHASE3_OUTLOOK_CALENDAR_BRIDGES.md`](../architecture/PHASE3_OUTLOOK_CALENDAR_BRIDGES.md) / [`PHASE3_5_TIMELINE_INTEGRATION.md`](../architecture/PHASE3_5_TIMELINE_INTEGRATION.md) — the Outlook bridge + `appendActivityEvent` timeline. Only the Outlook arm is live (see their banners and backlog `BRIDGES-DORMANT`). DOCMAP3.
 
 ### Power Automate / Salesforce / Outlook / Teams integration
 
@@ -158,6 +160,11 @@ to enforce, and it applies to itself.
 - [`salesforce_nm_authoritative_sync.md`](../architecture/salesforce_nm_authoritative_sync.md) — "Status: Foundation shipped" — describes the live is_northmarq classifier.
 - [`sf_connected_app_setup.md`](../architecture/sf_connected_app_setup.md) — Setup reference for the live Salesforce Connected App server-side file fetch.
 - [`sf_daily_bulk_backfill_RUNBOOK.md`](../architecture/sf_daily_bulk_backfill_RUNBOOK.md) — Runbook for the live SF daily bulk file backfill (Flow 7).
+- [`EMAIL_AUTO_ARCHIVE.md`](../architecture/EMAIL_AUTO_ARCHIVE.md) — `processing_log` staged/filed semantics. Its mover section is superseded by the P120 move-queue executor (banner). DOCMAP3.
+- [`INFRA_ALERT_CLASSIFICATION.md`](../architecture/INFRA_ALERT_CLASSIFICATION.md) — infra-alert classifier reference, cited by `api/_shared/intake-classify.js`. DOCMAP3.
+- [`INTEGRATION_BRIDGES.md`](../architecture/INTEGRATION_BRIDGES.md) — the `connector_bridges` / `bridge_runs` / `enrichment_jobs` model (Vercel guidance bannered; most bridges never seeded, backlog `BRIDGES-DORMANT`). DOCMAP3.
+- [`flows/BRIEFING_EMAIL_FLOW_v2.md`](../architecture/flows/BRIEFING_EMAIL_FLOW_v2.md) — spec for the live **LCC Morning Briefing v2** flow (`briefing-morning-email-v2` runbook in `FLOW-REGISTRY.yaml`). DOCMAP3.
+- [`marketing_leads_activity_taxonomy.md`](../architecture/marketing_leads_activity_taxonomy.md) — `marketing_leads.activity_type` vocabulary, matches `supabase/functions/lead-ingest`. DOCMAP3.
 
 ### Daily briefing
 
@@ -274,6 +281,7 @@ the review gate without publishing candidate identities or licensed payloads.
 - [`offer-submission-process-design.md`](../architecture/offer-submission-process-design.md) — v2 process design for offer submission, grounded in the live Claude Project.
 - [`scott-pa-flows-reference.md`](../architecture/scott-pa-flows-reference.md) — Build-ready operational reference for Scott's live PA flows; correctly self-labels retired sub-items rather than being stale as a whole.
 - [`unification-changeset.md`](../architecture/unification-changeset.md) — Cited as the/an authoritative page for its topic by root CLAUDE.
+- [`STATE_LEASE_MULTI_STATE_ROLLOUT_PLAN.md`](../architecture/STATE_LEASE_MULTI_STATE_ROLLOUT_PLAN.md) — state-lease rollout plan; government-lease owns the pipeline (banner). DOCMAP3.
 
 ## 2. Where each artifact type is filed
 
@@ -294,8 +302,14 @@ the review gate without publishing candidate identities or licensed payloads.
 
 ## 3. ⛔ Do not create these
 
-- **A new `.md` at the repo root.** The root is code and config. It already carries 69 `.md` files
-  from before this rule; do not add the seventieth. *(That is exactly how K13–K20 got lost.)*
+- **A new `.md` at the repo root.** The root is code and config. *(That is exactly how K13–K20 got lost.)*
+  Since DOCMAP3 (2026-09-24) the root holds **6** `.md` files, each there for a reason: `CLAUDE.md`,
+  `AGENTS.md` and `LCC-OS.md` are the agent and architecture entry points. `BRIGGS-WRITING-VOICE.md` is read
+  by path by `api/draft-assist.js` and the briefing tick. `WRITE_SURFACE_POLICY.md` is bound by name in canon
+  invariant 4 and `docs/os/REGISTRY.md`. `SALESFORCE_LCC_INGESTION_PLAN.md` is cited in an
+  `intake-salesforce-files` runtime error string (backlog J12 keeps it at root). Do not add a seventh.
+- **A loose file in the `docs/` root.** DOCMAP3 took it from 50 to 0. Every file belongs in a topic folder
+  (§2).
 - **A second document about a subsystem that already has one.** Extend the canonical file and
   leave a pointer. One source per topic.
 - **A `✅ done` row left sitting in the backlog.** When a row ships with nothing owed, move it

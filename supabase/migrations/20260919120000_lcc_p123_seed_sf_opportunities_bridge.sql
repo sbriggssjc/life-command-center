@@ -1,7 +1,7 @@
 -- ===========================================================================
 -- P123 -- seed the sf.opportunities connector bridge (prerequisite for the flow)
 -- APPLIED LIVE to LCC Opps (xengecqvemvfknjvbvrq) 2026-08-17.
--- Runbook: docs/RUNBOOK_sf_opportunity_inbound_flow.md
+-- Runbook: docs/history/RUNBOOK_sf_opportunity_inbound_flow.md
 -- ===========================================================================
 -- P122 registered the inbound SF Opportunity sync as dormant. Turning it on is
 -- NOT just building a Power-Automate flow: handleIngestRoute looks the bridge up
@@ -53,7 +53,7 @@ VALUES (
   )),
   'none',              -- inbound only; never writes back to Salesforce
   'active',
-  'P123: seeded so /api/bridges?_route=ingest&_source=salesforce&bridge=sf.opportunities stops 404ing. Carries SF Amount/StageName/CloseDate into LCC -- the only path that can populate bd_opportunities.amount (NULL on all 614 rows as of 2026-08-17). Inert until a Power-Automate flow posts to it; flip feature_flags_registry.SF_OPPORTUNITY_INBOUND_SYNC to on when it does. See docs/RUNBOOK_sf_opportunity_inbound_flow.md.'
+  'P123: seeded so /api/bridges?_route=ingest&_source=salesforce&bridge=sf.opportunities stops 404ing. Carries SF Amount/StageName/CloseDate into LCC -- the only path that can populate bd_opportunities.amount (NULL on all 614 rows as of 2026-08-17). Inert until a Power-Automate flow posts to it; flip feature_flags_registry.SF_OPPORTUNITY_INBOUND_SYNC to on when it does. See docs/history/RUNBOOK_sf_opportunity_inbound_flow.md.'
 )
 ON CONFLICT (workspace_id, bridge_key) DO UPDATE SET
   allowlist  = EXCLUDED.allowlist,

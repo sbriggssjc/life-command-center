@@ -119,7 +119,7 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 **Q54 retest owed.** Scott saved the flow edit. The test failed in `Get_deals_soql` with `unexpected token: 'sql'`: `queryParameters/query` began "sql SELECT…" because the code-fence language tag was pasted into the SOQL box. That is not a field or permission error. `docs/setup/SF-DEAL-SYNC-FLOW-EDIT-2026-09-23.md` now shows the query as one plain-text line with a warning. Checklist Q54 carries the one-step fix.
 
-**Misdirection trap removed.** `docs/RUNBOOK_sf_opportunity_inbound_flow.md` is headed "RETRACTED — there is no Salesforce Opportunity object". That is true for **BD opportunities** (Tasks with NM Type "Opportunity"), but the Opportunity object does exist and holds Team Briggs **deals**, which the live flow reads. A clarification banner now sits above the retraction and points at the setup guide.
+**Misdirection trap removed.** `docs/history/RUNBOOK_sf_opportunity_inbound_flow.md` is headed "RETRACTED — there is no Salesforce Opportunity object". That is true for **BD opportunities** (Tasks with NM Type "Opportunity"), but the Opportunity object does exist and holds Team Briggs **deals**, which the live flow reads. A clarification banner now sits above the retraction and points at the setup guide.
 
 **Consolidation by topic (Scott's standing ask) → `DOCMAP3`.** Measured:
 - 51 loose `docs/` root files;

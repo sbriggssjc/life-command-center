@@ -125,7 +125,7 @@ async function main() {
       derivation_classes: classSplit,
     },
     // Funnel from the full unlinked universe down to the synthesizable set.
-    // Reproduce with sql/round68a — see docs/round68a/R68A_SYNTHESIS_PLAN.md §Gap.
+    // Reproduce with sql/round68a — see docs/history/round68a/R68A_SYNTHESIS_PLAN.md §Gap.
     gap_funnel_reference: {
       u0_all_unlinked: 3058, u1_has_sale_date: 3058, u2_2013plus: 2678,
       u3_sold_price_gt_0: 2308, u4_not_excluded_from_metrics: 1608,

@@ -771,7 +771,7 @@ async function runBakeoff(opts) {
     console.log(`  ${mark} ${e.padEnd(10)} ${p.version || ''}${note}`);
   }
   if (!runnable.length) {
-    console.error('\nNo OCR engine available on PATH. Install one (see docs/UW4_LEASE_OCR.md) and re-run.');
+    console.error('\nNo OCR engine available on PATH. Install one (see docs/history/UW4_LEASE_OCR.md) and re-run.');
     process.exit(2);
   }
   console.log(`\nRunning: ${runnable.join(', ')}`);

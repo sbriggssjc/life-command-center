@@ -57,7 +57,7 @@ COMMENT ON TABLE public.processing_log IS
   'Processed/{category}). Power Automate consumes pending moves via '
   '/api/webhooks/processing-complete; the todo-completion poll drives the '
   'staged → Processed move on task completion. Never deletes (see the separate '
-  'retention sweep). See docs/EMAIL_AUTO_ARCHIVE.md.';
+  'retention sweep). See docs/architecture/EMAIL_AUTO_ARCHIVE.md.';
 
 -- One-line daily-briefing feed: append `staged` at the END (CREATE OR REPLACE
 -- VIEW is column-append-only — the existing columns keep their positions).
