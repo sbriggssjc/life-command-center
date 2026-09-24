@@ -61,6 +61,9 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 - **Filed:** `CONSOLIDATE-REVERSIBLE-unmerge-ui`, `-dia-restore-triggers`, `-reconcile-unmerge`, `MERGELOG-GAP` (46 orphaned dia entity refs), `MERGE-BARE-DB-CALLERS`.
 - **Deploy:** redeploy `tranquil-delight` (it serves `api/admin.js`). The MCP service does not import `admin.js`, so it needs no redeploy for this change. Then check with `npm run verify:deploy`.
 - **Next:** Scott clicks Consolidate on a known twin, then unmerges it with the `backup_id` from the toast.
+## 2026-09-24 — GOV-CLASSIFY1-diag-race (CC): per-run classifier diag + upsert error, no module globals
+
+`_lastClassifierDiag` and a second instance found by the sweep, `_lastDomainPropertyError`, are gone from `api/_handlers/sidebar-pipeline.js`. The diag is returned by `classifyDomainWithDiag` → `classifyAndUpdateDomain` and threaded to the stored summary, the alert gate and `domain_mismatch_warning`; `upsertDomainProperty` takes an optional caller-owned `errSink`. Guard `test/gov-classify1-diag-race.test.mjs` interleaves two real pipeline runs (both orders); a mutation that reintroduces a shared diag turns both RED. `npm test` 7,222 / 0 fail. **Owed:** redeploy BOTH Railway services, then force re-run Saginaw `6c85fe57` (must stay `no_domain`; stored diag must describe Saginaw). Detail in the backlog row.
 
 ## 2026-09-24 — Round 74 (Cowork): POSTSHIP-R73 + DOCMAP3 reconciled live; `opened_at` filled 610/612; Q56/Q57 done; `CONSOLIDATE-REVERSIBLE` + `GOV-CLASSIFY1-diag-race` prompted
 
