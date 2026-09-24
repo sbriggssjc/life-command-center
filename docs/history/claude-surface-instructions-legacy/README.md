@@ -1,3 +1,9 @@
+> 🚨 **SUPERSEDED — NOT AUTHORITATIVE (DOCMAP3, 2026-09-24).** This file used to live in `docs/claude/` and still
+> calls itself the "source of truth". It is not. The binding artifacts are `_WORKFLOW/NORTHMARQ_PROJECT_PROMPT.md`
+> (Northmarq Claude Project) and `~/.claude/skills/*` (Personal Claude / Cowork); the canon-rendered bundles are in
+> `docs/os/surfaces/*.canon.md`. See `docs/os/AI-SURFACES-OPERATIONAL-REFERENCE.md` §1 and
+> `docs/os/SURFACE-SYNC-PROTOCOL.md`. Kept here as history only; do not paste it into a surface.
+
 # Claude Instructions — Source of Truth & Maintenance
 
 Authoritative, uploadable instructions for the two **claude.ai** surfaces the team uses. Same

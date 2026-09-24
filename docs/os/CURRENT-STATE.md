@@ -881,8 +881,8 @@ from lcc_clean_assist_proposals group by source`:
   (auto) · ChatGPT → `docs/os/surfaces/chatgpt.canon.md` as the LCC-CANON knowledge file (auto) ·
   Northmarq Claude → `_WORKFLOW/NORTHMARQ_PROJECT_PROMPT.md` (manual) · Personal Claude / Cowork →
   `~/.claude/skills/*` (manual).
-- **Legacy, do not treat as authoritative:** `docs/claude/northmarq-claude-instructions.md` and
-  `docs/claude/personal-claude-instructions.md` self-label "AUTHORITATIVE" and are not.
+- **Legacy, do not treat as authoritative:** `docs/history/claude-surface-instructions-legacy/northmarq-claude-instructions.md` and
+  `docs/history/claude-surface-instructions-legacy/personal-claude-instructions.md` self-label "AUTHORITATIVE" and are not.
 - Full mechanics: **`AI-SURFACES-OPERATIONAL-REFERENCE.md`**.
 
 ## 6. Canonical doc map — one source per topic

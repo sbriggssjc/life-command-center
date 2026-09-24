@@ -29,8 +29,8 @@ working session so future chats don't re-derive it. Chronology lives in
 | **Northmarq Claude (team Project)** | `_WORKFLOW/NORTHMARQ_PROJECT_PROMPT.md` (rich hand-authored doc, its own version + §8 Update Log; currently **v1.10**) | **manual** — sync the canon-governed sections (comps §3C, resolution) by hand |
 | **Personal Claude / Cowork** | `~/.claude/skills/*` (comps-engine, briggs-comps, bov-underwriting, …) | **manual** — skills, not a single paste file |
 
-**LEGACY — do NOT treat as authoritative (delete to end the confusion):** `docs/claude/northmarq-claude-instructions.md`
-and `docs/claude/personal-claude-instructions.md` self-label "AUTHORITATIVE SOURCE OF TRUTH" but are NOT the binding
+**LEGACY — do NOT treat as authoritative (moved to `docs/history/` with a SUPERSEDED banner by DOCMAP3, 2026-09-24):** `docs/history/claude-surface-instructions-legacy/northmarq-claude-instructions.md`
+and `docs/history/claude-surface-instructions-legacy/personal-claude-instructions.md` self-label "AUTHORITATIVE SOURCE OF TRUTH" but are NOT the binding
 artifacts per §1 (Northmarq→_WORKFLOW prompt, Personal→skills). They are stale duplicates.
 
 **Open improvement (not yet built):** true one-command-updates-all needs each master (Northmarq prompt, the skills)
