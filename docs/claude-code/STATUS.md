@@ -81,6 +81,8 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 - The resolver was never case-sensitive.
 - Two merge-duplicated backlog rows were fixed by CC, plus one more found here: the duplicated SBN Open-threads row (the stale round-69 copy) is removed.
 
+**Guard fix (`GUARD-CLOBBER1-buffer`).** `PLANNED-BACKLOG.md` passed 1 MiB, which was Node's default `execFileSync` buffer in `doc-clobber-guard`. Any backlog growth turned the guard red with a misleading "not found at HEAD". It now uses a 64 MiB buffer. DOCMAP3's shipped-row archive is the real cure for the size.
+
 **Next.**
 - CC: `POSTSHIP-R73` (edge deploy, re-runs + Saginaw twin, `opened_at`), then `DOCMAP3`. Sequenced so the doc moves don't collide with backlog edits.
 - Scott: Q56 (re-save Tulelake/Jellico) and Q57 (re-check Available; MCP redeploy after POSTSHIP-R73 merges).
