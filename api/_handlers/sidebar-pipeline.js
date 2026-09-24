@@ -765,6 +765,35 @@ function canonicalGraphAddress(value) {
     .trim();
 }
 
+// SIDEBAR-AGENCY-OVERWRITE (2026-09-24): a sales_history row that carries a
+// date and NOTHING ELSE is not a transfer. CoStar renders a bare dated line
+// (its "updated on" stamp) that the extension captures as
+// `{ sale_date: "Sep 21, 2026" }`; picking it as "the most recent sale" wrote
+// 13 costar_sidebar ownership_history rows dated days before their capture and
+// stamped gov properties.latest_deed_date with the capture week (Saginaw
+// 16297 → 2026-09-21). A row counts as a transfer only when it carries at
+// least one fact that only a sale or deed record has: a price, a party, or a
+// recording fact. ⚠️ `sale_type` / `cap_rate` are NOT evidence — 3 of the 8
+// live stubs carried a sale_type ("1031 Exchange, Build to Suit") beside the
+// capture-week date, read off CoStar's stat card for an older sale.
+const SALE_TRANSFER_EVIDENCE_KEYS = [
+  'buyer', 'seller', 'true_buyer', 'true_seller',
+  'deed_type', 'document_number', 'doc_book_page', 'recordation_date',
+  // A CoStar sale-comp record (live: gov 6905, an "In Progress" comp with an
+  // undisclosed price, hold period 117 months) is a transfer even without a
+  // price. None of the 8 live stubs carries any of these.
+  'comp_id', '_comp_id', 'comp_status', 'hold_period', 'price_status', 'time_on_market',
+];
+export function saleHistoryRowIsTransfer(sale) {
+  if (!sale || typeof sale !== 'object' || !sale.sale_date) return false;
+  const price = parseCurrency(sale.sale_price ?? sale.sold_price);
+  if (price != null && price > 0) return true;
+  return SALE_TRANSFER_EVIDENCE_KEYS.some((k) => {
+    const v = sale[k];
+    return v != null && String(v).trim() !== '';
+  });
+}
+
 function saleHistoryRowAddress(sale) {
   return sale?.property_address
     || sale?.address
@@ -4791,7 +4820,7 @@ async function propagateToDomainDbDirect(domain, entity, metadata, opts = {}) {
       // writer populates all of them; provenance covered only the first 8.
       // 15 additional fields registered in migration 20260429460000.
       const govLatestSale = (Array.isArray(metadata.sales_history) ? metadata.sales_history : [])
-        .filter(s => s && s.sale_date)
+        .filter(s => saleHistoryRowIsTransfer(s))
         .sort((a, b) => new Date(b.sale_date).getTime() - new Date(a.sale_date).getTime())[0];
       const propValues = domain === 'government'
         ? {
@@ -5054,6 +5083,124 @@ async function linkDialysisMedicareIdInline(propertyId, entity) {
 // a true write failure its `.error` is set to the reason (string or
 // PostgREST error object). GOV-CLASSIFY1-diag-race: this replaced a
 // module-level `_lastDomainPropertyError` that concurrent runs overwrote.
+// SIDEBAR-AGENCY-OVERWRITE (2026-09-24). On the UPDATE path the sidebar used
+// to PATCH `agency`/`agency_full_name` with CoStar's primary tenant and
+// `address` with the lowercased lookup key. Live on Saginaw gov 16297 that
+// replaced the lessee "Saginaw County Community Mental Health Authority" with
+// one of its programs ("Max System Of Care") and "1040 N Towerline Rd" with
+// "1040 n towerline rd".
+//
+// ⚠️ Neither string resolves in the ID3a registry (gov_resolve_agency returns
+// 'unresolved' for both, and 16297 carries no agency_id/agency_canonical), so a
+// guard keyed only on "the existing value is registry-resolved" would NOT have
+// protected the case that found this. The rule is therefore fill-blanks with a
+// registry-upgrade exception:
+//   existing blank                              → write the capture
+//   same text (case/space-insensitive)          → write (no-op)
+//   existing unresolved, capture RESOLVES       → write (an upgrade)
+//   anything else                               → keep the existing agency
+// A resolved existing agency is never replaced from a CoStar tenant line, even
+// by a different resolved agency — that is a relocation/new-lease question the
+// GSA/lease layer answers, not the tenant panel.
+// Pure; `existingResolved` / `incomingResolved` are booleans the caller got
+// from the registry (null = could not check → treated as unresolved).
+export function decideGovAgencyWrite({ existingAgency, existingResolved, incomingAgency, incomingResolved } = {}) {
+  const norm = (v) => String(v || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const ex = norm(existingAgency);
+  const inc = norm(incomingAgency);
+  if (!inc) return { write: false, reason: 'no_incoming_agency' };
+  if (!ex) return { write: true, reason: 'existing_blank' };
+  if (ex === inc) return { write: true, reason: 'same_value' };
+  if (existingResolved === true) return { write: false, reason: 'existing_resolved_kept' };
+  if (incomingResolved === true) return { write: true, reason: 'incoming_resolves_upgrade' };
+  return { write: false, reason: 'existing_kept_incoming_unresolved' };
+}
+
+// The stored display address is kept when it names the same place as the
+// capture (same normalized key). The lowercased key is what the lookups match
+// on; the row was already found, so rewriting its display text buys nothing
+// and loses the casing a human (or the curated seed) chose.
+export function shouldKeepExistingAddress(existingAddress, normAddr) {
+  if (!existingAddress || !normAddr) return false;
+  return normalizeAddress(existingAddress) === normAddr;
+}
+
+async function govAgencyResolves(text) {
+  if (!text || !String(text).trim()) return null;
+  try {
+    const r = await domainQuery('government', 'POST', 'rpc/gov_resolve_agency', { p_text: String(text) });
+    if (!r.ok || !Array.isArray(r.data)) return null;
+    return r.data.some((row) => row && row.agency_id);
+  } catch {
+    return null;
+  }
+}
+
+// Applies both guards to the UPDATE payload in place. Returns a small report
+// (logged; also useful to tests). Fail-soft: if the existing row can't be
+// read, the capture's agency is NOT written over an unknown value.
+async function guardExistingPropertyIdentity(domain, propertyId, propertyData, normAddr) {
+  const report = { address_kept: false, agency: null };
+  const wantsAgency = domain === 'government'
+    && ('agency' in propertyData || 'agency_full_name' in propertyData);
+  const wantsAddress = 'address' in propertyData;
+  if (!wantsAgency && !wantsAddress) return report;
+  const cols = domain === 'government'
+    ? 'address,agency,agency_full_name,agency_id,agency_canonical'
+    : 'address';
+  const cur = await domainQuery(domain, 'GET',
+    `properties?property_id=eq.${propertyId}&select=${cols}&limit=1`).catch(() => null);
+  const row = cur?.ok && Array.isArray(cur.data) ? cur.data[0] : null;
+
+  if (wantsAddress && row && shouldKeepExistingAddress(row.address, normAddr)) {
+    delete propertyData.address;
+    report.address_kept = true;
+  }
+
+  if (wantsAgency) {
+    const incoming = propertyData.agency || propertyData.agency_full_name || null;
+    let decision;
+    if (!row) {
+      decision = { write: false, reason: 'existing_unreadable' };
+    } else {
+      const existing = row.agency || row.agency_full_name || null;
+      const existingResolved = row.agency_id || row.agency_canonical
+        ? true
+        : (existing ? await govAgencyResolves(existing) : null);
+      const needIncoming = existing && incoming
+        && String(existing).trim().toLowerCase() !== String(incoming).trim().toLowerCase()
+        && existingResolved !== true;
+      const incomingResolved = needIncoming ? await govAgencyResolves(incoming) : null;
+      decision = decideGovAgencyWrite({ existingAgency: existing, existingResolved, incomingAgency: incoming, incomingResolved });
+    }
+    report.agency = { ...decision, incoming };
+    if (!decision.write) {
+      delete propertyData.agency;
+      delete propertyData.agency_full_name;
+      // government_type was derived from the rejected tenant string.
+      delete propertyData.government_type;
+      if (incoming) {
+        console.warn(`[upsertDomainProperty] gov property ${propertyId}: kept existing agency ` +
+          `"${row?.agency || row?.agency_full_name || '?'}"; CoStar tenant "${incoming}" not written (${decision.reason}). ` +
+          `The tenant string stays on the LCC entity metadata (tenant_name/tenants).`);
+      }
+    }
+  }
+  return report;
+}
+
+// SIDEBAR-AGENCY-OVERWRITE: `_pipeline_last_error*` describe the LAST FAILED
+// run. The success branch spread the old metadata and never removed them, so a
+// run that succeeded still read `_pipeline_last_error=no_domain` from days
+// earlier. metadata is PATCHed as a whole column, so deleting the keys clears
+// them; the failure itself stays in `_pipeline_run_log`.
+const PIPELINE_ERROR_KEYS = ['_pipeline_last_error', '_pipeline_last_error_detail', '_pipeline_last_error_stack'];
+export function clearStalePipelineErrorOnSuccess(meta, succeeded) {
+  if (!succeeded || !meta || typeof meta !== 'object') return meta;
+  for (const k of PIPELINE_ERROR_KEYS) delete meta[k];
+  return meta;
+}
+
 export async function upsertDomainProperty(domain, entity, metadata, errSink = {}) {
   // Round 76fg: reset captured error each call. Set on the true-failure
   // path (POST 4xx + retry-lookup miss) so propagateToDomainDbDirect can
@@ -5525,7 +5672,7 @@ export async function upsertDomainProperty(domain, entity, metadata, errSink = {
     let latestSalePrice = null;
     {
       const sales = (metadata.sales_history || [])
-        .filter(s => s && s.sale_date)
+        .filter(s => saleHistoryRowIsTransfer(s))
         .map(s => ({
           date: parseDate(s.sale_date)?.split('T')[0] || null,
           price: parseCurrency(s.sale_price),
@@ -5683,6 +5830,10 @@ export async function upsertDomainProperty(domain, entity, metadata, errSink = {
       }
     }
 
+    // SIDEBAR-AGENCY-OVERWRITE: never downgrade the existing row's agency or
+    // rewrite its display address with the lowercased lookup key.
+    await guardExistingPropertyIdentity(domain, propertyId, propertyData, normAddr);
+
     // Round 76co (Phase 2): consult priority registry BEFORE the property PATCH.
     const filteredPropertyData = await filterByFieldPriority({
       targetDb:    domain === 'dialysis' ? 'dia_db' : 'gov_db',
@@ -5745,6 +5896,7 @@ export async function upsertDomainProperty(domain, entity, metadata, errSink = {
   if (retryLookup.ok && retryLookup.data?.length) {
     const propertyId = retryLookup.data[0].property_id;
     console.log(`[upsertDomainProperty] Race recovery: original POST failed (${result.status}); retry-lookup found property_id=${propertyId} -- treating as update.`);
+    await guardExistingPropertyIdentity(domain, propertyId, propertyData, normAddr);
     // Round 76co (Phase 2): same priority filter on the race-recovery path.
     const filteredPropertyData = await filterByFieldPriority({
       targetDb:    domain === 'dialysis' ? 'dia_db' : 'gov_db',
@@ -8293,8 +8445,9 @@ async function createSaleAlert(propertyId, saleData) {
 // ── Auto-stage gov comp for Salesforce sync ─────────────────────────────────
 async function stageGovCompForSalesforce(propertyId, entity, metadata) {
   // Check if already staged for this property + most recent sale date
+  // SIDEBAR-AGENCY-OVERWRITE: a date-only row is not a sale to stage.
   const mostRecentSale = (metadata.sales_history || [])
-    .filter(s => s.sale_date)
+    .filter(s => saleHistoryRowIsTransfer(s))
     .sort((a, b) => new Date(b.sale_date) - new Date(a.sale_date))[0];
   if (!mostRecentSale) return;
 
@@ -9114,7 +9267,7 @@ async function upsertDomainLoans(domain, propertyId, metadata, provCollect) {
     )?.split('T')[0] || null;
 
     const mostRecentSale = (metadata.sales_history || [])
-      .filter(s => s.sale_date
+      .filter(s => saleHistoryRowIsTransfer(s)
         && !(s.deed_type && MORTGAGE_DEED_TYPES.test(s.deed_type)))
       .map(s => ({
         date: parseDate(s.sale_date)?.split('T')[0] || null,
@@ -10602,8 +10755,10 @@ async function upsertDomainOwners(domain, propertyId, entity, metadata, provColl
       );
       if (ownerId) {
         // Find the most recent sale date as the transfer date
+        // SIDEBAR-AGENCY-OVERWRITE: a date-only row is CoStar's "updated on"
+        // stamp, not a transfer — never let it become transfer_date.
         const mostRecentSale = [...(metadata.sales_history || [])]
-          .filter(s => s.sale_date)
+          .filter(s => saleHistoryRowIsTransfer(s))
           .sort((a, b) => new Date(b.sale_date) - new Date(a.sale_date))[0];
         const transferDate = mostRecentSale
           ? parseDate(mostRecentSale.sale_date)?.split('T')[0]
@@ -13748,6 +13903,7 @@ async function _processSidebarExtractionOnce(entityId, workspaceId, userId, opts
       { ...runTrace, finished_at: new Date().toISOString() },
     ].slice(-SIDEBAR_RUN_LOG_MAX),
   };
+  clearStalePipelineErrorOnSuccess(updatedMeta, propagation.propagated);
   await opsQuery('PATCH',
     `entities?id=eq.${entityId}&workspace_id=eq.${workspaceId}`,
     { metadata: updatedMeta, updated_at: new Date().toISOString() }
