@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 // load, so it can't be imported in Node. Mirror costar-street-regex.test.js:
 // slice the PURE helper declarations straight out of the source and evaluate
 // them in isolation. Guards the 2026-07-31 For-Sale embedded-OM + external
-// property-webpage capture (SPEC_forsale_om_and_webpage_ingest.md, Parts A/B1).
+// property-webpage capture (docs/history/SPEC_forsale_om_and_webpage_ingest.md, Parts A/B1).
 const src = readFileSync(
   fileURLToPath(new URL('../extension/content/costar.js', import.meta.url)),
   'utf8',

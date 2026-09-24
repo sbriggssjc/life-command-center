@@ -485,7 +485,7 @@ pass the request verbatim, never invent tenant/metro/date filters, the engine re
 (appraisal: subject→state→region→national, incl. estimated-NOI) — the exact miss behind ChatGPT's 1-comp result;
 and (2) the **resolution/ambiguity** rule from prompt 25 — on `status='ambiguous'` present candidates and ask which
 (Woodland Hills 35724 vs 29882), on `not_on_file` say so, never fabricate. Files: `docs/copilot/agent-instructions.md`
-(unified/Copilot), `docs/claude/northmarq-claude-instructions.md`, `docs/claude/personal-claude-instructions.md`,
+(unified/Copilot), `docs/history/claude-surface-instructions-legacy/northmarq-claude-instructions.md`, `docs/history/claude-surface-instructions-legacy/personal-claude-instructions.md`,
 `docs/setup/gpt-actions-system-prompt.txt`; canon source `docs/os/canon/comps.md` (v1.1.0) + new
 `docs/os/canon/resolution.md` (+ blocks). ChatGPT also needs its LCC-CANON knowledge file updated to match.
 
@@ -502,9 +502,9 @@ ran `render-surfaces.mjs --write-live`. All 5 bundles + the Copilot live artifac
 no-self-narrow + resolution/ambiguity rules at v1.2.0. Reverted the redundant hand-edit to the ChatGPT persona
 (canon rides in the `chatgpt.canon.md` Knowledge file). Commit `0480e4a`.
 
-**Correction to session 2o:** the two `docs/claude/*.md` files edited then are NOT the binding artifacts
+**Correction to session 2o:** the two `docs/history/claude-surface-instructions-legacy/*.md` (formerly `docs/claude/`) files edited then are NOT the binding artifacts
 (SURFACE-SYNC-PROTOCOL §1): Northmarq binds to `_WORKFLOW/NORTHMARQ_PROJECT_PROMPT.md`, Personal Claude to the
-`~/.claude/skills/*`. Those `docs/claude/*.md` files are legacy duplicates that still self-label "AUTHORITATIVE"
+`~/.claude/skills/*`. Those `docs/history/claude-surface-instructions-legacy/*.md` (formerly `docs/claude/`) files are legacy duplicates that still self-label "AUTHORITATIVE"
 — a real repo contradiction to reconcile (delete or convert to binding artifacts). Also: only the Copilot artifact
 is a `--write-live` target; Northmarq/ChatGPT/Personal/Cowork are "external" (manual paste of the rendered bundle)
 — a future improvement is giving each a managed region so one `render --write-live` updates them all.

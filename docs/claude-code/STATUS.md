@@ -38,7 +38,7 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **C2g / sponsor↔SPE gate (C2k)** | C2g, C2h, C2i, C2k | 2026-09-16 | **C2k LIVE** (LCC PR #2506): 218 attested supersessions, 40/43 pairs to sponsor, 16/16 controls untouched, reversible; sponsor-as-edge = future work |
 | **Research lanes / owner gap (C1B/C1C/OWNERGAP)** | C1B-GOV-GATE, C1C-SPLIT, OWNERGAP1, OWNERGAP2, OWNERGAP2-harris, -harris-b/-c/-d, -ledger-order, MCP1 | 2026-09-17 | **41 assessor-sourced owners live** (Philadelphia 20, Harris 21 of 50); Harris is done except the 27 situs-gap properties → §P10a is the lane's next unit; next free-bulk jurisdiction after that |
 | **App feedback intake (SBN)** | FLOWS1, FLOWS1-artifact, FLOWS-consolidate, FLOWS-consolidate-lcc, FLOWS1-path, HOME1, HOME2, PRI1, PRI2, PRI2-on, DIA1, DIA1b, DIA1c, ID3a-drift, RECON1, RECON1-b, RECON2, RECON2-b, RECON2-render, RECON3, RECON3-b, SIDEBAR3, SIDEBAR3-b, SIDEBAR3-c, SIDEBAR3-d, EXT-HOST-2, SIDEBAR4, LEASEJUNK1, PERF-SPQ2, HOME2-fix, HOME2-b, HOME2-c, HOME2-d, HOME2-e, PERF-SPQ1, PERF-SPQ1-b, PERF-SPQ1-c, RECON2-c, RECON2-d, RECON2-d-reconcile, RECON2-d-render, RESOLVER1, SIDEBAR-LEASE1, SIDEBAR2, DIA-PROPAGATOR1, VERCEL-LIVE1, GOV-AVAIL1, GOV-UX1, SIDEBAR4-b, SIDEBAR4-c, RECON2-render-spa, RECON2-render-dossier, SIDEBAR3-d-orient, GOV-UX1-D1, GOV-UX1-D2, GOV-UX1-D3, GOV-UX1-D4, GOV-UX1-D5, GOV-UX1-D4-sftype, GOV-UX1-D5-gate, GOV-AVAIL1-postoak, GOV-AVAIL1-agency-tail, GOV-AVAIL1-twins, GOV-AVAIL1-govtype, GOV-AVAIL1-civic-drift, RECON2-render-views, HOME-MB-BOOT, SIDEBAR4-d, INTAKE-RESTAGE1, GOV-UX1-D1-registry, SF-BRIDGE1, SIDEBAR5, GOV-COMPS-CAP, GOV-UX1-D5-gate-bank, GOV-UX1-D5-gate-buyerspe, GOV-UX1-D5-gate-sponsor, SF-BRIDGE1-flow, GOV-CLASSIFY1, GOV-CU1, GOV-AVAIL2, SF-BRIDGE1-suppress, GOV-COMPS-SCOPE-reason, SIDEBAR5-residue, GOV-CLASSIFY1-rerun, GOV-CLASSIFY1-saginaw-twin, GOV-CLASSIFY1-costar-identity, GOV-CU1-home, GOV-CU1-edge-deploy, GOV-CU1-default-gov, GOV-CU1-fca, GOV-CU1-prefix, GOV-AVAIL2-state-registry, GOV-AVAIL2-multi-agency, GOV-AVAIL2-exposure-grouping, SF-BRIDGE1-opened-at | 2026-09-23 | **Current (round 73, 2026-09-23):** `tranquil-delight` live on `9d8bb05e` (GOV-CLASSIFY1 + GOV-CU1 + GOV-AVAIL2 all in it); extension 1.0.58; `data-query` v46. SBN-1…29 triaged. **Closed/live today:** GOV-AVAIL2 (one display mapping for Available/Comps/Leases; agency tail 271→294 matched), GOV-CU1 (credit unions out of gov: Available 490→473, NCUA kept; SF edge functions not yet redeployed), GOV-CLASSIFY1 (existing-record-first + route equivalence; re-runs owed), SF-BRIDGE1-flow (**Q54 done** — open deals with an address 12→29 of 43), SIDEBAR5, GOV-COMPS-CAP, GOV-UX1-D5-gate-2, SF-BRIDGE1, plus rounds 63–72. **Prompted, waiting on CC:** `POSTSHIP-R73` (SF edge deploy, GOV-CLASSIFY1 re-runs + Saginaw twin, `CreatedDate`→`opened_at`), then `DOCMAP3` (docs by topic). **Waiting on Scott:** Q51/Q55 (grade the 15 lane cards; 1.0.58 Contacts-tab Save; comps pill), Q56 (re-save Tulelake or Jellico), Q57 (re-check the Available view; MCP redeploy after POSTSHIP-R73). **Filed, not prompted:** GOV-CU1-home/-default-gov/-fca/-prefix, GOV-AVAIL2-state-registry/-multi-agency/-exposure-grouping, GOV-CLASSIFY1-costar-identity, SF-BRIDGE1-suppress, SIDEBAR5-residue, GOV-COMPS-SCOPE-reason, SIDEBAR5-twin-lane-consumer, GOV-UX1-D1-registry, GOV-AVAIL1 follow-ups, RECON2-render-views, SIDEBAR4-b, SIDEBAR3-b, SIDEBAR3-d-orient, FLOWS1 SF Listing spike. Older narrative: [`docs/history/STATUS_open-threads_SBN-row_to_2026-09-22.md`](../history/STATUS_open-threads_SBN-row_to_2026-09-22.md) + dated entries below. |
-| **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–5, INVENTORY1, INVENTORY1b, INVENTORY2, INVENTORY-process, REMEDIATION-2026-05, REPO1, ROADMAP, PROCESS-CC-DOCS, PROCESS-MERGE-CLOBBER, GUARD-CLOBBER1, PROCESS-ROW-CELLS, PROCESS-PARKING-LOT, DEPLOY2-coverage, DEPLOY2-stale-body, DOCMAP3 | 2026-09-23 | **PR #2563 reverted STATUS + backlog to a week-old snapshot (7 entries / 11 rows lost) — restored round 26; `GUARD-CLOBBER1` live on `main` (PR #2566), manual per-turn diff retired round 28**; DEPLOY2 live + CI; parking lot triaged; EDGE-GATES1 live **👤 2026-09-23 (Round 71):** `DOCMAP3` prompted: file the 51 loose `docs/` root files by topic, collapse the duplicate folders, and settle the shipped-backlog-row policy (the map says delete, the guard forbids it; the backlog is 817 rows / 145 done). |
+| **Process / consolidation (CONSOLIDATE, INVENTORY)** | CONSOLIDATE1–5, INVENTORY1, INVENTORY1b, INVENTORY2, INVENTORY-process, REMEDIATION-2026-05, REPO1, ROADMAP, PROCESS-CC-DOCS, PROCESS-MERGE-CLOBBER, GUARD-CLOBBER1, PROCESS-ROW-CELLS, PROCESS-PARKING-LOT, DEPLOY2-coverage, DEPLOY2-stale-body, DOCMAP3, DOCMAP3 | 2026-09-24 | **DOCMAP3 shipped 2026-09-24:** 101 shipped backlog rows archived verbatim under a guard exemption. `docs/` root 50 → 0 files, root `.md` 10 → 6, four duplicate folders collapsed. Earlier state: **PR #2563 reverted STATUS + backlog to a week-old snapshot (7 entries / 11 rows lost) — restored round 26; `GUARD-CLOBBER1` live on `main` (PR #2566), manual per-turn diff retired round 28**; DEPLOY2 live + CI; parking lot triaged; EDGE-GATES1 live **👤 2026-09-23 (Round 71):** `DOCMAP3` prompted: file the 51 loose `docs/` root files by topic, collapse the duplicate folders, and settle the shipped-backlog-row policy (the map says delete, the guard forbids it; the backlog is 817 rows / 145 done). |
 | **App / UX** | ASC50, HP1, UX-T1a | 2026-09-12 | ASC50 governed review workbench built + locally verified, publication pending |
 | **Buyer engagement (BUY0)** | BUY0, BUY1a/1b, BUY-G1–G6 | 2026-09-11 | Phase 0 complete for Geller Round 1 (client deliverable + email draft shipped); build handoff written, BUY1a/1b + BUY-G1..G6 filed as next steps |
 | **Broker identity (BR) / BROKER1** | BR1, BR2, BR3, BR4, BR4-b, BR5, BR1-misparse-handoff, BROKER1, BROKER1-sf | 2026-09-17 | **BR4 live**: 3 true duplicates merged, 52 firms minted with evidence, `broker_company_id` 14.4% → **25.0%** (641/2,566); residue → BR4-b (123 firm-shaped broker rows, 468 review); BR5 display next |
@@ -55,9 +55,9 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ## 2026-09-24 — POSTSHIP-R73 (CC): both SF edge functions deployed and verified; GOV-CLASSIFY1 re-runs done (0 minted); Saginaw queued for twin review; SF `opened_at` mapped fill-forward
 
-**Edge deploy (GOV-CU1-edge-deploy ✅).** Before deploying, I diffed the live bodies against the repo. They were the pre-GOV-CU1 source, differing only in CRLF line endings, so redeploying from `main` could not roll anything back.
-- `intake-salesforce`: dashboard label 34 → 37.
-- `intake-salesforce-files`: 31 → 33.
+**Edge deploy (GOV-CU1-edge-deploy ✅, deployed twice).** A parallel window deployed both first (`intake-salesforce` v36, `intake-salesforce-files` v32; its record is on the backlog row). I found out only when merging `main`. So this deploy was redundant: same content, not a rollback. Before deploying, I diffed the live bodies against the repo. They were the pre-GOV-CU1 source, differing only in CRLF line endings, so redeploying from `main` could not roll anything back.
+- `intake-salesforce`: dashboard label 37.
+- `intake-salesforce-files`: 33.
 - Both keep `verify_jwt=false`.
 
 Re-read with `get_edge_function` and diffed: **10/10 and 7/7 files byte-identical.** Smoke test via `net.http_*` from LCC Opps: no-secret `?action=requeue` → **401**, `intake-salesforce?action=retry` → **401**, info GETs → 200.
@@ -83,6 +83,49 @@ Re-read with `get_edge_function` and diffed: **10/10 and 7/7 files byte-identica
 - Guard `test/sf-bridge1-opened-at.test.mjs`: 10 tests, 6/6 mutations RED.
 - 👤 **Redeploy BOTH Railway services.** `server.js` (tranquil-delight, where the PA flow posts) and `mcp/server.js` both import `mcp/opportunity-sync.js`.
 - Verify: after the next 30-min sync, `opened_at` is NULL on 0 SF deals (610 / 612 today).
+
+## 2026-09-24 — DOCMAP3 (Claude Code): shipped-row policy settled, loose docs filed by topic, four folders collapsed
+
+**Docs only. No code or behaviour change, no Railway deploy, no canon change.** Branch `claude/admiring-lamport-chb78p`.
+
+- **A. Shipped-row rule.** `DOCUMENTATION-MAP.md` §3 said "delete a shipped row"; `doc-clobber-guard` failed any
+  deleted id. Both now say the same thing: a shipped row moves verbatim to
+  `docs/history/PLANNED-BACKLOG_shipped_<date>.md` in the same commit. The guard accepts a removed id only if its
+  whole line is in such an archive. A positive control proves it: an edited copy goes red. First pass: **101** rows
+  archived. 9 ✅ rows with an owed step stayed (HCRIS-TRACKER-BLIND, SIDEBAR5, GOV-CU1, GOV-AVAIL2,
+  GOV-UX1-D5-gate-buyerspe/-sponsor, C1C-UNAPPLIED, OWNERGAP2, OWNERGAP2-harris-c). CURRENT-STATE §2b has one-line
+  pointers for the 66 it did not already describe. Backlog **1,400 → 1,314 lines; 811 → 718 row ids**, counted by
+  the guard's parser after the new rows were added.
+- **B–D. Filing.** Four read-only agents read every file in full first. Then **62 `git mv`** moves; git sees all
+  62 as renames. `docs/` root: **50 → 0** files (the prompt's 51 counted `Life-Command-Center-Setup-Guide.docx`, which `*.docx` in `.gitignore` keeps untracked; its text is already in `docs/history/root-reports/`).
+  Repo-root `.md`: **10 → 6**. The kept six each have a reason in map §3: `BRIGGS-WRITING-VOICE.md` is read by path
+  by `api/`, `WRITE_SURFACE_POLICY.md` is bound in canon, and `SALESFORCE_LCC_INGESTION_PLAN.md` is in a runtime
+  error string. `docs/cm` went into `docs/capital-markets`. `docs/claude` was a set of legacy surface
+  instructions that called themselves authoritative, so it moved to
+  `docs/history/claude-surface-instructions-legacy/` with a not-authoritative banner. `docs/runbooks` went into
+  `docs/setup`, and `docs/round68a` into `docs/history/round68a`. 81 path references were fixed across 40 files:
+  code comments, migration comments, `.gitignore`, `CLAUDE.md` and docs. Every stale claim the agents named got a
+  dated banner. The move table is in `docs/history/INDEX.md` under "DOCMAP3".
+- **Not rewritten, on purpose.** Edge-function source comments were left alone: editing them without a deploy is
+  repo-vs-deployed drift. The dated `docs/audits/INVENTORY1_intent_2026-09.csv` was left alone too; it is evidence.
+- **E.** `DOCUMENTATION-MAP.md` §0 "Where to start" was added, and `NEW-CHAT-KICKOFF.md` now points at it. The
+  kickoff is ASC-specific and named the dated `BUILD-BACKLOG.md`.
+- **Found while reading, measured and filed:**
+  - The gov `unified_contacts` copy is **not frozen**. It has 165 rows created and 877 updated since the
+    cutover; the newest was created 2026-09-24 01:53 UTC. The `CLAUDE.md` sentence was corrected in place;
+    backlog `CONTACTS-GOV-WRITER`.
+  - The **gov Consolidate button calls `gov_merge_property`, which now RAISEs**, and dia hard-deletes (backlog
+    `CONSOLIDATE-REVERSIBLE`).
+  - The connector-bridge layer is almost entirely unseeded (`BRIDGES-DORMANT`).
+  - The SJC broker contact flow was never built (`SJC-BROKER-SYNC`).
+  - Staged iOS shares have no consumer (`DOCMAP3-shareinbox`).
+  - `FLOW-REGISTRY.yaml` pointed the live briefing-v2 flow at a deleted flow's page. It is repointed, and both
+    old briefing flow pages are bannered "deleted 2026-06-05".
+  - PA3, K7, SEC8 and UX-T1c-caprate-rerun carry dated corrections. The small leftovers are in `DOCMAP3-residue`.
+- **ID note.** A different, finished DOCMAP3 (the 2026-09-08 deep-read, PR #2178) sits in CURRENT-STATE §2a. The
+  two prompt filenames disambiguate them.
+- **Next:** decide `CONSOLIDATE-REVERSIBLE` first (a live broken button), then `CONTACTS-GOV-WRITER`.
+  `DOCS-CM-MISFILED` (115 archived prompts in `docs/capital-markets/`) is still open and unchanged by this round.
 
 
 ## 2026-09-23 — Round 73 (Cowork): GOV-CLASSIFY1, GOV-CU1, GOV-AVAIL2 reconciled live on `9d8bb05e`; SF Deal sync flow green (Q54 closed); `POSTSHIP-R73` prompted
@@ -137,7 +180,7 @@ Re-read with `get_edge_function` and diffed: **10/10 and 7/7 files byte-identica
 - **Shipped.** One strip rule (JS + Deno mirror + gov SQL) removes private federally-chartered lender names before any gov classifier reads "federal". Wired into the sidebar classifier, credit-tier resolver, SF deal classifier, both SF routers, and the OM create path. The OM path had been sending every non-dialysis tenant to gov by default.
 - **Gov DB (live, reversible):** Available **490 → 473**; 33 lender properties archived; 702 lost a false `Federal`; the insert guard refuses new lender-only rows.
 - **Caught on the way:** the 6 NCUA properties (a real agency, carrying all 8 leases and 8 sales) had been tagged "private company" by ID3a-c; that tag is now cleared. "AOC/Federal Bankruptcy Court" nearly matched `federal bank`.
-- **Next:** edge functions need their own deploy (`GOV-CU1-edge-deploy`). JS goes live on the Railway redeploy. `GOV-CU1-home` needs Scott's decision. Backlog: GOV-CU1 updated; five follow-ups added.
+- **Next:** edge functions DEPLOYED 2026-09-24 (`intake-salesforce` v36, `intake-salesforce-files` v32, byte-verified against `origin/main`, both answer 200). JS goes live on the Railway redeploy. `GOV-CU1-home` needs Scott's decision. Backlog: GOV-CU1 updated; five follow-ups added.
 
 ## 2026-09-23 — GOV-CLASSIFY1: existing-record-first sidebar classification + numbered-route equivalence
 
@@ -151,7 +194,7 @@ Re-read with `get_edge_function` and diffed: **10/10 and 7/7 files byte-identica
 
 **Q54 retest owed.** Scott saved the flow edit. The test failed in `Get_deals_soql` with `unexpected token: 'sql'`: `queryParameters/query` began "sql SELECT…" because the code-fence language tag was pasted into the SOQL box. That is not a field or permission error. `docs/setup/SF-DEAL-SYNC-FLOW-EDIT-2026-09-23.md` now shows the query as one plain-text line with a warning. Checklist Q54 carries the one-step fix.
 
-**Misdirection trap removed.** `docs/RUNBOOK_sf_opportunity_inbound_flow.md` is headed "RETRACTED — there is no Salesforce Opportunity object". That is true for **BD opportunities** (Tasks with NM Type "Opportunity"), but the Opportunity object does exist and holds Team Briggs **deals**, which the live flow reads. A clarification banner now sits above the retraction and points at the setup guide.
+**Misdirection trap removed.** `docs/history/RUNBOOK_sf_opportunity_inbound_flow.md` is headed "RETRACTED — there is no Salesforce Opportunity object". That is true for **BD opportunities** (Tasks with NM Type "Opportunity"), but the Opportunity object does exist and holds Team Briggs **deals**, which the live flow reads. A clarification banner now sits above the retraction and points at the setup guide.
 
 **Consolidation by topic (Scott's standing ask) → `DOCMAP3`.** Measured:
 - 51 loose `docs/` root files;

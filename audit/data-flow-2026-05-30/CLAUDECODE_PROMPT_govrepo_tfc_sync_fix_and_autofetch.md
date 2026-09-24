@@ -5,8 +5,8 @@
 ## Context (read first)
 - `docs/STATE_LEASE_INVENTORY_PIPELINE_PLAN.md` §9 (add-a-state recipe) + §10 (Phase 2
   automation — this prompt builds it).
-- LCC repo `docs/STATE_LEASE_MULTI_STATE_ROLLOUT_PLAN.md` (the cross-repo plan) and
-  `docs/STATE_GOV_LEASE_GAP_MEMO_2026-06-23.md` (origin; TX engine session wrap).
+- LCC repo `docs/architecture/STATE_LEASE_MULTI_STATE_ROLLOUT_PLAN.md` (the cross-repo plan) and
+  `docs/audits/STATE_GOV_LEASE_GAP_MEMO_2026-06-23.md` (origin; TX engine session wrap).
 - The consumer side is DONE (LCC W5.2, live 2026-08-06): `state_lease_events` distress
   types → tasks, digest counts, and a 45-day producer-staleness alarm
   (`state_lease_producer_stale` in `lcc_health_alerts`). This prompt fixes the PRODUCER.

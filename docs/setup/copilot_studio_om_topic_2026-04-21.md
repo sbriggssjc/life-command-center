@@ -1,5 +1,5 @@
 # Copilot Studio — OM Intake Topic Rebuild
-_2026-04-21 — paired with `docs/LCC_Copilot_Bidirectional_Plan_2026-04-21.md`_
+_2026-04-21 — paired with `docs/history/LCC_Copilot_Bidirectional_Plan_2026-04-21.md`_
 
 This document is a drop-in guide for the LCC Deal Agent changes in Copilot
 Studio. It replaces the GPT-prompt-driven OM ingestion with a dedicated

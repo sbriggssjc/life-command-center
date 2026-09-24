@@ -13,7 +13,7 @@ references into stale ones, which is worse than a slightly untidy root. This fil
 | `flow-outlook-intake-to-teams.json` · `…-hardened.json` · `…-button-to-teams.json` | Outlook intake → Teams | The `-hardened` variant supersedes the plain one; the `-button-` variant is the manual-trigger path. |
 | `flow-outlook-calendar-sync.json` · `flow-personal-calendar-sync.json` | Calendar sync (work / personal) | See `docs/architecture/calendar-system-status.md` and `calendar-tz-fix-runbook.md`. |
 | `flow-email-flag-to-todo.json` · `flow-personal-email-flag-to-todo.json` · `flow-todo-complete-unflag.json` | Flagged email ⇄ To-Do round trip | See `docs/architecture/INTAKE_TODO_FLOW_AUDIT_2026-07-23.md`. |
-| `flow-lcc-create-outlook-draft.json` | Draft-and-log action engine | See `docs/DRAFT_AND_LOG_ACTION_ENGINE.md`. |
+| `flow-lcc-create-outlook-draft.json` | Draft-and-log action engine | See `docs/architecture/DRAFT_AND_LOG_ACTION_ENGINE.md`. |
 | `flow-lcc-probe-outlook-contact-write.json` | Outlook contact write-back probe | Diagnostic; see `docs/architecture/contact-reconciliation-outbound.md`. |
 | `flow-lcc-teams-chat.json` · `flow-daily-briefing-to-teams.json` | Teams delivery (chat / daily briefing) | |
 | `flow-google-news-alert.json` | Google News alert intake | |

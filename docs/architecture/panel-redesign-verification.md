@@ -372,7 +372,7 @@ new workstream — see `connectivity-and-open-threads.md`.
 
 Also visible in the same load: `[sales-comp xref] 44 price disagreement(s)` (already tracked as
 `sales_price_xref_conflict` in dia `v_data_quality_issues`), and auth running in **dev-fallback** mode
-(expected pre-enforcement; see `docs/AUTH_ENFORCEMENT_ROLLOUT.md`).
+(expected pre-enforcement; see `docs/setup/AUTH_ENFORCEMENT_ROLLOUT.md`).
 
 ### 4.2d BROWSER RE-MEASURE, 2026-08-15 — and a claim of mine that did NOT hold
 

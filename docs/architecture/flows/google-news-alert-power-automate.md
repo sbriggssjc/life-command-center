@@ -40,7 +40,7 @@ Import: `flow-google-news-alert.json` (repo root, mirrors `flow-loopnet-backfill
    the Outlook move by `internetMessageId`, so a filed lead lands in
    **Processed/Leads** and the daily briefing counts it. A low-confidence hit is
    never moved or auto-deleted. (This unifies the move mechanism with the flagged-
-   email intake — see `docs/EMAIL_AUTO_ARCHIVE.md` §6.)
+   email intake — see `docs/architecture/EMAIL_AUTO_ARCHIVE.md` §6.)
 
 ## Response contract (from the edge function)
 
@@ -115,7 +115,7 @@ returns `ops_configured: true` when the LCC-Opps env is set.
 | `REPLACE_WITH_PA_WEBHOOK_SECRET` | The `PA_WEBHOOK_SECRET` the edge function authenticates against (same secret as the RCM/LoopNet flows). |
 
 The inline "Move to Archive" step was removed (the move is now the auto-archive
-pull-queue's job — §6 of `docs/EMAIL_AUTO_ARCHIVE.md`). The `Processed/Leads` /
+pull-queue's job — §6 of `docs/architecture/EMAIL_AUTO_ARCHIVE.md`). The `Processed/Leads` /
 `Processed/Duplicates` folders must exist in the mailbox (the processing-complete
 flow moves into them).
 

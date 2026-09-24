@@ -15,7 +15,7 @@
 //   Updates status / notes / promoted_to. Used by the review UI.
 //
 // Promotion to canonical property/contact records lives elsewhere — this
-// endpoint only stages and extracts. See docs/ios-shortcut-send-to-lcc.md.
+// endpoint only stages and extracts. See docs/setup/ios-shortcut-send-to-lcc.md.
 // ============================================================================
 
 import { createHash } from 'crypto';

@@ -456,8 +456,11 @@ page asks for, in order:
    `git show abc5ff2^:<path>` (the commit before GOV-CU1) once CRLF is normalised, so redeploying from
    `main` could not roll back anything that only lived in production.
 2. **Deploy from `main` via the Supabase MCP**, `verify_jwt=false` kept (both bodies carry their own
-   `authenticateWebhook` door). Dashboard labels: `intake-salesforce` 34 → 37 (`ezbr_sha256` e1906418… →
-   54c5742b…), `intake-salesforce-files` 31 → 33 (09618cc3… → f641d046…). The labels are not content
+   `authenticateWebhook` door). Dashboard labels: `intake-salesforce` → 37 (`ezbr_sha256` 54c5742b…),
+   `intake-salesforce-files` → 33 (f641d046…). ⚠️ A parallel window had already deployed the same source
+   minutes earlier (v36 / v32, recorded on the `GOV-CU1-edge-deploy` backlog row); this session's step-1
+   diff read the body BEFORE that, so the second deploy was redundant (identical content). Two windows
+   working one prompt is the §4a failure; the backlog row was the place to check first. The labels are not content
    identity (see the 2026-09-10 note above); the sha and the diff below are.
 3. **Read back and diff.** 10/10 and 7/7 deployed files byte-identical to the repo.
 4. **Behavioural smoke from LCC Opps `pg_net`** (the sandbox cannot reach `*.supabase.co` functions):

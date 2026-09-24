@@ -51,7 +51,7 @@ COMMENT ON TABLE public.processing_log IS
   'whose intake job is done: outcome (filed/needs_review/duplicate) + the '
   'Outlook target_folder. Power Automate consumes the pending rows via '
   '/api/webhooks/processing-complete and performs the Graph move. Never deletes '
-  '(see the separate retention sweep). See docs/EMAIL_AUTO_ARCHIVE.md.';
+  '(see the separate retention sweep). See docs/architecture/EMAIL_AUTO_ARCHIVE.md.';
 
 -- One authoritative decision per email (first emit wins; PA fires the flow 3-6x
 -- per flag and replays must not enqueue a second move). emitProcessingComplete

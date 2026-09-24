@@ -4,7 +4,7 @@
 
 **Trigger:** Earlier developer-tracking session surfaced that sample sales records were missing many transaction elements and that duplicates were appearing for the same sale on the same property. This audit confirms both observations, traces their root causes, and lays out the gap inventory.
 
-**Inputs reviewed:** `supabase/migrations/**`, `sql/`, `schema/`, `api/_handlers/sidebar-pipeline.js`, `api/_handlers/intake-promoter.js`, `api/sync.js`, `api/admin.js`, `detail.js`, plus the existing audit corpus (`DATA_INTEGRITY_AUDIT_2026-05-20.md`, `GAPS_AND_FINDINGS_REGISTER.md`, `AUDIT_PROGRESS.md`, `OWNERSHIP_*.md`, `SPEC_deed_county_ingestion_fix.md`, `SPEC_sos_direct_scraper.md`, `SPEC_owner_data_ingestion_2026-05-21.md`, `SPEC_unified_contacts_gov_dia_wiring_2026-05-21.md`, `CoStar_Ingestion_Audit_15002_Amargosa.md`, `CoStar_Ingestion_Audit_12316_Molly_Pitcher.md`, `Claude_Code_Prompts_SaleNotes_DocIngestion.md`, `RCM_LOOPNET_FIX_INSTRUCTIONS.md`, `Lease_Data_Provenance_Schema_Design.md`).
+**Inputs reviewed:** `supabase/migrations/**`, `sql/`, `schema/`, `api/_handlers/sidebar-pipeline.js`, `api/_handlers/intake-promoter.js`, `api/sync.js`, `api/admin.js`, `detail.js`, plus the existing audit corpus (`DATA_INTEGRITY_AUDIT_2026-05-20.md`, `GAPS_AND_FINDINGS_REGISTER.md`, `AUDIT_PROGRESS.md`, `OWNERSHIP_*.md`, `SPEC_deed_county_ingestion_fix.md`, `docs/history/SPEC_sos_direct_scraper.md`, `SPEC_owner_data_ingestion_2026-05-21.md`, `SPEC_unified_contacts_gov_dia_wiring_2026-05-21.md`, `CoStar_Ingestion_Audit_15002_Amargosa.md`, `CoStar_Ingestion_Audit_12316_Molly_Pitcher.md`, `Claude_Code_Prompts_SaleNotes_DocIngestion.md`, `RCM_LOOPNET_FIX_INSTRUCTIONS.md`, `Lease_Data_Provenance_Schema_Design.md`).
 
 ---
 
@@ -180,7 +180,7 @@ Three layers, only one of which is currently live:
 | G2b | Stated cap rate overwritten to NULL on non-recent sales | `sidebar-pipeline.js:4671–4763` | MED | Remove the NULL-out branch; keep stated cap rate on every sale row with `cap_rate_source='costar_stated'` and `cap_rate_confidence='low'`. |
 | G3 | Deed/parcel scrapers don't persist `property_id` | Python scrapers | HIGH | Modify `src/county_scraper.py` and `src/public_record_ingest.py` to accept and write the property context that triggered the fetch. Also persist `situs_address` + `apn` to enable retroactive backfill on future runs. |
 | G4 | Owner-entity dedup not enforced at write time | All ingestion writers | HIGH | Add `BEFORE INSERT` trigger on `recorded_owners`/`true_owners` that consults `resolve_company()` and either reuses the existing UUID or inserts a `contact_aliases` row. Schedule the address-canonical matcher (already spec'd). |
-| G5 | SOS enrichment never runs | `api/_shared/llc-research.js` | HIGH | Replace the placeholder OpenCorporates path with the per-state adapters described in `SPEC_sos_direct_scraper.md`. Keep the sidebar write-back as the manual fallback. |
+| G5 | SOS enrichment never runs | `api/_shared/llc-research.js` | HIGH | Replace the placeholder OpenCorporates path with the per-state adapters described in `docs/history/SPEC_sos_direct_scraper.md`. Keep the sidebar write-back as the manual fallback. |
 | G6 | Cap rates >10% on gov pollute metrics | `v_sales_comps_projected_rent`, gov ingestion | MED | Validate `sold_cap_rate` at insert against `gross_rent`/`noi`; tag `cap_rate_quality='implausible_unverified'` when outside 3–10%; exclude tagged rows from comp views. |
 | G7 | `unified_contacts` missing on dia | Schema decision | MED | Adopt the dia-side variant or commit to a single LCC-Opps `unified_contacts` (the latter aligns with `SPEC_unified_contacts_gov_dia_wiring_2026-05-21.md`). Backfill 13,964 dia properties. |
 | G8 | Owner→SF link near zero | `api/admin.js` + Salesforce bridge | MED | Implement the SF link/create route in `OWNERSHIP_ORCHESTRATION_BLUEPRINT §2`. For owners crossing the lead-priority threshold, auto-create an Account stub. |
@@ -223,4 +223,4 @@ These need a call before remediation can be sequenced:
 
 ---
 
-*Audit prepared 2026-05-23. Source references inline. Companion docs: `DATA_INTEGRITY_AUDIT_2026-05-20.md`, `GAPS_AND_FINDINGS_REGISTER.md`, `OWNERSHIP_INTELLIGENCE_WIRING_DESIGN_2026-05-21.md`, `OWNERSHIP_ORCHESTRATION_BLUEPRINT_2026-05-21.md`, `SPEC_deed_county_ingestion_fix.md`, `SPEC_sos_direct_scraper.md`, `SPEC_unified_contacts_gov_dia_wiring_2026-05-21.md`.*
+*Audit prepared 2026-05-23. Source references inline. Companion docs: `DATA_INTEGRITY_AUDIT_2026-05-20.md`, `GAPS_AND_FINDINGS_REGISTER.md`, `OWNERSHIP_INTELLIGENCE_WIRING_DESIGN_2026-05-21.md`, `OWNERSHIP_ORCHESTRATION_BLUEPRINT_2026-05-21.md`, `SPEC_deed_county_ingestion_fix.md`, `docs/history/SPEC_sos_direct_scraper.md`, `SPEC_unified_contacts_gov_dia_wiring_2026-05-21.md`.*

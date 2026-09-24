@@ -1364,7 +1364,7 @@ export function buildChartConfig(chart, brand) {
       //   matched the data but not the PDF axis layout.)
       //
       // Colors retained from Round 1 (sage green / light purple / navy /
-      // sky) — already PDF-matched per docs/cm-pdf-vs-export-chart-deltas.md.
+      // sky) — already PDF-matched per docs/capital-markets/cm-pdf-vs-export-chart-deltas.md.
       const govLike = chart.vertical === 'gov'
                    || chart.vertical === 'government_leased';
       // Round 26 — gov cap window widened 5.0–8.5% → 5.0–9.0%. Gov
@@ -2187,7 +2187,7 @@ export function buildChartConfig(chart, brand) {
     }
 
     case 'leased_inventory_by_state': {
-      // Round 4d (deferred — see docs/cm-pdf-vs-export-chart-deltas.md item #22):
+      // Round 4d (deferred — see docs/capital-markets/cm-pdf-vs-export-chart-deltas.md item #22):
       //
       // The PDF (gov p.26) ships this as a US choropleth — states colored
       // by lease count. QuickChart's hosted service does NOT bundle the
@@ -2358,7 +2358,7 @@ export function buildChartConfig(chart, brand) {
     }
 
     case 'rent_heat_map': {
-      // Round 4d (deferred — see docs/cm-pdf-vs-export-chart-deltas.md item #22):
+      // Round 4d (deferred — see docs/capital-markets/cm-pdf-vs-export-chart-deltas.md item #22):
       // PDF (gov p.33) ships as a US choropleth color-graded by avg rent PSF.
       // Choropleth requires chartjs-chart-geo plugin not bundled in QuickChart
       // hosted; when self-hosted instance comes online, swap to choropleth via
@@ -2388,7 +2388,7 @@ export function buildChartConfig(chart, brand) {
     }
 
     case 'sources_of_capital': {
-      // Round 4d (deferred — see docs/cm-pdf-vs-export-chart-deltas.md item #22):
+      // Round 4d (deferred — see docs/capital-markets/cm-pdf-vs-export-chart-deltas.md item #22):
       // PDF (gov p.19) ships as a US bubble map (states colored by dollar
       // volume + circles overlaid on top states with $X.XB labels). Bubble
       // map = scatter geo overlay, also requires chartjs-chart-geo plugin.

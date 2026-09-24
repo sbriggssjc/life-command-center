@@ -346,8 +346,10 @@ flows:
     endpoint_families: [railway-briefing-email, lcc-flow-failure-ledger]
     exported_at: "2026-09-09T12:02:31Z"
     package_path: private/power-automate/exports/production/2026-09-09/briefing/LCCMorningBriefingv2_20260909120231.zip
-    runbook: docs/architecture/flows/lcc-weekday-briefing-email.md
+    runbook: docs/architecture/flows/BRIEFING_EMAIL_FLOW_v2.md
     notes: >-
+      (DOCMAP3 2026-09-24: runbook repointed from lcc-weekday-briefing-email.md, which documents the
+      older flow deleted 2026-06-05 per docs/audits/BRIEFING_EMAIL_ALERT_AUDIT_2026-06-05.md.)
       Mon-Fri 12:30 UTC. Gets calendar (V4) + To Do tasks, POSTs to
       https://tranquil-delight-production-633f.up.railway.app/api/briefing-email, sends the email;
       on failure posts a dead-letter row via lcc_record_flow_failure (p_flow_name "LCC Weekday Briefing

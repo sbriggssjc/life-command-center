@@ -151,7 +151,7 @@ Two durable lessons from the fix, both expanded in
    interceptor. To enforce: set `LCC_API_KEY` + `LCC_ENV=production` in the Railway env — **in that order**.
    Flipping `LCC_ENV` first (key empty, no `OPS_SUPABASE_URL` JWT path) 401s every request = **total sign-in
    lockout**. Verify readiness first via `GET /api/diag?kind=auth-ready` (`would_pass_in_production` must be
-   true). Runbook: `docs/AUTH_ENFORCEMENT_ROLLOUT.md`.
+   true). Runbook: `docs/setup/AUTH_ENFORCEMENT_ROLLOUT.md`.
 1. Prefer adding endpoints as **sub-routes** of an existing handler (`?action=` / `?_route=`). A brand-new
    `api/*.js` is allowed (no platform cap now), but the sub-route pattern keeps related routes in one handler.
    Historically the codebase held **≤12 `api/*.js`**; many round logs cite that count — it is a structure
@@ -194,6 +194,11 @@ LCC Opps. Which one is live is decided by the **`CONTACTS_HUB`** env var
 three tables to LCC Opps. **It is currently set to `ops`** — LCC Opps is live (31,038 rows and
 growing); the gov copy is a **frozen pre-cutover snapshot**, 30,709 rows, last written
 2026-08-17 (the cutover date), 0 rows touched since.
+⚠️ **CORRECTED 2026-09-24 (DOCMAP3, measured live on gov): the gov copy is NOT frozen.** It holds
+**30,874** rows, with **165 created and 877 updated since 2026-08-18**. The newest was created
+**2026-09-24 01:53 UTC**, so some service-role writer still mints contacts into the retired copy. The
+sentence above was true on the day it was written. Backlog **CONTACTS-GOV-WRITER** tracks the
+producer hunt; until it closes, a gov `unified_contacts` count is neither "frozen" nor canonical.
 
 **⚠️ The function that reads them is called `govQuery()` REGARDLESS** — it does path-based
 routing internally, so the NAME tells you nothing about which database a contact write lands
@@ -2941,7 +2946,7 @@ specific round; do not quote its counts as current — several have moved (the C
 - **Architecture start:** `LCC-OS.md` → `docs/os/README.md`; canon in `docs/os/canon/`; consolidation map
   `docs/os/REGISTRY.md`; surface sync `docs/os/SURFACE-SYNC-PROTOCOL.md`.
 - **API/routing reference (read before editing `/api/`):** `.github/AI_INSTRUCTIONS.md`.
-- **Auth rollout:** `docs/AUTH_ENFORCEMENT_ROLLOUT.md`.
+- **Auth rollout:** `docs/setup/AUTH_ENFORCEMENT_ROLLOUT.md`.
 - **OM intake:** `docs/architecture/om_intake_pipeline.md`.
 - **Provenance / self-learning loop:** `docs/architecture/data_quality_self_learning_loop.md`.
 - **Consumption-layer doctrine (long form):** `audit/data-flow-2026-05-30/CONSUMPTION_LAYER_DOCTRINE_2026-06-23.md`.
