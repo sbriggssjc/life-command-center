@@ -1173,8 +1173,19 @@ async function updateContact(req, res, user, id) {
 
 async function mergeContacts(req, res, user) {
   const { keep_id, merge_id, queue_id } = req.body || {};
+  const r = await mergeUnifiedContacts({ keep_id, merge_id, queue_id, user });
+  return res.status(r.status).json(r.body);
+}
+
+// The contact merge path, callable without an HTTP request (REVIEW-LANES1: the Decision Center
+// contacts-hub conflict lane merges through THIS, never a second merge writer). Returns
+// { ok, status, body } — body is exactly what POST /api/contacts?action=merge answers.
+const _mergeFail = (result, message) => ({
+  ok: false, status: result?.status || 500, body: { error: message, detail: result?.data || null },
+});
+export async function mergeUnifiedContacts({ keep_id, merge_id, queue_id, user }) {
   if (!keep_id || !merge_id) {
-    return res.status(400).json({ error: 'keep_id and merge_id are required' });
+    return { ok: false, status: 400, body: { error: 'keep_id and merge_id are required' } };
   }
 
   // Fetch both
@@ -1183,8 +1194,8 @@ async function mergeContacts(req, res, user) {
     govQuery('GET', `unified_contacts?unified_id=eq.${pgVal(merge_id)}&limit=1`)
   ]);
 
-  if (!keepResult.data?.length) return res.status(404).json({ error: 'keep_id contact not found' });
-  if (!mergeResult.data?.length) return res.status(404).json({ error: 'merge_id contact not found' });
+  if (!keepResult.data?.length) return { ok: false, status: 404, body: { error: 'keep_id contact not found' } };
+  if (!mergeResult.data?.length) return { ok: false, status: 404, body: { error: 'merge_id contact not found' } };
 
   const keep = keepResult.data[0];
   const merge = mergeResult.data[0];
@@ -1236,7 +1247,7 @@ async function mergeContacts(req, res, user) {
       sourceSurface: 'contacts_merge',
       propagationScope: 'unified_contact'
     });
-    if (!ensureGovWriteOk(mergePatchResult, res, 'Failed to update kept contact during merge')) return;
+    if (!mergePatchResult?.ok) return _mergeFail(mergePatchResult, 'Failed to update kept contact during merge');
   }
 
   // Log the merge
@@ -1256,7 +1267,7 @@ async function mergeContacts(req, res, user) {
     sourceSurface: 'contacts_merge',
     propagationScope: 'contact_change_log'
   });
-  if (!ensureGovWriteOk(mergeLogResult, res, 'Failed to log contact merge')) return;
+  if (!mergeLogResult?.ok) return _mergeFail(mergeLogResult, 'Failed to log contact merge');
 
   // Delete the merged contact
   await govQuery('DELETE', `unified_contacts?unified_id=eq.${pgVal(merge_id)}`);
@@ -1329,15 +1340,15 @@ async function mergeContacts(req, res, user) {
       sourceSurface: 'contacts_merge',
       propagationScope: 'contact_merge_queue'
     });
-    if (!ensureGovWriteOk(mergeQueueResult, res, 'Failed to update merge queue')) return;
+    if (!mergeQueueResult?.ok) return _mergeFail(mergeQueueResult, 'Failed to update merge queue');
   }
 
-  return res.status(200).json({
+  return { ok: true, status: 200, body: {
     action: 'merged',
     kept: keep_id,
     removed: merge_id,
     fields_filled: Object.keys(updates)
-  });
+  } };
 }
 
 // ============================================================================

@@ -157,7 +157,7 @@ describe('lane rationalization map', () => {
   });
 
   it('collapses decision types into the 8 logical lanes', () => {
-    assert.equal(LCC_REVIEW_LANES.length, 8);
+    assert.equal(LCC_REVIEW_LANES.length, 9); // +accuracy (REVIEW-LANES1)
     // 26 = 19 + Phase 1b contact_company_link (linkage, 2026-07-21)
     //         + W3.2 owner_reconcile (entity_merge lane, 2026-07-30)
     //         + W3.4 comp_review (provenance lane, 2026-07)
@@ -169,7 +169,7 @@ describe('lane rationalization map', () => {
     //         + OWN-T0e sponsor_family_confirm (ownership lane, 2026-09-09)
     //         + C13g-min-lane entity_type_review (entity_merge lane, 2026-09-09)
     //         + PDR1 / P13#1 ambiguous_entity_resolution (entity_merge lane, 2026-09-10).
-    assert.equal(Object.keys(LCC_DECISION_LANE_MAP).length, 31);
+    assert.equal(Object.keys(LCC_DECISION_LANE_MAP).length, 35); // +4 REVIEW-LANES1
     assert.equal(laneForDecisionType('sponsor_family_confirm'), 'ownership');
     assert.equal(laneForDecisionType('entity_type_review'), 'entity_merge');
     // R43: cap-rate review + bad-rent leases group under the provenance lane.
@@ -196,14 +196,15 @@ describe('lane rationalization map', () => {
       { decision_type: 'confirm_true_owner', n: 10 },
       { decision_type: 'nope', n: 99 }, // unknown → ignored
     ]);
-    assert.equal(rolled.length, 8);
+    assert.equal(rolled.length, 9);
     const entityLane = rolled.find((l) => l.lane === 'entity_merge');
     assert.equal(entityLane.n, 8);
     assert.deepEqual(entityLane.types.sort(), ['junk_entity_name', 'merge_duplicate_entities']);
     assert.equal(rolled.find((l) => l.lane === 'property_merge').n, 2);
     assert.equal(rolled.find((l) => l.lane === 'ownership').n, 10);
     assert.equal(rolled.find((l) => l.lane === 'intake').n, 0);
-    // order preserved
-    assert.equal(rolled[0].lane, 'ownership');
+    // order preserved — the REVIEW-LANES1 accuracy lane leads, ownership follows
+    assert.equal(rolled[0].lane, 'accuracy');
+    assert.equal(rolled[1].lane, 'ownership');
   });
 });

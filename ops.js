@@ -1870,6 +1870,10 @@ window.renderOpsHealthPage = renderOpsHealthPage;
 // VERDICT lane whose count drives the nav badge. Keep in sync with
 // FEDERATED_DECISION_TYPES in api/admin.js — the two define the same partition.
 var _DC_FEDERATED = new Set([
+  // REVIEW-LANES1 (2026-09-25): the four accuracy review queues (listing↔sale dia+gov, asset
+  // relinks, gov owner→hub contact, contacts-hub conflicts). Keep in sync with admin.js
+  // FEDERATED_DECISION_TYPES (test/decision-center-partition.test.mjs).
+  'listing_sale_review', 'asset_property_link_review', 'gov_owner_contact_review', 'contact_hub_conflict',
   // PDR1 / P13#1 (2026-09-10): the needs_human half of the ambiguous-entity
   // automerge lane. Source = `entities` rows carrying metadata.ambiguous_
   // resolution whose planner score misses the auto-merge threshold; verdicts
@@ -2048,6 +2052,13 @@ async function renderReviewConsolePage() {
     // drift onto different sources (the P132 defect).
     const t0Lane = res.data.lanes.find(function (l) { return l.key === 'tier0_owner_contact'; });
     if (t0Lane && typeof t0Lane.count === 'number') dc['tier0_owner_contact'] = t0Lane.count;
+    // REVIEW-LANES1: the accuracy lanes read their live open counts (each source closes its own
+    // row on a verdict, so there is nothing to subtract).
+    ['listing_sale_review', 'asset_property_link_review', 'gov_owner_contact_review', 'contact_hub_conflict']
+      .forEach(function (k) {
+        const ln = res.data.lanes.find(function (l) { return l.key === k; });
+        if (ln && typeof ln.count === 'number') dc[k] = ln.count;
+      });
   }
   // W3.4: comp reconciliation reviews (flagged sold comps) keep their own
   // status-shaped worklist (dia_comp_review_queue + gov_comp_review_queue).
@@ -2063,6 +2074,11 @@ async function renderReviewConsolePage() {
   // Every sub-lane (decision_type) with its existing renderer — NOTHING lost.
   // Grouped into the 8 logical lanes via the Tier 3 lane map (review-shared.js).
   const SUBLANES = [
+    // REVIEW-LANES1 — the accuracy lanes, ordered by how much each changes what Scott sees.
+    { dt: 'listing_sale_review', label: 'Available listings — sold or still on market?', open: "renderFederatedLane('listing_sale_review')" },
+    { dt: 'asset_property_link_review', label: 'Asset → property relinks (merged away)', open: "renderFederatedLane('asset_property_link_review')" },
+    { dt: 'gov_owner_contact_review', label: 'Gov owner → hub contact', open: "renderFederatedLane('gov_owner_contact_review')" },
+    { dt: 'contact_hub_conflict', label: 'Contacts hub — two contacts, one owner', open: "renderFederatedLane('contact_hub_conflict')" },
     { dt: 'confirm_true_owner', label: 'Confirm the true owner', open: "renderDecisionLane('confirm_true_owner')" },
     { dt: 'confirm_buyer_parent', label: 'Buyer parents & SF mapping', open: 'renderBuyerParentLane()', extra: 'map_sf_parent_account' },
     { dt: 'resolve_owner_parent', label: 'Owner → ultimate parent', open: "renderFederatedLane('resolve_owner_parent')" },
