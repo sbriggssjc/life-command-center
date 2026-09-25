@@ -44,7 +44,7 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 | **Broker identity (BR) / BROKER1** | BR1, BR2, BR3, BR4, BR4-b, BR5, BR1-misparse-handoff, BROKER1, BROKER1-sf | 2026-09-17 | **BR4 live**: 3 true duplicates merged, 52 firms minted with evidence, `broker_company_id` 14.4% → **25.0%** (641/2,566); residue → BR4-b (123 firm-shaped broker rows, 468 review); BR5 display next |
 | **gov agency canonicalization (ID3a\*)** | ID3a, ID3a-b, ID3a-c, ID3a-d, ID3e, I14, I16 | 2026-09-12 | ID3a-b/c/d/e all shipped and live-verified; repo-ownership hazard (I16) found and closed — `government-lease` owns the gov DB's migrations, LCC's copy retired |
 | **CI / producer health (B6d/B6e)** | B6d-cms-*, B6d-assessor-*, B6d-pri-*, B6e-ci-*, B6e-fred-* | archived 2026-09-11 | Suite is a real merge gate (`Run Tests` unmasked, green once on `main`); `pip-audit`/secrets-grep/ruff still masked; full detail in the 2026-08-29→09-11 archive and `docs/architecture/producer-health-and-ci-enforcement.md` |
-| **Security / RLS (SEC7)** | SEC7, SEC7-views, SEC7-policy-withcheck, SEC7-phase-2, SEC7-gov-invoker-views, DIA-REDIRECTS-ANON-WRITE | 2026-09-24 | Phase 1 live: the 4 identity ledgers + the redirect view locked, guarded, and writers proven. Phase 2 inventoried: anon can UPDATE all gov `ownership_history` and dia `sales_transactions` rows through definer views (`SEC7-views`) |
+| **Security / RLS (SEC7)** | SEC7, SEC7-views, SEC7-policy-withcheck, SEC7-phase-2, SEC7-gov-invoker-views, DIA-REDIRECTS-ANON-WRITE | 2026-09-24 | Phase 1 + phase 2a live. Writable definer views (dia 10 / gov 7 / LCC 21) and `WITH CHECK (true)` / anon-write policies (dia 14 tables / gov 3) closed; reads kept; `<dom>_sec7_write_path_violations()` reads 0 on all three. No writer needed re-routing. Next: `SEC7-phase-2` (RLS-off tables dia 58 / gov 48 / LCC 124; top 10 in `docs/audits/SEC7_PHASE2A_2026-09-24.md` §4) |
 
 > **📦 ARCHIVE (2026-09-08):** entries for **2026-08-31 → 2026-09-01** (the CMS-ingestion restart,
 > DOC1–DOC18 document pipeline, C13/C14 entity-role work, and the trailing pointers for two earlier
@@ -77,6 +77,16 @@ applied a different rule.
 `docs/audits/LISTING_SALE_PARITY1_2026-09-24.md`.
 
 **Next.** Scott re-checks Gov Available. `-review-lane` (15 open) and `-sf-promoter` are filed.
+## 2026-09-24 — SEC7-PHASE2A (CC): writable definer views and `WITH CHECK (true)` policies closed on all three DBs; no writer broke
+
+- **Writer inventory first** (`edge_logs` 09-17..24, role from JWT or `sb_secret_`/`sb_publishable_` key prefix): **zero** anon/authenticated writes to any target view or table on dia, gov or LCC Opps. The only anon writer anywhere is Power Automate → `rpc/lcc_record_flow_failure` (LCC, untouched). `lead-ingest`'s `DIA_SUPABASE_KEY` (historically the anon key) resolved to `sb_secret_` on its last writes, so it is service role. **No writer was re-routed.**
+- **Views:** revoked INSERT/UPDATE/DELETE/TRUNCATE on every public definer view with `pg_relation_is_updatable(oid, true) > 0`: dia **10** (CC's 9 plus `scrub_cache`, writable through INSTEAD OF triggers), gov **7**, LCC **21**. SELECT is kept everywhere. Proven live: anon/authenticated 42501; anon still reads `v_ownership_history_portfolio` (12,697 rows); service_role still writes.
+- **Policies:** dropped the client write policies on dia `ingestion_tracker`, `cmbs_loans`, `cmbs_loan_properties`, `salesforce_accounts`, `lease_rent_schedule`/`_extensions`/`_options`, `facility_patient_counts`, `ingestion_log`, `bd_execution_log`, plus 4 more that are named "service role"/"authenticated" but are `TO public` (`loopnet_listing_map`, `marketing_leads`, `scrub_cache_backing`, `user_interactions`). On gov: `property_sale_events`, `research_queue_outcomes`, `ingestion_log`. Each gets a `TO service_role` policy. Where a dropped policy was a client's read path, it gets a SELECT policy for the same roles. Client write grants are revoked. Anon watermark INSERT on `ingestion_tracker` → 42501.
+- **Guard:** `dia_/gov_/lcc_sec7_write_path_violations()` (views + unconditional client write policies + phase-2a grants) read **0**. Migrations: dia `20261013140000`, gov `sql/20260924_gov_sec7_phase2a_write_paths.sql`, LCC `20261102350000`. Tests: 11 + 11 + 5, 14 mutations, each seen red.
+- **Phase-2 re-count unchanged** (58 / 48 / 124; the phase-2a tables already had RLS on). **`SEC7-gov-invoker-views` closed:** 0 `authenticated` requests to gov in 7 days.
+- LCC Opps was applied without a branch (view-write revokes only, with zero client writers logged). The phase-2 table flips still go on a branch.
+
+**Next:** `SEC7-phase-2`, top 10 in `docs/audits/SEC7_PHASE2A_2026-09-24.md` §4. No Railway deploy (no LCC runtime code changed).
 
 ## 2026-09-24 — Round 78 (Cowork): REGISTRY2-FOLLOWTHROUGH + SEC7-LEDGERS reconciled live; Scott's "sold but still Available" traced to a dead gov trigger; `LISTING-SALE-PARITY1` + `SEC7-PHASE2A` prompted
 
