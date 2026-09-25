@@ -243,6 +243,8 @@ app.all('/api/resolve-owner-link', (req, res) => { req.query._route = 'resolve-o
 // R7 Phase 1 Slice 2 (2026-06-07): Decision Center list / verdict / SF search.
 app.all('/api/decisions', (req, res) => { req.query._route = 'decisions'; adminHandler(req, res); });
 app.all('/api/decision-verdict', (req, res) => { req.query._route = 'decision-verdict'; adminHandler(req, res); });
+app.all('/api/decision-undo', (req, res) => { req.query._route = 'decision-undo'; adminHandler(req, res); });
+app.all('/api/review-lanes-tick', (req, res) => { req.query._route = 'review-lanes-tick'; adminHandler(req, res); });
 app.all('/api/decision-sf-search', (req, res) => { req.query._route = 'decision-sf-search'; adminHandler(req, res); });
 app.all('/api/junk-bucket', (req, res) => { req.query._route = 'junk-bucket'; adminHandler(req, res); });
 app.all('/api/exact-merge', (req, res) => { req.query._route = 'exact-merge'; adminHandler(req, res); });

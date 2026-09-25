@@ -33,6 +33,10 @@
 // single source of truth consumed by the consolidated lane index in Phase 2.
 // Phase 1 only DEFINES it — no decision_type is deleted or re-routed yet.
 var LCC_REVIEW_LANES = [
+  // REVIEW-LANES1 (2026-09-25): first because these decide whether what Scott SEES is true —
+  // an Available listing that already sold, an asset pointing at a deleted property, a gov owner
+  // with no contact, two contacts for one owner.
+  { lane: 'accuracy',      title: 'Accuracy — is what you see true?', question: 'Sold or still available? Which property? Same company?' },
   { lane: 'ownership',     title: 'Ownership & control',     question: 'Who is the true owner — confirm or correct?' },
   { lane: 'buyer_mapping', title: 'Buyer parents & SF mapping', question: 'Confirm the sponsor / map to the Salesforce parent account.' },
   { lane: 'entity_merge',  title: 'Entities — merge & clean', question: 'Same entity? Merge duplicates, rename junk, or keep separate.' },
@@ -47,6 +51,10 @@ var LCC_REVIEW_LANES = [
 // mapped; the SOS owner-contact worklist (built-in, not a decision_type) maps to
 // 'linkage' under the synthetic key 'sos_owner_links'.
 var LCC_DECISION_LANE_MAP = {
+  listing_sale_review:           { lane: 'accuracy',      merges: false },
+  asset_property_link_review:    { lane: 'accuracy',      merges: false },
+  gov_owner_contact_review:      { lane: 'accuracy',      merges: false },
+  contact_hub_conflict:          { lane: 'accuracy',      merges: 'contact' },
   confirm_true_owner:            { lane: 'ownership',     merges: false },
   resolve_ownership:             { lane: 'ownership',     merges: false },
   confirm_buyer_parent:          { lane: 'buyer_mapping', merges: false },
