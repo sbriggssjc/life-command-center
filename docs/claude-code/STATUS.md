@@ -54,6 +54,43 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-25 — SALE-PROMOTER1 (CC): sales SF and CoStar already knew are recorded; 5 of the 11 listings closed, 6 went to review with a reason
+
+**Shipped, live on both DBs.** One pure rule set, `lcc_sale_candidate_verdict`, byte-identical (live md5
+`5e7ad339…`), and one guarded writer per DB, `<dom>_promote_market_sales`. The writer is dry-run by
+default, logged, reversible and idempotent. Crons run at gov 05:50 and dia 05:52 UTC. The sidebar has a
+staging table, and dia's was loaded in-session: 17 rows.
+
+**The 11.**
+- Closed and linked: Walla Walla, Savannah, Moses Lake, Jasper, Manchester.
+- To review:
+  - Bronx: promoted, but the listing has no capture date.
+  - Durham: owner-user sale, written excluded.
+  - Asbury: owner-user sale already on file.
+  - Marathon: the listing is on the wrong property (41088 has the sale).
+  - Oak Forest and Kissimmee: the sale is on a duplicate property row.
+- Also promoted: gov West Plains, dia 24483 (listing closed) and dia 25203.
+- Guard 0 on both DBs. Open reviews: gov 10, dia 14.
+
+**Rule calls.** A price-less transfer is refused. This keeps R37: the sidebar never mints price-less
+sales. A non-market sale is written with `exclude_from_market_metrics`, and its listing goes to review,
+because the parity verdict never closes on a non-market sale. "Undisclosed" does not count as a party.
+SF staging held two comps twice; both are now deduped.
+
+**Stale rule.** Age counts from capture when the SF on-market date is older. Gov queue 158 → 27
+(131 released); dia 65 → 26 (39 released).
+
+⚠️ **Incident, mine: 131 gov listings left Available for 3h45m.** The pre-existing
+`gov_restore_listing_sale_close` replayed `listing_status` for stale-verify rows, which carry no status,
+so the release set all 131 to NULL (16:07–19:55 UTC; active 465 → 334). The function is fixed and the
+rows are back (active 465, UC 11, NULL 0). A regression test covers it. I didn't re-read `active` right
+after the release; I caught it only at the end-of-round check.
+
+**Tests.** gov 39 pass (12 mutations red), LCC 20 pass (9 red); the parity suites still pass.
+**Deploy.** DB only; no LCC JS changed, so no Railway redeploy. Writeup: `docs/audits/SALE_PROMOTER1_2026-09-25.md`.
+**Next.** `SALE-PROMOTER1-sidebar-feed` (no scheduled sidebar feed yet), `-dup-properties`, `-history`;
+REVIEW-LANES1 consumes the new review rows.
+
 ## 2026-09-25 — Round 79 (Cowork): LISTING-SALE-PARITY1 + SEC7-PHASE2A reconciled live; contacts +24 h clean; `SALE-PROMOTER1` + `REVIEW-LANES1` prompted
 
 **Deploy.** `tranquil-delight` is on `272ddf81`. Both merges were database-side only, so no redeploy was needed.
