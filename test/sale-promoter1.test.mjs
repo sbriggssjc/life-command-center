@@ -1,7 +1,7 @@
 // SALE-PROMOTER1 (2026-09-25) — record the sales Salesforce and the CoStar sidebar already know
 // about, so a sold dia listing closes itself through LISTING-SALE-PARITY1's triggers.
 //
-// Behavioural. The parity migration and then supabase/migrations/dialysis/20261015120000_dia_sale_promoter1.sql
+// Behavioural. The parity migration and then supabase/migrations/dialysis/20261015130000_dia_sale_promoter1.sql
 // are applied, byte for byte, to a throwaway Postgres cluster (the parity test's seed, read from
 // test/listing-sale-parity1.test.mjs, plus the columns this file writes). Then:
 //   * the shared rule block matches the md5 pinned in both repos (government-lease
@@ -27,7 +27,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const DIR = join(ROOT, 'supabase', 'migrations', 'dialysis');
 const PARITY = join(DIR, '20261014120000_dia_listing_sale_parity1.sql');
-const MIGRATION = join(DIR, '20261015120000_dia_sale_promoter1.sql');
+const MIGRATION = join(DIR, '20261015130000_dia_sale_promoter1.sql');
 const CASES = JSON.parse(readFileSync(join(ROOT, 'test', 'fixtures', 'sale_candidate_verdict_cases.json'), 'utf8'));
 const BEGIN = '-- ===== BEGIN lcc_sale_candidate_verdict';
 const END = '-- ===== END lcc_sale_candidate_verdict =====';
