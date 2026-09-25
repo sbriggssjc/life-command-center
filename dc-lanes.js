@@ -21,6 +21,16 @@
 let _dcFedArr = [];
 let _dcFedType = null;
 const _DC_FED_META = {
+  // REVIEW-LANES1 (2026-09-25) — the accuracy lanes. Every verdict writes through one DB function
+  // and can be undone from the collapsed card (Undo) or POST /api/decision-undo.
+  listing_sale_review: { title: 'Available listings — sold or still on market?',
+    intro: 'An Available listing (dia or gov) that may already have sold. The rule that closes listings on a sale was not sure, so it asked instead of guessing: the sale landed long before we first saw the listing, at a different price, on a twin record at the same address, or at exactly the same price years earlier. Read the sale line against the listing line. “Sold — close it” closes the listing with that sale (logged, undoable). “Still available” keeps it on market and that sale is never proposed for it again. Anything a later sale or another path already settled was closed automatically before it reached you.' },
+  asset_property_link_review: { title: 'Asset → property relinks',
+    intro: 'An asset whose dia property was deleted by a merge that no ledger recorded (MERGELOG-GAP). The evidence names one or two live properties — usually the same address, sometimes two twin rows for one building. Pick the one this asset is: it is repointed there (logged, undoable) and the “Not on file” flag comes off. “None of these” leaves it flagged. A later merge ledger that names a candidate resolves it automatically.' },
+  gov_owner_contact_review: { title: 'Gov owner → hub contact',
+    intro: 'A gov recorded owner with no contact on the hub, where the name match was not exact enough to link on its own. Link attaches the proposed hub contact (only if nothing else holds it). Create makes a new business contact for the owner. “Already on the hub” means the proposed contact already stands for this company under a duplicate gov owner — nothing is written. “Not the same” stops asking. Duplicate-owner cases with the same company key and no state conflict were resolved automatically. Every verdict is undoable.' },
+  contact_hub_conflict: { title: 'Contacts hub — two contacts, one owner',
+    intro: 'Two hub contacts now point at one gov owner after gov merged two owner records. Merge folds the tombstone contact into the one already on the survivor through the contact merge path (a snapshot is taken first, so Undo puts both back). It is refused when one is a person and the other a company. Repoint moves the contact to the survivor when no other contact holds it. Keep both records the decision and changes nothing.' },
   intake_disposition: { title: 'Staged intake — needs review',
     intro: 'Genuine new-listing candidates (unmatched OM / flyer / brochure with extracted data), value-ranked by asking price. Create the property, re-extract (OCR), dismiss, or research. Use “Show all” to also see already-matched rows (open / promote) and market-blast noise; empty extractions are auto-retired.' },
   property_merge: { title: 'Property merges & duplicates',
@@ -88,6 +98,124 @@ const _DC_FED_META = {
   npi_dedup_autoapprove: { title: 'NPI duplicates → approve',
     intro: 'W5.2. A dia duplicate-NPI cluster the deterministic gate scored auto-resolvable — a proposed survivor is shown. A human APPROVES the deterministic survivor (fill-blanks / never-guess applies to destructive dedup too), or rejects it. Approval spawns the reconcile task; the actual merge stays human/worker-driven — NEVER a silent auto-collapse.' },
 };
+
+// ── REVIEW-LANES1 cards ─────────────────────────────────────────────────────
+var _DC_RL1_TYPES = ['listing_sale_review', 'asset_property_link_review', 'gov_owner_contact_review', 'contact_hub_conflict'];
+
+function _rl1Months(a, b) {
+  const da = a ? new Date(a) : null, db = b ? new Date(b) : null;
+  if (!da || !db || isNaN(da) || isNaN(db)) return null;
+  return Math.round((db - da) / (30.44 * 86400000));
+}
+function _rl1Why(c) {
+  const v = String(c.verdict || '');
+  const gap = _rl1Months(c.sale_date, c.capture_date);
+  if (v.indexOf('review_twin_') === 0) return 'The sale is recorded on a second property row at the same address (#' + esc(String(c.sale_property_id)) + (c.sale_property_address ? ' · ' + esc(c.sale_property_address) : '') + '), not on this listing\'s own property.';
+  if (v === 'review_same_price') return 'The asking price is exactly the sold price of a sale ' + (gap != null ? gap + ' months' : 'well') + ' before we first saw the listing — often the old deal\'s OM re-captured.';
+  if (v === 'review_sold_before_capture') return 'The sale closed ' + (gap != null ? gap + ' months' : '') + ' before we first saw this listing, and nothing else ties them together.';
+  if (v === 'review_sold_near_entry') return 'It sold within 90 days of going on market, but the asking and sold prices differ by more than 30%.';
+  if (v === 'review_price_mismatch') return 'It sold after we saw it listed, but the price is off by more than 2×.';
+  // Reviews raised by another producer (e.g. SALE-PROMOTER1) carry their own reasoning.
+  if (c.details && c.details.note) return esc(String(c.details.note));
+  if (v === 'review_non_market_sale') return 'The sale is not a market sale (owner-user, portfolio or excluded) — did it still take this listing off the market?';
+  if (v === 'review_listing_on_wrong_property') return 'The listing may be attached to the wrong property.';
+  return esc(v);
+}
+function _rl1PropLink(dom, pid, label) {
+  if (!dom || pid == null || typeof openUnifiedDetail !== 'function') return esc(label || ('#' + pid));
+  return '<a href="#" onclick="openUnifiedDetail(\'' + esc(dom) + '\', {property_id: ' + esc(String(pid)) + '}, {}, \'Overview\');return false;">' + esc(label || ('#' + pid)) + '</a>';
+}
+function _rl1CardParts(type, c, i) {
+  let body = '', actions = '';
+  if (type === 'listing_sale_review') {
+    const loc = [c.city, c.state].filter(Boolean).join(', ');
+    const ratio = (c.ask_to_sold_ratio != null) ? Number(c.ask_to_sold_ratio) : null;
+    body = '<div class="q-item-header"><span class="q-item-title">' + _rl1PropLink(c.domain, c.property_id, c.address || ('Property ' + c.property_id)) + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">' + esc(c.domain) + '</span>'
+      + (c.via_twin ? '<span class="q-badge pri-high">sale on a twin row</span>' : '')
+      + (ratio != null ? '<span class="q-badge">ask ÷ sold ' + ratio.toFixed(2) + '</span>' : '') + '</div></div>'
+      + (loc ? '<div class="q-item-meta">' + esc(loc) + '</div>' : '')
+      + '<div class="q-item-meta">Listing: <b>' + (_fedMoney(c.asking_price) || 'no asking price') + '</b>'
+      + ' · first seen ' + esc(c.capture_date || '—')
+      + (c.on_market_date ? ' · on market ' + esc(c.on_market_date) + (c.on_market_date_confidence ? ' (' + esc(c.on_market_date_confidence) + ' confidence)' : '') : '')
+      + '</div>'
+      + '<div class="q-item-meta">Sale: <b>' + (_fedMoney(c.sold_price) || 'no price') + '</b> on ' + esc(c.sale_date || '—')
+      + ' · sale #' + esc(String(c.sale_id)) + '</div>'
+      + '<div class="q-item-meta" style="opacity:.8">' + _rl1Why(c) + '</div>';
+    actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'confirm_sold\')">Sold — close the listing</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'reject\')">Still available — not this sale</button>';
+  } else if (type === 'asset_property_link_review') {
+    const cands = Array.isArray(c.candidates) ? c.candidates : [];
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.entity_address || c.entity_name || 'Asset') + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">' + esc(c.domain || 'dia') + '</span>'
+      + '<span class="q-badge">was #' + esc(String(c.dropped_property_id)) + ' (deleted)</span>'
+      + (cands.length > 1 ? '<span class="q-badge pri-high">twin rows — pick one</span>' : '') + '</div></div>'
+      + '<div class="q-item-meta">Evidence: ' + esc((c.signals || []).join(' + ') || 'address') + '</div>'
+      + (c.note ? '<div class="q-item-meta" style="opacity:.8">' + esc(c.note) + '</div>' : '')
+      + cands.map(function (p) {
+        return '<div class="q-item-meta">#' + esc(p.property_id) + ' — '
+          + (p.exists ? _rl1PropLink(c.domain, p.property_id, [p.address, p.city, p.state].filter(Boolean).join(', ')) : '<b>no longer exists</b>')
+          + '</div>';
+      }).join('');
+    actions = cands.filter(function (p) { return p.exists; }).map(function (p, k) {
+      return '<button class="q-action' + (k === 0 ? ' primary' : '') + '" onclick="dcFed(' + i + ',\'relink\',{kept:\'' + esc(p.property_id) + '\'})">It’s #' + esc(p.property_id) + '</button>';
+    }).join('') + '<button class="q-action" onclick="dcFed(' + i + ',\'no_match\')">None of these</button>';
+  } else if (type === 'gov_owner_contact_review') {
+    const cand = c.candidate || null;
+    const linked = cand && cand.linked_owner_id;
+    const reasonTxt = { tier0_ambiguous: 'exact name — several hub contacts share it', tier1_fuzzy: 'close name, not exact',
+      unified_row_already_linked: 'exact name — contact already on another gov owner' }[c.reason] || c.reason;
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.owner_name || 'Gov owner') + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">gov owner</span>' + (c.owner_state ? '<span class="q-badge">' + esc(c.owner_state) + '</span>' : '')
+      + '<span class="q-badge type">' + esc(reasonTxt || '') + '</span>'
+      + (c.match_score != null ? '<span class="q-badge">score ' + Number(c.match_score).toFixed(2) + '</span>' : '') + '</div></div>'
+      + (cand ? '<div class="q-item-meta">Proposed hub contact: <b>' + esc(cand.company_name || cand.name || cand.unified_id) + '</b>'
+        + (cand.name && cand.company_name ? ' (' + esc(cand.name) + ')' : '') + (cand.state ? ' · ' + esc(cand.state) : '')
+        + (cand.email ? ' · ' + esc(cand.email) : '') + (cand.sf_account_id ? ' · SF ' + esc(cand.sf_account_id) : '') + '</div>' : '')
+      + (linked ? '<div class="q-item-meta">That contact is already on gov owner <b>' + esc(cand.linked_owner_name || cand.linked_owner_id) + '</b>'
+        + (cand.linked_owner_live === false ? ' (merged away)' : '') + '.</div>' : '');
+    actions = (linked
+      ? '<button class="q-action primary" onclick="dcFed(' + i + ',\'already_represented\')">Already on the hub</button>'
+      : (cand ? '<button class="q-action primary" onclick="dcFed(' + i + ',\'link\')">Link this contact</button>' : ''))
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'create\')">Create a new contact</button>'
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'not_same\')">Not the same</button>';
+  } else if (type === 'contact_hub_conflict') {
+    const nm = function (co, f, l) { return esc(co || [f, l].filter(Boolean).join(' ') || '—'); };
+    body = '<div class="q-item-header"><span class="q-item-title">' + esc(c.survivor_owner_name || 'Gov owner') + '</span>'
+      + '<div class="q-item-badges"><span class="q-badge">gov owner merge</span>'
+      + (Number(c.survivor_holders) > 1 ? '<span class="q-badge pri-high">' + esc(String(c.survivor_holders)) + ' contacts already on it</span>' : '') + '</div></div>'
+      + '<div class="q-item-meta">On the merged-away owner (<i>' + esc(c.tomb_owner_name || '') + '</i>): <b>' + nm(c.company_name, c.first_name, c.last_name) + '</b>'
+      + ' · ' + esc(c.contact_class || '') + (c.email ? ' · ' + esc(c.email) : '') + (c.sf_account_id ? ' · SF ' + esc(c.sf_account_id) : '') + '</div>'
+      + (c.holder_unified_id
+        ? '<div class="q-item-meta">Already on the survivor: <b>' + nm(c.holder_company_name, c.holder_first_name, c.holder_last_name) + '</b>'
+          + ' · ' + esc(c.holder_class || '') + (c.holder_email ? ' · ' + esc(c.holder_email) : '') + (c.holder_sf_account_id ? ' · SF ' + esc(c.holder_sf_account_id) : '') + '</div>'
+        : '<div class="q-item-meta">No contact holds the survivor yet.</div>');
+    const sameClass = (c.contact_class || '') === (c.holder_class || '');
+    actions = (c.holder_unified_id
+      ? (sameClass && Number(c.survivor_holders) === 1
+        ? '<button class="q-action primary" onclick="dcFed(' + i + ',\'merge\')">Merge into the survivor’s contact</button>' : '')
+      : '<button class="q-action primary" onclick="dcFed(' + i + ',\'repoint_to_survivor\')">Move it to the survivor</button>')
+      + '<button class="q-action" onclick="dcFed(' + i + ',\'keep_both\')">Keep both</button>';
+  }
+  return { body: body, actions: actions };
+}
+
+async function dcFedUndo(decisionId, i) {
+  const res = await opsApi('/api/decision-undo', { method: 'POST', body: JSON.stringify({ decision_id: decisionId }) });
+  const row = document.getElementById('dc-f' + i);
+  if (res.ok && res.data && res.data.ok) {
+    if (typeof showToast === 'function') showToast('Undone — back in the lane', 'success');
+    if (row && _dcFedArr[i]) {
+      const tmp = document.createElement('div');
+      tmp.innerHTML = _fedCardHTML(_dcFedArr[i], i, false);
+      const fresh = tmp.firstChild;
+      if (fresh) row.replaceWith(fresh);
+    }
+  } else if (typeof showToast === 'function') {
+    showToast('Undo failed: ' + ((res.data && (res.data.error || res.data.message)) || res.status), 'error');
+  }
+}
+window.dcFedUndo = dcFedUndo;
 
 function _fedMoney(n) { n = Number(n); return (isFinite(n) && n > 0) ? '$' + Math.round(n).toLocaleString() : ''; }
 
@@ -1009,6 +1137,13 @@ function _fedCardHTML(it, i, isNext) {
     actions = '<button class="q-action primary" onclick="dcFed(' + i + ',\'confirm\')">' + confirmLabel + '</button>'
       + '<button class="q-action" onclick="dcFed(' + i + ',\'reject\')">Reject — keep untouched</button>';
   }
+  // REVIEW-LANES1: one renderer for the four accuracy lanes (explicit comparisons, not
+  // _DC_RL1_TYPES, so this function still evaluates when a test slices it out on its own).
+  if (_dcFedType === 'listing_sale_review' || _dcFedType === 'asset_property_link_review'
+      || _dcFedType === 'gov_owner_contact_review' || _dcFedType === 'contact_hub_conflict') {
+    const parts = _rl1CardParts(_dcFedType, c, i);
+    body = parts.body; actions = parts.actions;
+  }
   return '<div class="q-item' + (isNext ? ' pq-next' : '') + '" id="dc-f' + i + '"'
     + (c.kind ? ' data-seeder="' + esc(String(c.kind)) + '"' : '') + '>' + body
     + _cleanAssistHTML(it)
@@ -1454,6 +1589,10 @@ async function dcFed(i, verdict, payload) {
       // C13g-min-lane retype_organization: this retype unblocked an OWN-T0e
       // sponsor-family card -- send the operator straight there.
       fwd = ' <button class="q-action primary" onclick="renderFederatedLane(\'sponsor_family_confirm\')">Open sponsor-family lane →</button>';
+    }
+    if (_DC_RL1_TYPES.indexOf(_dcFedType) >= 0 && res.data.decision_id != null) {
+      // REVIEW-LANES1: every verdict here is undoable — keep the collapsed row with an Undo button.
+      fwd += ' <button class="q-action" onclick="dcFedUndo(' + Number(res.data.decision_id) + ',' + i + ')">Undo</button>';
     }
     if (typeof showToast === 'function') showToast('Recorded', 'success');
     if (row) {

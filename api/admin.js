@@ -139,6 +139,10 @@ import { handleBenchRankTick } from './_handlers/bench-rank-tick.js';
 import { handleBriefingAnalystTakeTick } from './_handlers/briefing-analyst-take-tick.js';
 import { handleOwnerGap2ResolveTick } from './_handlers/ownergap2-owner-resolve-tick.js';
 import { runDownstreamPipeline } from './_handlers/intake-extractor.js';
+import {
+  fetchReviewLanes1Source, applyReviewLanes1Verdict, handleDecisionUndo, handleReviewLanesTick,
+} from './_handlers/review-lanes1.js';
+import { REVIEW_LANES1_TYPES, isReviewLanes1Type, reviewLanes1SubjectRef } from './_shared/review-lanes1.js';
 import { createPropertyFromIntake } from './_handlers/intake-create-property.js';
 import {
   isNonDealSnapshot, hasFullDealSignature, normalizeDocType,
@@ -289,6 +293,8 @@ export default withErrorHandler(async function handler(req, res) {
     case 'resolve-owner-link':         return handleResolveOwnerLink(req, res);
     case 'decisions':                  return handleDecisionsList(req, res);
     case 'decision-verdict':           return handleDecisionVerdict(req, res);
+    case 'decision-undo':              return handleDecisionUndo(req, res);
+    case 'review-lanes-tick':          return handleReviewLanesTick(req, res);
     case 'decision-sf-search':         return handleDecisionSfSearch(req, res);
     case 'owner-deed-autofix':         return handleOwnerDeedAutofix(req, res);
     case 'junk-bucket':                return handleJunkBucket(req, res);
@@ -1221,6 +1227,16 @@ async function handleReviewCounts(req, res) {
     withLaneTimeout(fetchFederatedSource('tier0_owner_contact', 1).then((r) => r.total)),
   ]);
 
+  // REVIEW-LANES1: the four accuracy lanes. Each source closes its own row on a verdict, so these
+  // are open counts with nothing to subtract.
+  const [rlLsDia, rlLsGov, rlAsset, rlOwner, rlConflict] = await Promise.all([
+    withLaneTimeout(domCount('dia', 'v_dia_listing_sale_review_open', 'exact')),
+    withLaneTimeout(domCount('gov', 'v_gov_listing_sale_review_open', 'exact')),
+    withLaneTimeout(opsCount('lcc_asset_property_link_resolution?verdict=eq.candidate&decided_at=is.null')),
+    withLaneTimeout(opsCount('lcc_gov_owner_unification_review?status=eq.open')),
+    withLaneTimeout(opsCount('v_lcc_contact_hub_conflict_open')),
+  ]);
+
   const val = (r) => (r && typeof r.value === 'number') ? r.value : null;
   const sum = (...rs) => {
     const v = rs.map(val).filter((x) => typeof x === 'number');
@@ -1239,6 +1255,19 @@ async function handleReviewCounts(req, res) {
   // lane gets its own dedicated worker view. count_mode tells the UI whether a
   // figure is exact, an estimate, or a cached (possibly stale) value.
   const lanes = [
+    // REVIEW-LANES1 — ordered by how much each changes what Scott sees; Available listings first.
+    { key: 'listing_sale_review', label: 'Available listings — sold or still on market?',
+      count: sum(rlLsDia, rlLsGov), parts: { dia: val(rlLsDia), gov: val(rlLsGov) },
+      count_mode: 'exact', status: laneStatus(rlLsDia, rlLsGov), href: 'pageDataQuality', tone: 'red' },
+    { key: 'asset_property_link_review', label: 'Asset → property relinks (merged away)',
+      count: sum(rlAsset), parts: { candidates: val(rlAsset) },
+      count_mode: 'exact', status: laneStatus(rlAsset), href: 'pageDataQuality', tone: 'yellow' },
+    { key: 'gov_owner_contact_review', label: 'Gov owner → hub contact',
+      count: sum(rlOwner), parts: { open: val(rlOwner) },
+      count_mode: 'exact', status: laneStatus(rlOwner), href: 'pageDataQuality', tone: '' },
+    { key: 'contact_hub_conflict', label: 'Contacts hub — two contacts, one owner',
+      count: sum(rlConflict), parts: { open: val(rlConflict) },
+      count_mode: 'exact', status: laneStatus(rlConflict), href: 'pageDataQuality', tone: '' },
     { key: 'ownership_research', label: 'Ownership & LLC research',
       count: sum(diaResearch, govOwnershipQueue, diaLlc, govLlc),
       parts: { dia_next_best: val(diaResearch), gov_ownership_queue: val(govOwnershipQueue), dia_llc_queued: val(diaLlc), gov_llc_queued: val(govLlc) },
@@ -7937,6 +7966,13 @@ const FEDERATED_DECISION_TYPES = new Set([
   //                         proposes the deterministic survivor, a human APPROVES
   //                         (never a silent auto-resolve). Ledgered ops-side.
   'agency_risk_action', 'npi_dedup_review', 'npi_dedup_autoapprove',
+  // REVIEW-LANES1 (2026-09-25): four review queues the accuracy rounds filled and nobody could
+  // act on — listing↔sale (dia+gov), asset→property relinks, gov owner→hub contact, contacts-hub
+  // conflicts. Sources/verdicts/undo live in api/_handlers/review-lanes1.js; each verdict writes
+  // through ONE DB function (or the contact merge path) and records the call that undoes it.
+  // Literal (not a spread of REVIEW_LANES1_TYPES) so test/decision-center-partition.test.mjs
+  // can read it; test/review-lanes1.test.mjs asserts it equals REVIEW_LANES1_TYPES.
+  'listing_sale_review', 'asset_property_link_review', 'gov_owner_contact_review', 'contact_hub_conflict',
 ]);
 
 // Decision types posted as (type + subject) from the PROPERTY-DETAIL signal
@@ -7956,6 +7992,7 @@ const DETAIL_SURFACE_DECISION_TYPES = new Set(['owner_source_conflict', 'suspect
 // Canonical subject key for a federated decision (the dedupe + exclusion key).
 function federatedSubjectRef(type, s) {
   s = s || {};
+  if (isReviewLanes1Type(type)) return reviewLanes1SubjectRef(type, s);
   switch (type) {
     case 'intake_disposition': return s.intake_id ? 'intake:' + s.intake_id : null;
     case 'property_merge':     return (s.domain && s.property_id != null) ? 'merge:' + s.domain + ':' + s.property_id : null;
@@ -8368,6 +8405,7 @@ function w52PropDeepLink(db, id) {
 // (top-of-funnel; exclusion + paging happen in JS).
 async function fetchFederatedSource(type, cap, opts) {
   opts = opts || {};
+  if (isReviewLanes1Type(type)) return fetchReviewLanes1Source(type, cap);
   const out = { items: [], total: null };
   const domCnt = async (dom, path) => {
     const r = await domainQuery(dom, 'GET',
@@ -9769,7 +9807,10 @@ async function listFederatedLane(type, limit, offset, opts) {
   const workable = src.items.filter((it) => it.subject_ref && !excluded.has(it.subject_ref));
   // `complete` sources carry the full universe in items, so workable.length is
   // the exact count (excluded subjects of OTHER views can't deflate it).
+  // A self-clearing source (REVIEW-LANES1) closes its own row on every verdict, so its total is
+  // already the open count — subtracting decided subjects again would count them twice.
   const total = src.complete ? workable.length
+    : (src.self_clearing && typeof src.total === 'number') ? src.total
     : (typeof src.total === 'number') ? Math.max(0, src.total - excluded.size) : workable.length;
   const items = workable.slice(offset, offset + limit).map((it) => ({
     id: null, decision_type: type, status: 'open', mode: 'federated',
@@ -9824,7 +9865,8 @@ async function handleDecisionsList(req, res) {
         // a view/grant problem degrades to the old behaviour rather than
         // silently reporting inflated badges.
         const exclN = exclR.ok ? (exclByType.get(t) || 0) : (await fetchExcludedRefs(t)).size;
-        const n = (typeof src.total === 'number') ? Math.max(0, src.total - exclN)
+        const n = (src.self_clearing && typeof src.total === 'number') ? src.total
+                : (typeof src.total === 'number') ? Math.max(0, src.total - exclN)
                 : Math.max(0, src.items.length - exclN);
         return { decision_type: t, n, mode: 'federated' };
       } catch (_e) { return { decision_type: t, n: 0, mode: 'federated' }; }
@@ -10343,6 +10385,21 @@ async function handleDecisionVerdict(req, res) {
       { effects, updated_at: new Date().toISOString() });
 
   try {
+    // ---- REVIEW-LANES1 (2026-09-25) -------------------------------------------
+    // listing↔sale / asset relink / gov owner→hub contact / hub conflict. The writer is named by
+    // planReviewLanes1Verdict; its undo call is recorded in effects.undo for /api/decision-undo.
+    // Effect-first: a refused or failed write keeps the decision open.
+    if (isReviewLanes1Type(decision.decision_type)) {
+      const out = await applyReviewLanes1Verdict({ type: decision.decision_type, verdict,
+        context: decision.context || {}, payload, user });
+      if (!out.ok) {
+        await recordEffectFailure({ ...(out.effects || {}), error: out.body });
+        return res.status(out.status || 502).json({ ...out.body, decision_id: decisionId });
+      }
+      await record(verdict, 'decided', payload, out.effects);
+      return res.status(200).json({ ...out.body, decision_id: decisionId, undoable: true });
+    }
+
     // ---- junk_entity_review (W8 U1 / Prompt 62) ------------------------------
     // The human verdict on an Ollama junk-entity proposal. confirm -> the
     // proposed disposition is applied (dismiss => reversible soft-retire, unless
