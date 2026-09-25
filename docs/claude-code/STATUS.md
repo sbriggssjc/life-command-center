@@ -54,6 +54,29 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-25 — REVIEW-LANES1 (CC): four review queues become Decision Center lanes
+
+**What shipped.** A new first lane group, **Accuracy — is what you see true?**, with four federated lanes. Each card carries the evidence the originating round gathered and one-click verdicts. Every verdict writes through one DB function, is logged, and is undoable from the collapsed card (Undo) or `POST /api/decision-undo`. The undo call is recorded on the decision (`effects.undo`) at verdict time.
+
+| lane | open | auto-resolved | writer |
+|---|---|---|---|
+| `listing_sale_review` (dia+gov) | **18** (dia 8, gov 10) | 0 | `<dom>_decide_listing_sale_review` / `_undo_` |
+| `asset_property_link_review` | 14 | 0 | `lcc_decide_asset_property_link` → `lcc_repoint_entity_property_id` |
+| `gov_owner_contact_review` | **646** | **88** (live) | `lcc_decide_gov_owner_review` |
+| `contact_hub_conflict` | 53 | 0 | `mergeUnifiedContacts` (snapshot first) / repoint / keep both |
+
+**Findings.**
+- **SALE-PROMOTER1 added 3 gov reviews today, with two new verdicts** (`review_non_market_sale`, `review_listing_on_wrong_property`). My first auto-resolver would have closed review 11, because its sale is non-market, and that is the very question it asks. The sale-based auto classes now apply only to verdicts the shared listing↔sale rule raises (new test + mutation on both domains). The listing-sale lane is **18, above the ≤15 target**, because of those 3.
+- The owner-unify tick excluded only **open** reviews, so any decided owner would have been re-queued within 30 minutes. Rewritten in place from the deployed body.
+- The contact merge path hard-deletes, and its DELETE is unchecked. The lane snapshots both rows first. It refuses a person↔company merge and a dropped contact pinned by `lcc_n15_sf_campaign_hub_mint_log`.
+- The gov close-log CHECK lacked `closed_unlinked`, which `gov_reconcile_listing_sales` writes in its WHEN OTHERS branch. Added.
+- The MERGELOG-GAP reverse note uses `research_tasks.status='dismissed'`, a value the enum doesn't have.
+
+**Verified.** Tests: dia 17, gov 14, LCC SQL 21, JS 17, every one mutation-red. Full `npm test` 7,373 / 0 fail; boot check passes. Live round trips (rolled back) passed: dia and gov confirm → undo, relink → undo, create → undo. The migrations are applied live on all three DBs. **Not live yet:** the JS (needs the PR merged and **both Railway services redeployed**) and the tick cron (`20261102370000_…`, applied after the deploy). Backlog: `REVIEW-LANES1-deploy`, `REVIEW-LANES1-gov-owner-dups`.
+
+**Next:** deploy; apply the cron; Scott works the listing-sale lane once.
+
+
 ## 2026-09-25 — CMS-PIPELINE-STAGE-STARVATION overnight checkpoint: PR #7428's self-lock fix holds across two more runs; a new open question filed as round 3
 
 **Independently verified two more runs since PR #7428 merged**: Scott's manual trigger (started 18:30 UTC 09-24, closed 20:57 UTC) and the scheduled 06:05 UTC 09-25 run (closed 07:53 UTC). Both are real evidence, not assumed from a status field:
