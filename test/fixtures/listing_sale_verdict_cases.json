@@ -1,0 +1,17 @@
+[
+  {"name": "sold_after_seen",        "omd": null,         "conf": "none",   "cap": "2026-05-06", "ask": null,     "sale": "2026-08-13", "sold": 6970000, "market": true,  "want": "close_sold_after_seen"},
+  {"name": "month_truncated_sale",   "omd": null,         "conf": "none",   "cap": "2026-08-25", "ask": null,     "sale": "2026-08-01", "sold": 2348250, "market": true,  "want": "close_sold_after_seen"},
+  {"name": "sold_after_real_entry",  "omd": "2025-12-16", "conf": "medium", "cap": "2026-07-31", "ask": 2475000,  "sale": "2026-06-23", "sold": 2300000, "market": true,  "want": "close_sold_after_entry"},
+  {"name": "pipkin_om_after_sale",   "omd": null,         "conf": "none",   "cap": "2026-09-24", "ask": 1650000,  "sale": "2026-06-09", "sold": 1800000, "market": true,  "want": "close_sold_shortly_before_capture"},
+  {"name": "same_deal_near_entry",   "omd": "2026-03-03", "conf": "medium", "cap": "2026-03-31", "ask": 2653000,  "sale": "2026-01-13", "sold": 2653000, "market": true,  "want": "close_sold_near_entry"},
+  {"name": "relisted_after_sale",    "omd": "2025-04-12", "conf": "medium", "cap": "2026-06-10", "ask": 6300000,  "sale": "2023-05-01", "sold": 6300000, "market": true,  "want": "keep_relisted_after_sale"},
+  {"name": "near_entry_price_off",   "omd": "2025-08-05", "conf": "medium", "cap": "2026-08-26", "ask": 2800000,  "sale": "2025-05-29", "sold": 347000,  "market": true,  "want": "review_sold_near_entry"},
+  {"name": "after_seen_price_off",   "omd": null,         "conf": "none",   "cap": "2026-05-06", "ask": 2800000,  "sale": "2026-07-01", "sold": 347000,  "market": true,  "want": "review_price_mismatch"},
+  {"name": "fair_oaks_no_price",     "omd": null,         "conf": "none",   "cap": "2026-05-06", "ask": null,     "sale": "2026-02-10", "sold": 107500,  "market": true,  "want": "review_sold_before_capture"},
+  {"name": "flip_price_up_22pct",    "omd": null,         "conf": "none",   "cap": "2026-07-31", "ask": 2200000,  "sale": "2025-10-21", "sold": 1800000, "market": true,  "want": "review_sold_before_capture"},
+  {"name": "stale_sf_entry_old_sale","omd": "2017-09-01", "conf": "high",   "cap": "2026-06-09", "ask": 1890000,  "sale": "2022-03-09", "sold": 2530000, "market": true,  "want": "keep_prior_sale"},
+  {"name": "old_sale_same_price",    "omd": "2023-07-11", "conf": "high",   "cap": "2026-06-11", "ask": 9450000,  "sale": "2023-02-06", "sold": 9450000, "market": true,  "want": "review_same_price"},
+  {"name": "low_conf_entry_ignored", "omd": "2025-10-01", "conf": "low",    "cap": "2026-06-08", "ask": 6285000,  "sale": "2026-01-29", "sold": 5550000, "market": true,  "want": "close_sold_shortly_before_capture"},
+  {"name": "not_market",             "omd": null,         "conf": "none",   "cap": "2026-05-06", "ask": null,     "sale": "2026-08-13", "sold": 100,     "market": false, "want": "not_market_sale"},
+  {"name": "undated_listing",        "omd": null,         "conf": "none",   "cap": null,         "ask": null,     "sale": "2026-08-13", "sold": 100,     "market": true,  "want": "keep_undated"}
+]
