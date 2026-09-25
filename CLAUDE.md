@@ -616,6 +616,12 @@ one alone is a no-op:
   every INSERT**. Anon wrote a CMS `watermark` row into dia `ingestion_tracker` that way. **Census all
   three paths (RLS-off grants, anon-write policies, updatable definer views), never just the first.**
   Audit: `docs/audits/SEC7_LEDGERS_PHASE1_2026-09-24.md`; backlog `SEC7-views`, `SEC7-policy-withcheck`.
+  ✅ **Both routes closed on all three DBs (SEC7-PHASE2A, 2026-09-24).** The guard is
+  `<dom>_sec7_write_path_violations()` on dia/gov/LCC Opps, and it must read 0. Two additions to the rule above:
+  (1) a view with `INSTEAD OF` triggers is writable too, and `is_updatable` says NO for it. Census with
+  `pg_relation_is_updatable(oid, true)`, not `information_schema`. (2) A policy's NAME is not its role:
+  four dia policies called "service role full access" / "for authenticated" were `TO public`. Read `polroles`.
+  Audit: `docs/audits/SEC7_PHASE2A_2026-09-24.md`.
 
 **Instances, in order:** B6d `compute_feed_cadence` (2026-08-29) → OCR2
 `<dom>_merge_document_extracted_data` (09-02) → ADDR1b `gov_merge_property_apply` (09-04) →
