@@ -245,6 +245,8 @@ app.all('/api/decisions', (req, res) => { req.query._route = 'decisions'; adminH
 app.all('/api/decision-verdict', (req, res) => { req.query._route = 'decision-verdict'; adminHandler(req, res); });
 app.all('/api/decision-undo', (req, res) => { req.query._route = 'decision-undo'; adminHandler(req, res); });
 app.all('/api/review-lanes-tick', (req, res) => { req.query._route = 'review-lanes-tick'; adminHandler(req, res); });
+// DUP-RECORDS1 (2026-09-26): stage CoStar sidebar sales_history rows for the domain sale promoters.
+app.all('/api/sidebar-sale-feed', (req, res) => { req.query._route = 'sidebar-sale-feed'; adminHandler(req, res); });
 app.all('/api/decision-sf-search', (req, res) => { req.query._route = 'decision-sf-search'; adminHandler(req, res); });
 app.all('/api/junk-bucket', (req, res) => { req.query._route = 'junk-bucket'; adminHandler(req, res); });
 app.all('/api/exact-merge', (req, res) => { req.query._route = 'exact-merge'; adminHandler(req, res); });

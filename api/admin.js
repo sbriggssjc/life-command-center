@@ -143,6 +143,7 @@ import {
   fetchReviewLanes1Source, applyReviewLanes1Verdict, handleDecisionUndo, handleReviewLanesTick,
 } from './_handlers/review-lanes1.js';
 import { REVIEW_LANES1_TYPES, isReviewLanes1Type, reviewLanes1SubjectRef } from './_shared/review-lanes1.js';
+import { handleSidebarSaleFeed } from './_handlers/sidebar-sale-feed.js';
 import { createPropertyFromIntake } from './_handlers/intake-create-property.js';
 import {
   isNonDealSnapshot, hasFullDealSignature, normalizeDocType,
@@ -295,6 +296,7 @@ export default withErrorHandler(async function handler(req, res) {
     case 'decision-verdict':           return handleDecisionVerdict(req, res);
     case 'decision-undo':              return handleDecisionUndo(req, res);
     case 'review-lanes-tick':          return handleReviewLanesTick(req, res);
+    case 'sidebar-sale-feed':          return handleSidebarSaleFeed(req, res);
     case 'decision-sf-search':         return handleDecisionSfSearch(req, res);
     case 'owner-deed-autofix':         return handleOwnerDeedAutofix(req, res);
     case 'junk-bucket':                return handleJunkBucket(req, res);
@@ -8946,6 +8948,7 @@ async function fetchFederatedSource(type, cap, opts) {
           shadow_operator: d.shadow_operator || null, anchor_operator: d.anchor_operator || null,
           anchor_medicare_id: a.medicare_id || null, anchor_chairs: a.total_chairs ?? null,
           n_anchors: d.n_anchors ?? null, same_norm_address: d.same_norm_address ?? null,
+          detector: d.detector || null, signals: d.signals || null, note: d.note || null,
         },
       };
     });
@@ -12582,12 +12585,18 @@ async function handleDecisionVerdict(req, res) {
         if (!Number.isFinite(keepId) || !Number.isFinite(dropId) || keepId === dropId) {
           return res.status(400).json({ error: 'twin row missing distinct anchor/shadow ids' });
         }
-        const mr = await domainQuery('dia', 'POST', 'rpc/dia_merge_property_reversible',
-          { p_keep_id: keepId, p_drop_id: dropId, p_batch_tag: 'dc_twin_verdict' });
-        if (!mr.ok) { await recordEffectFailure({ merge: false, error: mr.data }); return res.status(502).json({ error: 'twin_merge_failed', detail: mr.data }); }
-        // Function returns the backup_id (scalar bigint); PostgREST may wrap it.
-        const backupId = (typeof mr.data === 'number') ? mr.data
-          : (Array.isArray(mr.data) ? Number(mr.data[0]) : Number(mr.data));
+        // DUP-RECORDS1: the human verdict is the second signal. dia_dup1_merge_pair fills the keep
+        // row's blanks, supersedes a duplicate active listing (dia_merge_property would DELETE it),
+        // runs the reversible merge, and settles listing<->sale reviews on the merged row.
+        const mr = await domainQuery('dia', 'POST', 'rpc/dia_dup1_merge_pair',
+          { p_keep: keepId, p_drop: dropId, p_batch: 'dc_twin_verdict', p_dry_run: false,
+            p_human_confirmed: true });
+        const mres = (mr.ok && mr.data && typeof mr.data === 'object' && !Array.isArray(mr.data)) ? mr.data : null;
+        if (!mr.ok || !mres || mres.ok !== true || mres.outcome !== 'merged') {
+          await recordEffectFailure({ merge: false, error: mr.data });
+          return res.status(502).json({ error: 'twin_merge_failed', detail: mr.data });
+        }
+        const backupId = Number(mres.backup_id);
         const pr = await domainQuery('dia', 'PATCH',
           'dia_property_twin_review?id=eq.' + reviewId,
           { status: 'merged', backup_id: Number.isFinite(backupId) ? backupId : null,

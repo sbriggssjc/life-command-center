@@ -54,6 +54,15 @@ current window lives in `docs/history/STATUS_claude-code_*.md`; durable state li
 
 ---
 
+## 2026-09-26 — DUP-RECORDS1 (CC): duplicate property and owner rows merged; junk addresses refused; sidebar-sale feed built
+
+- **dia merges** through `dia_dup1_merge_pair` (two signals, vetoes, supersede-before-merge, restore by batch): Kissimmee 37696/37624 → 24669, Oak Forest 38853 → 25570, both listings closed sold; reviews 13/14/18 settled. Birmingham and Dayton are cards (one signal). Sizing pass: 10 more merged, 71 carded.
+- **gov:** Marathon listing repointed 3741 → 41088 and closed sold. 84 case-only duplicate owners merged via `apply_owner_merge`; hub merge-follow repointed 24 contacts.
+- **Writers:** junk addresses refused at both property tables; the listing/sale resolver matches `5340A`/`5340` and `Pky`/`Pkwy`.
+- **Feed:** `/api/sidebar-sale-feed` + `lcc_sidebar_sale_feed_rows`. **Operator:** redeploy both Railway services, then apply `20261102390000_lcc_dup_records1_sidebar_sale_feed_cron.sql`.
+- Audit: `docs/audits/DUP_RECORDS1_2026-09-26.md`. Follow-ups: `DUP-RECORDS1-*` in the backlog.
+
+
 ## 2026-09-26 — CMS-PIPELINE-STAGE-STARVATION: PR #7429 confirmed deployed and live — real progress, but starvation shifted to a new step
 
 **Scott reports PR #7429 merged and `CENSUS_API_KEY` set on Railway.** Independently verified against the first pipeline run since deploy (scheduled 06:05 UTC 09-26, closed 07:26:50 UTC) rather than taken on the merge report alone:
