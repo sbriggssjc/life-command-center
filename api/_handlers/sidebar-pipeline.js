@@ -399,14 +399,33 @@ export function detectRangeAddressCollision(capturedAddress, candidateAddress) {
 // (suffix-normalized, a present-vs-absent leading directional tolerated in
 // either spelling). No fuzzy scoring — a caller must still require exactly one
 // candidate. City/state are the caller's filter, not this function's.
+// DUP-RECORDS1 (2026-09-26): a unit letter glued to the civic number ("5340A W 159th St") is the
+// same building as the bare number ("5340 159th St") — Oak Forest's sale landed on a twin row because
+// parseCivicNumberSpan could not read "5340A". Tolerated only when ONE side carries a letter; two
+// different letters (100A vs 100B) are different units and never equal.
+export function splitCivicUnitLetter(addr) {
+  const s = String(addr || '').trim();
+  const m = s.match(/^(\d+)([A-Za-z])\s+(.+)$/);
+  if (!m) return { address: s, letter: null };
+  return { address: `${m[1]} ${m[3]}`, letter: m[2].toUpperCase() };
+}
+
+// DUP-RECORDS1: CoStar writes "Pky"; the CMS row says "Parkway" -> "Pkwy". Compared, not stored.
+function identityStreet(rest) {
+  return normalizeAddress(rest).replace(/\bpky\b/g, 'pkwy');
+}
+
 export function addressesIdentityEquivalent(capturedAddress, candidateAddress, state) {
-  const a = parseCivicNumberSpan(String(stripListingStatusPrefix(capturedAddress || '')).split(',')[0]);
-  const b = parseCivicNumberSpan(String(candidateAddress || '').split(',')[0]);
+  const ca = splitCivicUnitLetter(String(stripListingStatusPrefix(capturedAddress || '')).split(',')[0]);
+  const cb = splitCivicUnitLetter(String(candidateAddress || '').split(',')[0]);
+  if (ca.letter && cb.letter && ca.letter !== cb.letter) return false;
+  const a = parseCivicNumberSpan(ca.address);
+  const b = parseCivicNumberSpan(cb.address);
   if (!a || !b) return false;
   if (a.lo !== b.lo || a.hi !== b.hi) return false;
   const route = routeStreetsEquivalent(a.rest, b.rest, state);
   if (route !== null) return route;
-  return sameStreetRest(normalizeAddress(a.rest), normalizeAddress(b.rest));
+  return sameStreetRest(identityStreet(a.rest), identityStreet(b.rest));
 }
 
 const EXISTING_MATCH_DOMAINS = ['dialysis', 'government'];
@@ -434,7 +453,7 @@ export async function findExistingDomainPropertiesForCapture(entity, metadata, d
   const address = String(stripListingStatusPrefix(rawAddress || '')).split(',')[0].trim();
   const state = String(entity?.state || metadata?.state || '').trim();
   const city = String(entity?.city || metadata?.city || '').trim();
-  const span = parseCivicNumberSpan(address);
+  const span = parseCivicNumberSpan(splitCivicUnitLetter(address).address);
   if (!span || !state) return out;
   for (const domain of (deps.domains || EXISTING_MATCH_DOMAINS)) {
     if (!creds(domain)) continue;
